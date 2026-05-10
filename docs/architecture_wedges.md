@@ -462,15 +462,15 @@ Response:
 
 The server emits the following Prometheus series (when `prometheus-client` is installed):
 
-| Metric                              | Type      | Labels                                  | Description                                                                   |
-| ----------------------------------- | --------- | --------------------------------------- | ----------------------------------------------------------------------------- |
-| `reflex_act_latency_seconds`        | Histogram | `embodiment`, `model_id`, `policy_slot` | End-to-end `/act` latency (p50, p95, p99)                                     |
-| `reflex_safety_violation_total`     | Counter   | `embodiment`, `kind`                    | Total violations by type (`joint_clamp`, `non_finite`)                        |
-| `reflex_deadline_miss_total`        | Counter   | `embodiment`                            | Total deadline misses                                                         |
-| `reflex_batch_size_per_flush`       | Histogram | `embodiment`, `policy_slot`             | Requests per batch flush                                                      |
-| `reflex_batch_cost_per_flush_ms`    | Histogram | `embodiment`, `policy_slot`             | GPU-ms cost per batch                                                         |
-| `reflex_batch_flush_total`          | Counter   | `embodiment`, `policy_slot`, `reason`   | Flushes by reason (`budget_reached`, `timeout`, `single_request_over_budget`) |
-| `reflex_policy_runtime_queue_depth` | Gauge     | `embodiment`, `policy_slot`             | Pending requests in queue                                                     |
+| Metric                               | Type      | Labels                                  | Description                                                                   |
+| ------------------------------------ | --------- | --------------------------------------- | ----------------------------------------------------------------------------- |
+| `reflex_act_latency_seconds`         | Histogram | `embodiment`, `model_id`, `policy_slot` | End-to-end `/act` latency (p50, p95, p99)                                     |
+| `reflex_safety_violations_total`     | Counter   | `embodiment`, `kind`                    | Total violations by type (`joint_clamp`, `non_finite`)                        |
+| `reflex_fallback_invocations_total`  | Counter   | `embodiment`, `fallback_target`         | Total fallback invocations by target; deadline misses are represented here     |
+| `reflex_batch_size_per_flush`        | Histogram | `embodiment`, `policy_slot`             | Requests per batch flush                                                      |
+| `reflex_batch_cost_per_flush_ms`     | Histogram | `embodiment`, `policy_slot`             | GPU-ms cost per batch                                                         |
+| `reflex_batch_flush_total`           | Counter   | `embodiment`, `policy_slot`, `reason`   | Flushes by reason (`budget_reached`, `timeout`, `single_request_over_budget`) |
+| `reflex_policy_runtime_queue_depth`  | Gauge     | `embodiment`, `policy_slot`             | Pending requests in queue                                                     |
 
 ### OpenTelemetry Spans
 
