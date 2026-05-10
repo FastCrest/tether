@@ -262,7 +262,7 @@ Here's a detailed trace of a request through all wedges:
        safe_actions, violations = guard.check(actions)
        if violations > 0:
            log "safety_violations: {count}"
-           if mode == "reject": actions = zeros_like(actions)
+           if mode == "reject": actions = zeros_like(actions)  # still 200 OK
            if max_consecutive_clamps exceeded: return guard_tripped error
        actions = safe_actions
 
@@ -315,7 +315,7 @@ Here's a detailed trace of a request through all wedges:
 | `--device`                | str   | `cuda`      | `cuda` or `cpu` — default execution provider                                                          |
 | `--num-denoising-steps`   | int   | `10`        | Fixed denoise steps (without `--adaptive-steps`)                                                      |
 | `--providers`             | str   | auto-detect | Explicit ORT execution providers, comma-separated. E.g., `CUDAExecutionProvider,CPUExecutionProvider` |
-| `--no-strict-providers`   | bool  | `false`     | Set this flag to disable strict provider loading and allow CPU fallback; if omitted (default), strict mode stays enabled |
+| `--no-strict-providers`   | bool  | `false`     | Disable strict provider loading and allow CPU fallback if requested providers fail to load |
 | `--safety-config`         | path  | `None`      | Path to `safety.json` from `reflex guard init`. Enables ActionGuard.                                  |
 | `--adaptive-steps`        | bool  | `false`     | Enable TurboOptimizer velocity convergence early-stop                                                 |
 | `--cloud-fallback`        | str   | `""`        | Cloud endpoint URL (e.g., `http://cloud-vla:8000`). Enables Split setup.                              |
@@ -446,8 +446,8 @@ The server emits the following Prometheus series (when `prometheus-client` is in
 | Metric                               | Type      | Labels                                  | Description                                                                   |
 | ------------------------------------ | --------- | --------------------------------------- | ----------------------------------------------------------------------------- |
 | `reflex_act_latency_seconds`         | Histogram | `embodiment`, `model_id`, `policy_slot` | End-to-end `/act` latency (p50, p95, p99)                                     |
-| `reflex_safety_violations_total`     | Counter   | `embodiment`, `kind`                    | Total violations by type (`joint_clamp`, `non_finite`)                        |
-| `reflex_fallback_invocations_total`  | Counter   | `embodiment`, `fallback_target`         | Total fallback invocations by target; deadline misses are represented here     |
+| `reflex_safety_violations_total`     | Counter   | `embodiment`, `violation_kind`          | Total violations by type (`joint_clamp`, `non_finite`)                        |
+| `reflex_fallback_invocations_total`  | Counter   | `embodiment`, `fallback_target`         | Total fallback invocations by target (`previous_chunk`, `hold_position`, `abort`), including deadline-triggered fallbacks |
 | `reflex_batch_size_per_flush`        | Histogram | `embodiment`, `policy_slot`             | Requests per batch flush                                                      |
 | `reflex_batch_cost_per_flush_ms`     | Histogram | `embodiment`, `policy_slot`             | GPU-ms cost per batch                                                         |
 | `reflex_batch_flush_total`           | Counter   | `embodiment`, `policy_slot`, `reason`   | Flushes by reason (`budget_reached`, `timeout`, `single_request_over_budget`) |
