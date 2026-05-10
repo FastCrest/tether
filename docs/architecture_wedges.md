@@ -48,8 +48,8 @@ Each wedge is **independently toggleable** via startup flags. This allows:
 **When violations occur**:
 
 - **Mode `clamp` (default)**: Silently clamp and log. Client receives clamped actions and `safety_violations` count in the response.
-- **Mode `reject`**: Return a 400 error. Client must retry or fallback.
-- **Trip mode**: After N consecutive clamps, trip the guard and return errors until explicitly reset via `POST /guard/reset`.
+- **Mode `reject`**: Return a zeroed action vector instead of the rejected action. The `/act` request still completes successfully rather than returning HTTP 400.
+- **Trip mode**: After N consecutive clamps, trip the guard. While tripped, `/act` returns 200 with an error until explicitly reset via `POST /guard/reset`.
 
 **Configuration**:
 
