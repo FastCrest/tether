@@ -201,8 +201,8 @@ reflex serve ./my-export/ --adaptive-steps
 
 - Measures elapsed time from request start to just before returning
 - If elapsed > deadline, returns either:
-  - **Last good action** (from the prior successful inference)
-  - **Zero vector** (if no prior action exists)
+  - **Last good action** when a prior successful inference result is cached
+  - **Zero vector** when no prior successful action has been cached yet
 - Logs the deadline miss for alerting
 - Records miss count for SLO tracking
 
