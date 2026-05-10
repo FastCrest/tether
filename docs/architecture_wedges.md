@@ -315,7 +315,7 @@ Here's a detailed trace of a request through all wedges:
 | `--device`                | str   | `cuda`      | `cuda` or `cpu` — default execution provider                                                          |
 | `--num-denoising-steps`   | int   | `10`        | Fixed denoise steps (without `--adaptive-steps`)                                                      |
 | `--providers`             | str   | auto-detect | Explicit ORT execution providers, comma-separated. E.g., `CUDAExecutionProvider,CPUExecutionProvider` |
-| `--no-strict-providers`   | bool  | `false`     | Allow CPU fallback if explicit `--providers` fails to load (default behavior is strict)                |
+| `--no-strict-providers`   | bool  | `false`     | When set, allow CPU fallback if explicit `--providers` fails to load; by default (`false`) strict mode remains on |
 | `--safety-config`         | path  | `None`      | Path to `safety.json` from `reflex guard init`. Enables ActionGuard.                                  |
 | `--adaptive-steps`        | bool  | `false`     | Enable TurboOptimizer velocity convergence early-stop                                                 |
 | `--cloud-fallback`        | str   | `""`        | Cloud endpoint URL (e.g., `http://cloud-vla:8000`). Enables Split setup.                              |
@@ -476,7 +476,7 @@ Span: act
 
 ### JSONL Recording
 
-When enabled via `--record <dir>`, the server writes one line per request to a timestamped session file named `<YYYYMMDD-HHMMSS>-<model_hash>-<session_id>.jsonl[.gz]`:
+When enabled via `--record <dir>`, the server writes one line per request to a timestamped session file named `<YYYYMMDD-HHMMSS>-<model_hash>-<session_id>.jsonl[.gz]` (for example, `20260510-143022-abc123def-session42.jsonl.gz`):
 
 ```json
 {
