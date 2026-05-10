@@ -315,11 +315,11 @@ Here's a detailed trace of a request through all wedges:
 | `--device`                | str   | `cuda`      | `cuda` or `cpu` — default execution provider                                                          |
 | `--num-denoising-steps`   | int   | `10`        | Fixed denoise steps (without `--adaptive-steps`)                                                      |
 | `--providers`             | str   | auto-detect | Explicit ORT execution providers, comma-separated. E.g., `CUDAExecutionProvider,CPUExecutionProvider` |
-| `--no-strict-providers`   | bool  | `false`     | When set, allow CPU fallback if explicit `--providers` fails to load; by default (`false`) strict mode remains on |
+| `--no-strict-providers`   | bool  | `false`     | Set this flag to disable strict provider loading and allow CPU fallback; if omitted (default), strict mode stays enabled |
 | `--safety-config`         | path  | `None`      | Path to `safety.json` from `reflex guard init`. Enables ActionGuard.                                  |
 | `--adaptive-steps`        | bool  | `false`     | Enable TurboOptimizer velocity convergence early-stop                                                 |
 | `--cloud-fallback`        | str   | `""`        | Cloud endpoint URL (e.g., `http://cloud-vla:8000`). Enables Split setup.                              |
-| `--deadline-ms`           | float | `0.0`       | Deadline in milliseconds (`<=0` disables; server receives `None` when disabled).                      |
+| `--deadline-ms`           | float | `0.0`       | Deadline in milliseconds. Default `0.0` means disabled (internally treated as `None`).                |
 | `--max-batch`             | int   | `1`         | ⚠️ **Deprecated**. Use `--max-batch-cost-ms` instead.                                                 |
 | `--max-batch-cost-ms`     | float | `100`       | GPU-ms cost budget per batch flush (see `docs/batching.md`)                                           |
 | `--batch-timeout-ms`      | float | `5.0`       | Max time a request waits in queue before forced flush                                                 |
