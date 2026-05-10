@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.9.6 — 2026-05-10
+
+**Fix: GR00T N1.6 + OpenVLA registry entries (closes 2026-05-10 customer report).** Plus a contract test that prevents this exact class of bug from recurring.
+
+### Fixed
+
+- **GR00T N1.6 (`nvidia/GR00T-N1.6-3B`) + OpenVLA (`openvla/openvla-7b`) added to `src/reflex/registry/data.py`.** Both exporters had shipped (`gr00t_exporter.py` validated to max_diff=8.34e-07 vs PyTorch reference; `openvla_exporter.py` shipped via optimum-cli onnx path) but the curated model registry only had pi0/pi05/smolvla entries. Customer attempting to use GR00T or OpenVLA via `reflex models list` / `reflex chat` / `reflex doctor` was told "not supported" even though the underlying export pipeline worked. Now both surface correctly + are pullable via `reflex models pull gr00t-n1.6` / `reflex models pull openvla-7b`.
+
+### Added
+
+- **`tests/test_registry_completeness.py`** — contract test that prevents future drift between exporters and the registry. 5 tests:
+  - `test_every_primary_exporter_has_registry_entry` — for each primary exporter (gr00t / openvla / pi0 / pi05 / smolvla), assert at least one `ModelEntry` uses the matching family. Catches the GR00T/OpenVLA class of bug at CI time.
+  - `test_exporter_directory_audit_covers_all_files` — every file in `src/reflex/exporters/` must be classified as either internal-only (with docstring justification) or primary (with expected family). Catches the case where a contributor adds a new exporter file but forgets registry coverage.
+  - `test_registry_entries_have_required_fields` — each `ModelEntry` populates `model_id` / `hf_repo` / `family` / `action_dim` / `size_mb` / `supported_embodiments` / `supported_devices` / `description`.
+  - `test_gr00t_n16_in_registry` + `test_openvla_in_registry` — specific assertions that pin the 2026-05-10 fix.
+
+Per CLAUDE.md "real fixes not band-aids" — the registry entries patch the immediate bug; the contract test prevents the next contributor from shipping a new exporter without registry entry. Closes the structural hole, not just the symptom.
+
 ## v0.9.5 — 2026-05-07
 
 **CLI cut pass — `reflex --help` shrinks 22% (18 → 14 visible top-level verbs); `reflex inspect --help` shrinks 60% (5 → 2 visible).** No commands deleted; cluttered/redundant ones moved to `hidden=True` in their typer registration. All still callable directly for power-user scripts; just removed from the discovery surface.

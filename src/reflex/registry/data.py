@@ -105,4 +105,52 @@ REGISTRY: tuple[ModelEntry, ...] = (
         license="apache-2.0",
         hf_revision=None,
     ),
+    # ──────────────────────────────────────────────────────────────────────
+    # Added 2026-05-10 after customer report — exporters shipped but
+    # registry entries missing → `reflex models list`, `reflex chat`, and
+    # `reflex doctor` all said "not supported" even though export pipeline
+    # works. Contract test in tests/test_registry_completeness.py prevents
+    # future drift.
+    # ──────────────────────────────────────────────────────────────────────
+    ModelEntry(
+        model_id="gr00t-n1.6",
+        hf_repo="nvidia/GR00T-N1.6-3B",
+        family="groot",  # validation uses 'groot' (existing convention; NVIDIA brand is "GR00T")
+        action_dim=32,  # GR00T humanoid action space (joint targets + grippers)
+        size_mb=3290,  # 3.29B params per README
+        # GR00T is humanoid-focused but supports embodiment-id-based routing
+        # so single + dual-arm configs work via the standard preset path.
+        supported_embodiments=("humanoid", "franka", "so100"),
+        # Strategic signal per spec: NVIDIA Inception path; runs on Thor in
+        # production. Excludes orin_nano (3.29B params @ FP16 = ~6.5GB > 8GB
+        # tier comfortable budget when combined with activations + OS).
+        supported_devices=("agx_orin", "thor", "a10g", "a100", "h100", "h200"),
+        benchmarks=(),  # in-house numbers TBD; export validated to cos parity
+        requires_export=True,
+        description="NVIDIA GR00T N1.6 — humanoid-focused VLA with DiT action expert + "
+                    "Eagle (SigLIP+Llama) VLM backbone. Validated max_diff=8.34e-07 vs "
+                    "PyTorch reference. Run `reflex export gr00t-n1.6` after pull.",
+        license="nvidia-source-code-license",  # NVIDIA's bespoke OSS-adjacent license
+        hf_revision=None,
+    ),
+    ModelEntry(
+        model_id="openvla-7b",
+        hf_repo="openvla/openvla-7b",
+        family="openvla",
+        action_dim=7,  # discrete action tokens decoded to 7-DoF continuous
+        size_mb=7500,  # 7.5B params per README
+        # OpenVLA was trained on Open X-Embodiment cross-embodiment dataset;
+        # broad coverage via embodiment-id mapping.
+        supported_embodiments=("franka", "so100", "ur5", "widowx"),
+        # 7.5B model needs >=14GB VRAM in BF16. Excludes Jetson Orin Nano + AGX.
+        supported_devices=("a10g", "a100", "h100", "h200"),
+        benchmarks=(),  # in-house numbers TBD
+        requires_export=True,
+        description="OpenVLA — vanilla Llama-2-7B VLM with discrete action tokens. "
+                    "Export uses optimum-cli onnx path + the bin-to-continuous postprocess "
+                    "helper at `reflex.postprocess.openvla.decode_actions`. Run `reflex "
+                    "export openvla-7b` after pull.",
+        license="mit",
+        hf_revision=None,
+    ),
 )
