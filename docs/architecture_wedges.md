@@ -66,13 +66,12 @@ reflex serve ./my-export/ --safety-config safety.json
 ```json
 {
   "joint_names": ["shoulder_pan", "shoulder_lift", "elbow_flex", ...],
-  "joint_ranges": {
-    "qmin": [-3.14, -2.0, 0.0, ...],
-    "qmax": [3.14, 2.0, 3.14, ...],
-    "v_max": [2.0, 1.5, 2.5, ...]
-  },
-  "mode": "clamp",
-  "max_consecutive_clamps": 10
+  "position_min": [-3.14, -2.0, 0.0, ...],
+  "position_max": [3.14, 2.0, 3.14, ...],
+  "velocity_max": [2.0, 1.5, 2.5, ...],
+  "effort_max": [50.0, 50.0, 50.0, ...],
+  "workspace_min": [-1.0, -1.0, 0.0],
+  "workspace_max": [1.0, 1.0, 1.5]
 }
 ```
 
@@ -98,48 +97,31 @@ reflex serve ./my-export/ --safety-config safety.json
 
 ### 2. Split Wedge (SplitOrchestrator)
 
-**Purpose**: Cloud-edge orchestration — route inference to cloud (big model) or edge (small model) based on availability and latency budgets.
+**Purpose**: Configure cloud fallback integration for future split orchestration.
 
 **What it does**:
 
-- Monitors cloud endpoint health (periodic health checks)
-- Decides where to run inference: edge or cloud
-- Falls back gracefully if the chosen path fails
-- Returns the last good action or zeros if both paths unavailable
+- Initializes split orchestration when `--cloud-fallback` is set
+- Exposes `split_enabled: true` in `/act` responses when configured
+- Stores cloud fallback URL for future dispatch/routing support
 
-**Strategies**:
+**Current status**:
 
-- **`prefer="edge"` (default)**: Always run locally; use cloud only if edge crashes.
-- **`prefer="cloud"`**: Always try cloud first; fall back to edge on timeout/failure.
-- **`prefer="auto"`**: Route based on cloud latency history and availability.
-
-**Fallback modes** (when both edge and cloud are unavailable):
-
-- **`last_action`**: Return the prior successful action (safest for continuous control).
-- **`zero`**: Return zero vector (safe but jerky).
-- **`edge_small`**: Run a smaller model locally as ultimate fallback (future).
+- Full edge/cloud request dispatch is not active in the current server path yet.
+- Routing preferences and fallback strategies are planned for a future phase.
 
 **Configuration**:
 
 ```bash
 # Edge-first (cloud is optional):
-reflex serve ./my-export/ --cloud-fallback-url http://cloud-vla:8000
-
-# Cloud-first with edge fallback:
-reflex serve ./my-export/ --cloud-fallback-url http://cloud-vla:8000 \
-  --cloud-fallback-prefer cloud
+reflex serve ./my-export/ --cloud-fallback http://cloud-vla:8000
 ```
 
-**Split config** (internal):
+**Split config** (internal, created by the server):
 
 ```python
 SplitConfig(
     cloud_url="http://cloud-vla:8000",
-    prefer="edge",                    # or "cloud", "auto"
-    fallback_mode="last_action",      # or "zero"
-    edge_latency_budget_ms=100.0,
-    cloud_latency_budget_ms=500.0,
-    network_timeout_ms=200.0,
 )
 ```
 
@@ -147,12 +129,7 @@ SplitConfig(
 
 ```json
 {
-  "split_enabled": true,
-  "routing": {
-    "target": "edge",
-    "fallback_triggered": false,
-    "reason": "edge available, prefer=edge"
-  }
+  "split_enabled": true
 }
 ```
 
@@ -241,7 +218,7 @@ reflex serve ./my-export/ --adaptive-steps
 # Hard 100ms deadline:
 reflex serve ./my-export/ --deadline-ms 100
 
-# Soft deadline (log but don't enforce):
+# Deadline fallback still enforces the budget (returns last-good/zeros on miss):
 reflex serve ./my-export/ --deadline-ms 200  # with alerting
 ```
 
@@ -285,7 +262,7 @@ Here's a detailed trace of a request through all wedges:
        safe_actions, violations = guard.check(actions)
        if violations > 0:
            log "safety_violations: {count}"
-           if mode == "reject": return 400
+           if mode == "reject": actions = zeros_like(actions)
            if max_consecutive_clamps exceeded: return guard_tripped error
        actions = safe_actions
 
@@ -338,12 +315,11 @@ Here's a detailed trace of a request through all wedges:
 | `--device`                | str   | `cuda`      | `cuda` or `cpu` — default execution provider                                                          |
 | `--num-denoising-steps`   | int   | `10`        | Fixed denoise steps (without `--adaptive-steps`)                                                      |
 | `--providers`             | str   | auto-detect | Explicit ORT execution providers, comma-separated. E.g., `CUDAExecutionProvider,CPUExecutionProvider` |
-| `--strict-providers`      | bool  | `true`      | Raise error if explicit `--providers` fails to load (vs. silently fall back to CPU)                   |
+| `--no-strict-providers`   | bool  | `false`     | Allow CPU fallback if explicit `--providers` fails to load (default behavior is strict)                |
 | `--safety-config`         | path  | `None`      | Path to `safety.json` from `reflex guard init`. Enables ActionGuard.                                  |
 | `--adaptive-steps`        | bool  | `false`     | Enable TurboOptimizer velocity convergence early-stop                                                 |
-| `--cloud-fallback-url`    | str   | `""`        | Cloud endpoint URL (e.g., `http://cloud-vla:8000`). Enables Split.                                    |
-| `--cloud-fallback-prefer` | str   | `edge`      | `edge`, `cloud`, or `auto` — routing preference                                                       |
-| `--deadline-ms`           | float | `None`      | Soft deadline in milliseconds. Enables Deadline wedge.                                                |
+| `--cloud-fallback`        | str   | `""`        | Cloud endpoint URL (e.g., `http://cloud-vla:8000`). Enables Split setup.                              |
+| `--deadline-ms`           | float | `0.0`       | Deadline in milliseconds (`<=0` disables; server receives `None` when disabled).                      |
 | `--max-batch`             | int   | `1`         | ⚠️ **Deprecated**. Use `--max-batch-cost-ms` instead.                                                 |
 | `--max-batch-cost-ms`     | float | `100`       | GPU-ms cost budget per batch flush (see `docs/batching.md`)                                           |
 | `--batch-timeout-ms`      | float | `5.0`       | Max time a request waits in queue before forced flush                                                 |
@@ -362,12 +338,15 @@ Response:
 
 ```json
 {
-  "status": "ready",
-  "model": "pi0",
-  "policy_slot": "prod",
-  "queue_depth": 0,
-  "deadlines_missed": 0,
-  "safety_violations_24h": 1
+  "status": "ok",
+  "state": "ready",
+  "model_loaded": true,
+  "inference_mode": "onnx_cuda",
+  "export_dir": "/models/pi0-export",
+  "vlm_loaded": true,
+  "consecutive_crashes": 0,
+  "max_consecutive_crashes": 5,
+  "robot_id": ""
 }
 ```
 
@@ -382,8 +361,7 @@ Request:
   "image": "base64-encoded RGB image",
   "instruction": "pick up cup",
   "state": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-  "episode_id": "ep_001",
-  "request_id": "req_123"
+  "episode_id": "ep_001"
 }
 ```
 
@@ -406,8 +384,11 @@ Response:
   "model_hash": "abc123def456...",
   "config_hash": "xyz789...",
   "safety_violations": 0,
-  "safety_detail": [],
-  "guard_summary": null,
+  "guard_summary": {
+    "violations": [],
+    "clamped": false,
+    "clamp_count": 0
+  },
   "deadline_exceeded": false,
   "latency_p50_ms": 40.2,
   "latency_p95_ms": 45.1,
@@ -495,7 +476,7 @@ Span: act
 
 ### JSONL Recording
 
-When enabled via `--record-dir`, the server writes one line per request to `record.jsonl`:
+When enabled via `--record <dir>`, the server writes one line per request to a timestamped session file named `<YYYYMMDD-HHMMSS>-<model_hash>-<session_id>.jsonl[.gz]`:
 
 ```json
 {
@@ -604,8 +585,7 @@ Edge-first with cloud as hot standby:
 # Edge node
 reflex serve ./pi0 \
   --safety-config ./safety.json \
-  --cloud-fallback-url http://cloud-vla:8000 \
-  --cloud-fallback-prefer edge \
+  --cloud-fallback http://cloud-vla:8000 \
   --deadline-ms 100
 
 # Cloud node
