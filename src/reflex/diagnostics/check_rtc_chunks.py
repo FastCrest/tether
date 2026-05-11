@@ -61,40 +61,36 @@ def _run(embodiment_name: str = "custom", rtc: bool = False, **kwargs) -> CheckR
     control = cfg.control
     chunk_size = int(control["chunk_size"])
     frequency_hz = float(control["frequency_hz"])  # robot control loop rate
-    horizon_s = float(control["rtc_execution_horizon"])
+    # rtc_execution_horizon is INTEGER COUNT OF ACTIONS per
+    # embodiments/validate.py:163 — not seconds. An earlier revision of this
+    # check multiplied by frequency_hz, over-counting by ~Hz× and flagging
+    # franka (chunk=50, horizon=25) as fail when it actually aligns 2:1.
+    actions_per_horizon = int(control["rtc_execution_horizon"])
 
-    # actions executed per RTC horizon
-    actions_per_horizon = frequency_hz * horizon_s
-
-    # Sanity check 1: horizon must consume at least one action
     if actions_per_horizon < 1:
         return CheckResult(
             check_id=CHECK_ID,
             name="RTC chunk boundary",
             status="fail",
-            expected="frequency_hz × rtc_execution_horizon ≥ 1 action",
-            actual=(
-                f"{frequency_hz}Hz × {horizon_s}s = {actions_per_horizon:.2f} actions/horizon"
-            ),
+            expected="rtc_execution_horizon ≥ 1 action",
+            actual=f"rtc_execution_horizon = {actions_per_horizon} actions",
             remediation=(
-                f"Increase rtc_execution_horizon (currently {horizon_s}s) OR "
-                f"frequency_hz (currently {frequency_hz}Hz) so the product ≥ 1. "
-                f"With 0 actions per horizon, RTC degenerates to no-RTC."
+                f"Increase rtc_execution_horizon (currently {actions_per_horizon} "
+                f"actions). With 0 actions per horizon, RTC degenerates to no-RTC."
             ),
             duration_ms=0.0,
             github_issue=GH_ISSUE,
         )
 
-    # Sanity check 2: chunk must hold at least one horizon-worth of actions
     if chunk_size < actions_per_horizon:
         return CheckResult(
             check_id=CHECK_ID,
             name="RTC chunk boundary",
             status="fail",
-            expected=f"chunk_size ≥ {actions_per_horizon:.0f} actions (one horizon)",
-            actual=f"chunk_size={chunk_size} < {actions_per_horizon:.2f} actions/horizon",
+            expected=f"chunk_size ≥ {actions_per_horizon} actions (one horizon)",
+            actual=f"chunk_size={chunk_size} < {actions_per_horizon} actions/horizon",
             remediation=(
-                f"Either increase chunk_size to ≥ {int(actions_per_horizon) + 1} OR "
+                f"Either increase chunk_size to ≥ {actions_per_horizon + 1} OR "
                 f"reduce rtc_execution_horizon. Mismatch causes the boundary stalls "
                 f"reported in LeRobot #2356."
             ),
@@ -102,19 +98,17 @@ def _run(embodiment_name: str = "custom", rtc: bool = False, **kwargs) -> CheckR
             github_issue=GH_ISSUE,
         )
 
-    # Sanity check 3 (warn): chunk_size should be a clean multiple of horizon
-    # so multiple inferences per chunk align with RTC ticks
-    if actions_per_horizon >= 1 and chunk_size % int(actions_per_horizon) != 0:
+    if chunk_size % actions_per_horizon != 0:
         return CheckResult(
             check_id=CHECK_ID,
             name="RTC chunk boundary",
             status="warn",
-            expected=f"chunk_size ({chunk_size}) is a multiple of actions_per_horizon ({int(actions_per_horizon)})",
-            actual=f"chunk_size % horizon_actions = {chunk_size % int(actions_per_horizon)}",
+            expected=f"chunk_size ({chunk_size}) is a multiple of actions_per_horizon ({actions_per_horizon})",
+            actual=f"chunk_size % horizon_actions = {chunk_size % actions_per_horizon}",
             remediation=(
                 f"Non-integer ratio means the last partial-horizon at chunk boundary "
                 f"will run with stale guidance. Consider chunk_size="
-                f"{int(actions_per_horizon) * (chunk_size // int(actions_per_horizon) + 1)} "
+                f"{actions_per_horizon * (chunk_size // actions_per_horizon + 1)} "
                 f"for cleaner alignment. Not a hard failure."
             ),
             duration_ms=0.0,
@@ -128,7 +122,7 @@ def _run(embodiment_name: str = "custom", rtc: bool = False, **kwargs) -> CheckR
         expected="chunk_size, frequency_hz, rtc_execution_horizon align cleanly",
         actual=(
             f"chunk_size={chunk_size}, frequency_hz={frequency_hz}, "
-            f"horizon={horizon_s}s ({actions_per_horizon:.0f} actions/horizon)"
+            f"horizon={actions_per_horizon} actions"
         ),
         remediation="",
         duration_ms=0.0,

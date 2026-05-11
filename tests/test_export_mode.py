@@ -294,7 +294,11 @@ def test_run_parallel_pi05_exports_submits_both_workers(monkeypatch, tmp_path):
     assert expert_meta["prefix_seq_len"] == 968
     assert [call[0] for call in calls] == ["prefix", "expert"]
     assert calls[0][1][1] == str(tmp_path)
-    assert calls[1][1][-1] == 968
+    # _export_pi05_expert_worker signature:
+    # (model_id, output_dir, num_steps, student_checkpoint, variant,
+    #  past_kv_names, prefix_seq_len, per_step_expert)
+    # prefix_seq_len is positional arg 6 (0-indexed).
+    assert calls[1][1][6] == 968
 
 
 def test_write_decomposed_result_records_export_mode(tmp_path):

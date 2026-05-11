@@ -108,6 +108,7 @@ class Check:
 
 # Registry — populated lazily on first run_all_checks() call
 _REGISTRY: list[Check] = []
+_REGISTRY_LOADED: bool = False
 
 
 def register(check: Check) -> None:
@@ -116,8 +117,16 @@ def register(check: Check) -> None:
 
 
 def _ensure_registry_loaded() -> None:
-    """Import every check_*.py module so they self-register. Idempotent."""
-    if _REGISTRY:
+    """Import every check_*.py module so they self-register. Idempotent.
+
+    Uses a separate flag rather than `if _REGISTRY:` so a partial-load
+    (e.g. when a single check_*.py was imported directly elsewhere) still
+    triggers the full sweep. Re-imports are cheap — sys.modules caches them
+    and `register()` is at module top-level so it only fires once per
+    interpreter regardless of how many times you import the module.
+    """
+    global _REGISTRY_LOADED
+    if _REGISTRY_LOADED:
         return
     # Day 1 checks
     from . import (  # noqa: F401
@@ -145,6 +154,7 @@ def _ensure_registry_loaded() -> None:
         check_modal_auth,
         check_vla_eval_importable,
     )
+    _REGISTRY_LOADED = True
 
 
 def run_all_checks(
