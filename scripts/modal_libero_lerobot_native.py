@@ -170,6 +170,7 @@ def run_ported_libero(
     snapflow_student: str = "",
     snapflow_onnx: str = "",
     preprocessor_ref: str = "",
+    save_video_dir: str = "",
 ):
     """Port of openpi/examples/libero/main.py rolled out end-to-end.
 
@@ -414,12 +415,17 @@ def run_ported_libero(
                 action_plan = collections.deque()
                 t = 0
                 done = False
+                video_frames = [] if save_video_dir else None
+                if video_frames is not None:
+                    video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
                 while t < max_steps + num_steps_wait:
                     try:
                         # num_steps_wait: let objects settle
                         if t < num_steps_wait:
                             obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            if video_frames is not None:
+                                video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                             t += 1
                             continue
 
@@ -553,6 +559,8 @@ def run_ported_libero(
 
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(action.tolist())
+                        if video_frames is not None:
+                            video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                         if done:
                             task_result["success"] += 1
                             results["total_success"] += 1
@@ -582,6 +590,15 @@ def run_ported_libero(
                 print(f"  ep {ep} (init_idx={init_idx}): "
                       f"{'SUCCESS' if done else 'fail'} at {t} steps "
                       f"({time.time()-task_start:.1f}s total)")
+                if video_frames is not None and len(video_frames) > 0:
+                    from pathlib import Path as _P
+                    _P(save_video_dir).mkdir(parents=True, exist_ok=True)
+                    tag = "S" if done else "F"
+                    out = _P(save_video_dir) / (
+                        f"teacher_t{task_idx}_ep{ep}_seed{seed}_steps{t}_{tag}.npz"
+                    )
+                    np.savez_compressed(str(out), frames=np.array(video_frames, dtype=np.uint8))
+                    print(f"    frames → {out} ({len(video_frames)} frames)")
             except Exception as e:
                 err_tb = traceback.format_exc()
                 print(f"  episode error: {e}")
@@ -622,6 +639,7 @@ def main(
     snapflow_student: str = "",
     snapflow_onnx: str = "",
     preprocessor_ref: str = "",
+    save_video_dir: str = "",
 ):
     """
     --num-episodes N          episodes per task (OpenPI default: 50)
@@ -655,7 +673,9 @@ def main(
         task_suite_name=suite,
         task_indices=task_list,
         snapflow_student=snapflow_student,
+        snapflow_onnx=snapflow_onnx,
         preprocessor_ref=preprocessor_ref,
+        save_video_dir=save_video_dir,
     )
     print("\n=== RESULT ===")
     print(f"  model: {r.get('model')}")
