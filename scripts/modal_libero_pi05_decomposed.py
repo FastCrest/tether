@@ -191,10 +191,15 @@ def run_decomposed_libero(
     phash_hamming: int = 6,
     preprocessor_ref: str = "lerobot/pi05_libero_finetuned_v044",
     seed: int = 7,
+    save_video_dir: str = "",
 ):
     """LIBERO rollout through the decomposed ONNX chain. Mirrors
     ``modal_libero_lerobot_native.run_ported_libero`` but swaps the
     forward path for ``Pi05DecomposedInference``.
+
+    save_video_dir: if non-empty, write per-episode MP4 of agentview camera
+    to that path inside the container (typically a /onnx_out subpath so it
+    persists on the volume). Filename encodes task/ep/seed/steps/success.
     """
     import collections
     import logging
@@ -218,8 +223,6 @@ def run_decomposed_libero(
     torch.load = _compat_load
 
     # ─── Load PyTorch policy (preprocessing + config only) ──────────
-    print(f"[decomposed] Loading SnapFlow student from {student_checkpoint}")
-    from reflex.distill.snapflow_pi0_model import load_snapflow_student
     from lerobot.processor.pipeline import PolicyProcessorPipeline
     from lerobot.processor.converters import (
         batch_to_transition, transition_to_batch,
@@ -229,7 +232,25 @@ def run_decomposed_libero(
         OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, ACTION,
     )
 
-    policy = load_snapflow_student(student_checkpoint)
+    # Two ways to source the policy (config + _preprocess_images helper):
+    # 1) SnapFlow student dir on the volume (has model.safetensors) — preferred
+    #    when the student PyTorch checkpoint lives alongside the decomposed
+    #    ONNX export.
+    # 2) Fallback: load PI05Policy from preprocessor_ref (HF id). Inference
+    #    actually runs through ONNX so the policy weights here are unused —
+    #    only config + _preprocess_images matter.
+    student_ckpt_path = Path(student_checkpoint)
+    if (student_ckpt_path / "model.safetensors").exists():
+        print(f"[decomposed] Loading SnapFlow student from {student_checkpoint}")
+        from reflex.distill.snapflow_pi0_model import load_snapflow_student
+        policy = load_snapflow_student(student_checkpoint)
+    else:
+        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+        fallback = preprocessor_ref or "lerobot/pi05_libero_finetuned_v044"
+        print(f"[decomposed] No model.safetensors at {student_checkpoint}; "
+              f"loading PI05Policy from {fallback} (config + preprocessing only — "
+              f"inference still runs through decomposed ONNX)")
+        policy = PI05Policy.from_pretrained(fallback)
     policy.eval().to("cuda").to(torch.float32)
     cfg = policy.config
     chunk_size = cfg.chunk_size
@@ -427,11 +448,16 @@ def run_decomposed_libero(
                 action_plan = collections.deque()
                 t = 0
                 done = False
+                video_frames = [] if save_video_dir else None
+                if video_frames is not None:
+                    video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
                 while t < max_steps + num_steps_wait:
                     try:
                         if t < num_steps_wait:
                             obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            if video_frames is not None:
+                                video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                             t += 1
                             continue
 
@@ -494,6 +520,8 @@ def run_decomposed_libero(
 
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(np.asarray(action).tolist())
+                        if video_frames is not None:
+                            video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                         t += 1
                         if done:
                             break
@@ -515,6 +543,14 @@ def run_decomposed_libero(
                 if success:
                     task_result["success"] += 1
                 print(f"  ep {ep}: {'✓' if success else '✗'} (steps={t})")
+                if video_frames is not None and len(video_frames) > 0:
+                    Path(save_video_dir).mkdir(parents=True, exist_ok=True)
+                    tag = "S" if success else "F"
+                    out = Path(save_video_dir) / (
+                        f"student_t{task_idx}_ep{ep}_seed{seed}_steps{t}_{tag}.npz"
+                    )
+                    np.savez_compressed(str(out), frames=np.array(video_frames, dtype=np.uint8))
+                    print(f"    frames → {out} ({len(video_frames)} frames)")
             except Exception as ep_exc:
                 print(f"  ep {ep}: ERROR {ep_exc}")
                 task_result["episodes"].append({
@@ -551,6 +587,7 @@ def main(
     phash_hamming: int = 6,
     preprocessor_ref: str = "lerobot/pi05_libero_finetuned_v044",
     seed: int = 7,
+    save_video_dir: str = "",
 ):
     """
     --student-checkpoint   Path to SnapFlow student dir on volume (for
@@ -592,6 +629,7 @@ def main(
         phash_hamming=phash_hamming,
         preprocessor_ref=preprocessor_ref,
         seed=seed,
+        save_video_dir=save_video_dir,
     )
     print("\n=== RESULT ===")
     print(f"  model: {r.get('model')}")
