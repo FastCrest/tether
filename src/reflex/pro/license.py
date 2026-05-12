@@ -331,10 +331,15 @@ def issue_dev_license(
     `load_license` accepts (with a warning). Phase 1.5 will require all
     licenses to come from the signing endpoint; `issue_dev_license` will
     move to a `--dev-license` CLI flag that emits a warning at startup.
+
+    Writes as license_version=LICENSE_VERSION_LEGACY_UNSIGNED so the
+    loader takes the legacy unsigned path. Writing it as the current
+    LICENSE_VERSION (=2) trips signature verification, which fails on
+    the empty signature field — the dev path stops working.
     """
     now = datetime.now(timezone.utc)
     license = ProLicense(
-        license_version=LICENSE_VERSION,
+        license_version=LICENSE_VERSION_LEGACY_UNSIGNED,
         customer_id=customer_id,
         tier=tier,
         issued_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),

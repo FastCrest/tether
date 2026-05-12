@@ -19,6 +19,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+import importlib.util
+_LEROBOT_INSTALLED = importlib.util.find_spec("lerobot") is not None
+requires_lerobot = pytest.mark.skipif(
+    not _LEROBOT_INSTALLED,
+    reason="requires [native]/[monolithic]/[rtc] extras (lerobot)",
+)
+
 from reflex.distill.teacher_loader import (
     V03_TEACHER_ALLOWLIST,
     LoadedTeacher,
@@ -175,6 +182,7 @@ class TestPrepareBatch:
         assert not torch.allclose(n1, n2)
 
 
+@requires_lerobot
 class TestBuildPreprocessor:
     def test_overrides_rename_map_and_device(self, tmp_path):
         """_build_preprocessor should inject the image_key_map into the
@@ -230,6 +238,7 @@ class TestBuildVelocityAdapters:
                 teacher=MagicMock(), student=MagicMock(), policy_type="gr00t_n1_5",
             )
 
+    @requires_lerobot
     def test_pi_family_adapter_calls_denoise_step_with_prefix_cache(self):
         """The adapter should call policy.model.denoise_step with the
         lerobot signature (state, prefix_pad_masks, past_key_values, x_t,
@@ -313,6 +322,7 @@ class TestBuildVelocityAdapters:
         assert torch.allclose(vt, torch.full_like(x, 0.1))
         assert torch.allclose(vs, torch.full_like(x, 0.2))
 
+    @requires_lerobot
     def test_student_passes_target_time_through_denoise_step(self):
         """v0.3.1 SnapFlowPI0Pytorch: target_time is now routed through
         denoise_step → embed_suffix → target_time_embed_mlp. The backend

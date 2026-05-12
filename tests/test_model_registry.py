@@ -192,7 +192,10 @@ class TestCliList:
         assert "pi05-base" in ids
 
     def test_models_list_no_match_message(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["models", "list", "--family", "openvla"])
+        # Use a family that's genuinely not in the registry. openvla was
+        # added in v0.9.6 so it now matches; pick a sentinel name that
+        # won't accidentally match a future addition either.
+        result = runner.invoke(cli_app, ["models", "list", "--family", "nonexistent_family_xyz"])
         assert result.exit_code == 0
         assert "No models match" in result.stdout
 
@@ -227,7 +230,7 @@ class TestCliPull:
         result = runner.invoke(cli_app, ["models", "pull", "nope-xyz"])
         assert result.exit_code == 2
         assert "Unknown model_id" in result.stdout
-        assert "Available:" in result.stdout
+        assert "Available registry ids:" in result.stdout
         # Should list every registered model
         for e in REGISTRY:
             assert e.model_id in result.stdout

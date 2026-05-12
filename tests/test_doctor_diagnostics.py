@@ -386,28 +386,48 @@ class TestCheckHardwareCompat:
 
 
 class TestSmoke:
-    def test_runs_all_10_checks(self, tmp_path):
+    # Minimum check_ids that must always be present. New checks can be
+    # registered without breaking this test, but these foundational ones
+    # can never silently disappear.
+    REQUIRED_CHECK_IDS = {
+        "check_model_load",
+        "check_onnx_provider",
+        "check_vlm_tokenization",
+        "check_image_dims",
+        "check_rtc_chunks",
+        "check_action_denorm",
+        "check_gripper",
+        "check_state_proprio",
+        "check_gpu_memory",
+        "check_hardware_compat",
+    }
+
+    def test_runs_all_registered_checks(self, tmp_path):
+        from reflex.diagnostics import _REGISTRY, _ensure_registry_loaded
+        _ensure_registry_loaded()
+        registered_ids = {check.check_id for check in _REGISTRY}
+
         results = run_all_checks(str(tmp_path), "custom", rtc=False)
-        assert len(results) == 10
-        ids = {r.check_id for r in results}
-        assert ids == {
-            "check_model_load",
-            "check_onnx_provider",
-            "check_vlm_tokenization",
-            "check_image_dims",
-            "check_rtc_chunks",
-            "check_action_denorm",
-            "check_gripper",
-            "check_state_proprio",
-            "check_gpu_memory",
-            "check_hardware_compat",
-        }
+        result_ids = {r.check_id for r in results}
+
+        assert len(results) == len(_REGISTRY), (
+            f"executed {len(results)} but registry has {len(_REGISTRY)}"
+        )
+        assert result_ids == registered_ids, (
+            f"missing: {registered_ids - result_ids}, extra: {result_ids - registered_ids}"
+        )
+        assert self.REQUIRED_CHECK_IDS <= result_ids, (
+            f"foundational checks missing: {self.REQUIRED_CHECK_IDS - result_ids}"
+        )
 
     @pytest.mark.parametrize("emb", ["franka", "so100", "ur5"])
     def test_runs_against_each_preset(self, emb, tmp_path):
+        from reflex.diagnostics import _REGISTRY, _ensure_registry_loaded
+        _ensure_registry_loaded()
+
         (tmp_path / "model.onnx").write_bytes(b"\x00")
         results = run_all_checks(str(tmp_path), emb, rtc=True)
-        assert len(results) == 10
+        assert len(results) == len(_REGISTRY)
         for r in results:
             assert r.status in {"pass", "fail", "warn", "skip"}
             if r.status == "fail":

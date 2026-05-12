@@ -56,17 +56,21 @@ def test_import_reflex_exposes_patch_helper():
     assert "OK" in stdout
 
 
-def test_import_reflex_version_is_v07():
-    """Sanity check on the version string."""
+def test_import_reflex_version_is_at_least_v07():
+    """Sanity check on the version string. Uses semver parsing so version
+    bumps don't break this test — only an accidental regression below
+    0.7.0 (our wheel-compatibility floor) trips the assertion."""
     snippet = textwrap.dedent("""
         import reflex
-        v = reflex.__version__
-        assert v.startswith("0.7."), f"expected 0.7.x, got {v}"
-        print(v)
+        from packaging.version import Version
+        v = Version(reflex.__version__)
+        assert v >= Version("0.7.0"), f"version regressed below 0.7.0: {v}"
+        print(reflex.__version__)
     """)
     rc, stdout, stderr = _run_in_subprocess(snippet)
     assert rc == 0, f"stderr={stderr!r}"
-    assert stdout.strip().startswith("0.7.")
+    from packaging.version import Version
+    assert Version(stdout.strip()) >= Version("0.7.0")
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific")
