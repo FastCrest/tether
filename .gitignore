@@ -46,3 +46,49 @@ LICENSE.bak*
 .wrangler/
 **/.wrangler/
 **/wrangler.toml.bak
+
+# Secrets - never commit
+.env
+.env.*
+.env*
+!.env.example
+!.env.sample
+**/firebase-adminsdk*.json
+**/service-account*.json
+*.pem
+*.p12
+*.key
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.swp
+.vscode/
+
+# Node
+node_modules/
+dist/
+.next/
+.wrangler/
+.dev.vars
+out/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Xcode/Swift
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+
+# Logs
+*.log
