@@ -1,0 +1,26 @@
+name = "reflex-contributions"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+
+# D1 binding for contributor metadata + upload tracking + revoke cascade.
+# Fill in `database_id` after `wrangler d1 create reflex-contributions`.
+[[d1_databases]]
+binding = "DB"
+database_name = "reflex-contributions"
+database_id = "39cc37c0-524c-4a7a-921e-76cc44cb1494"
+
+# R2 binding for the actual contribution payloads. Bucket created via
+# `wrangler r2 bucket create reflex-curate`. Layout per spec:
+#   free-contributors/<contributor_id>/<date>/<session>.jsonl
+#   pro-contributors/<customer_id>/<date>/<session>.jsonl
+#   derived-datasets/v<n>/<dataset_slug>/...
+[[r2_buckets]]
+binding = "CURATE_BUCKET"
+bucket_name = "reflex-curate"
+
+# Optional: bind a custom domain after first deploy.
+# routes = [{ pattern = "data.fastcrest.com/*", custom_domain = true }]
+
+# Required Secrets (set via `wrangler secret put`):
+#   ADMIN_TOKEN                — bearer token for /admin/* endpoints
+#   SLACK_WEBHOOK_URL          — optional; alert on revoke + suspicious uploads

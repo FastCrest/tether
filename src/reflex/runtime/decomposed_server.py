@@ -79,6 +79,8 @@ class Pi05DecomposedServer:
         deadline_ms: float | None = None,
         max_batch: int = 1,
         batch_timeout_ms: float = 5.0,
+        action_similarity_threshold: float = 0.0,
+        max_similar_skips: int = 3,
     ):
         self.export_dir = Path(export_dir)
         self.device = device
@@ -93,6 +95,8 @@ class Pi05DecomposedServer:
         self._deadline_ms = deadline_ms
         self._max_batch = max(1, max_batch)
         self._batch_timeout_s = max(0.0, batch_timeout_ms) / 1000.0
+        self._action_similarity_threshold = float(action_similarity_threshold)
+        self._max_similar_skips = int(max_similar_skips)
 
         # ReflexServer-interface mirror attributes (populated during load
         # OR after lifespan wedge composition).
@@ -223,6 +227,8 @@ class Pi05DecomposedServer:
             providers=providers,
             enable_cache=True,
             cache_level="prefix",  # safe default; episode mode requires per-call episode_id
+            action_similarity_threshold=self._action_similarity_threshold,
+            max_similar_skips=self._max_similar_skips,
         )
 
         # Probe the lang_tokens input shape from the ONNX session to

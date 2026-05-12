@@ -59,6 +59,19 @@ def lang_hash(lang_tokens: np.ndarray) -> bytes:
     return hashlib.sha256(lang_tokens.tobytes()).digest()[:16]
 
 
+def _compute_entry_bytes(
+    past_kv: list[np.ndarray], prefix_pad_masks: np.ndarray,
+) -> int:
+    """Return the resident byte size of one cache entry's tensors.
+
+    Uses ``ndarray.nbytes`` (shape product × dtype.itemsize) — exact for
+    numpy buffers; ignores Python object overhead (negligible vs MB-scale
+    KV tensors). If a future code path stores torch tensors here, branch
+    on ``hasattr(arr, "element_size")`` and use ``numel * element_size``.
+    """
+    return sum(arr.nbytes for arr in past_kv) + prefix_pad_masks.nbytes
+
+
 @dataclass
 class EpisodePrefix:
     """One cached VLM forward for an episode."""
@@ -69,6 +82,7 @@ class EpisodePrefix:
     birth_time_ns: int = 0
     last_accessed_ns: int = 0
     hit_count: int = 0                   # how many timesteps reused this
+    bytes_size: int = 0                  # resident bytes (past_kv + prefix_pad_masks)
 
 
 @dataclass
@@ -115,10 +129,24 @@ class EpisodeCache:
         to 1-2.
     """
 
-    def __init__(self, max_episodes: int = 8):
+    def __init__(
+        self,
+        max_episodes: int = 8,
+        *,
+        embodiment: str | None = None,
+        model_id: str | None = None,
+        policy_slot: str = "prod",
+    ):
         self.max_episodes = max_episodes
         self._cache: OrderedDict[tuple[str, bytes], EpisodePrefix] = OrderedDict()
         self.stats = EpisodeCacheStats()
+        self._total_bytes: int = 0
+        # Prometheus labels are optional — emission is a no-op until both
+        # embodiment and model_id are provided. Lets callers adopt byte
+        # tracking without the Prometheus surface in one go.
+        self._embodiment = embodiment
+        self._model_id = model_id
+        self._policy_slot = policy_slot
 
     def lookup(
         self,
@@ -152,10 +180,12 @@ class EpisodeCache:
 
         # Evict LRU if at capacity
         while len(self._cache) >= self.max_episodes:
-            evicted_key, _ = self._cache.popitem(last=False)
+            evicted_key, evicted_prefix = self._cache.popitem(last=False)
+            self._total_bytes -= evicted_prefix.bytes_size
             self.stats.evictions += 1
             logger.debug("[episode-cache] evicted LRU episode %s", evicted_key[0])
 
+        entry_bytes = _compute_entry_bytes(past_kv, prefix_pad_masks)
         prefix = EpisodePrefix(
             episode_id=episode_id,
             lang_hash=key[1],
@@ -164,15 +194,44 @@ class EpisodeCache:
             birth_time_ns=now,
             last_accessed_ns=now,
             hit_count=0,
+            bytes_size=entry_bytes,
         )
         self._cache[key] = prefix
+        self._total_bytes += entry_bytes
         self.stats.episode_count += 1
+        self._emit_bytes_metric()
         return prefix
 
     def reset(self) -> None:
         """Drop all cached entries. Useful between LIBERO eval episodes
         when you want to ensure no cross-episode memory."""
         self._cache.clear()
+        self._total_bytes = 0
+        self._emit_bytes_metric()
+
+    def bytes_resident(self) -> int:
+        """Sum of resident bytes across all cached entries."""
+        return self._total_bytes
+
+    def _emit_bytes_metric(self) -> None:
+        """Push the current byte total to Prometheus when labels are set.
+
+        Import is lazy so callers without `prometheus_client` installed
+        (e.g. CPU-only dev installs without `[serve]`) don't pay the
+        import cost on every cache mutation.
+        """
+        if self._embodiment is None or self._model_id is None:
+            return
+        try:
+            from reflex.observability.prometheus import set_episode_cache_bytes
+        except ImportError:
+            return
+        set_episode_cache_bytes(
+            self._total_bytes,
+            embodiment=self._embodiment,
+            model_id=self._model_id,
+            policy_slot=self._policy_slot,
+        )
 
     def __len__(self) -> int:
         return len(self._cache)

@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - optional dep
 
 from reflex.chat.backends import ChatBackend, ProxyError, RateLimitError
 from reflex.chat.executor import execute, format_tool_result
-from reflex.chat.loop import LoopState, SYSTEM_PROMPT
+from reflex.chat.loop import LoopState, SYSTEM_PROMPT, build_system_prompt
 from reflex.chat.schema import TOOLS
 
 
@@ -91,7 +91,7 @@ if TEXTUAL_AVAILABLE:
             self.backend = backend
             self.dry_run = dry_run
             self.model_label = model_label
-            self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+            self.messages: list[dict[str, Any]] = [{"role": "system", "content": build_system_prompt()}]
             self.token_count = 0
             self.tool_call_count = 0
             self.tool_rows: list[_ToolCallRow] = []
@@ -141,7 +141,7 @@ if TEXTUAL_AVAILABLE:
                 self.exit()
                 return
             if text.lower() == "/reset":
-                self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                self.messages = [{"role": "system", "content": build_system_prompt()}]
                 self.tool_rows.clear()
                 self.tool_call_count = 0
                 self.token_count = 0
@@ -248,7 +248,7 @@ if TEXTUAL_AVAILABLE:
             ts.remove_children()
 
         def action_reset_conversation(self) -> None:
-            self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            self.messages = [{"role": "system", "content": build_system_prompt()}]
             self.tool_rows.clear()
             self.tool_call_count = 0
             self.token_count = 0

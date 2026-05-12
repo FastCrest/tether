@@ -25,6 +25,23 @@ CRITICAL — registry grounding: before any factual claim about a model name, fa
 CRITICAL — verbatim values: when reporting specific values from tool output (version numbers, file paths, IDs, sizes, error messages, model names, latency numbers), copy them exactly as they appear. Do not paraphrase, round, or "fix" them. If a tool says `torch 2.11.0`, write `torch 2.11.0` — never `torch 2.10` or `torch 2.11`. If you didn't run a tool that returned the value, say "I don't have that information" instead of guessing."""
 
 
+def build_system_prompt() -> str:
+    """Build the chat system prompt, optionally appending the curate
+    contribution-program hint when the user is NOT yet opted in.
+
+    Used by LoopState.reset() and tui.py session-start. Static SYSTEM_PROMPT
+    constant is retained for back-compat callers."""
+    base = SYSTEM_PROMPT
+    try:
+        from reflex.curate import consent as _curate_consent
+        from reflex.curate.messaging import CHAT_SYSTEM_PROMPT_ADDITION
+        if not _curate_consent.is_opted_in():
+            return base + "\n\n" + CHAT_SYSTEM_PROMPT_ADDITION
+    except Exception:  # noqa: BLE001
+        pass
+    return base
+
+
 @dataclass
 class LoopState:
     backend: ChatBackend
@@ -39,7 +56,7 @@ class LoopState:
             self.on_event({"kind": kind, **payload})
 
     def reset(self) -> None:
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.messages = [{"role": "system", "content": build_system_prompt()}]
 
     def send(self, user_text: str) -> str:
         if not self.messages:

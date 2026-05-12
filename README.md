@@ -207,8 +207,13 @@ reflex doctor           # diagnose env + GPU + per-deploy issues
 reflex models {list, pull, info, export}    # curated registry + lifecycle
 reflex train  {finetune, distill}           # training operations
 reflex validate {dataset, export}           # pre-flight checks
-reflex inspect {bench, replay, targets, guard, doctor}   # diagnostics + forensics
+reflex inspect {replay, traces}             # forensic tools (legacy diagnostics: --advanced)
+reflex traces {query, summary}              # search + aggregate recorded /act traces
+reflex pro     {activate, status, deactivate}   # Pro tier license
+reflex contribute  {opt-in, opt-out, status}    # Curate data contribution
 ```
+
+11 visible verbs. 8 advanced/SO-100/internal commands stay callable directly (config, calibrate, bench-game, status, inspect bench/targets/guard/doctor) but hidden from `--help` to reduce cognitive load. Power-users can still invoke them; they just don't crowd the discovery surface.
 
 Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable for one release as alias bridges. Removed in v0.3.
 
@@ -299,13 +304,37 @@ Every wedge is a flag on `reflex serve`:
 
 ```bash
 reflex serve ./p0 \
-  --safety-config ./robot_limits.json \   # joint-limit clamping + EU AI Act audit log
-  --adaptive-steps \                       # stop denoise loop early when velocity converges
-  --deadline-ms 33 \                       # return last-known-good action if over budget
-  --cloud-fallback http://cloud:8000      # edge-first with cloud backup
+  --safety-config ./robot_limits.json \    # joint-limit clamping + EU AI Act audit log
+  --adaptive-steps \                        # stop denoise loop early when velocity converges
+  --deadline-ms 33 \                        # return last-known-good action if over budget
+  --cloud-fallback http://cloud:8000 \     # edge-first with cloud backup
+  --action-similarity-threshold 0.05 \     # FlashVLA: skip expert when consecutive chunks are L2-similar
+  --max-similar-skips 3                    # cap on consecutive cached returns (anti-drift safety)
 ```
 
-The response JSON surfaces telemetry from each enabled wedge so you can see what's actually happening (`safety_violations`, `deadline_exceeded`, `adaptive_enabled`, etc.).
+The response JSON surfaces telemetry from each enabled wedge so you can see what's actually happening (`safety_violations`, `deadline_exceeded`, `adaptive_enabled`, etc.). Skip-count from the action-similarity fast path lands on the `reflex_action_skip_total` Prometheus counter at `/metrics`.
+
+## Trace archive — search + aggregate recorded `/act` traces
+
+Pair `reflex serve --record /tmp/traces` with `reflex traces` to debug deployments:
+
+```bash
+# Run any /act traffic with recording on
+reflex serve ./p0 --record /tmp/traces &
+
+# Filter recorded calls — failed pick-cube attempts in the last 7 days
+reflex traces query --dir /tmp/traces \
+  --task pick-cube --status failed --since 7d \
+  --output failures.json
+
+# Aggregate by task → success-rate + p50/p95/p99/max latency per bucket
+reflex traces summary --dir /tmp/traces --since 24h --by task
+
+# Group by model_hash to compare two deployed model versions
+reflex traces summary --dir /tmp/traces --by model --since 7d --output v1_vs_v2.csv
+```
+
+Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive substring), `--status` (`success` / `failed` / `any` — failed = `error` field present), `--model` (substring on `model_hash`), `--limit`. Output formats: rich table (default), JSON or CSV via `--output FILE` + auto-detected from suffix.
 
 ## Supported VLA models
 

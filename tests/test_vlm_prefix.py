@@ -700,12 +700,18 @@ class TestOrchestratorFullPipeline:
                 fake_image = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
                 fake_state = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
 
-                result = orch.run(fake_image, "pick up the cup", fake_state)
+                # Modern API returns (vlm_k, vlm_v) — both shape
+                # [num_layers, batch, seq, kv_dim]. Earlier signature
+                # returned a single 3D prefix; updated when expert
+                # cross-attention adopted per-layer K/V (vlm_components).
+                vlm_k, vlm_v = orch.run(fake_image, "pick up the cup", fake_state)
 
-                # Should be [1, seq, 960]
-                assert result.ndim == 3
-                assert result.shape[0] == 1
-                assert result.shape[2] == 960
+                assert vlm_k.ndim == 4 and vlm_v.ndim == 4
+                # batch dim
+                assert vlm_k.shape[1] == 1
+                assert vlm_v.shape[1] == 1
+                # k and v share the same sequence + kv_dim
+                assert vlm_k.shape == vlm_v.shape
 
 
 # ---------------------------------------------------------------------------

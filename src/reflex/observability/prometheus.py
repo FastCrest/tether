@@ -113,6 +113,17 @@ reflex_fallback_invocations_total = Counter(
     registry=REGISTRY,
 )
 
+# Action-similarity fast-path skip counter (action-similarity-fast-path
+# Phase 1.5 — FlashVLA). Increments when the inference path returns a
+# cached action chunk instead of running the expert. Operator visibility
+# on how often the fast path actually triggers (low rate = no real
+# benefit; high rate near 100% = threshold may be too lax → drift risk).
+reflex_action_skip_total = Counter(
+    "reflex_action_skip_total",
+    "Action-similarity fast path: cached-action returns instead of expert calls",
+    registry=REGISTRY,
+)
+
 reflex_model_swaps_total = Counter(
     "reflex_model_swaps_total",
     "Hot-swap events (recorded at swap-complete)",
@@ -215,6 +226,10 @@ def inc_fallback_invocation(embodiment: str, target: str) -> None:
     reflex_fallback_invocations_total.labels(
         embodiment=embodiment, fallback_target=target
     ).inc()
+
+
+def inc_action_skip() -> None:
+    reflex_action_skip_total.inc()
 
 
 def inc_model_swap(embodiment: str, from_model: str, to_model: str) -> None:
@@ -506,6 +521,38 @@ def inc_a2c2_applied(reason: str) -> None:
 
 def inc_a2c2_skipped(reason: str) -> None:
     reflex_a2c2_skipped_total.labels(reason=reason).inc()
+
+
+# ---------------------------------------------------------------------------
+# Episode cache memory tracking
+#
+# Note on naming: by Prometheus convention `_total` is reserved for monotonic
+# Counters. `reflex_episode_cache_bytes_total` is implemented here as a Gauge
+# because the resident byte size goes up on insert AND down on eviction/reset.
+# Name preserved verbatim from the GFI spec; flagged for maintainer review.
+#
+# Cardinality: bounded enums on (embodiment, model_id, policy_slot) — same
+# label set as reflex_act_latency_seconds. ~3 × 6 × 3 = 54 series.
+# ---------------------------------------------------------------------------
+
+reflex_episode_cache_bytes_total = Gauge(
+    "reflex_episode_cache_bytes_total",
+    "Resident byte size of the EpisodeCache (sum of past_kv + prefix_pad_masks "
+    "across all retained entries)",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
+
+def set_episode_cache_bytes(
+    value: int,
+    embodiment: str,
+    model_id: str,
+    policy_slot: str = "prod",
+) -> None:
+    reflex_episode_cache_bytes_total.labels(
+        embodiment=embodiment, model_id=model_id, policy_slot=policy_slot,
+    ).set(value)
 
 
 # ---------------------------------------------------------------------------

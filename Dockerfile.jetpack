@@ -1,0 +1,51 @@
+# Reflex VLA — Fully-bundled JetPack image (Orin / Nano / Thor)
+#
+# This is the "fat" image for users who want everything pre-installed.
+#   • Derives from NVIDIA L4T base (contains JetPack CUDA/cuDNN/TensorRT)
+#   • Bundles Jetson Zoo onnxruntime-gpu (no host-leak needed)
+#   • Weights can be pre-fetched at build time or mounted at runtime
+#
+# Trade-offs:
+#   • ~4-6 GB (vs ~1.6 GB for Dockerfile.arm64)
+#   • Requires NVIDIA NGC pull (nvcr.io login) — not Docker Hub
+#
+# Build:
+#   docker build -t reflex-vla:jetpack -f Dockerfile.jetpack .
+#
+# Run:
+#   docker run --rm --runtime=nvidia -it reflex-vla:jetpack go --preset franka
+
+ARG L4T_BASE=nvcr.io/nvidia/l4t-base:r36.2.0
+FROM ${L4T_BASE}
+
+# L4T base includes Python 3.10 and system JetPack 6.x libraries.
+# We only install the user-space Python packages.
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-pip libgl1 libglib2.0-0 libusb-1.0-0 libsndfile1 ffmpeg git \
+  && rm -rf /var/lib/apt/lists/*
+
+ARG JETPACK_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
+
+WORKDIR /reflex
+COPY pyproject.toml README.md LICENSE ./
+COPY src/ ./src/
+
+# Install reflex + [serve,monolithic] (no [gpu] — x86 wheels would break),
+# pin numpy<2 for Jetson Zoo ABI, then install Jetson Zoo onnxruntime-gpu.
+RUN pip3 install --no-cache-dir -e ".[serve,monolithic]" \
+  && pip3 install --no-cache-dir 'numpy<2' \
+  && pip3 install --no-cache-dir --index-url "${JETPACK_INDEX_URL}" onnxruntime-gpu
+
+# Verify GPU provider is importable (L4T base has CUDA libs, so this should pass).
+RUN python3 -c "
+import onnxruntime as ort
+assert 'CUDAExecutionProvider' in ort.get_available_providers(), 'CUDA provider missing'
+print('JetPack image OK — CUDAExecutionProvider available')
+"
+
+ENV REFLEX_CACHE_DIR=/reflex/.cache
+RUN mkdir -p /reflex/.cache
+
+ENTRYPOINT ["python3", "-m", "reflex.cli"]
+CMD ["--help"]

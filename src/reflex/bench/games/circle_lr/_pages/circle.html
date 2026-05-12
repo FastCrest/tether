@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+__SHARED_HEAD__
+</head>
+<body>
+<div id="score">Hits: 0 | Misses: 0</div>
+<div id="feedback"></div>
+<canvas id="c"></canvas>
+<script>
+__TOUCH_HANDLER_JS__
+
+// Server is the single source of truth for target_x, target_y, visible.
+// JS just polls /circle/target every 200ms and renders whatever it says.
+// On tap: POST /circle/tap_done so the server hides the circle. Server
+// only spawns a new circle when the collector POSTs /circle/respawn.
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const feedbackEl = document.getElementById('feedback');
+
+// Local cache of server's authoritative target state.
+let serverTarget = {x: 0, y: 0, r: 120, color: '#00FF00',
+                    shape: 'circle', visible: false, token: 0};
+let hits = 0, misses = 0;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  draw();
+}
+
+function draw() {
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (serverTarget.visible) {
+    ctx.fillStyle = serverTarget.color || '#00FF00';
+    const r = serverTarget.r;
+    if (serverTarget.shape === 'square') {
+      ctx.fillRect(serverTarget.x - r, serverTarget.y - r, 2*r, 2*r);
+    } else {
+      ctx.beginPath();
+      ctx.arc(serverTarget.x, serverTarget.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function showFeedback(text, color) {
+  feedbackEl.textContent = text;
+  feedbackEl.style.color = color;
+  feedbackEl.style.opacity = 1;
+  setTimeout(() => { feedbackEl.style.opacity = 0; }, 500);
+}
+
+// Touch handler — informational only. Server hides the circle on its
+// own state when /circle/tap_done is POSTed.
+let _tapTarget = null, _tapDist = 0, _tapHit = false;
+
+function onTouchTap(tx, ty) {
+  _tapTarget = {x: serverTarget.x, y: serverTarget.y, r: serverTarget.r};
+  const dx = tx - serverTarget.x, dy = ty - serverTarget.y;
+  _tapDist = Math.sqrt(dx*dx + dy*dy);
+  _tapHit = serverTarget.visible && _tapDist <= serverTarget.r;
+  if (_tapHit) { hits++; showFeedback('HIT!', '#00FF66'); }
+  else { misses++; showFeedback('MISS', '#FF4444'); }
+  scoreEl.textContent = 'Hits: ' + hits + ' | Misses: ' + misses;
+  // Send the token of the circle we just tapped. Server only hides
+  // if the token still matches — prevents a delayed tap_done from
+  // hiding the NEXT round's freshly-respawned circle.
+  fetch('/circle/tap_done', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({token: serverTarget.token}),
+  }).catch(()=>{});
+}
+
+function getLogExtras() {
+  if (!_tapTarget) return {};
+  return {
+    target_x: _tapTarget.x, target_y: _tapTarget.y, target_r: _tapTarget.r,
+    distance: _tapDist, hit: _tapHit,
+  };
+}
+
+window.addEventListener('resize', resize);
+_initTouchHandler(canvas);
+resize();
+
+let lastDrawnToken = 0;
+
+function confirmDrawnAfterPaint(token) {
+  if (!token || token <= lastDrawnToken) return;
+  // Two animation frames means the canvas draw has had a chance to reach
+  // the compositor before the server unblocks collection.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      fetch('/circle/drawn', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          token: token,
+          screen_w: canvas.width,
+          screen_h: canvas.height,
+        }),
+      }).then(() => { lastDrawnToken = token; }).catch(()=>{});
+    });
+  });
+}
+
+// Poll the server for the current target. Server is authoritative.
+setInterval(() => {
+  fetch('/circle/target').then(r => r.json()).then(d => {
+    if (d.x !== serverTarget.x || d.y !== serverTarget.y ||
+        d.visible !== serverTarget.visible || d.r !== serverTarget.r ||
+        d.token !== serverTarget.token || d.color !== serverTarget.color ||
+        d.shape !== serverTarget.shape) {
+      serverTarget = {x: d.x, y: d.y, r: d.r,
+                      color: d.color || '#00FF00',
+                      shape: d.shape || 'circle',
+                      visible: d.visible, token: d.token};
+      draw();
+      if (serverTarget.visible && serverTarget.token > 0) {
+        confirmDrawnAfterPaint(serverTarget.token);
+      }
+    }
+  }).catch(()=>{});
+}, 50);
+</script>
+</body>
+</html>

@@ -1,52 +1,83 @@
-# arm64 variant of reflex-vla — targets Jetson Orin / Orin Nano / Thor.
+# Reflex VLA — ARM64 runtime image (Jetson Orin / Nano / Thor)
 #
-# Philosophy: this image ships reflex-vla's Python runtime + ONNX deps
-# without bundling Jetson-specific CUDA/cuDNN/TensorRT (those live on the
-# Jetson device under /usr/local/cuda and are ABI-locked to the host
-# JetPack version). Customers `docker run --runtime=nvidia` on a Jetson
-# device and the host CUDA libs are exposed into the container via the
-# nvidia container runtime.
+# This is intentionally a *thin* runtime-only image.
+#   ✓ It is 1.6-2.0 GB and can be built on x86_64 with docker buildx.
+#   ✓ It does NOT contain NVIDIA driver libraries — it expects the host
+#     JetPack (CUDA, cuDNN, TensorRT) to be mounted at runtime via
+#     --runtime=nvidia (or via a Docker Compose nvidia-device-plugin).
+#   ✓ It does NOT include [gpu] (x86_64 PyPI wheels) — instead we pull
+#     the Jetson Zoo onnxruntime-gpu wheel which is built against JetPack.
 #
-# Use:
-#   docker pull ghcr.io/fastcrest/reflex-vla:<version>-arm64
-#   docker run --runtime=nvidia --rm -v $(pwd)/exports:/exports \
-#     ghcr.io/fastcrest/reflex-vla:<version>-arm64
+# Recommended usage:
+#   docker build -t reflex-vla:arm64 -f Dockerfile.arm64 .
+#   docker run --rm --runtime=nvidia -it reflex-vla:arm64
 #
-# Image size: ~1.2 GB (no CUDA baked in).
-# If you want a fully-bundled JetPack image, watch for :<version>-jetpack
-# tags (tracked in docker-jetpack-bundle goal, v0.3+).
+# If you want a fully-bundled JetPack image (larger, no host-leak):
+#   see Dockerfile.jetpack
 
-FROM python:3.12-slim
+FROM python:3.10-slim-bookworm
 
+ARG TARGETARCH
+
+RUN <<EOR
+  if [ "$TARGETARCH" != "arm64" ] && [ "$TARGETARCH" != "" ]; then
+    echo "WARNING: TARGETARCH is not 'arm64' ($TARGETARCH)."
+    echo "  Build with: docker build --platform linux/arm64 ..."
+  fi
+EOR
+
+# System deps: OpenGL, USB cameras, audio libs (for real-robot I/O)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+      libgl1 libglib2.0-0 libusb-1.0-0 libsndfile1 \
+      ffmpeg git wget \
+  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# JetPack version — defaults to 6.0 / 6.1 (cu126).
+# Override at build time for JetPack 6.2+:
+#   --build-arg JETPACK_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu129
+ARG JETPACK_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
+
+WORKDIR /reflex
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 
-# arm64 wheel availability:
-#   - torch: arm64 wheels exist from 2.2+
-#   - onnxruntime: arm64 wheels exist (CPU provider; CUDA provider requires
-#                  host libs via nvidia container runtime)
-#   - transformers, safetensors, onnx: pure-python or arm64-native wheels
-# We install ONLY the [serve] extra. Jetson customers RUN inference
-# (FastAPI + ORT) -- they don't run the export pipeline (which requires
-# [monolithic]'s lerobot dep, which transitively pulls evdev that needs
-# linux-input-headers + gcc to source-build on slim images). Customers who
-# need to export should do that on an x86 workstation and deploy the
-# resulting ONNX dir to the Jetson.
-# NOTE: [gpu] extra is NOT installed here — onnxruntime-gpu's CUDA
-# dependencies are pinned to specific CUDA major versions that won't
-# match Jetson's JetPack CUDA. Jetson users install onnxruntime-gpu
-# via JetPack-compatible wheels themselves (see NVIDIA's Jetson Zoo).
-RUN pip install --no-cache-dir ".[serve]"
+# 1) Install reflex-vla itself WITHOUT [gpu].
+#    The [serve,monolithic] extra includes everything needed to serve
+#    a pre-exported model OR run reflex go (export+serve) in one shot.
+# 2) Pin numpy<2 because Jetson Zoo wheels are compiled against numpy 1.x
+#    and crash with ABI errors under numpy 2.x.
+# 3) Install Jetson Zoo onnxruntime-gpu over the top of any CPU wheel that
+#    may have been pulled transitively by transformers / pi0.
+RUN pip install --no-cache-dir -e ".[serve,monolithic]" \
+  && pip install --no-cache-dir 'numpy<2' \
+  && pip install --no-cache-dir --index-url "${JETPACK_INDEX_URL}" onnxruntime-gpu
 
-EXPOSE 8000
-VOLUME ["/exports"]
+# Runtime verification — fail the build if the GPU wheel can't see CUDA.
+# This is a sanity check; the real test requires --runtime=nvidia + a GPU.
+RUN <<EOR
+  python3 -c "
+import onnxruntime as ort
+print('onnxruntime:', ort.__version__)
+providers = ort.get_available_providers()
+print('providers:', providers)
+if 'CUDAExecutionProvider' not in providers:
+    print('WARNING: CUDAExecutionProvider not available.')
+    print('  This is expected during build on hosts without --runtime=nvidia.')
+    print('  Run with: docker run --rm --runtime=nvidia -it <image>')
+    exit(0)  # don't fail the build; this is a runtime-only check
+print('CUDAExecutionProvider OK')
+"
+EOR
 
-ENTRYPOINT ["reflex"]
-CMD ["serve", "/exports", "--host", "0.0.0.0", "--port", "8000"]
+# Optional: install additional presets at build time
+# (e.g. Unitree G1, Franka Emika, UR5, etc.)
+# This is intentionally commented out because it adds ~1 GB of weights.
+# Users can mount a host weights cache or download at first run.
+# RUN reflex preset --fetch all
+
+# The default reflex go command expects a writable cache dir.
+ENV REFLEX_CACHE_DIR=/reflex/.cache
+RUN mkdir -p /reflex/.cache
+
+ENTRYPOINT ["python3", "-m", "reflex.cli"]
+CMD ["--help"]

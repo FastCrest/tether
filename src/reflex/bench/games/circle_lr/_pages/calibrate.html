@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>SO-ARM bench calibration</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #111; overflow: hidden;
+    font-family: -apple-system, system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  #hint {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    color: #888; font-size: 14px; text-align: center; pointer-events: none;
+    line-height: 1.6;
+  }
+  #feedback {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 64px; font-weight: bold;
+    pointer-events: none; opacity: 0;
+    transition: opacity 0.18s;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">
+  <div style="font-size:18px">SO-ARM bench calibration</div>
+  <div style="font-size:12px;color:#666;margin-top:6px">
+    Touch each green marker (1→4) with the gripper.<br>
+    Hit = marker turns gray. Miss = brief red flash.<br>
+    Press fullscreen first.
+  </div>
+</div>
+<div id="feedback"></div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const feedbackEl = document.getElementById('feedback');
+
+const MARGIN = 80;     // must match calibrate.py MARGIN_PX
+const RADIUS = 36;     // hit-test radius (matches drawn marker)
+
+// Per-marker state — once hit, stays gray.
+const hit = [false, false, false, false];
+
+function corners() {
+  const W = canvas.width, H = canvas.height;
+  return [
+    {n: 1, x: MARGIN,     y: MARGIN,     name: 'top-left'},
+    {n: 2, x: W - MARGIN, y: MARGIN,     name: 'top-right'},
+    {n: 3, x: W - MARGIN, y: H - MARGIN, name: 'bottom-right'},
+    {n: 4, x: MARGIN,     y: H - MARGIN, name: 'bottom-left'},
+  ];
+}
+
+function showFeedback(text, color) {
+  feedbackEl.textContent = text;
+  feedbackEl.style.color = color;
+  feedbackEl.style.opacity = 1;
+  setTimeout(() => { feedbackEl.style.opacity = 0; }, 450);
+}
+
+function draw() {
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (const c of corners()) {
+    const isHit = hit[c.n - 1];
+    // Outer circle: green if untouched, dark gray if hit.
+    ctx.fillStyle = isHit ? '#444' : '#00FF66';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cross-hair inside (so the user has a precise tap target)
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(c.x - RADIUS + 6, c.y); ctx.lineTo(c.x + RADIUS - 6, c.y);
+    ctx.moveTo(c.x, c.y - RADIUS + 6); ctx.lineTo(c.x, c.y + RADIUS - 6);
+    ctx.stroke();
+
+    // Big number above/below the marker.
+    ctx.fillStyle = isHit ? '#888' : '#fff';
+    ctx.font = 'bold 32px sans-serif';
+    ctx.textAlign = 'center';
+    const labelY = (c.y < canvas.height / 2) ? c.y + RADIUS + 32 : c.y - RADIUS - 12;
+    ctx.fillText(`${c.n}`, c.x, labelY);
+
+    // Coordinate text.
+    ctx.fillStyle = isHit ? '#666' : '#bbb';
+    ctx.font = 'bold 22px monospace';
+    const coordY = (c.y < canvas.height / 2) ? c.y + RADIUS + 60 : c.y - RADIUS - 40;
+    ctx.fillText(`(${Math.round(c.x)}, ${Math.round(c.y)})`, c.x, coordY);
+
+    // Corner name.
+    ctx.fillStyle = '#666';
+    ctx.font = '14px sans-serif';
+    const nameY = (c.y < canvas.height / 2) ? c.y + RADIUS + 80 : c.y - RADIUS - 60;
+    ctx.fillText(c.name, c.x, nameY);
+  }
+
+  // Top-centre status: viewport + hits.
+  const hitCount = hit.filter(Boolean).length;
+  ctx.fillStyle = '#444';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(
+    `viewport: ${canvas.width} × ${canvas.height}   |   hits: ${hitCount}/4`,
+    canvas.width / 2, 18);
+}
+
+function postHit(corner) {
+  // Notify the Pi-side wizard that a corner was just tapped. Wizard
+  // reads arm pose at that moment.
+  fetch('/hit', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({corner: corner}),
+  }).catch(()=>{});
+}
+
+function postTouch(kind, tx, ty, corner, dist) {
+  fetch('/touch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      kind: kind,
+      x: tx,
+      y: ty,
+      corner: corner || 0,
+      distance: Number.isFinite(dist) ? dist : null,
+      t: Date.now(),
+    }),
+  }).catch(()=>{});
+}
+
+function handleTap(tx, ty) {
+  // Distance to each marker; pick closest within RADIUS.
+  let bestDist = Infinity, bestIdx = -1;
+  for (const c of corners()) {
+    const dx = tx - c.x, dy = ty - c.y;
+    const d = Math.sqrt(dx*dx + dy*dy);
+    if (d < bestDist) { bestDist = d; bestIdx = c.n - 1; }
+  }
+  if (bestDist <= RADIUS) {
+    if (hit[bestIdx]) {
+      showFeedback(`#${bestIdx+1} again`, '#888');
+    } else {
+      hit[bestIdx] = true;
+      showFeedback(`HIT #${bestIdx+1}`, '#00FF66');
+    }
+    // Always POST so the wizard sees retaps too (it dedupes per-corner).
+    postHit(bestIdx + 1);
+    postTouch('tap', tx, ty, bestIdx + 1, bestDist);
+  } else {
+    showFeedback(`MISS (${Math.round(bestDist)}px)`, '#FF4444');
+    postTouch('tap', tx, ty, 0, bestDist);
+  }
+  draw();
+}
+
+canvas.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(()=>{});
+  }
+  if (e.touches && e.touches[0]) {
+    const t = e.touches[0];
+    handleTap(t.clientX, t.clientY);
+  }
+}, {passive: false});
+
+canvas.addEventListener('touchmove', function(e) {
+  e.preventDefault();
+  if (e.touches && e.touches[0]) {
+    const t = e.touches[0];
+    postTouch('move', t.clientX, t.clientY, 0, null);
+  }
+}, {passive: false});
+
+canvas.addEventListener('touchend', function(e) {
+  postTouch('end', -1, -1, 0, null);
+}, {passive: false});
+
+canvas.addEventListener('mousedown', function(e) {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(()=>{});
+  }
+  handleTap(e.clientX, e.clientY);
+});
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  draw();
+}
+
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+resize();
+</script>
+</body>
+</html>

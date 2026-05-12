@@ -792,6 +792,7 @@ class ReflexServer:
         # reflex guard — safety check
         safety_violations = 0
         guard_detail: list[str] = []
+        guard_summary: dict[str, Any] | None = None
         if self._action_guard is not None:
             try:
                 safe_actions, guard_results = self._action_guard.check(actions_np)
@@ -802,6 +803,18 @@ class ReflexServer:
                         f"action {i}: {len(r.violations)} violations"
                         for i, r in enumerate(guard_results[:3]) if r.violations
                     ]
+                # Failure-classifier substrate (per consent-revoke + failure-classifier
+                # research sidecars): expose flat violations list + clamp count so the
+                # recorder can write it into the JSONL `guard` field. Detectors that
+                # depend on guard data (collision, action_clamp) read this in the
+                # uploader pass.
+                guard_summary = {
+                    "violations": [
+                        v for r in guard_results for v in r.violations
+                    ],
+                    "clamped": any(r.clamped for r in guard_results),
+                    "clamp_count": sum(1 for r in guard_results if r.clamped),
+                }
             except Exception as e:
                 logger.warning("safety check failed: %s", e)
 
@@ -858,6 +871,11 @@ class ReflexServer:
             result["safety_violations"] = safety_violations
             if guard_detail:
                 result["safety_detail"] = guard_detail
+            # Recorder consumes guard_summary to populate write_request(guard=...)
+            # for the failure classifier. Only emit when there's actual data
+            # (omit when guard_summary remained None due to exception above).
+            if guard_summary is not None:
+                result["guard_summary"] = guard_summary
         if self._deadline_ms is not None:
             result["deadline_exceeded"] = deadline_exceeded
             if self._deadline_misses:
@@ -1161,6 +1179,11 @@ def create_app(
     otel_sample: float = 1.0,  # 0.0-1.0; 1.0=sample all, 0.1=10% (OTel SemConv)
     robot_id: str | None = None,  # fleet-telemetry: human-readable per-process identity
     cuda_graphs_enabled: bool = False,  # opt-in ORT cuda-graphs on decomposed sessions
+    # Action-similarity fast path (FlashVLA, arxiv 2505.21200). Decomposed
+    # pi0.5 only — Pi05DecomposedServer wires it; legacy + monolithic ignore.
+    # 0.0 = disabled (default); 0.05 = paper default.
+    action_similarity_threshold: float = 0.0,
+    max_similar_skips: int = 3,
     a2c2_checkpoint: str | None = None,  # path to .npz A2C2 head; None disables A2C2
     a2c2_latency_threshold_ms: float = 40.0,  # hook auto-skip when latency_p95 < this (ms)
     a2c2_success_threshold: float = 0.90,  # hook auto-skip when /act success rate > this; set to 1.01 to disable
@@ -1281,6 +1304,8 @@ def create_app(
             deadline_ms=deadline_ms,
             max_batch=max_batch,
             batch_timeout_ms=batch_timeout_ms,
+            action_similarity_threshold=action_similarity_threshold,
+            max_similar_skips=max_similar_skips,
         )
     elif _monolithic_cfg.get("export_kind") == "monolithic":
         _model_type = _monolithic_cfg.get("model_type", "smolvla")
@@ -1444,6 +1469,25 @@ def create_app(
             _model_type = _monolithic_cfg.get("model_type", "smolvla")
             _export_kind = _monolithic_cfg.get("export_kind", "decomposed")
             _ec = embodiment_config
+            # Curate dual-write: when --record AND consent is opted-in,
+            # also enqueue every recorded /act into the contribution queue
+            # at ~/.reflex/contribute/queue/. Failures here downgrade the
+            # recorder to JSONL-only — never block --record.
+            _curate_collector = None
+            try:
+                from reflex.curate import consent as _curate_consent
+                if _curate_consent.is_opted_in():
+                    from reflex.curate.free_collector import FreeContributorCollector
+                    _curate_collector = FreeContributorCollector.from_consent()
+                    logger.info(
+                        "curate dual-write armed: contributor_id=%s tier=%s",
+                        _curate_collector.contributor_id, _curate_collector.tier,
+                    )
+            except Exception as _curate_exc:  # noqa: BLE001
+                logger.warning(
+                    "curate dual-write disabled: %s", _curate_exc,
+                )
+                _curate_collector = None
             server._recorder = RecordWriter(  # type: ignore[attr-defined]
                 record_dir=record_dir,
                 model_hash=compute_model_hash(export_dir),
@@ -1459,10 +1503,12 @@ def create_app(
                 image_redaction=record_image_redaction,  # type: ignore[arg-type]
                 gzip_output=record_gzip,
                 reflex_version=_REFLEX_VERSION,
+                curate_collector=_curate_collector,
             )
             logger.info(
-                "RecordWriter armed: dir=%s redaction=%s gzip=%s",
+                "RecordWriter armed: dir=%s redaction=%s gzip=%s curate=%s",
                 record_dir, record_image_redaction, record_gzip,
+                "on" if _curate_collector else "off",
             )
         except Exception as e:  # noqa: BLE001 — recorder must never crash serve startup
             logger.error("RecordWriter init failed (recording disabled): %s", e)
@@ -1709,6 +1755,16 @@ def create_app(
                 ec.control["frequency_hz"], ec.control["chunk_size"],
             )
         server.health_state = "loading"  # type: ignore[attr-defined]
+        # Curate touchpoint: brief banner at serve start until the user has
+        # decided about data contribution. Honors REFLEX_NO_CONTRIB_NUDGE=1
+        # for hard-silence; otherwise prints once per serve start.
+        try:
+            from reflex.curate import nudge_engine as _curate_nudge
+            _msg = _curate_nudge.maybe_serve_start_banner()
+            if _msg is not None:
+                logger.info("contribute: %s", _msg.body)
+        except Exception as _curate_exc:  # noqa: BLE001
+            logger.debug("curate banner skipped: %s", _curate_exc)
         # Phase logging + loud failure: if server.load() throws, print a
         # full traceback to stderr (uvicorn swallows lifespan exceptions
         # by default, leaving users staring at "Waiting for application
@@ -2045,9 +2101,45 @@ def create_app(
             except Exception as exc:  # noqa: BLE001 — never block startup on heartbeat scaffolding
                 logger.warning("Pro heartbeat scaffolding failed: %s", exc)
 
+        # Curate uploader scaffolding — daily background upload of the
+        # contribution queue at ~/.reflex/contribute/queue/. Posts to the
+        # live contribution-worker (https://reflex-contributions.fastcrest
+        # .workers.dev) by default. Set REFLEX_CURATE_DRY_RUN=1 to keep
+        # files locally without uploading; REFLEX_CONTRIB_ENDPOINT to point
+        # at a self-hosted worker.
+        _curate_uploader = None
+        try:
+            from reflex.curate import consent as _curate_consent
+            if _curate_consent.is_opted_in():
+                from reflex.curate.uploader import Uploader as _CurateUploader
+                _curate_receipt = _curate_consent.load()
+                _curate_dry_run = os.environ.get("REFLEX_CURATE_DRY_RUN", "").lower() in ("1", "true", "yes")
+                _curate_uploader = _CurateUploader(
+                    contributor_id=_curate_receipt.contributor_id,
+                    tier=_curate_receipt.tier,
+                    opted_in_at=_curate_receipt.opted_in_at,
+                    privacy_mode=_curate_receipt.privacy_mode,
+                    live=not _curate_dry_run,
+                )
+                _curate_uploader.start()
+                logger.info(
+                    "curate uploader started (live=%s; contributor_id=%s)",
+                    not _curate_dry_run, _curate_receipt.contributor_id,
+                )
+        except Exception as exc:  # noqa: BLE001 — never block startup on uploader scaffolding
+            logger.warning("curate uploader scaffolding failed: %s", exc)
+            _curate_uploader = None
+
         try:
             yield
         finally:
+            # Stop the curate uploader if it was started.
+            if _curate_uploader is not None:
+                try:
+                    _curate_uploader.stop(drain=True)
+                    logger.info("curate uploader stopped")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("curate uploader.stop failed: %s", exc)
             # Cancel the Pro heartbeat task if running.
             if _heartbeat_task is not None and not _heartbeat_task.done():
                 _heartbeat_task.cancel()
@@ -2482,6 +2574,13 @@ def create_app(
                         "cached": _two_routing_decision.cached,
                         "crash_verdict": _two_routing_decision.crash_verdict,
                     }
+                # Failure-classifier substrate (per failure-classifier-v1 research
+                # sidecar Finding 3.1): pass through guard_summary if predict()
+                # populated it. None when ActionGuard wasn't built (no URDF /
+                # embodiment_config.constraints absent).
+                _guard_for_record = (
+                    result.get("guard_summary") if isinstance(result, dict) else None
+                )
                 rec_seq = _rec.write_request(
                     chunk_id=_rec.seq,  # 1:1 with seq for non-batched serve
                     image_b64=request.image,
@@ -2493,6 +2592,7 @@ def create_app(
                     mode=str(result.get("inference_mode", "")),
                     error=err,
                     routing=_routing_for_record,
+                    guard=_guard_for_record,
                 )
                 if rec_seq >= 0:
                     span.set_attribute("reflex.record.seq", rec_seq)

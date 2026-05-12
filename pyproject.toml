@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "reflex-vla"
-version = "0.8.0"
+version = "0.9.6"
 description = "Deploy any VLA model to any edge hardware. Now with reflex chat — natural-language CLI."
 readme = "README.md"
 license = "BUSL-1.1"
@@ -67,22 +67,31 @@ onnx = ["onnxruntime>=1.17.0"]
 # and ORT silently falls back to CUDA EP — losing the 5.55x. See ADR
 # 2026-04-29-ort-trt-ep-first-class-support.md. Adds ~2 GB to install.
 #
+# v0.9.2 (2026-05-07): bumped onnxruntime-gpu floor to 1.25.1 + dropped the
+# <1.24 ceiling. ORT 1.25.0 (2026-04-20) shipped Blackwell sm_120 kernels
+# via PR #27278 (CUDA arch family codes 100f/110f/120f) — first PyPI wheels
+# with usable RTX 5090 / RTX 5060 / B200 / GB200 support. Earlier 1.23/1.24
+# regressed sm_120 (cudaErrorNoKernelImageForDevice on Blackwell); 1.25.1
+# is the current stable. Live caveat: open issue #27621 (silent threading
+# deadlock on sm_120 with PTX JIT + GIL) means Blackwell tier needs smoke
+# validation before declaring fully production-ready.
+#
 # Apr-14 post-mortem: omitting cuDNN/cuBLAS pulls was the cause of silent
 # CPU fallback in v0.1 benchmarks. Same shape of bug at the TRT layer is
 # why v0.7 ships tensorrt by default in [gpu].
 gpu = [
-    "onnxruntime-gpu>=1.20,<1.24",
-    "nvidia-cudnn-cu12>=9.0,<10.0",
-    "nvidia-cublas-cu12>=12.0,<13.0",
+    "onnxruntime-gpu>=1.25.1",
+    "nvidia-cudnn-cu12>=9.5,<10.0",
+    "nvidia-cublas-cu12>=12.6,<13.0",
     # New in v0.7: provides libnvinfer.so.10 for ORT-TRT EP
     "tensorrt>=10.0,<11; sys_platform == 'linux'",
 ]
 # Optional: skip tensorrt for users who explicitly don't want the 2 GB install
 # footprint. They get ORT-CUDA EP only (~5x slower than TRT EP on transformers).
 gpu-min = [
-    "onnxruntime-gpu>=1.20,<1.24",
-    "nvidia-cudnn-cu12>=9.0,<10.0",
-    "nvidia-cublas-cu12>=12.0,<13.0",
+    "onnxruntime-gpu>=1.25.1",
+    "nvidia-cudnn-cu12>=9.5,<10.0",
+    "nvidia-cublas-cu12>=12.6,<13.0",
 ]
 # HTTP serve stack. Includes onnxruntime (CPU) so `pip install reflex-vla[serve]`
 # gives you a working server out of the box. For GPU, use `[serve,gpu]` to pull in
@@ -155,6 +164,34 @@ tracing = [
 # extra; only the actual processor construction needs it.
 rtc = [
     "lerobot==0.5.1",
+]
+# Curate format-converter extras. Phase 1 ships LeRobot v3 + HDF5 with the
+# core install (parquet via pyarrow which huggingface_hub already pulls; h5py
+# is small). RLDS + OXE + LeRobot-v3-video need heavier deps that the base
+# install skips.
+#
+# [curate-hdf5]: HDF5 converter. h5py is small (~5MB) but adds build-time
+# C-extension cost; gated to keep the base wheel slim.
+curate-hdf5 = [
+    "h5py>=3.0,<4",
+]
+# [curate-video]: LeRobot v3 video materialization. Decodes base64 image_b64
+# frames + ffmpeg-encodes to H.264 mp4 per the LeRobot v3 spec. Without this
+# extra the converter ships parquet + metadata only (warning emitted).
+# imageio-ffmpeg ships its own ffmpeg binary so the customer doesn't need a
+# system-wide install. We use imageio_ffmpeg.write_frames directly (simpler
+# than ffmpeg-python's pipe builder + sufficient for the H.264 path).
+curate-video = [
+    "imageio-ffmpeg>=0.4.9",
+    "Pillow>=10.0.0",
+]
+# [curate-rlds]: Google's RLDS / TFRecord format + Open X-Embodiment.
+# tensorflow_datasets is heavy (~80MB; pulls TF + numpy version pins that
+# may conflict with local envs). Gated behind the extra so customers who
+# only need LeRobot v3 / HDF5 don't pay that cost.
+curate-rlds = [
+    "tensorflow-datasets>=4.9.0",
+    "tensorflow>=2.13.0",
 ]
 
 [project.scripts]

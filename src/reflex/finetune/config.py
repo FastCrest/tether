@@ -37,7 +37,26 @@ class FinetuneConfig:
     batch_size: int = 8
     learning_rate: float = 1e-4
     mode: str = "lora"
-    """One of: lora | lora-cross-embodiment | full. v0.3 supports lora."""
+    """One of: lora | lora-cross-embodiment | full. v0.3 supports lora.
+    `full` is now permitted for ACT-from-scratch training (policy='act')
+    per ADR 2026-05-06-vendor-auto-soarm.md."""
+
+    policy: str = "auto"
+    """Policy class to train.
+      - 'auto' (default): infer from `base` (e.g. lerobot/smolvla_base → smolvla).
+      - 'act' / 'diffusion' / 'pi0' / etc.: explicit lerobot policy.type.
+    Used by from-scratch training paths where `base` is empty or a non-pretrained
+    sentinel; lerobot-train requires --policy.type either way.
+
+    ACT-from-scratch (vendored from auto_soarm 2026-05-06): set policy='act',
+    mode='full', leave base='' (or set to ''). Recipe defaults:
+        num_steps=30000, batch_size=8, learning_rate=1e-5, chunk_size=31, seed=1
+    """
+
+    chunk_size: int = 50
+    """Action chunk size. Used by ACT (chunk_size=31 in auto_soarm's recipe)
+    + diffusion-policy. Pretrained policies (smolvla / pi0.5) bake this in;
+    we only pass it through when policy != 'auto'."""
 
     lora_rank: int = 32
     """Default r=32 — VLA intrinsic rank is 4-16x LLM's (LoRA-SP).

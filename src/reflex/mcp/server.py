@@ -1,13 +1,22 @@
 """FastMCP server factory bound to a live ReflexServer.
 
-Exposes 4 tools + 1 resource to MCP-compatible agents:
+Exposes 6 tools + 1 resource to MCP-compatible agents (Phase 1 + Phase 1.5):
 
+Phase 1 (consumer-side):
 - tool: `act(instruction, image_b64, state, episode_id?)` → action chunk +
   policy_version + inference_ms
 - tool: `health()` → {state, model_version, uptime_seconds, cuda_graphs_active}
 - tool: `models_list()` → [{id, hf_id, size_gb_fp16, hardware_fit}, ...]
 - tool: `validate_dataset(dataset_path)` → {summary, checks: [...]}
 - resource: `metrics://prometheus` → current Prometheus exposition text
+
+Phase 1.5 (producer-side, agents-can-plan-without-executing):
+- tool: `bench_latency(export_dir, iterations, warmup)` → p50/p95/p99 stats.
+  Synchronous; defaults sized to fit MCP timeout budgets (~30s).
+- tool: `export_estimate(model_id, target, precision)` → projected VRAM,
+  inference latency, export time. Best-effort projection from the registry +
+  HARDWARE_PROFILES table; lets agents plan exports before committing
+  to long-running compute. Async export_start + export_status are Phase 2.
 
 Usage:
 
@@ -256,6 +265,241 @@ def create_mcp_server(
             return {"error": {"kind": type(exc).__name__,
                               "message": str(exc),
                               "remediation": "Run `reflex validate-dataset <path>` from the CLI for full diagnostics."}}
+
+    @mcp.tool()
+    async def bench_latency(
+        export_dir: str,
+        iterations: int = 20,
+        warmup: int = 5,
+    ) -> dict[str, Any]:
+        """Quick latency probe for an exported model.
+
+        Runs a synchronous warmup + iterations sweep through inference + reports
+        latency stats. Designed to fit MCP tool-call timeout budgets (default
+        20 iters + 5 warmup → typically <30s on GPU; up to ~2 min on CPU).
+
+        Use cases:
+        - Agent-driven hardware fit checks ("is this model fast enough on this box?")
+        - Pre-deploy sanity ("did the latest export regress?")
+        - Cross-checkpoint comparison without committing to a full bench run
+
+        Args:
+            export_dir: filesystem path to a Reflex export directory (the
+                directory containing the .onnx file + reflex_export_meta.json).
+            iterations: number of measured iterations (default 20).
+                Cap at 100 to keep tool-call latency reasonable.
+            warmup: warmup iterations excluded from stats (default 5).
+
+        Returns:
+            On success: {iterations, warmup_iterations, mean_ms, median_ms,
+                p50_ms, p95_ms, p99_ms, min_ms, max_ms, std_ms, hz, device, export_dir}.
+            On failure: {error: {kind, message, remediation}}.
+        """
+        if iterations < 1 or iterations > 100:
+            return {"error": {
+                "kind": "ValueError",
+                "message": f"iterations must be in [1, 100], got {iterations}",
+                "remediation": "Use a smaller iteration count for MCP-callable bench. "
+                               "For full benchmarks, run `reflex bench` from the CLI.",
+            }}
+        if warmup < 0 or warmup > 50:
+            return {"error": {
+                "kind": "ValueError",
+                "message": f"warmup must be in [0, 50], got {warmup}",
+                "remediation": "Use 5-10 warmup iterations for typical use.",
+            }}
+        try:
+            import time as _t
+            from pathlib import Path
+
+            from reflex.bench.methodology import compute_stats
+            from reflex.runtime.server import ReflexServer
+        except ImportError as exc:
+            return {"error": {
+                "kind": "ImportError",
+                "message": f"bench helpers unavailable: {exc}",
+                "remediation": "Reinstall reflex-vla with default extras (serve + bench substrate).",
+            }}
+
+        path = Path(export_dir).expanduser()
+        if not path.exists():
+            return {"error": {
+                "kind": "FileNotFoundError",
+                "message": f"export_dir does not exist: {export_dir}",
+                "remediation": "Run `reflex export <model>` first or check the path.",
+            }}
+        if not list(path.glob("*.onnx")):
+            return {"error": {
+                "kind": "ValueError",
+                "message": f"no ONNX file in {export_dir}",
+                "remediation": "Make sure the directory points at a Reflex export output, "
+                               "not the source HF model dir.",
+            }}
+
+        try:
+            bench_server = ReflexServer(str(path), device="cuda", strict_providers=False)
+            bench_server.load()
+            if not bench_server.ready:
+                return {"error": {
+                    "kind": "ServerNotReady",
+                    "message": "ReflexServer.load() returned without ready state",
+                    "remediation": "Check the export's reflex_export_meta.json + run "
+                                   "`reflex doctor --model <export_dir>` from the CLI.",
+                }}
+            for _ in range(int(warmup)):
+                bench_server.predict()
+            latencies: list[float] = []
+            for _ in range(int(iterations)):
+                t0 = _t.perf_counter()
+                bench_server.predict()
+                latencies.append((_t.perf_counter() - t0) * 1000)
+            stats = compute_stats(latencies, warmup_n=0)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("mcp.bench_latency error: %s: %s", type(exc).__name__, exc)
+            return {"error": {
+                "kind": type(exc).__name__,
+                "message": str(exc),
+                "remediation": "Run `reflex bench <export_dir>` from the CLI for "
+                               "full diagnostics.",
+            }}
+
+        return {
+            "iterations": int(iterations),
+            "warmup_iterations": int(warmup),
+            "export_dir": str(path),
+            "inference_mode": getattr(bench_server, "_inference_mode", "unknown"),
+            **stats.to_dict(),
+        }
+
+    @mcp.tool()
+    async def export_estimate(
+        model_id: str,
+        target: str = "desktop",
+        precision: str = "fp16",
+    ) -> dict[str, Any]:
+        """Estimate the resource footprint + latency of exporting a model
+        without running the export.
+
+        Lets agents plan exports before committing to long-running compute:
+        will this model fit on the target hardware? Roughly how long will
+        export take? What latency should we expect at inference time?
+
+        Args:
+            model_id: HuggingFace id (e.g. "lerobot/smolvla_base") or a
+                Reflex-registry id (e.g. "smolvla").
+            target: hardware profile slug. One of: desktop / orin /
+                orin-nano / orin-64 / thor (defaults to desktop).
+            precision: target precision. One of: fp32 / fp16 / fp8 / int8.
+
+        Returns:
+            {model_id, target, precision, fits_on_target, estimated_vram_gb,
+             estimated_export_time_minutes, estimated_inference_ms_p50,
+             notes: list[str]}.
+            Estimates are best-effort projections from the registry +
+            HARDWARE_PROFILES table; not a guarantee. Run a real export
+            via `reflex export` for ground truth.
+        """
+        try:
+            from reflex.config import HARDWARE_PROFILES, get_hardware_profile
+            from reflex.registry import by_id
+        except ImportError as exc:
+            return {"error": {
+                "kind": "ImportError",
+                "message": f"registry unavailable: {exc}",
+                "remediation": "Reinstall reflex-vla with default extras.",
+            }}
+
+        if target not in HARDWARE_PROFILES:
+            return {"error": {
+                "kind": "ValueError",
+                "message": f"unknown target {target!r}",
+                "remediation": f"Pick from: {sorted(HARDWARE_PROFILES.keys())}",
+            }}
+        if precision not in ("fp32", "fp16", "fp8", "int8"):
+            return {"error": {
+                "kind": "ValueError",
+                "message": f"unsupported precision {precision!r}",
+                "remediation": "Use one of: fp32, fp16, fp8, int8.",
+            }}
+
+        # Best-effort registry lookup. Falls back to a generic estimate when
+        # the model isn't in the curated registry. by_id() returns ModelEntry
+        # or None.
+        entry = None
+        try:
+            entry = by_id(model_id)
+        except Exception:  # noqa: BLE001
+            entry = None
+
+        hw = get_hardware_profile(target)
+        notes: list[str] = []
+
+        # VRAM estimate: registry entry's size_gb_fp16 (when present) scaled
+        # by precision. Agents that ask for unknown models get a generic
+        # "likely 4-8 GB at fp16" range.
+        precision_scale = {"fp32": 2.0, "fp16": 1.0, "fp8": 0.5, "int8": 0.5}[precision]
+        entry_size_gb = getattr(entry, "size_gb_fp16", None) if entry is not None else None
+        if entry_size_gb:
+            estimated_vram_gb = round(float(entry_size_gb) * precision_scale, 2)
+            notes.append(f"VRAM estimate from registry size_gb_fp16={entry_size_gb}")
+        else:
+            estimated_vram_gb = round(4.0 * precision_scale, 2)
+            notes.append(
+                f"model_id {model_id!r} not in registry; using generic VRAM "
+                f"estimate. Add it to reflex.registry for a tighter projection."
+            )
+
+        # Hardware fit: per HARDWARE_PROFILES.vram_gb (rough; assumes other
+        # processes leave ~1 GB headroom).
+        target_vram = float(getattr(hw, "vram_gb", 0)) or 0.0
+        headroom_gb = 1.0
+        fits = (target_vram - headroom_gb) >= estimated_vram_gb if target_vram > 0 else None
+        if fits is False:
+            notes.append(
+                f"VRAM tight: model needs ~{estimated_vram_gb} GB; "
+                f"target {target} has ~{target_vram} GB. Try fp8 or int8."
+            )
+
+        # Export-time estimate: rule-of-thumb scaled by model size.
+        # Empirical ranges from prior reflex export experiments
+        # (decomposed pi05 ~12 min on A100; smolvla ~3 min).
+        export_minutes = max(2.0, estimated_vram_gb * 1.5)
+
+        # Inference latency estimate: depends on hardware + precision.
+        # Pull from registry's benchmarks when available (ModelEntry.benchmarks
+        # is a list[ModelBenchmark]; we look for a matching device + precision).
+        latency_ms_p50: float | None = None
+        entry_benchmarks = getattr(entry, "benchmarks", None) if entry is not None else None
+        if entry_benchmarks:
+            for b in entry_benchmarks:
+                if (getattr(b, "device", "") == target
+                        and getattr(b, "precision", "") == precision):
+                    latency_ms_p50 = float(getattr(b, "p50_ms", 0)) or None
+                    if latency_ms_p50 is not None:
+                        notes.append(
+                            f"latency from registry benchmark device={target} "
+                            f"precision={precision}"
+                        )
+                        break
+        if latency_ms_p50 is None:
+            # Fall back: scale by VRAM × precision (very rough).
+            latency_ms_p50 = round(estimated_vram_gb * 30.0 / precision_scale, 1)
+            notes.append(
+                "no registry benchmark for this hardware/precision combo; "
+                "latency is a rough estimate. Run `reflex bench` for ground truth."
+            )
+
+        return {
+            "model_id": model_id,
+            "target": target,
+            "precision": precision,
+            "fits_on_target": fits,
+            "estimated_vram_gb": estimated_vram_gb,
+            "estimated_export_time_minutes": round(export_minutes, 1),
+            "estimated_inference_ms_p50": latency_ms_p50,
+            "registry_hit": entry is not None,
+            "notes": notes,
+        }
 
     @mcp.resource("metrics://prometheus")
     async def prometheus_metrics() -> str:

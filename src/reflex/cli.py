@@ -1649,6 +1649,26 @@ def serve(
              "overhead pattern). Default off — opt-in for Phase 1 per ADR "
              "2026-04-24-cuda-graphs-architecture.",
     ),
+    action_similarity_threshold: float = typer.Option(
+        0.0,
+        "--action-similarity-threshold",
+        help="Action-similarity fast path (FlashVLA, arxiv 2505.21200). When "
+             ">0, the inference path skips the expert + reuses the prior "
+             "action chunk if its L2 distance to the new chunk is below this "
+             "value. Paper default 0.05; 0.0 = disabled (default). Caps "
+             "consecutive skips via --max-similar-skips. Decomposed pi0.5 "
+             "only; ignored on monolithic exports. Per Phase 1.5 spec "
+             "features/01_serve/subfeatures/_perf_compound/"
+             "action-similarity-fast-path.",
+    ),
+    max_similar_skips: int = typer.Option(
+        3,
+        "--max-similar-skips",
+        help="Cap on consecutive cached-action returns from the action-"
+             "similarity fast path. Prevents drift on slow-changing scenes. "
+             "Paper default 3. Only used when --action-similarity-threshold "
+             ">0.",
+    ),
     policy_a: str = typer.Option(
         "", "--policy-a",
         help="2-policy A/B mode: path to policy A export. When set, --policy-b "
@@ -2018,6 +2038,8 @@ def serve(
         otel_sample=otel_sample,
         robot_id=robot_id or None,
         cuda_graphs_enabled=cuda_graphs,
+        action_similarity_threshold=action_similarity_threshold,
+        max_similar_skips=max_similar_skips,
         max_batch_cost_ms=max_batch_cost_ms,
         a2c2_checkpoint=a2c2_checkpoint or None,
         a2c2_latency_threshold_ms=a2c2_latency_threshold_ms,
@@ -2048,6 +2070,11 @@ def serve(
         composed.append(f"[cyan]robot[/cyan]={robot_id}")
     if cuda_graphs:
         composed.append("[cyan]cuda-graphs[/cyan]")
+    if action_similarity_threshold > 0:
+        composed.append(
+            f"[cyan]action-fast-path[/cyan]"
+            f"=L2<{action_similarity_threshold:g}/max-skip={max_similar_skips}"
+        )
     if a2c2_checkpoint:
         composed.append(f"[cyan]a2c2[/cyan]={Path(a2c2_checkpoint).name}")
     if auto_calibrate:
@@ -2720,6 +2747,141 @@ def doctor(
     except ImportError as e:
         add("torch + CUDA", False, f"torch not installed: {e}")
 
+    # ─── Multi-GPU mixed-arch guard ─────────────────────────────────────
+    # If the customer has 2+ NVIDIA GPUs of different architectures (e.g.
+    # 1× A100 + 1× RTX 5090), ORT only uses CUDA_VISIBLE_DEVICES[0] by
+    # default. Surface the mix loudly so they don't get a working ORT
+    # session on GPU 0 + silent kernel-image failure if they ever target
+    # GPU 1. Quiet on single-GPU + uniform-multi-GPU systems.
+    try:
+        import subprocess as _sub
+        proc = _sub.run(
+            ["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=3.0,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            lines = [
+                ln.strip() for ln in proc.stdout.strip().splitlines() if ln.strip()
+            ]
+            if len(lines) >= 2:
+                # Crude arch detection — same compute-cap if same generation.
+                # We don't have nvidia-ml-py; use name-substring heuristics.
+                def _arch_from_name(name: str) -> str:
+                    n = name.lower()
+                    if any(p in n for p in ("rtx 50", "rtx pro 60", "blackwell", "b200", "gb200")):
+                        return "blackwell"
+                    if any(p in n for p in ("h100", "h200", "hopper")):
+                        return "hopper"
+                    if any(p in n for p in ("rtx 40", "l4", "l40", "ada")):
+                        return "ada"
+                    if any(p in n for p in ("a100", "a10g", "a40", "ampere", "rtx 30")):
+                        return "ampere"
+                    if "orin" in n or "tegra" in n:
+                        return "orin"
+                    return "unknown"
+
+                names = [ln.split(",", 1)[1].strip() for ln in lines]
+                archs = {_arch_from_name(n) for n in names}
+                archs.discard("unknown")
+                if len(archs) > 1:
+                    add(
+                        "  → multi-GPU arch consistency",
+                        False,
+                        f"⚠ Mixed GPU architectures: {sorted(archs)} ({len(lines)} GPUs). "
+                        f"ORT uses CUDA_VISIBLE_DEVICES[0] only by default. "
+                        f"If you target GPU 1 via CUDA_VISIBLE_DEVICES, kernels "
+                        f"compiled for GPU 0's arch will silently fail.",
+                    )
+    except (FileNotFoundError, ImportError, OSError):
+        pass
+
+    # ─── Jetson JetPack guard ───────────────────────────────────────────
+    # Jetson devices ship CUDA + cuDNN baked into JetPack at the OS level.
+    # Customers running ORT 1.25+ on JetPack 5.x (CUDA 11.4) will silently
+    # fall to CPU because ORT's bundled CUDA 12 EP can't find compatible
+    # libs. Surface JetPack version + ORT compatibility loudly.
+    try:
+        from pathlib import Path as _P
+        jetson_release = _P("/etc/nv_tegra_release")
+        if jetson_release.exists():
+            content = jetson_release.read_text(errors="ignore")
+            # Format example: "# R36 (release), REVISION: 4.0, GCID: ..."
+            jetpack_major = "unknown"
+            for line in content.splitlines():
+                if line.startswith("# R"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        jetpack_major = parts[1].lstrip("R")
+                    break
+            # JetPack R36+ ships CUDA 12.x; R35 ships CUDA 11.4
+            # ORT 1.20+ requires CUDA 12.x → R36+ is required for GPU EP.
+            try:
+                jp_int = int(jetpack_major)
+            except (TypeError, ValueError):
+                jp_int = 0
+            if jp_int and jp_int < 36:
+                add(
+                    "  → Jetson JetPack target",
+                    False,
+                    f"❌ JetPack R{jetpack_major} ships CUDA 11.4. ORT 1.20+ "
+                    f"requires CUDA 12.x → CUDAExecutionProvider will silently "
+                    f"fall to CPU. Upgrade to JetPack R36+ (Orin) or use "
+                    f"reflex-vla[serve,onnx] for CPU-only inference.",
+                )
+            elif jp_int >= 36:
+                add(
+                    "  → Jetson JetPack target",
+                    True,
+                    f"JetPack R{jetpack_major} (CUDA 12.x compatible).",
+                )
+    except (OSError, ImportError):
+        pass
+
+    # ─── CUDA driver vs cuDNN version skew guard ────────────────────────
+    # cuDNN minor versions have driver minimum requirements (cuDNN 9.5
+    # needs NVIDIA driver R555+; cuDNN 9.0 needs R550+). Mismatch causes
+    # silent kernel failures at first invocation, not at session-init.
+    # Catches: customer pinned old driver via apt-hold, used Reflex's
+    # bundled cuDNN at the wrong system driver level.
+    try:
+        import subprocess as _sub
+        nv_proc = _sub.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=3.0,
+        )
+        if nv_proc.returncode == 0:
+            driver_str = (nv_proc.stdout or "").strip().split("\n")[0]
+            try:
+                driver_major = int(driver_str.split(".")[0])
+            except (ValueError, IndexError):
+                driver_major = 0
+            try:
+                from importlib.metadata import version as _v
+                cudnn_v = _v("nvidia-cudnn-cu12")
+                cudnn_minor = int(cudnn_v.split(".")[1]) if cudnn_v else 0
+                # cuDNN 9.5 needs driver R555+; cuDNN 9.0 needs R550+
+                min_driver = 555 if cudnn_minor >= 5 else 550
+                if driver_major and driver_major < min_driver:
+                    add(
+                        "  → CUDA driver vs cuDNN",
+                        False,
+                        f"❌ NVIDIA driver R{driver_major} predates cuDNN "
+                        f"{cudnn_v} requirement (needs R{min_driver}+). "
+                        f"Kernels will silently fail at first inference call. "
+                        f"Upgrade driver: `sudo apt install nvidia-driver-{min_driver}` "
+                        f"or use cuDNN <9.5 (`pip install 'nvidia-cudnn-cu12<9.5'`).",
+                    )
+                elif driver_major:
+                    add(
+                        "  → CUDA driver vs cuDNN",
+                        True,
+                        f"driver R{driver_major} OK for cuDNN {cudnn_v}",
+                    )
+            except Exception:  # noqa: BLE001 — best-effort probe
+                pass
+    except (FileNotFoundError, ImportError, OSError):
+        pass
+
     # ONNX Runtime + execution providers
     try:
         import onnxruntime as ort
@@ -2745,6 +2907,114 @@ def doctor(
             "available — reflex serve will auto-prefer this" if has_trt else
             "NOT available — TRT FP16 disabled, will use CUDA EP",
         )
+
+        # ─── ORT-TRT EP empirical session test ───────────────────────────
+        # `available_providers` says the lib is loaded — it does NOT confirm
+        # session-init will succeed with that provider. The v0.7 install gap
+        # (caught 2026-04-29 by the v07-install-validation experiment + ADR
+        # 2026-04-29-ort-trt-ep-first-class-support) is exactly this: TRT EP
+        # registered but `InferenceSession(providers=[TRT EP])` falls back to
+        # CUDA because libnvinfer.so.10 isn't in the dlopen path. Customers
+        # silently lose the 5.55× perf win.
+        # Empirical fix: try creating a session with TRT EP forced + check
+        # active providers. Only runs when TRT EP is "available" per above.
+        if has_trt:
+            try:
+                import os as _os
+                import tempfile as _tmp
+                import onnx as _onnx
+                from onnx import TensorProto, helper
+
+                # Build a tiny stub model (1x1 add) — small enough that
+                # ORT session creation is the bottleneck, not graph compile.
+                node = helper.make_node("Add", inputs=["A", "B"], outputs=["C"])
+                graph = helper.make_graph(
+                    [node],
+                    "trt_ep_smoke",
+                    [
+                        helper.make_tensor_value_info("A", TensorProto.FLOAT, [1]),
+                        helper.make_tensor_value_info("B", TensorProto.FLOAT, [1]),
+                    ],
+                    [helper.make_tensor_value_info("C", TensorProto.FLOAT, [1])],
+                )
+                model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
+                model.ir_version = 9
+
+                with _tmp.NamedTemporaryFile(suffix=".onnx", delete=False) as _f:
+                    _f.write(model.SerializeToString())
+                    stub_path = _f.name
+
+                try:
+                    # Force-prefer TRT EP. If session creation succeeds AND
+                    # active providers include TRT EP, the loadchain is fine.
+                    sess = ort.InferenceSession(
+                        stub_path,
+                        providers=["TensorrtExecutionProvider", "CUDAExecutionProvider"],
+                    )
+                    active = sess.get_providers()
+                    if "TensorrtExecutionProvider" in active:
+                        add(
+                            "  → TRT EP empirical load",
+                            True,
+                            "session-init with TRT EP succeeds; production "
+                            "serve will get the 5.55× win.",
+                        )
+                    else:
+                        add(
+                            "  → TRT EP empirical load",
+                            False,
+                            f"❌ TRT EP listed available but session falls back "
+                            f"to {active}. Likely libnvinfer.so.10 not on dlopen "
+                            f"path. Fix: `pip install -U 'tensorrt>=10.0,<11'` + "
+                            f"restart shell. Customer silently loses ~5× perf "
+                            f"otherwise. See ADR 2026-04-29-ort-trt-ep-first-class.",
+                        )
+                finally:
+                    _os.unlink(stub_path)
+            except Exception as _exc:  # noqa: BLE001
+                add(
+                    "  → TRT EP empirical load",
+                    False,
+                    f"⚠ session-init test failed: {type(_exc).__name__}: {_exc}. "
+                    f"Customer's TRT EP is likely broken; serve will silently "
+                    f"fall to CUDA EP.",
+                )
+
+        # ─── Blackwell guard ──────────────────────────────────────────
+        # Background: ORT 1.25.0 (2026-04-20) shipped Blackwell sm_120
+        # kernels via PR #27278; 1.25.1 (2026-04-27) is current stable.
+        # Earlier 1.23/1.24 regressed sm_120 (cudaErrorNoKernelImageForDevice).
+        # Customers running Blackwell hardware on ORT < 1.25.1 hit a hard
+        # segfault at session-init that is NOT a reflex bug. Surfaced
+        # 2026-04-28 by tester (rob, RTX 5090); cost 2 weeks of his time
+        # before we tracked the upstream fix.
+        # This check fails LOUD per CLAUDE.md "no silent fallbacks" so
+        # future Blackwell customers see the upgrade path immediately.
+        from reflex.runtime.server import _gpu_is_blackwell
+        if _gpu_is_blackwell():
+            from packaging.version import Version
+            installed = Version(ort.__version__)
+            min_blackwell_safe = Version("1.25.1")
+            if installed < min_blackwell_safe:
+                add(
+                    "  → Blackwell sm_120 support",
+                    False,
+                    f"❌ ORT {ort.__version__} predates Blackwell support. "
+                    f"Upgrade to >=1.25.1 (1.25.0 added sm_120 kernels via "
+                    f"PR #27278). Reflex on this hardware will SEGFAULT at "
+                    f"session-init until upgraded. Run: "
+                    f"`pip install -U 'onnxruntime-gpu>=1.25.1'`",
+                )
+            else:
+                add(
+                    "  → Blackwell sm_120 support",
+                    True,
+                    f"ORT {ort.__version__} ≥ 1.25.1 — Blackwell sm_120 "
+                    f"kernels available. Live caveat: open ORT issue #27621 "
+                    f"(silent threading deadlock on sm_120 with PTX JIT + "
+                    f"GIL); reflex's single-thread inference path doesn't "
+                    f"trigger it, but multi-threaded customers should monitor.",
+                )
     except ImportError:
         add(
             "ONNX Runtime",
@@ -2863,6 +3133,53 @@ def doctor(
         add("reflex-vla", True, f"version {reflex_version}")
     except Exception as e:
         add("reflex-vla", False, str(e))
+
+    # Curate data-contribution status (informational; no pass/fail).
+    try:
+        from reflex.curate import nudge_engine as _curate_nudge
+        _status_line = _curate_nudge.doctor_status()
+        add("Data contribution", True, _status_line)
+    except Exception as _curate_exc:  # noqa: BLE001
+        add("Data contribution", False, f"unavailable: {_curate_exc}")
+
+    # Curate queue disk usage. Warns when queue exceeds 500 MB
+    # (signals stuck uploads or disk-fill protection nearing the 1 GB limit).
+    try:
+        from reflex.curate.uploader import (
+            DEFAULT_QUEUE_DIR as _Q,
+            DEFAULT_REJECTED_DIR as _R,
+            DEFAULT_UPLOADED_DIR as _U,
+        )
+        _q_path = Path(_Q).expanduser()
+        _r_path = Path(_R).expanduser()
+        _u_path = Path(_U).expanduser()
+
+        def _bytes_under(p: Path) -> tuple[int, int]:
+            if not p.exists():
+                return 0, 0
+            n = 0
+            total = 0
+            for f in p.glob("*.jsonl"):
+                n += 1
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    continue
+            return n, total
+
+        _qn, _qb = _bytes_under(_q_path)
+        _un, _ub = _bytes_under(_u_path)
+        _rn, _rb = _bytes_under(_r_path)
+        _q_mb = _qb / (1024 * 1024)
+        _detail = (
+            f"queue {_qn} files / {_qb / (1024 * 1024):.1f} MB · "
+            f"uploaded {_un} / {_ub / (1024 * 1024):.1f} MB · "
+            f"rejected {_rn} / {_rb / (1024 * 1024):.1f} MB"
+        )
+        # 500 MB warning threshold (1 GB hard limit per FreeContributorCollector spec).
+        add("Contribute queue", _q_mb < 500, _detail)
+    except Exception as _q_exc:  # noqa: BLE001
+        add("Contribute queue", False, f"unavailable: {_q_exc}")
 
     console.print(table)
     console.print(
@@ -3511,14 +3828,28 @@ inspect_app = typer.Typer(
 
 # Cross-register existing functions under the new verb-noun paths.
 # Same callable, two surface names: old hidden, new visible.
+#
+# v0.9.5 (2026-05-07) CLI cut pass: hidden=True on cluttered/redundant
+# inspect commands per the surface-audit. Each stays callable directly
+# (`reflex inspect bench`, etc. still works); just removed from --help.
+# Reduces customer cognitive load on `reflex inspect --help` from 5 → 2.
 models_app.command("export")(export)
 validate_app.command("dataset")(validate_dataset)
 validate_app.command("export")(validate)
-inspect_app.command("bench")(benchmark_cmd)
-inspect_app.command("replay")(replay)
-inspect_app.command("targets")(targets)
-inspect_app.command("guard")(guard)
-inspect_app.command("doctor")(doctor)  # also expose under inspect for completeness; doctor stays top-level too
+# inspect bench: internal-only latency microbench (`customer_signal: internal`
+# per spec). Customers don't run benches. Hidden 2026-05-07.
+inspect_app.command("bench", hidden=True)(benchmark_cmd)
+inspect_app.command("replay")(replay)  # legitimate trace replay tool
+# inspect targets: lists hardware profiles. Used once during install,
+# never after. Hidden 2026-05-07.
+inspect_app.command("targets", hidden=True)(targets)
+# inspect guard: dumps shipped safety config. Niche diagnostic;
+# fired ~twice in entire experiment history. Hidden 2026-05-07.
+inspect_app.command("guard", hidden=True)(guard)
+# inspect doctor: pure duplicate of top-level `reflex doctor`.
+# Cross-registration was for "completeness" but adds a redundant entry
+# to --help. Hidden 2026-05-07; top-level `doctor` is the canonical path.
+inspect_app.command("doctor", hidden=True)(doctor)
 
 
 @inspect_app.command("traces")
@@ -3627,6 +3958,305 @@ app.add_typer(models_app, name="models")
 app.add_typer(train_app, name="train")
 app.add_typer(validate_app, name="validate")
 app.add_typer(inspect_app, name="inspect")
+
+
+# ─── reflex traces {query, summary} ─────────────────────────────────────────
+# Customer trace archive (Phase 1.5 v1) per spec
+# features/01_serve/subfeatures/_ecosystem/customer-trace-archive/.
+# Operates on JSONL traces written by `reflex serve --record <dir>`.
+# Phase 1.5 ships: query (filter + export) + summary (aggregations).
+# Phase 2 deferred: parquet+DuckDB index for fast filter on million-record
+# archives + SQL surface for power users.
+traces_app = typer.Typer(
+    help="Searchable + summarizable view over recorded /act traces.",
+    no_args_is_help=True,
+)
+app.add_typer(traces_app, name="traces")
+
+
+def _default_trace_dirs() -> list[Path]:
+    """Same default order as `reflex inspect traces`."""
+    return [
+        Path.home() / ".cache" / "reflex" / "traces",
+        Path("/tmp/traces"),
+    ]
+
+
+def _resolve_output_format(output: Optional[str], explicit: Optional[str]) -> str:
+    """Pick output format: explicit --format > suffix on --output > 'table'."""
+    if explicit:
+        if explicit not in ("table", "json", "csv"):
+            raise typer.BadParameter(
+                f"--format must be 'table' / 'json' / 'csv', got {explicit!r}"
+            )
+        return explicit
+    if output:
+        suffix = Path(output).suffix.lower().lstrip(".")
+        if suffix in ("json", "csv"):
+            return suffix
+    return "table"
+
+
+@traces_app.command("query")
+def traces_query(
+    dir: Optional[str] = typer.Option(
+        None, "--dir",
+        help="Trace directory to scan. Defaults to ~/.cache/reflex/traces "
+             "and /tmp/traces.",
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since",
+        help="Only include records newer than this window: '7d', '24h', "
+             "'30m'. File mtime is used as the cheap pre-filter.",
+    ),
+    task: Optional[str] = typer.Option(
+        None, "--task",
+        help="Case-insensitive substring match against request.instruction.",
+    ),
+    status: str = typer.Option(
+        "any", "--status",
+        help="Filter by request status: 'any' (default) / 'success' / 'failed'. "
+             "'failed' = response had an `error` field (server-side error). "
+             "Episode-level task-success is not yet recorded; that lands in v2.",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Substring match against header.model_hash. Files with no match "
+             "are skipped entirely (cheap, runs once per file).",
+    ),
+    limit: Optional[int] = typer.Option(
+        None, "--limit",
+        help="Max records to emit. Default unbounded.",
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output",
+        help="Output file. Format auto-detected from suffix (.json / .csv) "
+             "unless --format is set. Default writes a Rich table to stdout.",
+    ),
+    format: Optional[str] = typer.Option(
+        None, "--format",
+        help="Output format override: 'table' / 'json' / 'csv'. Default "
+             "auto-detect from --output suffix.",
+    ),
+) -> None:
+    """Filter + export recorded /act traces. Composes with Pro-tier
+    record-replay; runs locally so customer data stays on-prem."""
+    from reflex.traces.archive import (
+        TraceFilter,
+        query_traces,
+    )
+    from typing import cast
+
+    if status not in ("any", "success", "failed"):
+        raise typer.BadParameter(
+            f"--status must be 'any' / 'success' / 'failed', got {status!r}"
+        )
+
+    dirs = [Path(dir)] if dir else _default_trace_dirs()
+    flt = TraceFilter(
+        since=since,
+        task=task,
+        status=cast("Any", status),  # narrow after validation
+        model=model,
+        limit=limit,
+    )
+    try:
+        records = query_traces(dirs, filter_=flt)
+    except ValueError as exc:
+        console.print(f"[red]Invalid filter: {exc}[/red]")
+        raise typer.Exit(1)
+
+    if not records:
+        console.print("[dim]No traces match the filter.[/dim]")
+        return
+
+    fmt = _resolve_output_format(output, format)
+
+    if fmt == "json":
+        import json as _json
+        rows = [
+            {
+                "file": str(r.file),
+                "seq": r.seq,
+                "timestamp": r.timestamp,
+                "instruction": r.instruction,
+                "latency_ms": r.latency_ms,
+                "status": "failed" if r.is_failed else "success",
+                "error": r.error,
+            }
+            for r in records
+        ]
+        text = _json.dumps(rows, indent=2)
+        if output:
+            Path(output).write_text(text + "\n", encoding="utf-8")
+            console.print(f"Wrote {len(rows)} record(s) to {output}")
+        else:
+            print(text)
+        return
+
+    if fmt == "csv":
+        import csv as _csv
+        import io as _io
+        buf = _io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow([
+            "file", "seq", "timestamp", "instruction",
+            "latency_ms", "status", "error_reason",
+        ])
+        for r in records:
+            err_reason = (
+                (r.error or {}).get("reason", "") if r.error else ""
+            )
+            w.writerow([
+                str(r.file), r.seq, r.timestamp, r.instruction,
+                r.latency_ms,
+                "failed" if r.is_failed else "success",
+                err_reason,
+            ])
+        text = buf.getvalue()
+        if output:
+            Path(output).write_text(text, encoding="utf-8")
+            console.print(f"Wrote {len(records)} record(s) to {output}")
+        else:
+            print(text, end="")
+        return
+
+    # Default: table to stdout
+    table = Table(title=f"Trace records ({len(records)} match)")
+    table.add_column("Timestamp")
+    table.add_column("Status")
+    table.add_column("Latency (ms)")
+    table.add_column("Task")
+    table.add_column("File")
+    for r in records:
+        table.add_row(
+            r.timestamp,
+            "[red]failed[/red]" if r.is_failed else "[green]success[/green]",
+            f"{r.latency_ms:.1f}",
+            (r.instruction[:50] + "...") if len(r.instruction) > 50 else r.instruction,
+            r.file.name,
+        )
+    console.print(table)
+
+
+@traces_app.command("summary")
+def traces_summary(
+    dir: Optional[str] = typer.Option(
+        None, "--dir",
+        help="Trace directory to scan. Defaults to ~/.cache/reflex/traces "
+             "and /tmp/traces.",
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since",
+        help="Only include records newer than this window: '7d', '24h', '30m'.",
+    ),
+    task: Optional[str] = typer.Option(
+        None, "--task",
+        help="Pre-filter by task substring before grouping.",
+    ),
+    status: str = typer.Option(
+        "any", "--status",
+        help="Pre-filter by status before grouping.",
+    ),
+    model: Optional[str] = typer.Option(
+        None, "--model",
+        help="Pre-filter by model_hash substring before grouping.",
+    ),
+    by: str = typer.Option(
+        "task", "--by",
+        help="Group records by this dimension: 'task' (default) / 'model' / "
+             "'day'. 'model' uses model_hash from the trace filename.",
+    ),
+    output: Optional[str] = typer.Option(
+        None, "--output",
+        help="Output file. Format auto-detected from suffix (.json / .csv) "
+             "unless --format is set. Default writes a Rich table.",
+    ),
+    format: Optional[str] = typer.Option(
+        None, "--format",
+        help="Output format override: 'table' / 'json' / 'csv'.",
+    ),
+) -> None:
+    """Aggregate trace records by task, model, or day. Each bucket gets
+    count, success_rate, latency p50/p95/p99/max."""
+    from reflex.traces.archive import (
+        TraceFilter,
+        summarize_traces,
+    )
+    from typing import cast
+
+    if status not in ("any", "success", "failed"):
+        raise typer.BadParameter(
+            f"--status must be 'any' / 'success' / 'failed', got {status!r}"
+        )
+    if by not in ("task", "model", "day"):
+        raise typer.BadParameter(
+            f"--by must be 'task' / 'model' / 'day', got {by!r}"
+        )
+
+    dirs = [Path(dir)] if dir else _default_trace_dirs()
+    flt = TraceFilter(since=since, task=task, status=cast("Any", status), model=model)
+    try:
+        summaries = summarize_traces(
+            dirs, filter_=flt, by=cast("Any", by),
+        )
+    except ValueError as exc:
+        console.print(f"[red]Invalid filter: {exc}[/red]")
+        raise typer.Exit(1)
+
+    if not summaries:
+        console.print("[dim]No traces match the filter.[/dim]")
+        return
+
+    fmt = _resolve_output_format(output, format)
+
+    if fmt == "json":
+        import json as _json
+        rows = [s.as_dict() for s in summaries]
+        text = _json.dumps(rows, indent=2)
+        if output:
+            Path(output).write_text(text + "\n", encoding="utf-8")
+            console.print(f"Wrote {len(rows)} summary buckets to {output}")
+        else:
+            print(text)
+        return
+
+    if fmt == "csv":
+        import csv as _csv
+        import io as _io
+        buf = _io.StringIO()
+        w = _csv.DictWriter(buf, fieldnames=list(summaries[0].as_dict().keys()))
+        w.writeheader()
+        for s in summaries:
+            w.writerow(s.as_dict())
+        text = buf.getvalue()
+        if output:
+            Path(output).write_text(text, encoding="utf-8")
+            console.print(f"Wrote {len(summaries)} summary buckets to {output}")
+        else:
+            print(text, end="")
+        return
+
+    # Default: table
+    table = Table(title=f"Trace summary by {by} ({len(summaries)} bucket(s))")
+    table.add_column(by.capitalize(), max_width=60)
+    table.add_column("Count")
+    table.add_column("Success rate")
+    table.add_column("p50 ms")
+    table.add_column("p95 ms")
+    table.add_column("p99 ms")
+    table.add_column("max ms")
+    for s in summaries:
+        table.add_row(
+            s.bucket,
+            str(s.count),
+            f"{s.success_rate:.1%}",
+            f"{s.latency_p50_ms:.1f}",
+            f"{s.latency_p95_ms:.1f}",
+            f"{s.latency_p99_ms:.1f}",
+            f"{s.latency_max_ms:.1f}",
+        )
+    console.print(table)
 
 
 # ─── reflex pro {activate, status, deactivate} ──────────────────────────────
@@ -3828,12 +4458,257 @@ def chat(
 
 
 config_app = typer.Typer(name="config", help="Show + manage reflex configuration.", no_args_is_help=True)
-app.add_typer(config_app, name="config")
+# Hidden 2026-05-07: config schema is currently a stub (no real
+# config knobs surfaced through this CLI yet — the verb-noun ADR
+# scopes config-driven workflows for Phase 2). Premature top-level
+# verb. Keep callable for any power-user scripts.
+app.add_typer(config_app, name="config", hidden=True)
 
 
-@app.command()
+# ─── reflex contribute {opt-in,opt-out,revoke,status,info} ──────────────────
+# Curate wedge data-contribution program. Implementation lives in
+# src/reflex/curate/opt_in_cli.py; this is the wiring.
+from reflex.curate.opt_in_cli import contribute_app  # noqa: E402
+app.add_typer(contribute_app, name="contribute")
+
+
+# ─── reflex calibrate <embodiment> ───────────────────────────────────────────
+# Physical-arm calibration. SO-ARM 100 substrate vendored from auto_soarm
+# (MIT) per ADR 2026-05-06-vendor-auto-soarm.md. Other embodiments add their
+# own subcommand groups under this.
+calibrate_app = typer.Typer(
+    name="calibrate",
+    help="Calibrate a physical robot arm (joint zeroing + workspace bounds).",
+    no_args_is_help=True,
+)
+# Hidden 2026-05-07: SO-ARM 100 hardware-specific (corners/surface/tap).
+# Customers without SO-100 hardware (~95% of the user base) don't need
+# to see this. Stays callable directly for SO-100 customers.
+app.add_typer(calibrate_app, name="calibrate", hidden=True)
+
+so100_calibrate_app = typer.Typer(
+    name="so100",
+    help="SO-ARM 100 calibration (corners + surface + tap model).",
+    no_args_is_help=True,
+)
+calibrate_app.add_typer(so100_calibrate_app, name="so100")
+
+
+@so100_calibrate_app.command("corners")
+def calibrate_so100_corners() -> None:
+    """Hand-guide the arm to the 4 numbered tablet corners; record joint poses."""
+    import subprocess as _sp
+    from reflex.embodiments.so100.calibration import calibrate_corners as _mod
+    # The upstream module is invoked as a script. Re-exec via -m for now;
+    # Phase 1.5 can swap to in-process invocation when we audit the script's
+    # __main__ block for safe-as-library use.
+    _sp.run([sys.executable, "-m", "reflex.embodiments.so100.calibration.calibrate_corners"], check=False)
+
+
+@so100_calibrate_app.command("surface")
+def calibrate_so100_surface() -> None:
+    """Probe the tablet surface for tap depth; fit the tap model."""
+    import subprocess as _sp
+    _sp.run([sys.executable, "-m", "reflex.embodiments.so100.calibration.calibrate_surface"], check=False)
+
+
+@so100_calibrate_app.command("all")
+def calibrate_so100_all() -> None:
+    """Run the full SO-ARM 100 calibration sequence: corners → surface."""
+    import subprocess as _sp
+    _sp.run([sys.executable, "-m", "reflex.embodiments.so100.calibration.calibrate_all"], check=False)
+
+
+@so100_calibrate_app.command("preflight")
+def calibrate_so100_preflight(
+    skip_camera: bool = typer.Option(
+        False, "--skip-camera", help="Skip the camera-availability check.",
+    ),
+) -> None:
+    """Non-invasive checks: arm serial / motor IDs / camera / ADB tablet."""
+    import subprocess as _sp
+    cmd = [sys.executable, "-m", "reflex.embodiments.so100.calibration.preflight"]
+    if skip_camera:
+        cmd.append("--skip-camera")
+    _sp.run(cmd, check=False)
+
+
+# ─── reflex bench-game <game> {collect, eval} ───────────────────────────────
+# Real-arm bench games. Vendored from auto_soarm (MIT) per ADR 2026-05-06.
+# Separate typer group from the existing `reflex bench` (hardware-level) so
+# the existing surface stays untouched.
+bench_game_app = typer.Typer(
+    name="bench-game",
+    help="Reflex bench games — real-arm regression-test rigs (tablet tap, etc.).",
+    no_args_is_help=True,
+)
+# Hidden 2026-05-07: real-arm bench games vendored from auto_soarm.
+# SO-100 + tablet-specific rig; ~3 customers globally. Hidden from
+# default --help to reduce surface clutter; SO-100 customers can still
+# invoke directly.
+app.add_typer(bench_game_app, name="bench-game", hidden=True)
+
+circle_lr_app = typer.Typer(
+    name="circle_lr",
+    help="Canonical SO-ARM 100 + tablet circle-tap benchmark.",
+    no_args_is_help=True,
+)
+bench_game_app.add_typer(circle_lr_app, name="circle_lr")
+
+
+@circle_lr_app.command("collect")
+def bench_game_circle_lr_collect(
+    episodes: int = typer.Option(20, "--episodes", help="Number of episodes to collect."),
+) -> None:
+    """Collect a circle-tap dataset on real SO-ARM 100 + Android tablet."""
+    import subprocess as _sp
+    cmd = [
+        sys.executable, "-m", "reflex.bench.games.circle_lr.circle_collect",
+        "--episodes", str(episodes),
+    ]
+    _sp.run(cmd, check=False)
+
+
+@circle_lr_app.command("eval")
+def bench_game_circle_lr_eval(
+    ckpt: str = typer.Option(..., "--ckpt", help="Path to a trained ACT checkpoint."),
+    episodes: int = typer.Option(8, "--episodes", help="Number of eval episodes."),
+    remote_host: Optional[str] = typer.Option(
+        None, "--remote-host", help="Remote inference host (use with --remote-port).",
+    ),
+    remote_port: Optional[int] = typer.Option(
+        None, "--remote-port", help="Remote inference port.",
+    ),
+) -> None:
+    """Run the trained policy against the live tablet + score hits."""
+    import subprocess as _sp
+    cmd = [
+        sys.executable, "-m", "reflex.bench.games.circle_lr.circle_eval",
+        "--ckpt", ckpt, "--episodes", str(episodes),
+    ]
+    if remote_host:
+        cmd += ["--remote-host", remote_host]
+    if remote_port:
+        cmd += ["--remote-port", str(remote_port)]
+    _sp.run(cmd, check=False)
+
+
+# ─── reflex curate {convert} ─────────────────────────────────────────────────
+# Curate dataset-conversion subcommand. `reflex curate convert <input> --format X`
+curate_app = typer.Typer(
+    name="curate",
+    help="Reflex Curate — convert recorded traces to published dataset formats.",
+    no_args_is_help=True,
+)
+app.add_typer(curate_app, name="curate")
+
+
+@curate_app.command("convert")
+def curate_convert(
+    input_jsonl: str = typer.Argument(
+        ..., help="Path to a JSONL trace file or directory of JSONL files.",
+    ),
+    format: str = typer.Option(
+        ..., "--format", "-f",
+        help="Target format: lerobot-v3 | hdf5 | rlds | openx-embodiment",
+    ),
+    output: str = typer.Option(
+        ..., "--output", "-o",
+        help="Output directory for the converted dataset.",
+    ),
+    min_quality: Optional[float] = typer.Option(
+        None, "--min-quality",
+        help="Drop episodes with quality_score below this threshold.",
+    ),
+    canonical_only: bool = typer.Option(
+        False, "--canonical-only",
+        help="Drop non-canonical episodes (dedup cluster non-canonicals filtered out).",
+    ),
+    robot_type: str = typer.Option(
+        "unknown", "--robot-type",
+        help="Embodiment slug (franka / so100 / ur5 / aloha / ...). Used by lerobot-v3 + openx-embodiment.",
+    ),
+    fps: int = typer.Option(
+        30, "--fps",
+        help="Target frame rate for the dataset (used by lerobot-v3).",
+    ),
+) -> None:
+    """Convert Reflex JSONL traces to a published dataset format."""
+    import json as _json
+    from reflex.curate.format_converters import (
+        CONVERTER_REGISTRY,
+        HDF5Converter,
+        LeRobotV3Converter,
+        OpenXEmbodimentConverter,
+        RLDSConverter,
+    )
+
+    if format not in CONVERTER_REGISTRY:
+        console.print(
+            f"[red]Unknown format[/red] [cyan]{format}[/cyan]; available: "
+            f"[cyan]{', '.join(sorted(CONVERTER_REGISTRY.keys()))}[/cyan]"
+        )
+        raise typer.Exit(2)
+
+    try:
+        if format == "lerobot-v3":
+            converter = LeRobotV3Converter(robot_type=robot_type, fps=fps)
+        elif format == "hdf5":
+            converter = HDF5Converter()
+        elif format == "openx-embodiment":
+            converter = OpenXEmbodimentConverter(embodiment=robot_type)
+        else:
+            converter = CONVERTER_REGISTRY[format]()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to construct converter:[/red] {exc}")
+        raise typer.Exit(2)
+
+    try:
+        result = converter.convert(
+            input_jsonl=input_jsonl,
+            output_dir=output,
+            min_quality=min_quality,
+            canonical_only=canonical_only,
+        )
+    except ImportError as exc:
+        console.print(f"[red]Missing dependency:[/red] {exc}")
+        raise typer.Exit(3)
+    except NotImplementedError as exc:
+        console.print(f"[yellow]Not yet implemented:[/yellow] {exc}")
+        raise typer.Exit(4)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Conversion failed:[/red] {exc}")
+        raise typer.Exit(5)
+
+    # Render summary table
+    table = Table(title=f"Conversion: {format} → {output}")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    table.add_row("Format", format)
+    table.add_row("Episodes", str(result.episode_count))
+    table.add_row("Steps", str(result.step_count))
+    table.add_row("Bytes written", f"{result.bytes_written:,}")
+    table.add_row("Skipped", str(result.skipped_episodes))
+    if result.skipped_reasons:
+        table.add_row(
+            "Skip reasons",
+            ", ".join(f"{k}={v}" for k, v in result.skipped_reasons.items()),
+        )
+    console.print(table)
+
+    if result.warnings:
+        console.print("[yellow]Warnings:[/yellow]")
+        for w in result.warnings:
+            console.print(f"  - {w}")
+
+
+@app.command(hidden=True)
 def status() -> None:
-    """List running reflex serve processes (PID, port, command)."""
+    """List running reflex serve processes (PID, port, command).
+
+    Hidden 2026-05-07: niche diagnostic; `ps aux | grep reflex`
+    accomplishes the same thing. Power-users can still invoke directly.
+    """
     import re
     import subprocess as _sp
     try:

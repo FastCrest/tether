@@ -20,9 +20,22 @@ logger = logging.getLogger(__name__)
 
 def finetune_command(
     base: str = typer.Option(
-        ...,
+        "",
         "--base",
-        help="HF model id of the base checkpoint, e.g. lerobot/smolvla_base",
+        help="HF model id of the base checkpoint, e.g. lerobot/smolvla_base. "
+             "Leave empty for from-scratch training (set --policy + --mode full).",
+    ),
+    policy: str = typer.Option(
+        "auto",
+        "--policy",
+        help="Policy class. 'auto' (default) infers from --base. Set explicitly "
+             "(e.g. 'act') for from-scratch training. Per ADR 2026-05-06.",
+    ),
+    chunk_size: int = typer.Option(
+        50,
+        "--chunk-size",
+        help="Action chunk size for ACT / diffusion-policy from-scratch "
+             "training. Pretrained bases (smolvla / pi0.5) bake this in.",
     ),
     dataset: str = typer.Option(
         ...,
@@ -116,6 +129,8 @@ def finetune_command(
         batch_size=batch_size,
         learning_rate=learning_rate,
         mode=mode,
+        policy=policy,
+        chunk_size=chunk_size,
         lora_rank=lora_rank,
         precision=precision,
         seed=seed,

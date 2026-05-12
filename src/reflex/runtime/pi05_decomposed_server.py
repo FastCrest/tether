@@ -153,6 +153,8 @@ class Pi05DecomposedInference:
         cuda_graphs_enabled: bool = False,
         cuda_graphs_embodiment: str = "unknown",
         cuda_graphs_model_id: str = "unknown",
+        action_similarity_threshold: float = 0.0,  # 0.0 = disabled
+        max_similar_skips: int = 3,
     ):
         """``cache_level`` controls which layer is cached:
 
@@ -196,6 +198,16 @@ class Pi05DecomposedInference:
         self.cache_ignore_lang = cache_ignore_lang
         self._call_index: int = 0  # monotonic call counter for step-count TTL
         self._action_cache: ActionCacheEntry | None = None
+        # Action-similarity fast path (FlashVLA, Phase 1.5). Disabled when
+        # threshold == 0; enabled when threshold > 0. Defaults to off so
+        # existing behavior is unchanged unless --action-similarity-threshold
+        # is set on the CLI.
+        from reflex.runtime.action_fast_path import ActionFastPath
+        self._fast_path = ActionFastPath(
+            threshold=float(action_similarity_threshold),
+            max_skips=int(max_similar_skips),
+            enabled=action_similarity_threshold > 0,
+        )
         # Default prefers CUDA when available, falls back to CPU if the
         # runtime doesn't have GPU providers. LIBERO eval on an A100 box
         # runs ~50× faster on GPU; only use CPU explicitly when matching
@@ -461,7 +473,26 @@ class Pi05DecomposedInference:
                 state_arr = np.concatenate([state_arr, pad], axis=-1)
             expert_feed_base["state"] = state_arr
 
+        # ---- Action-similarity fast path (FlashVLA, Phase 1.5) -----------
+        # Skip the expert when the previous chunk was L2-similar enough +
+        # we still have skip budget. PRE-A2C2 cache per spec — A2C2 hooks
+        # outside this method recompute corrections on the reused actions.
+        if self._fast_path.should_skip():
+            cached = self._fast_path.cached_actions()
+            if cached is not None:
+                self._fast_path.consume_skip()
+                # Surface skip to the per-flush metric. Defensive import
+                # so unit tests without the prometheus extra don't fail.
+                try:
+                    from reflex.observability.prometheus import inc_action_skip
+                    inc_action_skip()
+                except Exception:  # noqa: BLE001
+                    pass
+                return cached
+
         actions = self._run_expert(expert_feed_base, noise)
+        # Update fast-path tracker on each real expert call.
+        self._fast_path.observe(actions)
 
         # ---- Populate action cache -------------------------------------
         if self.cache_level == "action":
@@ -545,6 +576,9 @@ class Pi05DecomposedInference:
         self._call_index = 0
         if self._episode_cache is not None:
             self._episode_cache.reset()
+        # Reset action-similarity fast path — last episode's action chunk
+        # has no relevance to the next task's first chunk.
+        self._fast_path.reset()
 
     def get_stats(self) -> dict[str, Any]:
         base = self._stats.as_dict()

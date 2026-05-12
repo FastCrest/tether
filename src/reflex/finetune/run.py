@@ -33,9 +33,18 @@ def _validate_config(cfg: FinetuneConfig) -> list[str]:
     """
     errs: list[str] = []
     is_distill = getattr(cfg, "phase", "train") == "distill"
-    # base is inferred from teacher_export in distill mode.
-    if not cfg.base and not is_distill:
-        errs.append("base is required (e.g. lerobot/smolvla_base)")
+    is_from_scratch = (
+        getattr(cfg, "policy", "auto") != "auto"
+        and getattr(cfg, "mode", "lora") == "full"
+    )
+    # base is inferred from teacher_export in distill mode, OR not needed
+    # when training from-scratch (policy != 'auto' + mode='full').
+    if not cfg.base and not is_distill and not is_from_scratch:
+        errs.append(
+            "base is required (e.g. lerobot/smolvla_base) for fine-tuning. "
+            "For ACT-from-scratch training, set --policy act --mode full and "
+            "leave --base empty."
+        )
     if is_distill and not cfg.teacher_export:
         errs.append("teacher_export is required for phase='distill'")
     if not cfg.dataset:
@@ -48,11 +57,13 @@ def _validate_config(cfg: FinetuneConfig) -> list[str]:
         errs.append(
             f"mode must be one of lora|lora-cross-embodiment|full; got {cfg.mode!r}"
         )
-    # v0.3 fine-tune supports LoRA only. Distill requires 'full' (SnapFlow
-    # trains a full-weight student copy — no PEFT adapter step).
-    if not is_distill and cfg.mode != "lora":
+    # v0.3 fine-tune supports LoRA on pretrained bases. `full` is now
+    # permitted for from-scratch training (policy != 'auto').
+    if not is_distill and cfg.mode != "lora" and not is_from_scratch:
         errs.append(
-            f"v0.3 fine-tune only supports --mode lora; {cfg.mode!r} lands in v0.5+"
+            f"v0.3 fine-tune supports --mode lora for pretrained bases. "
+            f"For from-scratch training, also set --policy <name> (e.g. act). "
+            f"Got mode={cfg.mode!r} policy={getattr(cfg, 'policy', 'auto')!r}."
         )
     if is_distill and cfg.mode != "full":
         errs.append(
@@ -120,8 +131,14 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     policy config. v0.5 will add per-policy precision overrides.
     """
     # draccus requires `policy.type` to select which PreTrainedConfig
-    # subclass to decode into. Infer from the base-model id.
-    policy_type = _infer_policy_type(cfg.base)
+    # subclass to decode into. Use explicit cfg.policy when set, else
+    # infer from the base-model id.
+    explicit_policy = getattr(cfg, "policy", "auto")
+    if explicit_policy != "auto":
+        policy_type = explicit_policy
+    else:
+        policy_type = _infer_policy_type(cfg.base)
+    is_from_scratch = (explicit_policy != "auto" and cfg.mode == "full")
 
     # lerobot-train wants to OWN its output_dir (errors if pre-existing
     # and resume=False). We keep cfg.output as the reflex orchestration
@@ -137,7 +154,6 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     cmd = [
         "lerobot-train",
         f"--policy.type={policy_type}",
-        f"--policy.pretrained_path={cfg.base}",
         f"--policy.repo_id={repo_id}",
         f"--policy.push_to_hub=false",
         f"--dataset.repo_id={cfg.dataset}",
@@ -147,6 +163,16 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         f"--optimizer.lr={cfg.learning_rate}",
         f"--seed={cfg.seed}",
     ]
+    if not is_from_scratch:
+        # Pretrained-base path: pass the HF id / local checkpoint to load weights from.
+        cmd.append(f"--policy.pretrained_path={cfg.base}")
+    if is_from_scratch and cfg.chunk_size:
+        # ACT (and similar chunked policies) need chunk_size; pretrained bases
+        # bake this in. auto_soarm convention (per its train.py): set
+        # n_action_steps == chunk_size so ACTConfig.__post_init__ doesn't
+        # reject the default n_action_steps=100 against a smaller chunk_size.
+        cmd.append(f"--policy.chunk_size={cfg.chunk_size}")
+        cmd.append(f"--policy.n_action_steps={cfg.chunk_size}")
     if cfg.mode == "lora":
         cmd.extend([
             f"--peft.method_type=lora",

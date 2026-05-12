@@ -6,6 +6,7 @@
 # Usage:
 #   curl -sSf https://fastcrest.com/install | sh
 #   curl -sSf https://fastcrest.com/install | sh -s -- --extras serve,gpu
+#   curl -sSf https://fastcrest.com/install | sh -s -- --jetson --jetpack 6.2
 #
 # Source: https://github.com/FastCrest/reflex-vla
 set -eu
@@ -30,10 +31,15 @@ echo
 
 # -- Parse args ---------------------------------------------------------------
 EXTRAS=""
+FORCE_JETSON=0
+JETPACK_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --extras) EXTRAS="$2"; shift 2 ;;
     --extras=*) EXTRAS="${1#--extras=}"; shift ;;
+    --jetson) FORCE_JETSON=1; shift ;;
+    --jetpack) JETPACK_ARG="$2"; shift 2 ;;
+    --jetpack=*) JETPACK_ARG="${1#--jetpack=}"; shift ;;
     *) shift ;;
   esac
 done
@@ -77,14 +83,28 @@ if [ -r /proc/device-tree/model ]; then
 fi
 
 IS_OLD_NANO=0
-IS_ORIN=0
+IS_JETSON=0
+JETPACK_VERSION=""
 if [ -n "$JETSON_MODEL" ]; then
   case "$JETSON_MODEL" in
     *"Jetson Nano"*|*"jetson-nano"*|*"Tegra X1"*|*"p3450"*|*"p3448"*)
       IS_OLD_NANO=1 ;;
-    *"Orin"*|*"orin"*)
-      IS_ORIN=1 ;;
+    *"Orin"*|*"orin"*|*"Thor"*|*"thor"*)
+      IS_JETSON=1 ;;
   esac
+fi
+
+# Detect JetPack version from nv_tegra_release if available
+if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
+  if [ -r /etc/nv_tegra_release ]; then
+    # Format: # R36 (release), REVISION: 2.2, GCID: 34907586, BOARD: ...
+    # R36 = JetPack 6.x
+    JETPACK_VERSION="$(head -1 /etc/nv_tegra_release | grep -oP 'REVISION: \K[0-9.]+' || true)"
+  fi
+  # Override with explicit arg
+  if [ -n "$JETPACK_ARG" ]; then
+    JETPACK_VERSION="$JETPACK_ARG"
+  fi
 fi
 
 # -- Branch on hardware -------------------------------------------------------
@@ -126,11 +146,37 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }
 fi
 ok "Python $PY_VER (>=3.10 required)"
 
+# -- Jetson-specific Python version check ------------------------------------
+# JetPack 6 ships Python 3.10. Jetson Zoo wheels are built for cp310.
+# Running on Python 3.11+ means no pre-built GPU wheel and a source build.
+if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
+  if [ "$PY_MINOR" -ne 10 ]; then
+    echo
+    warn "Jetson detected but Python is $PY_VER."
+    note "  Jetson Zoo provides GPU wheels for Python 3.10 only."
+    note "  Python $PY_VER will work for CPU inference but GPU (CUDA) may fail."
+    note "  Recommended: use Python 3.10, e.g. pyenv or a Docker image."
+    echo
+    if [ "$FORCE_JETSON" -eq 0 ]; then
+      read -r -p "Continue anyway? [y/N] " response
+      case "$response" in
+        [yY][eE][sS]|[yY]) ;;  # continue
+        *) exit 1 ;;
+      esac
+    fi
+  fi
+fi
+
 # -- Pick install extras based on detected platform ---------------------------
 if [ -z "$EXTRAS" ]; then
-  if [ "$IS_ORIN" -eq 1 ]; then
-    EXTRAS="serve,gpu,monolithic"
-    ok "Detected Jetson Orin → installing with [serve,gpu,monolithic]"
+  if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
+    # NEVER install [gpu] on Jetson — those are x86_64 wheels (nvidia-cu12,
+    # tensorrt). They will either fail to install, segfault, or silently
+    # fall back to CPU. Instead we install [serve,monolithic] and then
+    # pull the Jetson Zoo onnxruntime-gpu wheel explicitly.
+    EXTRAS="serve,monolithic"
+    ok "Detected Jetson ($JETSON_MODEL) → installing with [serve,monolithic]"
+    note "  Jetson-specific GPU runtime will be installed separately."
   elif [ "$OS" = "Darwin" ]; then
     EXTRAS="serve,onnx,monolithic"
     ok "Detected macOS → installing with [serve,onnx,monolithic] (CPU runtime)"
@@ -141,7 +187,9 @@ if [ -z "$EXTRAS" ]; then
     EXTRAS="serve,onnx,monolithic"
     ok "No GPU detected → installing with [serve,onnx,monolithic] (CPU runtime)"
   fi
-  note "  (monolithic adds the extras 'reflex go' needs to actually deploy a model — not just chat)"
+  if [ "$EXTRAS" != "serve,monolithic" ] && [ "$IS_JETSON" -eq 0 ]; then
+    note "  (monolithic adds the extras 'reflex go' needs to actually deploy a model — not just chat)"
+  fi
 fi
 echo
 
@@ -170,12 +218,68 @@ info "Installing: $PIP_TARGET"
 echo
 "$PYTHON" -m pip install --upgrade "$PIP_TARGET"
 
+# -- Jetson: install Jetson Zoo onnxruntime-gpu -------------------------------
+# This must happen AFTER reflex is installed so we override any CPU-only
+# onnxruntime that may have been pulled transitively.
+if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
+  echo
+  info "Installing Jetson-compatible onnxruntime-gpu..."
+
+  # JetPack version → index URL mapping
+  # Default to JP6.0/6.1 (cu126) since that's the current standard.
+  # JP6.2+ uses cu129 and has cp310 + cp312 wheels.
+  case "${JETPACK_VERSION:-}" in
+    6.2*|6.3*|6.4*)
+      JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu129"
+      ok "Detected JetPack $JETPACK_VERSION → using cu129 index"
+      ;;
+    6.0*|6.1*|""|*)
+      JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126"
+      if [ -n "${JETPACK_VERSION:-}" ]; then
+        ok "Detected JetPack $JETPACK_VERSION → using cu126 index"
+      else
+        warn "Could not detect JetPack version. Assuming JetPack 6.0/6.1 (cu126)."
+        note "  If you are on JetPack 6.2+, run with: --jetpack 6.2"
+      fi
+      ;;
+  esac
+
+  # Pin numpy<2 because Jetson Zoo wheels are compiled against numpy 1.x
+  # and will segfault / throw ABI errors with numpy 2.x.
+  # Reflex itself works fine with numpy 1.x.
+  note "  Pinning numpy<2 for Jetson Zoo ABI compatibility..."
+  "$PYTHON" -m pip install 'numpy<2' || warn "numpy pin failed — may cause runtime issues"
+
+  # Install the GPU wheel from Jetson Zoo index
+  if "$PYTHON" -m pip install --upgrade --index-url "$JETSON_INDEX" onnxruntime-gpu; then
+    ok "Installed onnxruntime-gpu (Jetson Zoo, $JETSON_INDEX)"
+  else
+    echo
+    fail "Jetson Zoo onnxruntime-gpu install failed."
+    info "Manual install command:"
+    note "  $PYTHON -m pip install numpy '<2'"
+    note "  $PYTHON -m pip install --upgrade --index-url $JETSON_INDEX onnxruntime-gpu"
+    echo
+    warn "Reflex is installed but inference will fall back to CPU (slow)."
+  fi
+fi
+
 echo
 ok "Installed."
 echo
 info "Next:"
+echo "  reflex doctor      # check your install (Jetson: should show CUDAExecutionProvider)"
 echo "  reflex chat        # natural-language CLI"
-echo "  reflex doctor      # check your install"
 echo "  reflex --help      # see all commands"
 echo
+
+if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
+  info "Jetson deployment:"
+  echo "  reflex go --preset franka    # one-command deploy (after ONNX export)"
+  echo "  reflex serve /path/to/export  # serve a pre-exported model"
+  echo
+  note "For a fully-bundled JetPack Docker image:"
+  note "  docker pull ghcr.io/fastcrest/reflex-vla:latest-jetpack"
+fi
+
 note "Source: https://github.com/FastCrest/reflex-vla"

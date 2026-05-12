@@ -1,5 +1,125 @@
 # Changelog
 
+## v0.9.6 — 2026-05-10
+
+**Fix: GR00T N1.6 + OpenVLA registry entries (closes 2026-05-10 customer report).** Plus a contract test that prevents this exact class of bug from recurring.
+
+### Fixed
+
+- **GR00T N1.6 (`nvidia/GR00T-N1.6-3B`) + OpenVLA (`openvla/openvla-7b`) added to `src/reflex/registry/data.py`.** Both exporters had shipped (`gr00t_exporter.py` validated to max_diff=8.34e-07 vs PyTorch reference; `openvla_exporter.py` shipped via optimum-cli onnx path) but the curated model registry only had pi0/pi05/smolvla entries. Customer attempting to use GR00T or OpenVLA via `reflex models list` / `reflex chat` / `reflex doctor` was told "not supported" even though the underlying export pipeline worked. Now both surface correctly + are pullable via `reflex models pull gr00t-n1.6` / `reflex models pull openvla-7b`.
+
+### Added
+
+- **`tests/test_registry_completeness.py`** — contract test that prevents future drift between exporters and the registry. 5 tests:
+  - `test_every_primary_exporter_has_registry_entry` — for each primary exporter (gr00t / openvla / pi0 / pi05 / smolvla), assert at least one `ModelEntry` uses the matching family. Catches the GR00T/OpenVLA class of bug at CI time.
+  - `test_exporter_directory_audit_covers_all_files` — every file in `src/reflex/exporters/` must be classified as either internal-only (with docstring justification) or primary (with expected family). Catches the case where a contributor adds a new exporter file but forgets registry coverage.
+  - `test_registry_entries_have_required_fields` — each `ModelEntry` populates `model_id` / `hf_repo` / `family` / `action_dim` / `size_mb` / `supported_embodiments` / `supported_devices` / `description`.
+  - `test_gr00t_n16_in_registry` + `test_openvla_in_registry` — specific assertions that pin the 2026-05-10 fix.
+
+Per CLAUDE.md "real fixes not band-aids" — the registry entries patch the immediate bug; the contract test prevents the next contributor from shipping a new exporter without registry entry. Closes the structural hole, not just the symptom.
+
+## v0.9.5 — 2026-05-07
+
+**CLI cut pass — `reflex --help` shrinks 22% (18 → 14 visible top-level verbs); `reflex inspect --help` shrinks 60% (5 → 2 visible).** No commands deleted; cluttered/redundant ones moved to `hidden=True` in their typer registration. All still callable directly for power-user scripts; just removed from the discovery surface.
+
+### Hidden (still callable)
+
+- **`inspect doctor`** — pure duplicate of top-level `reflex doctor` (cross-registered "for completeness" but added redundant entry to --help)
+- **`inspect targets`** — lists hardware profiles. Used once during install, never after
+- **`inspect guard`** — dumps shipped safety config. Niche diagnostic
+- **`inspect bench`** — internal-only latency microbench (`customer_signal: internal` per spec)
+- **`config show/set`** — config schema is a stub (no real config knobs surfaced via this CLI yet; verb-noun ADR scopes config-driven workflows for Phase 2)
+- **`bench-game`** — SO-ARM 100 hardware-specific bench rigs (~3 customers globally)
+- **`calibrate`** — SO-ARM 100 calibration (corners/surface/tap)
+- **`status`** — list running serves; `ps aux | grep reflex` does the same
+
+### Customer-facing impact
+
+Customer's `reflex --help` now shows 11 daily-driver verbs + Pro/contribute. Discord onboarding becomes "here are the 11 verbs you actually need" instead of "good luck navigating 18." Power-user invocations (`reflex inspect doctor`, `reflex calibrate so100 corners`, etc.) still work — only the discovery surface changed.
+
+## v0.9.4 — 2026-05-07
+
+**`reflex doctor` expanded with 4 silent-failure guards.** Customers no longer hit silent failures at deploy time for any of these traps:
+
+### Added
+
+- **Multi-GPU mixed-architecture warning.** If `nvidia-smi` reports 2+ GPUs of different generations (e.g. 1× H100 + 1× RTX 5090), surface a row warning that ORT only uses `CUDA_VISIBLE_DEVICES[0]` and switching GPUs at runtime will silently fail with arch-mismatched kernels.
+- **Jetson JetPack target check.** Detects Jetson via `/etc/nv_tegra_release`, parses JetPack version (R35 / R36 / etc.). R35 ships CUDA 11.4 → fails ORT 1.20+'s CUDA 12.x requirement (silent CPU fallback). R36+ passes. Loud message tells JetPack 5.x customers to upgrade or use `[serve,onnx]` CPU extra.
+- **CUDA driver vs cuDNN version skew check.** cuDNN 9.5+ requires NVIDIA driver R555+; cuDNN 9.0-9.4 requires R550+. Customer pinning old driver via `apt-hold` + bundled cuDNN 9.5 silently fails at first inference call. Guard reads `nvidia-smi --query-gpu=driver_version` + `importlib.metadata.version('nvidia-cudnn-cu12')` and surfaces the gap.
+- **ORT-TRT EP empirical session test.** `available_providers` says the lib loaded — does NOT confirm session-init succeeds. The v0.7 install gap (caught 2026-04-29 v07-install-validation experiment) is exactly this: TRT EP available + session falls back to CUDA EP because `libnvinfer.so.10` isn't on dlopen path. Customer silently loses ~5× perf. Guard creates a tiny stub ONNX model + forces TRT EP + checks `sess.get_providers()` — if TRT EP is missing from active list, surface the loadchain breakage.
+
+### Tests
+
+- 35 new unit tests in `tests/test_doctor_guards.py` covering arch detection (16 GPU SKUs across Blackwell/Hopper/Ada/Ampere/Orin/unknown), Jetson version parsing (R35 / R36 / future / malformed), CUDA driver vs cuDNN version logic (cuDNN 9.0-9.10, drivers R550/R555).
+- All 4 guards gracefully skip on non-applicable systems (no NVIDIA: returns silently; no Jetson: returns silently; etc.).
+
+Per CLAUDE.md "no silent fallbacks that paper over errors" — every customer-facing silent-failure mode in our matrix now surfaces a specific row with a concrete remediation command at `reflex doctor` time.
+
+## v0.9.3 — 2026-05-07
+
+**`reflex doctor` Blackwell guard.** Loud check that catches the trap rob (RTX 5090) hit for 2 weeks: customers running Blackwell hardware on `onnxruntime-gpu < 1.25.1` will see an explicit failure row in `reflex doctor` output telling them to upgrade ORT. Previously the customer had to discover this via segfault.
+
+### Added
+
+- **Blackwell sm_120 support row in `reflex doctor`**:
+  - **Fires only on Blackwell hardware** (RTX 50-series, RTX PRO Blackwell, B200, GB200) — uses existing `reflex.runtime.server._gpu_is_blackwell()` so no new detection logic. Silent on non-Blackwell.
+  - **❌ FAIL** when ORT < 1.25.1: explicit upgrade message with exact pip command (`pip install -U 'onnxruntime-gpu>=1.25.1'`) + reference to PR #27278 + reason ("predates Blackwell support; will SEGFAULT at session-init").
+  - **✅ PASS** when ORT >= 1.25.1: confirms support active + flags live caveat (open ORT issue #27621 about silent threading deadlock on sm_120 with PTX JIT + GIL; reflex's single-thread inference doesn't trigger but multi-threaded customers should monitor).
+- 7 unit tests in `tests/test_doctor_blackwell_guard.py` covering version-comparison logic (pre-1.25.0, 1.25.0, 1.25.1, post-1.25.1, dev/rc/post pre-release suffixes) + GPU-name pattern matching (real Blackwell SKUs match; Hopper/Ada/Ampere/Jetson don't).
+
+Per CLAUDE.md "no silent fallbacks that paper over errors" — Blackwell users now see the upgrade path immediately at `reflex doctor` time, not 2 weeks later via debugging a segfault.
+
+## v0.9.2 — 2026-05-07
+
+**Blackwell (RTX 5090 / B200 / GB200) support unblocked via ORT 1.25.1 bump.**
+
+### Fixed
+
+- **`onnxruntime-gpu` pin bumped from `>=1.20,<1.24` to `>=1.25.1`** in both `[gpu]` and `[gpu-min]` extras. ORT 1.25.0 (2026-04-20) shipped Blackwell sm_120 kernels via PR [#27278](https://github.com/microsoft/onnxruntime/pull/27278) (CUDA arch family codes `100f`/`110f`/`120f`); 1.25.1 (2026-04-27) is current stable. Earlier 1.23/1.24 regressed sm_120 (`cudaErrorNoKernelImageForDevice` on Blackwell). The ceiling `<1.24` was blocking customers from picking up the working release.
+- Bumped `nvidia-cudnn-cu12>=9.5` and `nvidia-cublas-cu12>=12.6` floors to match ORT 1.25's documented build requirements (CUDA SDK 12.8+, cuDNN 9.5+ per maintainer guidance in #26181).
+
+### Live caveat
+
+Open ORT issue [#27621](https://github.com/microsoft/onnxruntime/issues/27621) tracks a silent threading deadlock on sm_120 (PTX JIT + GIL interaction). Reflex doesn't yet exercise the multi-threaded `InferenceSession.run()` codepath that triggers it (single-server, single-request through PolicyRuntime). Will smoke-validate on RTX 5090 hardware before declaring Blackwell tier "production-ready" in the README. Customers using `--max-batch >1` or running multiple `reflex serve` processes on a single GPU should monitor.
+
+### Context — why this took 2 weeks
+
+ADR `2026-04-29-ort-trt-ep-first-class-support.md` (written 9 days AFTER ORT 1.25.0 dropped) assumed Blackwell support would arrive in some future ORT 1.21+. We didn't track ORT releases. Tester `not rob` (RTX 5090) hit segfaults from 2026-04-28 → 2026-05-07 because reflex was pinning `onnxruntime-gpu<1.24`. The fix: drop the ceiling, bump the floor.
+
+## v0.9.1 — 2026-05-07
+
+**Fix: stale `__version__` constant.** v0.9.0's `pyproject.toml` was bumped to 0.9.0 but `src/reflex/__init__.py` still hardcoded `__version__ = "0.8.0"`. The wheel metadata (`pip show`) correctly reported 0.9.0 — only the human-readable upgrade-check nag + `reflex --version` print misreported. No functional bug; all v0.9.0 features (action-similarity-fast-path, customer-trace-archive, uncertainty scoring) shipped working code.
+
+## v0.9.0 — 2026-05-07
+
+**Three Phase 1.5 perf-compound + observability features ship.** Action-similarity fast-path closes redundant expert calls (FlashVLA), customer-trace-archive lands query/summary CLI on recorded /act traces, data-labeling-pipeline gets uncertainty scoring (the orthogonal third axis to success + quality).
+
+### Added
+
+- **`reflex serve --action-similarity-threshold <L2>` + `--max-similar-skips <N>`** (FlashVLA, arxiv 2505.21200). When the expert produces an action chunk L2-similar to the previously-emitted one, the next `predict_action_chunk()` skips the expert and reuses the cached chunk. Default OFF (`0.0` = disabled); paper default `0.05`. Capped at `--max-similar-skips 3` consecutive cached returns to bound drift on slow-changing scenes. Wired only on Pi05DecomposedServer (decomposed pi0.5); legacy + monolithic exports ignore the flags silently.
+  - **Production validated 2026-05-07** on Modal A100 with real pi0.5 decomposed export: 9 skips / 20 calls = 45% skip rate, 20/20 bit-exact actions vs disabled mode, **1.24× wall-clock speedup** (2.7s → 2.2s with deterministic identical inputs).
+  - Surfaces skip events via new `reflex_action_skip_total` Prometheus counter at `/metrics`.
+  - 19 unit tests + 8 mock-integration tests covering enabled/disabled, threshold gating, max_skips cap, cached_actions returns copy, episode reset, stats accounting.
+
+- **`reflex traces query` + `reflex traces summary` subcommands** (customer-trace-archive v1). Filter and aggregate JSONL traces written by `reflex serve --record <dir>`.
+  - `reflex traces query --task X --status failed --since 7d --output failures.json` — filter by time window / task substring / `success`/`failed`/`any` status / `model_hash` substring + export to JSON or CSV.
+  - `reflex traces summary --by {task,model,day} --since 7d` — aggregate count + success_rate + latency p50/p95/p99/max per bucket. Output rich table (default), JSON or CSV via `--output FILE` + auto-detected from suffix.
+  - Built directly on existing JSONL storage; parquet+DuckDB index migration deferred to v2.
+  - 20 unit tests + manual end-to-end smoke validated.
+
+- **`uncertainty_score()` + `classify_episode_value()` in `reflex.curate.quality`** (data-labeling-pipeline subsystem 3). N-pass inference variance for flow-matching VLAs (pi0/pi0.5/SmolVLA). Per-dim variance across N samples → normalize by per-dim observed range² → mean across dims → mean across steps → score in [0, 1]. Components dict surfaces `argmax_step` + `argmax_dim` for debugging.
+  - 4-quadrant classifier per the spec's training-value framing: high-uncertainty + success → `informative_edge_case` (highest value); high-uncertainty + failure → `edge_case_to_correct`; low + success → `redundant_known_good`; low + failure → `model_blind_spot`.
+  - Pure-numpy. Sample-generation is the caller's responsibility (decoupled from inference). Wiring into a `reflex traces uncertainty` CLI deferred to v2.
+  - 17 unit tests covering identical-samples → 0, maximally-divergent → ~0.33, constant-dim contributes 0, monotone in variance, argmax pointers correct, parquet-ready `to_dict()`, all 4 classifier quadrants.
+
+### Fixed
+
+- **`ActionFastPath.observe()` stats counter** now increments `expert_calls` regardless of `enabled` state. Previously the counter early-returned at `if not self._enabled: return`, so disabled-mode runs reported `expert_calls=0` even though the expert ran on each call. Caught by 2026-05-07 production smoke. New regression test.
+
+### Phase 1 status
+
+**Phase 1 closed 2026-05-07** with 16/16 features shipped or explicitly killed. a2c2-correction marked `phase_1_shipped` (Phase 1 fix at OFF parity validated 2026-04-29; Phase 2 ON > OFF positive delta filed as 3 successor stubs: FASTER, TAS, Legato — research revisit committed). Phase 1.5 perf-compound queue done — language-layer-pruning + cross-request-pipelining deferred to Phase 2 with explicit re-open triggers.
+
 ## v0.8.0 — 2026-05-02
 
 **Per-step expert ONNX export feature ships.** New `per_step_expert=True` flag on `export_pi05_decomposed` produces an `expert_denoise.onnx` that takes `(x_t, t, past_kv)` and returns `v_t` (single Euler step velocity), instead of the default baked-loop ONNX that takes `noise` and returns the fully-denoised action chunk. The per-step shape unblocks RTC + per-step caching (Dexmal 3-stage) by exposing the denoise loop in Python rather than baking it into the ONNX graph.

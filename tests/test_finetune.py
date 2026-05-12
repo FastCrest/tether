@@ -60,9 +60,32 @@ class TestConfigValidation:
             output=tmp_path,
             mode="full",
             phase="train",  # explicit — distill allows full, train does not
+            # policy='auto' (default) — from-scratch path NOT triggered
         )
         errs = _validate_config(cfg)
-        assert any("v0.3 fine-tune only supports --mode lora" in e for e in errs)
+        # Per ADR 2026-05-06: full mode is now allowed for from-scratch
+        # training (policy != 'auto'), but still rejected when policy='auto'.
+        assert any(
+            "supports --mode lora" in e and "from-scratch" in e
+            for e in errs
+        )
+
+    def test_from_scratch_act_full_mode_accepted(self, tmp_path):
+        """ACT-from-scratch (policy='act' + mode='full' + empty base) is allowed
+        per ADR 2026-05-06-vendor-auto-soarm.md."""
+        cfg = FinetuneConfig(
+            base="",  # no pretrained base
+            dataset="lerobot/circle_lr",
+            output=tmp_path,
+            mode="full",
+            policy="act",
+            chunk_size=31,
+            phase="train",
+        )
+        errs = _validate_config(cfg)
+        # No "base required" error + no "mode lora" rejection.
+        assert not any("base is required" in e for e in errs)
+        assert not any("supports --mode lora" in e for e in errs)
 
     def test_non_lerobot_backend_rejected(self, tmp_path):
         cfg = FinetuneConfig(

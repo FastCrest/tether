@@ -42,12 +42,15 @@ def test_dispatch_by_model_id():
 
 
 def test_unsupported_model_type_raises():
-    """pi0.5 / GR00T dispatch should raise a clean error until v0.3."""
+    """A model id that doesn't match any family substring AND has no
+    readable local config.json must raise a clean ValueError. (GR00T,
+    pi0.5, smolvla all hit the substring matcher now — pick a name
+    that doesn't.)"""
     from reflex.exporters import monolithic
 
     with pytest.raises(ValueError, match="Cannot infer model_type"):
         monolithic.export_monolithic(
-            "nvidia/GR00T-N1.6-3B", "/tmp/out",
+            "some-org/totally-unknown-architecture", "/tmp/out",
         )
 
 

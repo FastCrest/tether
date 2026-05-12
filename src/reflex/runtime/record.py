@@ -151,6 +151,7 @@ class RecordWriter:
         reflex_version: str = "",
         policies: list[dict[str, Any]] | None = None,
         pro_customer_id: str | None = None,
+        curate_collector: Any = None,
     ) -> None:
         self.record_dir = Path(record_dir)
         self.record_dir.mkdir(parents=True, exist_ok=True)
@@ -223,6 +224,20 @@ class RecordWriter:
         self._header_written = False
         self._seq = 0
         self.degraded = False  # set on first OSError; recorder stops writing
+        # Curate dual-write: when a FreeContributorCollector is attached,
+        # write_request emits to BOTH the JSONL trace (audit) AND the
+        # curate queue (training corpus). Independent failure modes; if
+        # the collector is broken the JSONL still records.
+        self._curate_collector = curate_collector
+        if curate_collector is not None:
+            try:
+                if not getattr(curate_collector, "is_running", False):
+                    curate_collector.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "curate_collector.start failed (curate dual-write disabled): %s", exc,
+                )
+                self._curate_collector = None
 
         # Open file lazily on first emit so the file isn't created if
         # nothing ever gets recorded (e.g. empty test runs).
@@ -373,6 +388,32 @@ class RecordWriter:
             record["routing"] = routing
 
         self._emit(record)
+        # Curate dual-write: feed the same event into the contribution queue.
+        # Failures here NEVER affect the JSONL trace — collector is best-effort.
+        if self._curate_collector is not None and error is None:
+            try:
+                from reflex.pro.data_collection import (
+                    CollectedEvent,
+                    QueueFull,
+                    hash_instruction,
+                )
+                event = CollectedEvent(
+                    timestamp=record["timestamp"],
+                    episode_id=self.session_id,
+                    state_vec=list(state) if state is not None else [],
+                    action_chunk=actions,
+                    reward_proxy=1.0 if error is None else 0.0,
+                    image_b64=image_b64 if self.image_redaction == "full" else None,
+                    instruction_hash=hash_instruction(instruction),
+                    instruction_raw=instruction if self.instruction_redaction == "full" else None,
+                    metadata={"chunk_id": chunk_id, "seq": seq},
+                )
+                try:
+                    self._curate_collector.record(event)
+                except QueueFull:
+                    pass  # queue full → drop, collector tracks via events_dropped
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("curate dual-write skipped: %s", exc)
         return seq
 
     def write_footer(self, totals: dict[str, int]) -> None:
@@ -390,6 +431,13 @@ class RecordWriter:
         self._emit(record)
 
     def close(self) -> None:
+        # Stop the curate collector first so its drain has a chance to
+        # flush queued events before the process exits.
+        if self._curate_collector is not None:
+            try:
+                self._curate_collector.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("curate_collector.stop failed: %s", exc)
         if self._fh is None:
             return
         try:
