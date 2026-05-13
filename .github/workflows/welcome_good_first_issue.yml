@@ -1,0 +1,78 @@
+name: Welcome Good First Issue Contributors
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  welcome:
+    # Ignore pull request comments
+    if: github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Evaluate conditions
+        id: check
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+
+            // 1. Check label (case-insensitive)
+            const labels = issue.labels.map(l => l.name.toLowerCase());
+            const hasGoodFirstIssue = labels.includes("good first issue");
+
+            // 2. Only first comment (includes current comment)
+            const isFirstComment = issue.comments === 1;
+
+            // 3. Ignore bots
+            const isBot = comment.user.type === "Bot";
+
+            // 4. Only first-time / external contributors.
+            //    NONE = no association with repo; FIRST_TIME_CONTRIBUTOR = first-ever
+            //    contribution. CONTRIBUTOR (prior merged commits) intentionally excluded
+            //    — they're not first-timers and shouldn't see the welcome message.
+            const allowedAssociations = [
+              "NONE",
+              "FIRST_TIME_CONTRIBUTOR"
+            ];
+            const isExternal = allowedAssociations.includes(
+              comment.author_association
+            );
+
+            return hasGoodFirstIssue && isFirstComment && !isBot && isExternal;
+
+      - name: Post welcome message
+        if: steps.check.outputs.result == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const message = [
+              "👋 Thanks for your interest in this issue!",
+              "",
+              "This is a great place to start contributing 🎉",
+              "",
+              "Before you begin, please read our contributing guide:",
+              "👉 https://github.com/" + owner + "/" + repo + "/blob/main/CONTRIBUTING.md",
+              "",
+              "### Getting started",
+              "- Comment that you're working on it",
+              "- Follow the setup steps in CONTRIBUTING.md",
+              "- Open a PR when ready",
+              "",
+              "If you get stuck, just ask here — happy to help! 🚀"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: message
+            });
