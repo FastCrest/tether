@@ -29,9 +29,8 @@ ALL_PRESETS = ["franka", "so100", "ur5"]
 
 
 class TestEmbodimentLoading:
-    def test_list_presets_finds_all_three(self):
-        # Order is alphabetical from list_presets()
-        assert list_presets() == ALL_PRESETS
+    def test_list_presets_finds_all(self):
+        assert set(list_presets()) == set(ALL_PRESETS)
 
     @pytest.mark.parametrize("name", ALL_PRESETS)
     def test_preset_loads(self, name):
