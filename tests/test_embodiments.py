@@ -103,9 +103,9 @@ class TestSchemaValidation:
 
     def test_schema_rejects_missing_required_field(self):
         cfg = EmbodimentConfig.load_preset("franka").to_dict()
-        del cfg["gripper"]
+        del cfg["action_space"]
         errors = validate_against_schema(cfg)
-        assert any("gripper" in e["message"] or e["field"] == "gripper" for e in errors)
+        assert any("action_space" in e["message"] or e["field"] == "action_space" for e in errors)
 
     def test_schema_rejects_unknown_embodiment_enum(self):
         cfg = EmbodimentConfig.load_preset("franka").to_dict()

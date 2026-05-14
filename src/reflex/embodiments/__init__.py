@@ -77,11 +77,11 @@ class EmbodimentConfig:
     embodiment: str
     action_space: dict[str, Any]
     normalization: dict[str, list[float]]
-    gripper: dict[str, Any] = field(default_factory=dict)
-    payload_release: dict[str, Any] = field(default_factory=dict)
     cameras: list[dict[str, Any]]
     control: dict[str, float | int]
     constraints: dict[str, Any]
+    gripper: dict[str, Any] = field(default_factory=dict)
+    payload_release: dict[str, Any] = field(default_factory=dict)
 
     # Where this config came from (for debugging + audit trail). Not part
     # of the schema; populated by the loader.
@@ -158,16 +158,20 @@ class EmbodimentConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize back to a dict matching the schema (drops _source_path)."""
-        return {
+        out = {
             "schema_version": self.schema_version,
             "embodiment": self.embodiment,
             "action_space": self.action_space,
             "normalization": self.normalization,
-            "gripper": self.gripper,
             "cameras": self.cameras,
             "control": self.control,
             "constraints": self.constraints,
         }
+        if self.gripper:
+            out["gripper"] = self.gripper
+        if self.payload_release:
+            out["payload_release"] = self.payload_release
+        return out
 
     @property
     def action_dim(self) -> int:

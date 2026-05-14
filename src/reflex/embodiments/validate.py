@@ -145,20 +145,21 @@ def validate_cross_field(cfg: EmbodimentConfig) -> list[ValidationError]:
             }
         )
 
-    # gripper.component_idx must be inside [0, action_dim)
-    grip_idx = cfg.gripper.get("component_idx", -1)
-    if not 0 <= grip_idx < action_dim:
-        errors.append(
-            {
-                "slug": "gripper-idx-out-of-range",
-                "severity": "error",
-                "field": "gripper.component_idx",
-                "message": (
-                    f"component_idx {grip_idx} is outside action_space "
-                    f"[0, {action_dim})"
-                ),
-            }
-        )
+    # gripper.component_idx must be inside [0, action_dim) if gripper exists
+    if cfg.gripper:
+        grip_idx = cfg.gripper.get("component_idx", -1)
+        if not 0 <= grip_idx < action_dim:
+            errors.append(
+                {
+                    "slug": "gripper-idx-out-of-range",
+                    "severity": "error",
+                    "field": "gripper.component_idx",
+                    "message": (
+                        f"component_idx {grip_idx} is outside action_space "
+                        f"[0, {action_dim})"
+                    ),
+                }
+            )
 
     # control.rtc_execution_horizon is an INTEGER count of actions (per
     # ADR 2026-04-25-auto-calibration-architecture decision #8 — the legacy
