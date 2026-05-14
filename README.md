@@ -301,7 +301,7 @@ source /opt/ros/humble/setup.bash   # or iron / jazzy
 # `reflex serve --transport ros2` in a future release.
 reflex ros2-serve ./my_export \
   --image-topic /camera/image_raw \
-  --state-topic /joint_states \
+  --state-topic /joint_states \    # or /mavros/imu/data for drones
   --task-topic  /reflex/task \
   --action-topic /reflex/actions \
   --rate-hz 20
