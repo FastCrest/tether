@@ -24,7 +24,7 @@ ALL_PRESETS = ["franka", "so100", "ur5"]
 
 
 # ---------------------------------------------------------------------------
-# TestEmbodimentLoading — the 3 shipped presets must load + validate
+# TestEmbodimentLoading — the 4 shipped presets must load + validate
 # ---------------------------------------------------------------------------
 
 
