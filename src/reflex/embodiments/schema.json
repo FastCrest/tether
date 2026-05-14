@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://reflex-vla.io/schemas/embodiment-v1.json",
-  "title": "Reflex VLA — embodiment config",
+  "title": "Reflex VLA \u2014 embodiment config",
   "description": "Per-robot config: action space, normalization, gripper, cameras, control, constraints. Read by reflex serve via --embodiment <name>. See features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs.md.",
   "type": "object",
   "required": [
@@ -9,7 +9,6 @@
     "embodiment",
     "action_space",
     "normalization",
-    "gripper",
     "cameras",
     "control",
     "constraints"
@@ -23,17 +22,32 @@
     },
     "embodiment": {
       "type": "string",
-      "enum": ["franka", "so100", "ur5", "trossen", "stretch", "quadcopter", "custom"],
+      "enum": [
+        "franka",
+        "so100",
+        "ur5",
+        "trossen",
+        "stretch",
+        "quadcopter",
+        "custom"
+      ],
       "description": "Embodiment slug. Must match the file name minus .json for presets."
     },
     "action_space": {
       "type": "object",
-      "required": ["type", "dim", "ranges"],
+      "required": [
+        "type",
+        "dim",
+        "ranges"
+      ],
       "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["continuous", "discrete"]
+          "enum": [
+            "continuous",
+            "discrete"
+          ]
         },
         "dim": {
           "type": "integer",
@@ -48,7 +62,9 @@
             "type": "array",
             "minItems": 2,
             "maxItems": 2,
-            "items": { "type": "number" }
+            "items": {
+              "type": "number"
+            }
           },
           "description": "Per-dim [min, max] hard limits. Length must equal action_space.dim."
         }
@@ -56,27 +72,44 @@
     },
     "normalization": {
       "type": "object",
-      "required": ["mean_action", "std_action", "mean_state", "std_state"],
+      "required": [
+        "mean_action",
+        "std_action",
+        "mean_state",
+        "std_state"
+      ],
       "additionalProperties": false,
       "properties": {
         "mean_action": {
           "type": "array",
-          "items": { "type": "number" },
+          "items": {
+            "type": "number"
+          },
           "minItems": 1
         },
         "std_action": {
           "type": "array",
-          "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          },
           "minItems": 1
         },
         "mean_state": {
           "type": "array",
-          "items": { "type": "number" },
+          "items": {
+            "type": "number"
+          },
           "minItems": 1
         },
         "std_state": {
           "type": "array",
-          "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          },
           "minItems": 1
         }
       },
@@ -84,7 +117,11 @@
     },
     "gripper": {
       "type": "object",
-      "required": ["component_idx", "close_threshold", "inverted"],
+      "required": [
+        "component_idx",
+        "close_threshold",
+        "inverted"
+      ],
       "additionalProperties": false,
       "properties": {
         "component_idx": {
@@ -110,27 +147,52 @@
       "maxItems": 8,
       "items": {
         "type": "object",
-        "required": ["name", "resolution", "fps", "color_space"],
+        "required": [
+          "name",
+          "resolution",
+          "fps",
+          "color_space"
+        ],
         "additionalProperties": false,
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
           "resolution": {
             "type": "array",
             "minItems": 2,
             "maxItems": 2,
-            "items": { "type": "integer", "minimum": 32, "maximum": 4096 }
+            "items": {
+              "type": "integer",
+              "minimum": 32,
+              "maximum": 4096
+            }
           },
-          "fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 240 },
+          "fps": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 240
+          },
           "color_space": {
             "type": "string",
-            "enum": ["rgb8", "bgr8", "mono8", "rgba8"]
+            "enum": [
+              "rgb8",
+              "bgr8",
+              "mono8",
+              "rgba8"
+            ]
           }
         }
       }
     },
     "control": {
       "type": "object",
-      "required": ["frequency_hz", "chunk_size", "rtc_execution_horizon"],
+      "required": [
+        "frequency_hz",
+        "chunk_size",
+        "rtc_execution_horizon"
+      ],
       "additionalProperties": false,
       "properties": {
         "frequency_hz": {
@@ -155,7 +217,11 @@
     },
     "constraints": {
       "type": "object",
-      "required": ["max_ee_velocity", "max_gripper_velocity", "collision_check"],
+      "required": [
+        "max_ee_velocity",
+        "max_gripper_velocity",
+        "collision_check"
+      ],
       "additionalProperties": false,
       "properties": {
         "max_ee_velocity": {
@@ -173,6 +239,25 @@
         "collision_check": {
           "type": "boolean",
           "description": "Whether the runtime should run a per-step collision check before commanding."
+        }
+      }
+    },
+    "payload_release": {
+      "type": "object",
+      "required": [
+        "component_idx",
+        "trigger_threshold"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "component_idx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "trigger_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
         }
       }
     }

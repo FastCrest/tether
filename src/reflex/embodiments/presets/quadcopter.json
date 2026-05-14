@@ -55,11 +55,6 @@
       0.5
     ]
   },
-  "gripper": {
-    "component_idx": 4,
-    "close_threshold": 0.5,
-    "inverted": false
-  },
   "cameras": [
     {
       "name": "front",
@@ -89,5 +84,9 @@
     "max_ee_velocity": 5.0,
     "max_gripper_velocity": 1.0,
     "collision_check": true
+  },
+  "payload_release": {
+    "component_idx": 4,
+    "trigger_threshold": 0.5
   }
 }

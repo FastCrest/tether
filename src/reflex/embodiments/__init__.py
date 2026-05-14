@@ -77,7 +77,8 @@ class EmbodimentConfig:
     embodiment: str
     action_space: dict[str, Any]
     normalization: dict[str, list[float]]
-    gripper: dict[str, Any]
+    gripper: dict[str, Any] = field(default_factory=dict)
+    payload_release: dict[str, Any] = field(default_factory=dict)
     cameras: list[dict[str, Any]]
     control: dict[str, float | int]
     constraints: dict[str, Any]
@@ -118,7 +119,8 @@ class EmbodimentConfig:
             embodiment=d["embodiment"],
             action_space=d["action_space"],
             normalization=d["normalization"],
-            gripper=d["gripper"],
+            gripper=d.get("gripper", {}),
+            payload_release=d.get("payload_release", {}),
             cameras=d["cameras"],
             control=control,
             constraints=d["constraints"],
