@@ -639,6 +639,12 @@ goals:
     check: "test -f reflex_context/03_experiments/cloud_latency_matrix.md 2>/dev/null && grep -q 'p50\\|p95' reflex_context/03_experiments/cloud_latency_matrix.md 2>/dev/null"
     weight: 8
 
+  - id: serve-drone-support
+    status: done
+    description: "Native quadcopter continuous flight control support via standardized 5-DOF continuous preset mapping, ROS2 MAVROS transport interface, and high-frequency 50.0 Hz verification constraints."
+    check: "test -f configs/embodiments/quadcopter.json && grep -q 'quadcopter' src/reflex/embodiments/schema.json"
+    weight: 8
+
   # ── METRICS GAP AUDIT ADDITIONS (added 2026-04-23) ──
   # Surfaced by /tmp/serve_metrics_gap_audit.md — these 6 goals were
   # implied by features/01_serve/METRICS.md but not previously tracked

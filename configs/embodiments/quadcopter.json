@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "embodiment": "quadcopter",
+  "action_space": {
+    "type": "continuous",
+    "dim": 5,
+    "ranges": [
+      [
+        -3.1416,
+        3.1416
+      ],
+      [
+        -3.1416,
+        3.1416
+      ],
+      [
+        -3.1416,
+        3.1416
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "normalization": {
+    "mean_action": [
+      0.0,
+      0.0,
+      0.0,
+      0.5,
+      0.0
+    ],
+    "std_action": [
+      1.0,
+      1.0,
+      1.0,
+      0.5,
+      0.5
+    ],
+    "mean_state": [
+      0.0,
+      0.0,
+      0.0,
+      0.5
+    ],
+    "std_state": [
+      1.0,
+      1.0,
+      1.0,
+      0.5
+    ]
+  },
+  "gripper": {
+    "component_idx": 4,
+    "close_threshold": 0.5,
+    "inverted": false
+  },
+  "cameras": [
+    {
+      "name": "front",
+      "resolution": [
+        640,
+        480
+      ],
+      "fps": 30.0,
+      "color_space": "rgb8"
+    },
+    {
+      "name": "downward",
+      "resolution": [
+        640,
+        480
+      ],
+      "fps": 30.0,
+      "color_space": "rgb8"
+    }
+  ],
+  "control": {
+    "frequency_hz": 50.0,
+    "chunk_size": 20,
+    "rtc_execution_horizon": 10
+  },
+  "constraints": {
+    "max_ee_velocity": 5.0,
+    "max_gripper_velocity": 1.0,
+    "collision_check": true
+  }
+}

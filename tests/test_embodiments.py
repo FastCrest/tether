@@ -20,7 +20,7 @@ from reflex.embodiments.validate import (
     validate_embodiment_config,
 )
 
-ALL_PRESETS = ["franka", "so100", "ur5"]
+ALL_PRESETS = ["franka", "quadcopter", "so100", "ur5"]
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +69,11 @@ class TestEmbodimentLoading:
     def test_ur5_action_dim_seven(self):
         cfg = EmbodimentConfig.load_preset("ur5")
         assert cfg.action_dim == 7
+
+    def test_quadcopter_action_dim_five(self):
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        assert cfg.action_dim == 5
+        assert cfg.control["frequency_hz"] == 50.0
 
     def test_to_dict_round_trip(self):
         original = EmbodimentConfig.load_preset("franka")
@@ -268,9 +273,10 @@ class TestPresetSemantics:
 
     @pytest.mark.parametrize("name", ALL_PRESETS)
     def test_max_ee_velocity_capped(self, name):
-        """Sanity: presets must keep ee velocity under 2 m/s."""
+        """Sanity: presets must keep ee velocity under 2 m/s (or 6 m/s for flight)."""
         cfg = EmbodimentConfig.load_preset(name)
-        assert 0 < cfg.constraints["max_ee_velocity"] <= 2.0
+        cap = 6.0 if name == "quadcopter" else 2.0
+        assert 0 < cfg.constraints["max_ee_velocity"] <= cap
 
     @pytest.mark.parametrize("name", ALL_PRESETS)
     def test_chunk_size_reasonable(self, name):

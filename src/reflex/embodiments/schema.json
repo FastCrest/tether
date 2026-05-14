@@ -23,7 +23,7 @@
     },
     "embodiment": {
       "type": "string",
-      "enum": ["franka", "so100", "ur5", "trossen", "stretch", "custom"],
+      "enum": ["franka", "so100", "ur5", "trossen", "stretch", "quadcopter", "custom"],
       "description": "Embodiment slug. Must match the file name minus .json for presets."
     },
     "action_space": {
