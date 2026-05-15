@@ -22,7 +22,7 @@ The authoritative schema is at `src/reflex/embodiments/schema.json` (JSON Schema
 | Field | Type | Notes |
 |---|---|---|
 | `schema_version` | int (= 1) | Bump only on removed/renamed fields. Additive changes don't bump. |
-| `embodiment` | enum | `franka` \| `so100` \| `ur5` \| `trossen` \| `stretch` \| `custom` |
+| `embodiment` | enum | `franka` \| `so100` \| `ur5` \| `trossen` \| `stretch` \| `quadcopter` \| `custom` |
 
 ## `action_space`
 
