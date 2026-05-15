@@ -9,7 +9,6 @@
     "embodiment",
     "action_space",
     "normalization",
-    "gripper",
     "cameras",
     "control",
     "constraints"
@@ -23,7 +22,7 @@
     },
     "embodiment": {
       "type": "string",
-      "enum": ["franka", "so100", "ur5", "trossen", "stretch", "custom"],
+      "enum": ["franka", "so100", "ur5", "trossen", "stretch", "quadcopter", "custom"],
       "description": "Embodiment slug. Must match the file name minus .json for presets."
     },
     "action_space": {
@@ -86,6 +85,7 @@
       "type": "object",
       "required": ["component_idx", "close_threshold", "inverted"],
       "additionalProperties": false,
+      "description": "Optional. Present for embodiments with a gripper end-effector (arms). Omitted for drones and other gripper-less robots.",
       "properties": {
         "component_idx": {
           "type": "integer",
@@ -101,6 +101,25 @@
         "inverted": {
           "type": "boolean",
           "description": "If true, low values close the gripper instead of high values."
+        }
+      }
+    },
+    "payload_release": {
+      "type": "object",
+      "required": ["component_idx", "trigger_threshold"],
+      "additionalProperties": false,
+      "description": "Optional. Present for embodiments with a payload-release actuator (drones with delivery, etc.). Mutually exclusive with `gripper` in practice — an embodiment has one end-effector type.",
+      "properties": {
+        "component_idx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index into the action vector that controls payload release."
+        },
+        "trigger_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Action value above which payload is released."
         }
       }
     },
@@ -155,20 +174,20 @@
     },
     "constraints": {
       "type": "object",
-      "required": ["max_ee_velocity", "max_gripper_velocity", "collision_check"],
+      "required": ["max_ee_velocity", "collision_check"],
       "additionalProperties": false,
       "properties": {
         "max_ee_velocity": {
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 10.0,
-          "description": "End-effector velocity cap (m/s)."
+          "description": "End-effector velocity cap (m/s for arms; flight speed for aerial)."
         },
         "max_gripper_velocity": {
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 10.0,
-          "description": "Gripper open/close velocity cap (rad/s or normalized)."
+          "description": "Gripper open/close velocity cap (rad/s or normalized). Required when `gripper` is present; otherwise omitted."
         },
         "collision_check": {
           "type": "boolean",

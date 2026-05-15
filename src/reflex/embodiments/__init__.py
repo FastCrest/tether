@@ -1,4 +1,4 @@
-"""Per-embodiment configs (Franka, SO-100, UR5, Trossen, Stretch, custom).
+"""Per-embodiment configs (Franka, SO-100, UR5, Trossen, Stretch, Quadcopter, custom).
 
 Read by `reflex serve --embodiment <name>` so the runtime knows the robot's
 action space, normalization stats, gripper layout, control rate, and safety
@@ -77,10 +77,16 @@ class EmbodimentConfig:
     embodiment: str
     action_space: dict[str, Any]
     normalization: dict[str, list[float]]
-    gripper: dict[str, Any]
     cameras: list[dict[str, Any]]
     control: dict[str, float | int]
     constraints: dict[str, Any]
+
+    # Optional end-effector concepts. Arms have a gripper; drones have a
+    # payload_release; future embodiments may have neither, both, or other
+    # actuators (sprayer, gimbal). Schema requires neither — embodiments
+    # without an end-effector simply omit the field.
+    gripper: dict[str, Any] = field(default_factory=dict)
+    payload_release: dict[str, Any] = field(default_factory=dict)
 
     # Where this config came from (for debugging + audit trail). Not part
     # of the schema; populated by the loader.
@@ -118,7 +124,8 @@ class EmbodimentConfig:
             embodiment=d["embodiment"],
             action_space=d["action_space"],
             normalization=d["normalization"],
-            gripper=d["gripper"],
+            gripper=d.get("gripper", {}),
+            payload_release=d.get("payload_release", {}),
             cameras=d["cameras"],
             control=control,
             constraints=d["constraints"],
@@ -155,17 +162,26 @@ class EmbodimentConfig:
         return cls.from_dict(data, source_path=str(p))
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize back to a dict matching the schema (drops _source_path)."""
-        return {
+        """Serialize back to a dict matching the schema (drops _source_path).
+
+        Empty optional fields (gripper, payload_release) are omitted so the
+        output round-trips cleanly through the JSON schema's
+        `additionalProperties: false` constraint.
+        """
+        out: dict[str, Any] = {
             "schema_version": self.schema_version,
             "embodiment": self.embodiment,
             "action_space": self.action_space,
             "normalization": self.normalization,
-            "gripper": self.gripper,
             "cameras": self.cameras,
             "control": self.control,
             "constraints": self.constraints,
         }
+        if self.gripper:
+            out["gripper"] = self.gripper
+        if self.payload_release:
+            out["payload_release"] = self.payload_release
+        return out
 
     @property
     def action_dim(self) -> int:
@@ -179,7 +195,18 @@ class EmbodimentConfig:
         return len(self.normalization["mean_state"])
 
     @property
+    def has_gripper(self) -> bool:
+        """True if this embodiment has a gripper end-effector."""
+        return bool(self.gripper)
+
+    @property
     def gripper_idx(self) -> int:
+        """Index into the action vector that controls the gripper.
+
+        Raises KeyError if this embodiment has no gripper — callers must
+        check `has_gripper` first when the embodiment can be a drone or
+        other gripper-less robot.
+        """
         return int(self.gripper["component_idx"])
 
 

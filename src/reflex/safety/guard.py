@@ -104,11 +104,19 @@ class SafetyLimits:
         action_space = cfg.action_space
         ranges = action_space["ranges"]
         action_dim = int(action_space["dim"])
-        gripper_idx = cfg.gripper_idx
         constraints = cfg.constraints
 
         max_ee_vel = float(constraints["max_ee_velocity"])
-        max_gripper_vel = float(constraints["max_gripper_velocity"])
+        # max_gripper_velocity is only present for embodiments with a gripper
+        # (arms). For drones and other gripper-less embodiments, broadcast
+        # max_ee_velocity across all action dims. gripper_idx = -1 ensures
+        # no axis matches the gripper-specific path below.
+        if cfg.has_gripper:
+            gripper_idx = cfg.gripper_idx
+            max_gripper_vel = float(constraints["max_gripper_velocity"])
+        else:
+            gripper_idx = -1
+            max_gripper_vel = max_ee_vel  # unused when gripper_idx == -1
 
         position_min = [float(r[0]) for r in ranges]
         position_max = [float(r[1]) for r in ranges]

@@ -1,9 +1,11 @@
 """Tests for per-embodiment configs (B.1).
 
-Three test classes:
-- TestEmbodimentLoading — all 3 shipped presets load via load_preset()
+Test classes:
+- TestEmbodimentLoading — all 4 shipped presets load via load_preset()
 - TestSchemaValidation — JSON-schema layer rejects malformed configs
 - TestCrossValidation — Python-side cross-field rules catch mismatches
+- TestPresetSemantics — per-embodiment invariants
+- TestGripperOptional — drones and other gripper-less embodiments
 
 Style mirrors tests/test_config.py.
 """
@@ -20,11 +22,13 @@ from reflex.embodiments.validate import (
     validate_embodiment_config,
 )
 
-ALL_PRESETS = ["franka", "so100", "ur5"]
+ALL_PRESETS = ["franka", "quadcopter", "so100", "ur5"]
+ARM_PRESETS = ["franka", "so100", "ur5"]
+GRIPPERLESS_PRESETS = ["quadcopter"]
 
 
 # ---------------------------------------------------------------------------
-# TestEmbodimentLoading — the 3 shipped presets must load + validate
+# TestEmbodimentLoading — the 4 shipped presets must load + validate
 # ---------------------------------------------------------------------------
 
 
@@ -69,6 +73,16 @@ class TestEmbodimentLoading:
         cfg = EmbodimentConfig.load_preset("ur5")
         assert cfg.action_dim == 7
 
+    def test_quadcopter_specifics(self):
+        """Quadcopter preset: 5-DOF action (3 body rates + thrust + payload),
+        10-DOF state (pos + quat + vel), 50 Hz, no gripper, has payload_release."""
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        assert cfg.action_dim == 5
+        assert cfg.state_dim == 10
+        assert cfg.control["frequency_hz"] == 50.0
+        assert not cfg.has_gripper
+        assert cfg.payload_release["component_idx"] == 4
+
     def test_to_dict_round_trip(self):
         original = EmbodimentConfig.load_preset("franka")
         d = original.to_dict()
@@ -96,10 +110,15 @@ class TestSchemaValidation:
         assert errors == []
 
     def test_schema_rejects_missing_required_field(self):
+        # `action_space` is required (unlike `gripper`, which became optional
+        # to support drones — see test_quadcopter_validates_without_gripper).
         cfg = EmbodimentConfig.load_preset("franka").to_dict()
-        del cfg["gripper"]
+        del cfg["action_space"]
         errors = validate_against_schema(cfg)
-        assert any("gripper" in e["message"] or e["field"] == "gripper" for e in errors)
+        assert any(
+            "action_space" in e["message"] or e["field"] == "action_space"
+            for e in errors
+        )
 
     def test_schema_rejects_unknown_embodiment_enum(self):
         cfg = EmbodimentConfig.load_preset("franka").to_dict()
@@ -265,17 +284,102 @@ class TestPresetSemantics:
         cfg = EmbodimentConfig.load_preset(name)
         assert cfg.constraints["collision_check"] is True
 
-    @pytest.mark.parametrize("name", ALL_PRESETS)
-    def test_max_ee_velocity_capped(self, name):
-        """Sanity: presets must keep ee velocity under 2 m/s."""
+    @pytest.mark.parametrize("name", ARM_PRESETS)
+    def test_arm_max_ee_velocity_capped(self, name):
+        """Sanity: arm presets must keep end-effector velocity under 2 m/s.
+
+        Drones use the same field for flight speed and have a separate,
+        looser cap — see test_quadcopter_flight_speed_capped.
+        """
         cfg = EmbodimentConfig.load_preset(name)
         assert 0 < cfg.constraints["max_ee_velocity"] <= 2.0
+
+    def test_quadcopter_flight_speed_capped(self):
+        """Quadcopter `max_ee_velocity` is reused as flight-speed cap.
+        Hard ceiling: 6 m/s (~13 mph) — well under the schema cap of 10."""
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        assert 0 < cfg.constraints["max_ee_velocity"] <= 6.0
 
     @pytest.mark.parametrize("name", ALL_PRESETS)
     def test_chunk_size_reasonable(self, name):
         """Sanity: chunk_size between 10 and 100 (matches model output range)."""
         cfg = EmbodimentConfig.load_preset(name)
         assert 10 <= cfg.control["chunk_size"] <= 100
+
+
+# ---------------------------------------------------------------------------
+# TestGripperOptional — gripper-less embodiments (drones, future) must
+# round-trip cleanly through schema + cross-field + SafetyLimits without
+# special-casing at every call site.
+# ---------------------------------------------------------------------------
+
+
+class TestGripperOptional:
+    def test_quadcopter_omits_gripper(self):
+        """The shipped quadcopter preset must NOT include a `gripper` block."""
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        assert not cfg.has_gripper
+        assert "gripper" not in cfg.to_dict()
+
+    def test_quadcopter_validates_without_gripper(self):
+        """Schema must accept a preset with no `gripper` block (and no
+        `max_gripper_velocity`)."""
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        ok, errors = validate_embodiment_config(cfg)
+        blocking = [e for e in errors if e["severity"] == "error"]
+        assert ok and not blocking, f"quadcopter validation failed: {blocking}"
+
+    def test_gripper_idx_raises_when_no_gripper(self):
+        """Accessing `gripper_idx` on a gripper-less embodiment raises
+        KeyError — callers must check `has_gripper` first."""
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        with pytest.raises(KeyError):
+            _ = cfg.gripper_idx
+
+    def test_arms_unchanged_have_gripper(self):
+        """Regression: existing arm presets must still report has_gripper=True."""
+        for name in ARM_PRESETS:
+            cfg = EmbodimentConfig.load_preset(name)
+            assert cfg.has_gripper, f"{name} lost its gripper after refactor"
+            assert "gripper" in cfg.to_dict()
+
+    def test_payload_release_idx_out_of_range_caught(self):
+        d = EmbodimentConfig.load_preset("quadcopter").to_dict()
+        d["payload_release"]["component_idx"] = 99  # action_dim=5
+        cfg = EmbodimentConfig.from_dict(d)
+        errors = validate_cross_field(cfg)
+        assert any(e["slug"] == "payload-release-idx-out-of-range" for e in errors)
+
+    def test_gripper_present_requires_max_gripper_velocity(self):
+        """If a `gripper` block is present, `max_gripper_velocity` must also
+        be present — otherwise SafetyLimits would crash at runtime."""
+        d = EmbodimentConfig.load_preset("franka").to_dict()
+        del d["constraints"]["max_gripper_velocity"]
+        cfg = EmbodimentConfig.from_dict(d)
+        errors = validate_cross_field(cfg)
+        assert any(e["slug"] == "gripper-missing-velocity-cap" for e in errors)
+
+    def test_safety_limits_builds_for_quadcopter(self):
+        """Regression: SafetyLimits.from_embodiment_config must work for a
+        gripper-less embodiment — broadcasts max_ee_velocity across all dims."""
+        from reflex.safety.guard import SafetyLimits
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        limits = SafetyLimits.from_embodiment_config(cfg)
+        assert len(limits.velocity_max) == cfg.action_dim
+        # All axes should get the same (max_ee_velocity) cap — no gripper axis.
+        max_ee = cfg.constraints["max_ee_velocity"]
+        assert all(v == max_ee for v in limits.velocity_max)
+
+    def test_safety_limits_arm_gripper_axis_uses_gripper_cap(self):
+        """Regression for arms: the gripper axis still gets max_gripper_velocity."""
+        from reflex.safety.guard import SafetyLimits
+        cfg = EmbodimentConfig.load_preset("franka")
+        limits = SafetyLimits.from_embodiment_config(cfg)
+        max_ee = cfg.constraints["max_ee_velocity"]
+        max_grip = cfg.constraints["max_gripper_velocity"]
+        for i, v in enumerate(limits.velocity_max):
+            expected = max_grip if i == cfg.gripper_idx else max_ee
+            assert v == expected, f"axis {i}: expected {expected}, got {v}"
 
     @pytest.mark.parametrize("name", ALL_PRESETS)
     def test_state_dim_matches_norm_arrays(self, name):

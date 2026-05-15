@@ -145,20 +145,54 @@ def validate_cross_field(cfg: EmbodimentConfig) -> list[ValidationError]:
             }
         )
 
-    # gripper.component_idx must be inside [0, action_dim)
-    grip_idx = cfg.gripper.get("component_idx", -1)
-    if not 0 <= grip_idx < action_dim:
-        errors.append(
-            {
-                "slug": "gripper-idx-out-of-range",
-                "severity": "error",
-                "field": "gripper.component_idx",
-                "message": (
-                    f"component_idx {grip_idx} is outside action_space "
-                    f"[0, {action_dim})"
-                ),
-            }
-        )
+    # gripper.component_idx must be inside [0, action_dim) — only checked
+    # when a gripper is declared. Drones omit the gripper block entirely.
+    if cfg.gripper:
+        grip_idx = cfg.gripper.get("component_idx", -1)
+        if not 0 <= grip_idx < action_dim:
+            errors.append(
+                {
+                    "slug": "gripper-idx-out-of-range",
+                    "severity": "error",
+                    "field": "gripper.component_idx",
+                    "message": (
+                        f"component_idx {grip_idx} is outside action_space "
+                        f"[0, {action_dim})"
+                    ),
+                }
+            )
+        # When a gripper is declared, the runtime needs a per-gripper
+        # velocity cap separate from max_ee_velocity — otherwise SafetyLimits
+        # falls back to broadcasting max_ee_velocity across all dims.
+        if "max_gripper_velocity" not in cfg.constraints:
+            errors.append(
+                {
+                    "slug": "gripper-missing-velocity-cap",
+                    "severity": "error",
+                    "field": "constraints.max_gripper_velocity",
+                    "message": (
+                        "constraints.max_gripper_velocity is required when "
+                        "a `gripper` block is present"
+                    ),
+                }
+            )
+
+    # payload_release.component_idx must be inside [0, action_dim) — only
+    # checked when payload_release is declared.
+    if cfg.payload_release:
+        pr_idx = cfg.payload_release.get("component_idx", -1)
+        if not 0 <= pr_idx < action_dim:
+            errors.append(
+                {
+                    "slug": "payload-release-idx-out-of-range",
+                    "severity": "error",
+                    "field": "payload_release.component_idx",
+                    "message": (
+                        f"component_idx {pr_idx} is outside action_space "
+                        f"[0, {action_dim})"
+                    ),
+                }
+            )
 
     # control.rtc_execution_horizon is an INTEGER count of actions (per
     # ADR 2026-04-25-auto-calibration-architecture decision #8 — the legacy
