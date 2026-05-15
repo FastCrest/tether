@@ -100,6 +100,11 @@ def _install_fake_rclpy(monkeypatch):
     sensor_msgs_msg = types.ModuleType("sensor_msgs.msg")
     sensor_msgs_msg.Image = type("Image", (), {})
     sensor_msgs_msg.JointState = type("JointState", (), {})
+    sensor_msgs_msg.Imu = type("Imu", (), {})
+
+    nav_msgs = types.ModuleType("nav_msgs")
+    nav_msgs_msg = types.ModuleType("nav_msgs.msg")
+    nav_msgs_msg.Odometry = type("Odometry", (), {})
 
     std_msgs = types.ModuleType("std_msgs")
     std_msgs_msg = types.ModuleType("std_msgs.msg")
@@ -114,6 +119,8 @@ def _install_fake_rclpy(monkeypatch):
     monkeypatch.setitem(sys.modules, "rclpy.node", rclpy_node)
     monkeypatch.setitem(sys.modules, "sensor_msgs", sensor_msgs)
     monkeypatch.setitem(sys.modules, "sensor_msgs.msg", sensor_msgs_msg)
+    monkeypatch.setitem(sys.modules, "nav_msgs", nav_msgs)
+    monkeypatch.setitem(sys.modules, "nav_msgs.msg", nav_msgs_msg)
     monkeypatch.setitem(sys.modules, "std_msgs", std_msgs)
     monkeypatch.setitem(sys.modules, "std_msgs.msg", std_msgs_msg)
 
@@ -251,3 +258,215 @@ def test_tick_handles_server_error_gracefully(monkeypatch):
     # predict called but no publish happened
     server.predict.assert_called_once()
     node._action_pub.publish.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# State extractor unit tests — exercise the decoupled extractor functions
+# directly with SimpleNamespace mocks. No rclpy install needed.
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+
+class TestJointStateExtractor:
+    def test_extracts_position_field(self):
+        from reflex.runtime.ros2_bridge import _extract_joint_state
+        msg = SimpleNamespace(position=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
+        state = _extract_joint_state(msg)
+        assert state == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+
+    def test_normalises_to_floats(self):
+        from reflex.runtime.ros2_bridge import _extract_joint_state
+        msg = SimpleNamespace(position=(1, 2, 3))
+        state = _extract_joint_state(msg)
+        assert state == [1.0, 2.0, 3.0]
+        assert all(isinstance(v, float) for v in state)
+
+
+class TestImuExtractor:
+    def test_extracts_quaternion_xyzw(self):
+        """ROS REP-103 convention — quaternion stored as (x, y, z, w)."""
+        from reflex.runtime.ros2_bridge import _extract_imu
+        msg = SimpleNamespace(
+            orientation=SimpleNamespace(x=0.1, y=0.2, z=0.3, w=0.9),
+        )
+        assert _extract_imu(msg) == [0.1, 0.2, 0.3, 0.9]
+
+    def test_output_is_four_dof_partial_state(self):
+        from reflex.runtime.ros2_bridge import _extract_imu
+        msg = SimpleNamespace(
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        )
+        assert len(_extract_imu(msg)) == 4
+
+
+class TestOdometryExtractor:
+    @staticmethod
+    def _mock_odom(*, p, o, v):
+        return SimpleNamespace(
+            pose=SimpleNamespace(pose=SimpleNamespace(
+                position=SimpleNamespace(x=p[0], y=p[1], z=p[2]),
+                orientation=SimpleNamespace(x=o[0], y=o[1], z=o[2], w=o[3]),
+            )),
+            twist=SimpleNamespace(twist=SimpleNamespace(
+                linear=SimpleNamespace(x=v[0], y=v[1], z=v[2]),
+            )),
+        )
+
+    def test_extracts_pos_orient_vel_in_order(self):
+        from reflex.runtime.ros2_bridge import _extract_odom
+        msg = self._mock_odom(
+            p=(1.0, 2.0, 3.0),
+            o=(0.0, 0.0, 0.0, 1.0),
+            v=(0.1, 0.2, 0.3),
+        )
+        assert _extract_odom(msg) == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, 0.1, 0.2, 0.3]
+
+    def test_output_is_ten_dof(self):
+        from reflex.runtime.ros2_bridge import _extract_odom
+        msg = self._mock_odom(p=(0, 0, 0), o=(0, 0, 0, 1), v=(0, 0, 0))
+        assert len(_extract_odom(msg)) == 10
+
+    def test_matches_quadcopter_preset_state_dim(self):
+        """Cross-layer pin: if the quadcopter preset state_dim ever drifts
+        from the odom extractor length, this breaks at CI time at the right
+        layer to catch which side moved."""
+        from reflex.embodiments import EmbodimentConfig
+        from reflex.runtime.ros2_bridge import _extract_odom
+        cfg = EmbodimentConfig.load_preset("quadcopter")
+        msg = self._mock_odom(p=(0, 0, 0), o=(0, 0, 0, 1), v=(0, 0, 0))
+        assert len(_extract_odom(msg)) == cfg.state_dim
+
+
+class TestRegistryAndResolution:
+    def test_all_documented_types_registered(self):
+        from reflex.runtime.ros2_bridge import _STATE_EXTRACTORS
+        assert set(_STATE_EXTRACTORS) == {"joint_state", "imu", "odom"}
+
+    def test_resolve_unknown_type_raises(self):
+        from reflex.runtime.ros2_bridge import _resolve_state_msg_class
+        with pytest.raises(ValueError, match="unknown state_msg_type"):
+            _resolve_state_msg_class("not_a_real_msg_type")
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — verify create_ros2_bridge_node dispatches the right
+# extractor for each state_msg_type and surfaces mismatch warnings.
+# ---------------------------------------------------------------------------
+
+
+class TestStateMsgTypeDispatch:
+    def test_default_is_joint_state(self, monkeypatch):
+        _install_fake_rclpy(monkeypatch)
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        node = create_ros2_bridge_node(MagicMock())
+        msg = SimpleNamespace(position=[0.1, 0.2, 0.3])
+        node._state_cb(msg)
+        assert node._last_state == [0.1, 0.2, 0.3]
+
+    def test_imu_dispatch(self, monkeypatch):
+        _install_fake_rclpy(monkeypatch)
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        node = create_ros2_bridge_node(
+            MagicMock(), state_msg_type="imu", state_topic="/mavros/imu/data",
+        )
+        msg = SimpleNamespace(
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        )
+        node._state_cb(msg)
+        assert node._last_state == [0.0, 0.0, 0.0, 1.0]
+
+    def test_odom_dispatch(self, monkeypatch):
+        _install_fake_rclpy(monkeypatch)
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        node = create_ros2_bridge_node(
+            MagicMock(),
+            state_msg_type="odom",
+            state_topic="/mavros/local_position/odom",
+        )
+        msg = TestOdometryExtractor._mock_odom(
+            p=(1.0, 2.0, 3.0),
+            o=(0.0, 0.0, 0.0, 1.0),
+            v=(0.1, 0.2, 0.3),
+        )
+        node._state_cb(msg)
+        assert node._last_state == [
+            1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, 0.1, 0.2, 0.3,
+        ]
+
+    def test_unknown_msg_type_raises(self, monkeypatch):
+        _install_fake_rclpy(monkeypatch)
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        with pytest.raises(ValueError, match="unknown state_msg_type"):
+            create_ros2_bridge_node(MagicMock(), state_msg_type="lidar")
+
+    def test_extractor_failure_logged_not_raised(self, monkeypatch):
+        """A malformed message must not crash the node — log and skip."""
+        _install_fake_rclpy(monkeypatch)
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        node = create_ros2_bridge_node(MagicMock(), state_msg_type="imu")
+        # IMU extractor expects msg.orientation — feed a JointState-shaped msg
+        bad_msg = SimpleNamespace(position=[0.1, 0.2])
+        node._state_cb(bad_msg)
+        # _last_state stays None, no exception
+        assert node._last_state is None
+
+    def test_state_dim_mismatch_warns_once(self, monkeypatch):
+        """When a loaded embodiment expects state_dim=10 (quadcopter) but
+        the extractor returns 4 (imu), surface a warning. Fires once per
+        node — the same mismatch every tick would spam the log."""
+        _install_fake_rclpy(monkeypatch)
+        from reflex.embodiments import EmbodimentConfig
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+
+        server = MagicMock()
+        server.embodiment_config = EmbodimentConfig.load_preset("quadcopter")
+
+        warnings: list[str] = []
+        original_create = create_ros2_bridge_node
+
+        node = original_create(server, state_msg_type="imu")
+        # Capture warnings from the node's logger (FakeNode.get_logger returns
+        # a fresh MagicMock each call, so monkey-patch at the node level).
+        node.get_logger = lambda warnings_ref=warnings: SimpleNamespace(
+            info=lambda *a, **k: None,
+            warning=lambda m, *a, **k: warnings_ref.append(str(m)),
+            error=lambda *a, **k: None,
+        )
+
+        msg = SimpleNamespace(
+            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+        )
+        node._state_cb(msg)
+        node._state_cb(msg)  # second tick — should NOT re-warn
+        node._state_cb(msg)
+        mismatch_warnings = [
+            w for w in warnings if "does NOT match embodiment state_dim" in w
+        ]
+        assert len(mismatch_warnings) == 1, mismatch_warnings
+
+    def test_state_dim_match_no_warning(self, monkeypatch):
+        """When extractor output length matches embodiment state_dim, no
+        warning fires."""
+        _install_fake_rclpy(monkeypatch)
+        from reflex.embodiments import EmbodimentConfig
+        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+
+        server = MagicMock()
+        server.embodiment_config = EmbodimentConfig.load_preset("quadcopter")
+
+        warnings: list[str] = []
+        node = create_ros2_bridge_node(server, state_msg_type="odom")
+        node.get_logger = lambda warnings_ref=warnings: SimpleNamespace(
+            info=lambda *a, **k: None,
+            warning=lambda m, *a, **k: warnings_ref.append(str(m)),
+            error=lambda *a, **k: None,
+        )
+        msg = TestOdometryExtractor._mock_odom(
+            p=(0, 0, 0), o=(0, 0, 0, 1), v=(0, 0, 0),
+        )
+        node._state_cb(msg)
+        mismatch_warnings = [
+            w for w in warnings if "does NOT match embodiment state_dim" in w
+        ]
+        assert mismatch_warnings == []

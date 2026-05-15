@@ -2142,7 +2142,19 @@ def ros2_serve(
     ),
     state_topic: str = typer.Option(
         "/joint_states",
-        help="sensor_msgs/JointState topic — .position field becomes the state vector",
+        help="State topic. Default reads .position from a JointState (arm "
+             "convention). For drones, pair --state-msg-type=odom with "
+             "/mavros/local_position/odom for full 10-DOF state, or --state-"
+             "msg-type=imu with /mavros/imu/data for 4-DOF orientation-only.",
+    ),
+    state_msg_type: str = typer.Option(
+        "joint_state",
+        "--state-msg-type",
+        help="How to interpret messages on --state-topic. One of: "
+             "'joint_state' (sensor_msgs/JointState .position, arms; default), "
+             "'imu' (sensor_msgs/Imu .orientation quaternion, drone partial "
+             "state — 4 DOF), 'odom' (nav_msgs/Odometry pose + linear twist, "
+             "drone full state — 10 DOF, matches the quadcopter preset).",
     ),
     task_topic: str = typer.Option(
         "/reflex/task",
@@ -2208,7 +2220,7 @@ def ros2_serve(
     console.print(f"  export_dir: {export_dir}")
     console.print(f"  node_name: {node_name}")
     console.print(f"  rate_hz: {rate_hz}")
-    console.print(f"  subs: {image_topic}, {state_topic}, {task_topic}")
+    console.print(f"  subs: {image_topic}, {state_topic} ({state_msg_type}), {task_topic}")
     console.print(f"  pub:  {action_topic}")
     if mcp:
         console.print(f"  mcp:  {mcp_transport}" + (f" (port {mcp_port})" if mcp_transport == "http" else ""))
@@ -2223,10 +2235,16 @@ def ros2_serve(
             action_topic=action_topic,
             rate_hz=rate_hz,
             node_name=node_name,
+            state_msg_type=state_msg_type,
             mcp=mcp,
             mcp_transport=mcp_transport,
             mcp_port=mcp_port,
         )
+    except ValueError as exc:
+        # _resolve_state_msg_class / create_ros2_bridge_node raise ValueError
+        # for unknown --state-msg-type values.
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     except ImportError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
