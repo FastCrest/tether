@@ -172,11 +172,20 @@ if [ -z "$EXTRAS" ]; then
   if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
     # NEVER install [gpu] on Jetson — those are x86_64 wheels (nvidia-cu12,
     # tensorrt). They will either fail to install, segfault, or silently
-    # fall back to CPU. Instead we install [serve,monolithic] and then
-    # pull the Jetson Zoo onnxruntime-gpu wheel explicitly.
-    EXTRAS="serve,monolithic"
-    ok "Detected Jetson ($JETSON_MODEL) → installing with [serve,monolithic]"
-    note "  Jetson-specific GPU runtime will be installed separately."
+    # fall back to CPU.
+    #
+    # NEVER install [monolithic] on Jetson — it depends on lerobot==0.5.1
+    # which requires Python >=3.12. JetPack 6 ships Python 3.10. Export
+    # on a Python 3.12+ host, then serve the ONNX on the Jetson.
+    #
+    # Instead we install [serve] only, and pre-install numpy<2, torch, and
+    # onnxruntime-gpu from the Jetson AI Lab index BEFORE reflex-vla so
+    # pip doesn't pull incompatible x86_64 or numpy-2.x-linked wheels.
+    EXTRAS="serve"
+    ok "Detected Jetson ($JETSON_MODEL) → installing with [serve]"
+    note "  Jetson-specific GPU deps (numpy<2, torch, ort) will be installed first."
+    note "  [monolithic] skipped — lerobot requires Python >=3.12 (Jetson has 3.10)."
+    note "  Export on a desktop/cloud host, then serve the ONNX here."
   elif [ "$OS" = "Darwin" ]; then
     EXTRAS="serve,onnx,monolithic"
     ok "Detected macOS → installing with [serve,onnx,monolithic] (CPU runtime)"
@@ -187,7 +196,7 @@ if [ -z "$EXTRAS" ]; then
     EXTRAS="serve,onnx,monolithic"
     ok "No GPU detected → installing with [serve,onnx,monolithic] (CPU runtime)"
   fi
-  if [ "$EXTRAS" != "serve,monolithic" ] && [ "$IS_JETSON" -eq 0 ]; then
+  if [ "$IS_JETSON" -eq 0 ] && echo "$EXTRAS" | grep -q "monolithic"; then
     note "  (monolithic adds the extras 'reflex go' needs to actually deploy a model — not just chat)"
   fi
 fi
@@ -212,18 +221,14 @@ if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
   fi
 fi
 
-# -- Run pip install ----------------------------------------------------------
-PIP_TARGET="reflex-vla[$EXTRAS]"
-info "Installing: $PIP_TARGET"
-echo
-"$PYTHON" -m pip install --upgrade "$PIP_TARGET"
-
-# -- Jetson: install Jetson Zoo onnxruntime-gpu -------------------------------
-# This must happen AFTER reflex is installed so we override any CPU-only
-# onnxruntime that may have been pulled transitively.
+# -- Jetson: pre-install GPU deps from Jetson AI Lab --------------------------
+# This MUST happen BEFORE `pip install reflex-vla[serve]` so that:
+#   1. numpy<2 is locked in place before torch's transitive dep pulls 2.x
+#   2. torch comes from the Jetson AI Lab aarch64 wheel (not PyPI x86_64)
+#   3. onnxruntime-gpu comes from Jetson AI Lab (not the unresolvable PyPI one)
 if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
   echo
-  info "Installing Jetson-compatible onnxruntime-gpu..."
+  info "Pre-installing Jetson GPU dependencies..."
 
   # JetPack version → index URL mapping
   # Default to JP6.0/6.1 (cu126) since that's the current standard.
@@ -244,25 +249,43 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
       ;;
   esac
 
-  # Pin numpy<2 because Jetson Zoo wheels are compiled against numpy 1.x
-  # and will segfault / throw ABI errors with numpy 2.x.
-  # Reflex itself works fine with numpy 1.x.
-  note "  Pinning numpy<2 for Jetson Zoo ABI compatibility..."
+  # 1. Pin numpy<2 FIRST — Jetson AI Lab torch and ort wheels are compiled
+  #    against numpy 1.x C ABI. numpy 2.x causes:
+  #      "A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x"
+  note "  Step 1/3: Pinning numpy<2 for Jetson AI Lab ABI compatibility..."
   "$PYTHON" -m pip install 'numpy<2' || warn "numpy pin failed — may cause runtime issues"
 
-  # Install the GPU wheel from Jetson Zoo index
-  if "$PYTHON" -m pip install --upgrade --index-url "$JETSON_INDEX" onnxruntime-gpu; then
-    ok "Installed onnxruntime-gpu (Jetson Zoo, $JETSON_INDEX)"
+  # 2. Install Jetson-native torch (aarch64, CUDA-enabled)
+  note "  Step 2/3: Installing torch from Jetson AI Lab index..."
+  if "$PYTHON" -m pip install --index-url "$JETSON_INDEX" torch torchvision; then
+    ok "Installed torch (Jetson AI Lab, $JETSON_INDEX)"
+  else
+    warn "Jetson AI Lab torch install failed — pip will fall back to PyPI torch."
+    note "  PyPI torch may be CPU-only on aarch64."
+  fi
+
+  # 3. Install Jetson-native onnxruntime-gpu
+  note "  Step 3/3: Installing onnxruntime-gpu from Jetson AI Lab index..."
+  if "$PYTHON" -m pip install --index-url "$JETSON_INDEX" onnxruntime-gpu; then
+    ok "Installed onnxruntime-gpu (Jetson AI Lab, $JETSON_INDEX)"
   else
     echo
-    fail "Jetson Zoo onnxruntime-gpu install failed."
+    fail "Jetson AI Lab onnxruntime-gpu install failed."
     info "Manual install command:"
-    note "  $PYTHON -m pip install numpy '<2'"
-    note "  $PYTHON -m pip install --upgrade --index-url $JETSON_INDEX onnxruntime-gpu"
+    note "  $PYTHON -m pip install 'numpy<2'"
+    note "  $PYTHON -m pip install --index-url $JETSON_INDEX torch torchvision"
+    note "  $PYTHON -m pip install --index-url $JETSON_INDEX onnxruntime-gpu"
     echo
-    warn "Reflex is installed but inference will fall back to CPU (slow)."
+    warn "Reflex will be installed but inference will fall back to CPU (slow)."
   fi
+  echo
 fi
+
+# -- Run pip install ----------------------------------------------------------
+PIP_TARGET="reflex-vla[$EXTRAS]"
+info "Installing: $PIP_TARGET"
+echo
+"$PYTHON" -m pip install --upgrade "$PIP_TARGET"
 
 echo
 ok "Installed."

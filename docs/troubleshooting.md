@@ -26,10 +26,16 @@ python3 -c "import onnxruntime; print(onnxruntime.__version__, onnxruntime.get_a
 pip install 'onnxruntime-gpu>=1.25.1' 'nvidia-cudnn-cu12>=9.5' 'nvidia-cublas-cu12>=12.6'
 ```
 
-**Jetson fix:** On JetPack 6.0+, use the NVIDIA-provided ORT wheel from the Jetson Zoo (NOT the desktop x86 wheel — that crashes or falls back to CPU silently):
+**Jetson fix:** On JetPack 6.0+, do not install the `[gpu]` extra from standard PyPI (since those wheels are `x86_64` only). Install `[serve,monolithic]` and then pull the Jetson-compatible `onnxruntime-gpu` wheel from the Jetson AI Lab index:
 ```bash
-# JetPack 6 / R36 / Python 3.10
-pip install onnxruntime-gpu --extra-index-url https://elinux.org/Jetson_Zoo
+# Pin numpy<2 for Jetson Zoo ABI compatibility
+pip install 'numpy<2'
+
+# JetPack 6.0 / 6.1 (cu126)
+pip install onnxruntime-gpu --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+
+# Or JetPack 6.2+ (cu129)
+pip install onnxruntime-gpu --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu129
 ```
 
 JetPack 5.x (R35 / CUDA 11.4) is not supported — `reflex doctor` will flag this loudly with the upgrade path.
@@ -146,6 +152,45 @@ dpkg -l | grep nvidia-l4t-core
 ```
 
 JetPack 5.x is not supported. The v0.9.4 doctor guard parses `/etc/nv_tegra_release`, detects R35, and surfaces the upgrade path loudly — without it, ORT silently falls back to CPU and you get useless latency numbers.
+
+### `A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x`
+
+```
+ImportError: A module that was compiled using NumPy 1.x cannot be run in NumPy 2.2.6
+```
+
+**Cause:** The Jetson AI Lab `torch` and `onnxruntime-gpu` wheels are compiled against NumPy 1.x C ABI. If `numpy>=2.0` is installed (pip's default), both libraries crash on import.
+
+**Fix:** Pin `numpy<2` **before** installing torch or onnxruntime-gpu:
+```bash
+pip install 'numpy<2'
+# Then install torch / ort from the Jetson AI Lab index
+```
+
+If you already installed numpy 2.x, downgrade:
+```bash
+pip install 'numpy<2' --force-reinstall
+```
+
+### `No matching distribution found for lerobot==0.5.1` (Python 3.10)
+
+```
+ERROR: Could not find a version that satisfies the requirement lerobot==0.5.1; extra == "monolithic"
+ERROR: Ignored the following versions that require a different python version: 0.5.0 Requires-Python >=3.12; 0.5.1 Requires-Python >=3.12
+```
+
+**Cause:** The `[monolithic]` (and `[native]`, `[rtc]`) extras depend on `lerobot==0.5.1`, which requires Python ≥ 3.12. JetPack 6 ships Python 3.10.
+
+**Fix:** On Jetson, install `[serve]` only — **not** `[monolithic]`:
+```bash
+pip install 'reflex-vla[serve]'
+```
+
+The monolithic ONNX export (`reflex export --monolithic`) requires lerobot and must run on a **Python 3.12+ host** (desktop, cloud GPU, or Docker). Export there, then copy the ONNX to the Jetson and serve it:
+```bash
+# On Jetson — serve a pre-exported model
+reflex serve /path/to/exported/model/
+```
 
 ### `Thermal throttling during inference`
 

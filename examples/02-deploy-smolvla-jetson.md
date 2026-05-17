@@ -6,82 +6,86 @@
 
 ## Install on the Jetson
 
+> **Two things that will break your install if you skip them:**
+> 1. **Pin `numpy<2` before installing anything else.** The Jetson AI Lab torch and onnxruntime-gpu wheels are compiled against NumPy 1.x. If pip pulls NumPy 2.x, both libraries will crash on import with *"A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x"*.
+> 2. **Do NOT use `[gpu]` from standard PyPI.** Those wheels are `x86_64`-only and will fail with `ResolutionImpossible` on `aarch64`.
+
+### Recommended: bootstrap installer
+
 ```bash
-pip install 'reflex-vla[serve,gpu,monolithic]'
+./install.sh
 ```
 
-Why those extras:
-- `serve` — FastAPI + uvicorn for the HTTP inference server
-- `gpu` — `onnxruntime-gpu` (links to CUDA on the Jetson via the nvidia container runtime)
-- `monolithic` — `lerobot` + `transformers==5.3.0` + `onnx-diagnostic`, the cos=+1.0 verified export path
+### Manual install
+
+```bash
+# 0. Create a clean venv (recommended)
+python3 -m venv ~/reflex-orin && source ~/reflex-orin/bin/activate
+pip install -U pip setuptools wheel
+
+# 1. Pin numpy<2 FIRST — before torch or ort
+pip install 'numpy<2'
+
+# 2. Install Jetson-native torch + ort from the Jetson AI Lab index
+pip install torch torchvision \
+  --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+
+pip install onnxruntime-gpu \
+  --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+
+# 3. Install reflex-vla with [serve] only (NOT [gpu], NOT [monolithic])
+pip install 'reflex-vla[serve]'
+```
+
+> **Why not `[monolithic]`?** The monolithic export extra depends on `lerobot==0.5.1`, which requires **Python ≥ 3.12**. JetPack 6 ships Python 3.10. Export your model on a desktop/cloud machine with Python 3.12+, then copy the ONNX to the Jetson and serve it.
+
+### Adding `reflex` to your PATH (non-venv installs)
+If you installed without a venv and see `reflex: command not found`, add `~/.local/bin`:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
+### What each piece provides:
+- `numpy<2` — ABI compatibility with Jetson AI Lab pre-built wheels
+- `torch` / `onnxruntime-gpu` (from Jetson AI Lab) — GPU-accelerated inference, compiled for `aarch64` + JetPack CUDA
+- `reflex-vla[serve]` — FastAPI + uvicorn HTTP inference server + embodiment validation
 
 This pulls ~2 GB of dependencies. Takes 5-10 minutes on the Jetson.
 
-## One command — deploy
+## Deploy
+
+Since monolithic export requires Python 3.12+ (for `lerobot`), the typical Jetson workflow is **export on a desktop/cloud host, serve on-device**.
+
+### Step 1: Export on a Python 3.12+ machine
 
 ```bash
-reflex go --model smolvla-base
+# On your desktop / cloud GPU (Python 3.12+)
+pip install 'reflex-vla[serve,monolithic]'
+reflex export --model smolvla-base --out ./smolvla-export/
 ```
 
-What this does, step by step:
-
-```
-device:    orin_nano (via tegrastats, GPU=Jetson Orin Nano)
-model:     smolvla-base (lerobot/smolvla_base, 900MB, action_dim=7)
-  strategy: exact-id
-pulling:   lerobot/smolvla_base → ~/.cache/reflex/models/smolvla-base/
-           ↓ 900 MB from HuggingFace (~30 sec)
-exporting: ~/.cache/reflex/models/smolvla-base → ~/.cache/reflex/exports/smolvla-base
-           (target=orin-nano, monolithic, 5-15 min depending on hardware)
-           ↓ Loading PyTorch model
-           ↓ Tracing torch.export (the heaviest step on Orin Nano)
-           ↓ Writing ONNX (~1.6 GB on disk)
-           ↓ Validating cos=+1.0 vs PyTorch reference
-export complete in 612.4s  ONNX=model.onnx (1623 MB)
-
-Starting serve on http://0.0.0.0:8000
-  Loading ONNX into onnxruntime-gpu (CUDAExecutionProvider)...
-  TRT engine build (first time)...   ~60-90 sec
-  Warmup inference...                ~5 sec
-  ✓ Server ready
+Then copy the export directory to the Jetson:
+```bash
+scp -r ./smolvla-export/ aihpc@<jetson-ip>:~/smolvla-export/
 ```
 
-## Hit /act
-
-From another terminal (or a connected workstation):
+### Step 2: Serve on the Jetson
 
 ```bash
-curl -X POST http://<jetson-ip>:8000/act \
-  -H 'content-type: application/json' \
-  -d '{
-    "instruction": "pick up the red cup",
-    "image": "<base64-png-or-jpeg>",
-    "state": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-  }'
+# On the Jetson (Python 3.10, [serve] only)
+reflex serve ~/smolvla-export/
 ```
 
-Response:
-
-```json
-{
-  "actions": [[...], [...], ...],
-  "latency_ms": 47.3,
-  "inference_mode": "onnx_trt_fp16",
-  "guard_clamped": false
-}
+What happens:
+```
+Loading ONNX into onnxruntime-gpu (CUDAExecutionProvider)...
+TRT engine build (first time)...   ~60-90 sec
+Warmup inference...                ~5 sec
+✓ Server ready on http://0.0.0.0:8000
 ```
 
-## What just happened
-
-`reflex go` chained:
-
-1. **Hardware probe** — `tegrastats` confirms Orin Nano (8 GB)
-2. **Model resolution** — picked `smolvla-base` from the curated registry; warned if your `--device-class` doesn't match the model's `supported_devices`
-3. **Pull** — `huggingface_hub.snapshot_download`; cached in `~/.cache/reflex/models/`
-4. **Export** — `reflex.exporters.monolithic.export_monolithic` traces PyTorch → ONNX with `num_steps=10` baked in, validates parity at cos=+1.0; output cached in `~/.cache/reflex/exports/`
-5. **Serve** — `reflex.runtime.server.create_app` mounts the ONNX into onnxruntime-gpu, builds a TRT FP16 engine on first run (cached for next time), exposes `/act` and `/health`
-
-Re-running `reflex go --model smolvla-base` skips pull (cache hit) and skips export (`VERIFICATION.md` marker hit), goes straight to serve in ~2 sec.
+> **If `reflex go` is available** (i.e. you have a pre-exported ONNX cached from a prior session), `reflex go --model smolvla-base` will skip export (cache hit) and go straight to serve in ~2 sec.
 
 ## Or use the chat
 
@@ -96,7 +100,7 @@ Watch it call `list_targets`, `pull_model`, `export_model`, `serve_model` in seq
 
 ## Troubleshooting
 
-- **"Missing dependencies for monolithic export"** — install `[monolithic]`: `pip install 'reflex-vla[monolithic]'`
+- **"Missing dependencies for monolithic export"** — export requires Python 3.12+ with `[monolithic]`; run on a desktop/cloud host
 - **"CUDA unavailable"** — confirm `nvidia-container-runtime` is set up on the Jetson; `reflex doctor` will tell you which check failed
 - **TRT engine build fails** — try `--no-trt` to fall back to plain CUDAExecutionProvider; usually means `trtexec` isn't on PATH
 - **Disk full** — SmolVLA needs ~2 GB free for weights + ONNX. `reflex inspect targets` shows memory budgets per hardware tier.

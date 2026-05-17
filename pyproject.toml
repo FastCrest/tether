@@ -111,8 +111,13 @@ safety = ["yourdfpy"]
 # reference PyTorch policy. Required for the native-path-parity regression
 # gate in GOALS.yaml. Heavy (pulls torch, torchvision, accelerate, etc.) —
 # that's why it's a separate extra, not a base dep.
+#
+# lerobot 0.5.x requires Python >=3.12. Jetson (JetPack 6) ships 3.10,
+# so we gate lerobot behind a version marker — pip skips it on 3.10/3.11
+# instead of hard-failing with ResolutionImpossible. Native parity
+# verification should be run on a Python 3.12+ host.
 native = [
-    "lerobot==0.5.1",
+    "lerobot==0.5.1; python_version >= '3.12'",
     "num2words",
 ]
 # Monolithic ONNX export — cos=1.0 verified production path. Runs locally
@@ -120,8 +125,13 @@ native = [
 # transformers==5.3.0 EXACTLY (5.4+ has a q_length regression in
 # masking_utils.sdpa_mask that breaks onnx-diagnostic patches). Base pin
 # `transformers>=4.40,<5.4` permits this extra to pin-to-exact.
+#
+# lerobot 0.5.x requires Python >=3.12. On Jetson (Python 3.10) the
+# monolithic export can't run locally — export on a cloud/desktop host
+# (Python 3.12+) and `reflex serve` the resulting ONNX on the Jetson
+# with `pip install 'reflex-vla[serve]'` only.
 monolithic = [
-    "lerobot==0.5.1",
+    "lerobot==0.5.1; python_version >= '3.12'",
     "transformers==5.3.0",
     "onnx-diagnostic>=0.9",
     "onnxscript>=0.1",
@@ -162,8 +172,10 @@ tracing = [
 # Lerobot is heavy (torch + vision + datasets); only install when serving
 # RTC-enabled deployments. Skeleton + config validation work without this
 # extra; only the actual processor construction needs it.
+#
+# lerobot 0.5.x requires Python >=3.12 (skipped on 3.10/3.11).
 rtc = [
-    "lerobot==0.5.1",
+    "lerobot==0.5.1; python_version >= '3.12'",
 ]
 # Curate format-converter extras. Phase 1 ships LeRobot v3 + HDF5 with the
 # core install (parquet via pyarrow which huggingface_hub already pulls; h5py
