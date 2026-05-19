@@ -180,8 +180,8 @@
         "max_ee_velocity": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "maximum": 10.0,
-          "description": "End-effector velocity cap (m/s for arms; flight speed for aerial)."
+          "maximum": 50.0,
+          "description": "Velocity cap (m/s) — end-effector for arms, flight speed for aerial embodiments."
         },
         "max_gripper_velocity": {
           "type": "number",
