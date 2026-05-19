@@ -85,9 +85,9 @@ Test it:
 curl -X POST http://localhost:8000/act \
   -H 'content-type: application/json' \
   -d '{"instruction":"pick up the red cup","state":[0.1,0.2,0.3,0.4,0.5,0.6]}'
+```
 
 > **For drone deployments:** send IMU/attitude state instead of joint positions, e.g., `"state": [roll, pitch, yaw, altitude]`.
-```
 
 You'll get back something like:
 
