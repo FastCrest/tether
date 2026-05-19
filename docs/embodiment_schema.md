@@ -119,7 +119,7 @@ CI gate: `bash scripts/verify_embodiment_structure.sh && pytest tests/test_embod
 
 ## Adding a new preset
 
-1. Add a new dict to `scripts/emit_embodiment_presets.py` — copy a similar robot's preset and adjust DOFs, gripper index, normalization stats.
+1. Add a new dict to `scripts/emit_embodiment_presets.py` (for arms) or create a raw JSON directly in `configs/embodiments/` and `src/reflex/embodiments/presets/` (for drones).
 2. Add the slug to the `embodiment` enum in `src/reflex/embodiments/schema.json`.
 3. Add the slug to `ALL_PRESETS` in `tests/test_embodiments.py`.
 4. Run `python scripts/emit_embodiment_presets.py` — emits the new JSON, validates it.
