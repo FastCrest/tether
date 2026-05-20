@@ -25,7 +25,15 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
-    "numpy>=1.24.0,<2.0",
+    # numpy upper bound is Jetson-only — JetPack ships bundled CUDA libs
+    # compiled against numpy 1.x ABI; numpy 2.x's ABI break corrupts ORT +
+    # JAX wheels on aarch64. On x86_64 (Modal A100, customer desktops) +
+    # arm64 (M-series Mac dev hosts) numpy 2.x is fine, AND the
+    # [monolithic] extra's lerobot==0.5.1 dep REQUIRES numpy>=2.0 — pinning
+    # numpy<2 globally makes lerobot uninstallable on Modal (caught by the
+    # 2026-05-20 lift #4 smoke fire). Split via PEP-508 platform marker.
+    "numpy>=1.24.0,<2.0; platform_machine == 'aarch64'",
+    "numpy>=1.24.0; platform_machine != 'aarch64'",
     "pyyaml>=6.0",
     # Always needed: hub access for `reflex export <hf_id>` and tokenizer/config
     # loading for the auto-detect path. Apr-14 install-path verification caught
