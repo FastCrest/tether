@@ -326,21 +326,46 @@ def test_build_unexpected_kwarg_raises_with_diagnostic(populated_registry):
         )
 
 
-def test_build_nested_with_default_args_does_not_leak_to_inner(populated_registry):
+def test_build_nested_with_default_args_does_not_leak_to_inner():
     """default_args applies to the OUTER call only — not to recursively-resolved
-    inner dicts. Otherwise a default named `x` would mask the inner spec."""
+    inner dicts. To prove it, both outer + inner classes share a parameter name
+    with a class-level default; default_args provides a different value on the
+    outer call; the inner build must fall back to the class default, NOT inherit
+    the outer's default_args.
+
+    This is the load-bearing semantics — without it, a default named `marker`
+    in default_args would silently override inner class defaults too, which
+    would be hostile in a Registry pattern where component composition relies
+    on each component having its own defaults.
+    """
+    reg = Registry("leak_test")
+
+    class _OuterWithMarker:
+        def __init__(self, child, marker: str = "class-default-outer"):
+            self.child = child
+            self.marker = marker
+
+    class _InnerWithMarker:
+        def __init__(self, marker: str = "class-default-inner"):
+            self.marker = marker
+
+    reg.register(_OuterWithMarker)
+    reg.register(_InnerWithMarker)
+
+    # Outer doesn't specify `marker` in cfg; default_args provides it.
+    # Inner doesn't specify `marker` either — must hit ITS class default,
+    # not leak the outer default_args value through the recursive build.
     cfg = {
-        "type": "_Branch",
-        "leaf": {"type": "_Leaf", "x": 1},
-        # scale provided via default_args
+        "type": "_OuterWithMarker",
+        "child": {"type": "_InnerWithMarker"},
     }
-    obj = build_from_cfg(
-        cfg,
-        populated_registry,
-        default_args={"scale": 0.5, "x": 999},  # x=999 must NOT leak into _Leaf
-    )
-    assert obj.scale == 0.5
-    assert obj.leaf.x == 1  # inner _Leaf saw x=1 from cfg, not 999 from defaults
+    obj = build_from_cfg(cfg, reg, default_args={"marker": "from-outer-defaults"})
+
+    # Outer: gets default_args value (cfg doesn't override).
+    assert obj.marker == "from-outer-defaults"
+    # Inner: gets ITS class default. default_args did NOT leak through the
+    # recursive call. This is the load-bearing assertion.
+    assert obj.child.marker == "class-default-inner"
 
 
 # ---------------------------------------------------------------------------
