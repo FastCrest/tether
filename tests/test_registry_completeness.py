@@ -36,7 +36,11 @@ EXPORTERS_INTERNAL = {
     "monolithic.py",          # path-spec for all monolithic exports
     "onnx_export.py",         # generic torch.onnx.export wrapper
     "pi0_prefix_exporter.py", # SigLIP/Gemma split; internal R&D path
-    "vlm_components.py",      # text embedder + state encoder helpers
+    # vlm_components.py moved to src/reflex/runtime/vlm_components.py
+    # on 2026-05-20 (basevla-spine lift #1 Day 1 janitor) — it's an
+    # inference-time helper, not an export-time helper, so it belongs in
+    # runtime/. No replacement entry here because the audit is
+    # exporters/-directory-scoped.
     "vlm_prefix_exporter.py", # vlm prefix exporter; consumed via decomposed
     "_export_mode.py",        # parallel/sequential mode selector
     "trt_build.py",           # TensorRT engine builder; consumed by all primary exporters
