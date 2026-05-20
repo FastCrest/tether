@@ -246,7 +246,11 @@ def test_predict_inference_call_passes_correct_shapes(tmp_path, monkeypatch):
     assert call["state"].shape == (1, DEFAULT_MAX_ACTION_DIM)
     # Padded with zeros
     assert (call["state"][0, 3:] == 0).all()
-    assert call["state"][0, 0] == 0.1
+    # State is np.float32 (per the assertion above on the array's dtype, and
+    # the upstream marshal layer's float32 cast). Comparing np.float32(0.1)
+    # to Python's 0.1 (which is float64) yields False under == because the
+    # bit patterns differ at the boundary precision. Use np.isclose.
+    assert np.isclose(call["state"][0, 0], 0.1)
 
 
 def test_predict_state_truncated_when_too_long(tmp_path, monkeypatch):
