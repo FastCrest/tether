@@ -197,114 +197,34 @@ def run_decomposed_libero(
     ``modal_libero_lerobot_native.run_ported_libero`` but swaps the
     forward path for ``Pi05DecomposedInference``.
 
+    Rollout body extracted on 2026-05-20 to ``src/reflex/eval/libero_rollout.py``
+    so multiple Modal scripts can share the proven loop (lift #4 of
+    fluxvla-lift-program). Behavior is bit-identical to the pre-refactor
+    inline version.
+
     save_video_dir: if non-empty, write per-episode MP4 of agentview camera
     to that path inside the container (typically a /onnx_out subpath so it
     persists on the volume). Filename encodes task/ep/seed/steps/success.
     """
-    import collections
     import logging
-    import math
-    import time
-    import traceback
-    from pathlib import Path
-
-    import numpy as np
-    import torch
+    from pathlib import Path  # used in the run_libero_rollout label below
 
     # The Pi05DecomposedInference module uses logger.info(...) for provider
     # diagnostics; default root handler is WARN which swallows those.
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    # PyTorch 2.6 default-weights_only-True refuses LIBERO init-state pickles.
-    _orig_torch_load = torch.load
-    def _compat_load(*args, **kwargs):
-        kwargs.setdefault("weights_only", False)
-        return _orig_torch_load(*args, **kwargs)
-    torch.load = _compat_load
-
-    # ─── Load PyTorch policy (preprocessing + config only) ──────────
-    from lerobot.processor.pipeline import PolicyProcessorPipeline
-    from lerobot.processor.converters import (
-        batch_to_transition, transition_to_batch,
-        policy_action_to_transition, transition_to_policy_action,
+    # Load policy + processors via the shared helper (extracted 2026-05-20).
+    from reflex.eval.libero_rollout import load_pi05_policy_and_processors
+    policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
+        student_checkpoint=student_checkpoint,
+        decomposed_dir=decomposed_dir,
+        preprocessor_ref=preprocessor_ref,
     )
-    from lerobot.utils.constants import (
-        OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, ACTION,
-    )
-
-    # Two ways to source the policy (config + _preprocess_images helper):
-    # 1) SnapFlow student dir on the volume (has model.safetensors) — preferred
-    #    when the student PyTorch checkpoint lives alongside the decomposed
-    #    ONNX export.
-    # 2) Fallback: load PI05Policy from preprocessor_ref (HF id). Inference
-    #    actually runs through ONNX so the policy weights here are unused —
-    #    only config + _preprocess_images matter.
-    student_ckpt_path = Path(student_checkpoint)
-    if (student_ckpt_path / "model.safetensors").exists():
-        print(f"[decomposed] Loading SnapFlow student from {student_checkpoint}")
-        from reflex.distill.snapflow_pi0_model import load_snapflow_student
-        policy = load_snapflow_student(student_checkpoint)
-    else:
-        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
-        fallback = preprocessor_ref or "lerobot/pi05_libero_finetuned_v044"
-        print(f"[decomposed] No model.safetensors at {student_checkpoint}; "
-              f"loading PI05Policy from {fallback} (config + preprocessing only — "
-              f"inference still runs through decomposed ONNX)")
-        policy = PI05Policy.from_pretrained(fallback)
-    policy.eval().to("cuda").to(torch.float32)
     cfg = policy.config
-    chunk_size = cfg.chunk_size
-    action_dim_pad = cfg.max_action_dim
-    real_action_dim = cfg.output_features[ACTION].shape[0]
-
-    # Student-distillation checkpoints don't always ship the processor
-    # JSONs — fall back to the teacher HF repo (pi05_libero_finetuned_v044
-    # by default) which has the baseline preprocessor + normalizer stats.
-    from huggingface_hub import snapshot_download
-    proc_ref = preprocessor_ref or student_checkpoint
-    if proc_ref and not Path(proc_ref).exists():
-        proc_ref = snapshot_download(proc_ref)
-    print(f"[decomposed] Using processor configs from: {proc_ref}")
-    preprocessor = PolicyProcessorPipeline.from_pretrained(
-        pretrained_model_name_or_path=proc_ref,
-        config_filename="policy_preprocessor.json",
-        to_transition=batch_to_transition,
-        to_output=transition_to_batch,
-        overrides={"device_processor": {"device": "cuda"}},
+    print(
+        f"[decomposed] Policy + processors ready. chunk_size={cfg.chunk_size}, "
+        f"max_action_dim={cfg.max_action_dim}"
     )
-    postprocessor = PolicyProcessorPipeline.from_pretrained(
-        pretrained_model_name_or_path=proc_ref,
-        config_filename="policy_postprocessor.json",
-        to_transition=policy_action_to_transition,
-        to_output=transition_to_policy_action,
-    )
-
-    # v0.5 state-out: if the decomposed export was built with
-    # expert_takes_state=True, the student expects state via the
-    # state_proj input AND a stripped lang prompt. Default preprocessor
-    # bakes state into lang ("Task: ..., State: ...") which (a) double-
-    # feeds state to the model, (b) makes lang_tokens drift per frame
-    # → kills the prefix cache hit rate. Swap to the state-out step.
-    import json as _json
-    decomposed_cfg_path = Path(decomposed_dir) / "reflex_config.json"
-    is_state_out_export = False
-    if decomposed_cfg_path.exists():
-        with decomposed_cfg_path.open() as _f:
-            _dcfg = _json.load(_f)
-        is_state_out_export = (
-            _dcfg.get("decomposed", {}).get("expert_takes_state", False)
-        )
-    if is_state_out_export:
-        from reflex.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
-        max_state_dim = action_dim_pad  # pi0.5 max_state_dim == max_action_dim == 32
-        swap_prepare_step_in_pipeline(preprocessor, max_state_dim=max_state_dim)
-        print(
-            f"[decomposed] Detected state-out export — swapped preprocessor "
-            f"to Pi05PrepareTokenizerStateOutStep (max_state_dim={max_state_dim})"
-        )
-
-    print(f"[decomposed] Policy + processors ready. chunk_size={chunk_size}, "
-          f"max_action_dim={action_dim_pad}, real_action_dim={real_action_dim}")
 
     # ─── Load decomposed ONNX inference ──────────────────────────────
     from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
@@ -341,235 +261,27 @@ def run_decomposed_libero(
           f"action_max_age_steps={action_cache_max_age_steps}, "
           f"phash_threshold={phash_hamming}")
 
-    # ─── LIBERO setup ────────────────────────────────────────────────
-    np.random.seed(seed)
-    from libero.libero import benchmark
-    from libero.libero import get_libero_path
-    from libero.libero.envs import OffScreenRenderEnv
-
-    benchmark_dict = benchmark.get_benchmark_dict()
-    task_suite = benchmark_dict[task_suite_name]()
-    num_tasks = task_suite.n_tasks
-    max_steps = TASK_SUITE_MAX_STEPS[task_suite_name]
-    print(f"[decomposed] suite={task_suite_name}, num_tasks={num_tasks}, max_steps={max_steps}")
-
-    def _quat2axisangle(quat):
-        if quat[3] > 1.0: quat[3] = 1.0
-        elif quat[3] < -1.0: quat[3] = -1.0
-        den = np.sqrt(1.0 - quat[3] * quat[3])
-        if math.isclose(den, 0.0):
-            return np.zeros(3)
-        return (quat[:3] * 2.0 * math.acos(quat[3])) / den
-
-    def _resize_with_pad(img: np.ndarray, size: int) -> np.ndarray:
-        import cv2
-        h, w = img.shape[:2]
-        if h != w:
-            side = max(h, w)
-            pad_top = (side - h) // 2
-            pad_bot = side - h - pad_top
-            pad_left = (side - w) // 2
-            pad_right = side - w - pad_left
-            img = cv2.copyMakeBorder(img, pad_top, pad_bot, pad_left, pad_right,
-                                     cv2.BORDER_CONSTANT, value=[0, 0, 0])
-        return cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
-
-    def _to_tensor(img_np_hwc: np.ndarray):
-        # HWC uint8 → NCHW float32 [0,1] (standard lerobot format)
-        t = torch.from_numpy(img_np_hwc).float() / 255.0
-        return t.permute(2, 0, 1).unsqueeze(0).to("cuda")
-
-    def _build_env(task):
-        task_bddl = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-        env_args = {
-            "bddl_file_name": str(task_bddl),
-            "camera_heights": 256,
-            "camera_widths": 256,
-        }
-        return OffScreenRenderEnv(**env_args)
-
-    def _build_batch(obs, task_description):
-        img = _resize_with_pad(obs["agentview_image"][::-1, ::-1], resize_size)
-        wrist_img = _resize_with_pad(obs["robot0_eye_in_hand_image"][::-1, ::-1], resize_size)
-        state = np.concatenate([
-            np.asarray(obs["robot0_eef_pos"], dtype=np.float32),
-            _quat2axisangle(np.asarray(obs["robot0_eef_quat"], dtype=np.float32).copy()),
-            np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32),
-        ]).astype(np.float32)
-        return {
-            "observation.images.image": _to_tensor(img),
-            "observation.images.image2": _to_tensor(wrist_img),
-            "observation.state": torch.from_numpy(state).unsqueeze(0).to("cuda"),
-            "task": [task_description],
-        }
-
-    # ─── Results ─────────────────────────────────────────────────────
-    results = {
-        "model": f"decomposed:{decomposed_dir}",
-        "cache_mode": cache_mode,
-        "suite": task_suite_name,
-        "num_episodes_per_task": num_episodes,
-        "max_steps": max_steps,
-        "resize_size": resize_size,
-        "replan_steps": replan_steps,
-        "num_steps_wait": num_steps_wait,
-        "cache_ttl_sec": cache_ttl_sec,
-        "phash_hamming": phash_hamming,
-        "per_task": [],
-        "total_success": 0,
-        "total_eps": 0,
-        "cache_stats": None,  # filled at end
-        "errors": [],
-    }
-    tasks_to_run = task_indices if task_indices is not None else list(range(num_tasks))
-    print(f"[decomposed] Running tasks: {tasks_to_run}")
-
-    for task_idx in tasks_to_run:
-        task = task_suite.get_task(task_idx)
-        task_description = task.language
-        print(f"\n[decomposed] TASK {task_idx}: {task_description!r}")
-        initial_states = task_suite.get_task_init_states(task_idx)
-        env = _build_env(task)
-        task_result = {
-            "task_idx": task_idx,
-            "task_description": task_description,
-            "episodes": [],
-            "success": 0,
-            "total": 0,
-        }
-
-        for ep in range(num_episodes):
-            try:
-                env.reset()
-                init_idx = ep % len(initial_states)
-                obs = env.set_init_state(initial_states[init_idx])
-                policy.reset()
-                inference.reset_cache()  # fresh cache per episode
-                action_plan = collections.deque()
-                t = 0
-                done = False
-                video_frames = [] if save_video_dir else None
-                if video_frames is not None:
-                    video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
-
-                while t < max_steps + num_steps_wait:
-                    try:
-                        if t < num_steps_wait:
-                            obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
-                            if video_frames is not None:
-                                video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
-                            t += 1
-                            continue
-
-                        if not action_plan:
-                            batch = _build_batch(obs, task_description)
-                            batch_pp = preprocessor(batch)
-                            batch_pp = {
-                                k: (v.to("cuda") if isinstance(v, torch.Tensor) else v)
-                                for k, v in batch_pp.items()
-                            }
-                            with torch.no_grad():
-                                from lerobot.utils.constants import OBS_STATE
-                                images, img_masks = policy._preprocess_images(batch_pp)
-                                lang_tokens = batch_pp[OBS_LANGUAGE_TOKENS]
-                                lang_masks = batch_pp[OBS_LANGUAGE_ATTENTION_MASK]
-                                bsize = images[0].shape[0]
-                                noise = torch.randn(
-                                    bsize, chunk_size, action_dim_pad,
-                                    device=images[0].device, dtype=torch.float32,
-                                )
-                                # v0.5: pass state explicitly. predict_action_chunk
-                                # accepts state=None for default exports and uses
-                                # it for state-out exports (auto-detects from
-                                # reflex_config.json's expert_takes_state flag).
-                                state_np = batch_pp[OBS_STATE].cpu().numpy() if OBS_STATE in batch_pp else None
-                                # Episode id stable within one LIBERO episode
-                                # → lang-only cache hits after the first frame.
-                                _episode_id = f"t{task_idx}_ep{ep}"
-                                chunk_np = inference.predict_action_chunk(
-                                    img_base=images[0].cpu().numpy(),
-                                    img_wrist_l=images[1].cpu().numpy(),
-                                    img_wrist_r=images[2].cpu().numpy(),
-                                    mask_base=img_masks[0].cpu().numpy(),
-                                    mask_wrist_l=img_masks[1].cpu().numpy(),
-                                    mask_wrist_r=img_masks[2].cpu().numpy(),
-                                    lang_tokens=lang_tokens.cpu().numpy(),
-                                    lang_masks=lang_masks.cpu().numpy(),
-                                    noise=noise.cpu().numpy(),
-                                    state=state_np,
-                                    episode_id=_episode_id,
-                                )
-                                chunk = torch.from_numpy(chunk_np).to(images[0].device)
-                                # Trim padded max_action_dim → real env action dim
-                                chunk = chunk[:, :, :real_action_dim]
-
-                            # Postprocessor is a PolicyProcessorPipeline whose
-                            # to_transition/to_output converters accept a raw
-                            # tensor and return a tensor — pass the chunk
-                            # directly (same path as modal_libero_lerobot_native).
-                            post = postprocessor(chunk.detach().cpu())
-                            chunk_np_post = (
-                                post.detach().cpu().numpy()
-                                if hasattr(post, "detach")
-                                else np.asarray(post)
-                            )
-                            if chunk_np_post.ndim == 3:
-                                chunk_np_post = chunk_np_post[0]  # (chunk, N)
-                            chunk_np_post = chunk_np_post[:, :7]  # LIBERO 7D
-                            action_plan.extend(chunk_np_post[:replan_steps])
-
-                        action = action_plan.popleft()
-                        obs, _, done, info = env.step(np.asarray(action).tolist())
-                        if video_frames is not None:
-                            video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
-                        t += 1
-                        if done:
-                            break
-
-                    except Exception as step_exc:
-                        tb = traceback.format_exc()
-                        results["errors"].append({
-                            "task_idx": task_idx, "ep": ep, "t": t,
-                            "error": f"{step_exc}",
-                            "traceback": tb.splitlines()[-5:],
-                        })
-                        raise
-
-                success = bool(done)
-                task_result["episodes"].append({
-                    "ep": ep, "success": success, "steps": t,
-                })
-                task_result["total"] += 1
-                if success:
-                    task_result["success"] += 1
-                print(f"  ep {ep}: {'✓' if success else '✗'} (steps={t})")
-                if video_frames is not None and len(video_frames) > 0:
-                    Path(save_video_dir).mkdir(parents=True, exist_ok=True)
-                    tag = "S" if success else "F"
-                    out = Path(save_video_dir) / (
-                        f"student_t{task_idx}_ep{ep}_seed{seed}_steps{t}_{tag}.npz"
-                    )
-                    np.savez_compressed(str(out), frames=np.array(video_frames, dtype=np.uint8))
-                    print(f"    frames → {out} ({len(video_frames)} frames)")
-            except Exception as ep_exc:
-                print(f"  ep {ep}: ERROR {ep_exc}")
-                task_result["episodes"].append({
-                    "ep": ep, "success": False, "error": str(ep_exc),
-                })
-                task_result["total"] += 1
-
-        env.close()
-        results["per_task"].append(task_result)
-        results["total_success"] += task_result["success"]
-        results["total_eps"] += task_result["total"]
-        print(f"  TASK {task_idx}: {task_result['success']}/{task_result['total']}")
-
-    results["cache_stats"] = inference.get_stats()
-    if results["total_eps"]:
-        results["success_rate_pct"] = 100.0 * results["total_success"] / results["total_eps"]
-    print(f"\n[decomposed] TOTAL: {results['total_success']}/{results['total_eps']} "
-          f"= {results.get('success_rate_pct', 0):.1f}%")
-    print(f"[decomposed] CACHE STATS: {results['cache_stats']}")
+    # ─── Run rollout via shared helper (extracted 2026-05-20) ────────
+    from reflex.eval.libero_rollout import run_libero_rollout
+    results = run_libero_rollout(
+        inference=inference,
+        policy=policy,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        task_suite_name=task_suite_name,
+        num_episodes=num_episodes,
+        task_indices=task_indices,
+        resize_size=resize_size,
+        replan_steps=replan_steps,
+        num_steps_wait=num_steps_wait,
+        seed=seed,
+        save_video_dir=save_video_dir,
+        label=f"decomposed:{Path(decomposed_dir).name}",
+    )
+    # Add caller-specific metadata that the shared helper doesn't know about.
+    results["cache_mode"] = cache_mode
+    results["cache_ttl_sec"] = cache_ttl_sec
+    results["phash_hamming"] = phash_hamming
     return results
 
 
