@@ -509,19 +509,51 @@ def _run_libero_suite(
 ) -> dict:
     """Run LIBERO rollouts for a single suite at N=num_episodes/task.
 
-    Stub for v1 — first fire will surface what's missing from the
-    modal_libero_pi05_decomposed rollout helper to make it suite-parametric.
-    Returns {"successes": int, "total": int, "per_task": [...]}.
+    Wires the shared rollout helper extracted to src/reflex/eval/libero_rollout.py
+    on 2026-05-20. Returns the rollout dict shape; caller aggregates per-suite.
     """
-    # TODO(fluxvla-checkpoint-republish v1 first fire): inline the rollout
-    # loop from modal_libero_pi05_decomposed.run_decomposed_libero, parameterized
-    # by suite. The current run_decomposed_libero accepts task_suite_name —
-    # we just need to thread it through with the right max_steps.
-    raise NotImplementedError(
-        "v1 stub — wire up in the same fire as the first conversion attempt. "
-        "Reuse modal_libero_pi05_decomposed.run_decomposed_libero with "
-        f"task_suite_name={suite!r}, num_episodes={num_episodes}, seed={seed}."
+    from reflex.eval.libero_rollout import (
+        load_pi05_policy_and_processors,
+        run_libero_rollout,
     )
+    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+
+    # Load policy + processors from the converted (lerobot-format) checkpoint.
+    # The student_checkpoint arg is the converted dir — it has model.safetensors,
+    # so the SnapFlow-student branch fires (which then dispatches to the
+    # FluxVLA-derived weights via load_snapflow_student or the fallback PI05Policy
+    # path depending on what's present after _convert_fluxvla_to_lerobot).
+    policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
+        student_checkpoint=CONVERTED_CHECKPOINT_DIR,
+        decomposed_dir=export_dir,
+        preprocessor_ref="lerobot/pi05_libero_finetuned_v044",  # baseline preprocessor stats
+    )
+
+    inference = Pi05DecomposedInference(
+        export_dir=export_dir,
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        enable_cache=False,  # cache modes are an orthogonal lift; this eval is bare-baseline
+    )
+
+    rollout_results = run_libero_rollout(
+        inference=inference,
+        policy=policy,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        task_suite_name=suite,
+        num_episodes=num_episodes,
+        seed=seed,
+        save_video_dir=save_video_dir,
+        label=f"fluxvla:{suite}",
+    )
+    # Caller wants {"successes": int, "total": int, "per_task": [...]}; map.
+    return {
+        "successes": rollout_results["total_success"],
+        "total": rollout_results["total_eps"],
+        "per_task": rollout_results["per_task"],
+        "errors": rollout_results.get("errors", []),
+        "cache_stats": rollout_results.get("cache_stats"),
+    }
 
 
 @app.local_entrypoint()
