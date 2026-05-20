@@ -232,7 +232,7 @@ class VLMPrefixOrchestrator:
         When decoder_prefill.onnx is missing, returns zeros of the correct
         shape so the expert can still run with dummy conditioning.
         """
-        from reflex.exporters.vlm_components import assemble_prefix, pad_state
+        from reflex.runtime.vlm_components import assemble_prefix, pad_state
 
         # 1. Image(s) -> image_embeds [1, 64*N, 960]. Encode each camera
         # view separately; SmolVLA-LIBERO's decoder sees N*64 image tokens.
@@ -432,7 +432,7 @@ class VLMPrefixOrchestrator:
 
     def _encode_state(self, state: np.ndarray) -> np.ndarray:
         """Project robot state to VLM hidden space -> [1, 1, 960]."""
-        from reflex.exporters.vlm_components import pad_state
+        from reflex.runtime.vlm_components import pad_state
 
         state = np.asarray(state, dtype=np.float32)
         if state.ndim == 1:

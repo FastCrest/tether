@@ -26,7 +26,7 @@ from reflex.exporters.vlm_prefix_exporter import (
     VisionEncoderForONNX,
     export_vlm_prefix,
 )
-from reflex.exporters.vlm_components import (
+from reflex.runtime.vlm_components import (
     HIDDEN_SIZE,
     MAX_STATE_DIM,
     StateEncoder,
