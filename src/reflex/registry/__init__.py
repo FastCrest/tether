@@ -26,7 +26,26 @@ from reflex.registry.models import (
     list_devices,
 )
 
+# Component + spine registries — added 2026-05-20 for the BaseVLA spine
+# refactor (lift #1). Foundation for build_from_cfg-driven model construction
+# across vision / llm / vlm / projector / head / text / vla slots.
+from reflex.registry.builder import (
+    Registry,
+    RegistryError,
+    build_from_cfg,
+)
+from reflex.registry.components import (
+    VISION_BACKBONES,
+    LLM_BACKBONES,
+    VLM_BACKBONES,
+    PROJECTORS,
+    VLA_HEADS,
+    TEXT_ENCODERS,
+    VLAS,
+)
+
 __all__ = [
+    # Curated model registry (preserved API)
     "ModelEntry",
     "ModelBenchmark",
     "REGISTRY",
@@ -34,4 +53,15 @@ __all__ = [
     "filter_models",
     "list_families",
     "list_devices",
+    # Component registries + builder (new for BaseVLA spine)
+    "Registry",
+    "RegistryError",
+    "build_from_cfg",
+    "VISION_BACKBONES",
+    "LLM_BACKBONES",
+    "VLM_BACKBONES",
+    "PROJECTORS",
+    "VLA_HEADS",
+    "TEXT_ENCODERS",
+    "VLAS",
 ]
