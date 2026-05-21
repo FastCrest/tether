@@ -517,6 +517,13 @@ def run_parity(
             my_l0.o_proj.register_forward_hook(make_sub_hook("my_o_proj")),
             ler_l0.post_attention_layernorm.register_forward_hook(make_sub_hook("ler_post_ln")),
             my_l0.post_attention_layernorm.register_forward_hook(make_sub_hook("my_post_ln")),
+            ler_l0.mlp.gate_proj.register_forward_hook(make_sub_hook("ler_gate")),
+            my_l0.gate_proj.register_forward_hook(make_sub_hook("my_gate")),
+            ler_l0.mlp.up_proj.register_forward_hook(make_sub_hook("ler_up")),
+            my_l0.up_proj.register_forward_hook(make_sub_hook("my_up")),
+            ler_l0.mlp.down_proj.register_forward_hook(make_sub_hook("ler_down")),
+            my_l0.down_proj.register_forward_hook(make_sub_hook("my_down")),
+            ler_l0.mlp.register_forward_hook(make_sub_hook("ler_mlp_out")),
         ]
         try:
             ler_pkv_copy3 = _copy.deepcopy(ler_pkv)
@@ -531,14 +538,22 @@ def run_parity(
                 prefix_k=my_prefix_k, prefix_v=my_prefix_v,
                 state_emb=my_state_emb.unsqueeze(1), attn_mask=suffix_2d,
             )
-            for name in ["input_ln", "q_proj", "k_proj", "v_proj", "o_proj", "post_ln"]:
-                ler_x = sub_captured[f"ler_{name}"]
-                my_x = sub_captured[f"my_{name}"]
+            for name in ["input_ln", "q_proj", "k_proj", "v_proj", "o_proj", "post_ln",
+                          "gate", "up", "down"]:
+                ler_x = sub_captured.get(f"ler_{name}")
+                my_x = sub_captured.get(f"my_{name}")
+                if ler_x is None or my_x is None:
+                    print(f"  {name}: missing (ler={ler_x is not None}, my={my_x is not None})")
+                    continue
                 if ler_x.shape != my_x.shape:
                     print(f"  {name}: shape mismatch ler={ler_x.shape} my={my_x.shape}")
                     continue
                 d = (ler_x.float() - my_x.float()).abs()
                 print(f"  {name}: shape {ler_x.shape}, ler norm {ler_x.norm():.4f}, my norm {my_x.norm():.4f}, diff max {d.max():.4e}, mean {d.mean():.4e}")
+            # lerobot mlp output (whole MLP forward result)
+            if "ler_mlp_out" in sub_captured:
+                ler_mlp = sub_captured["ler_mlp_out"]
+                print(f"  ler MLP whole-forward output: shape {ler_mlp.shape}, norm {ler_mlp.norm():.4f}")
         finally:
             for h in sub_hooks:
                 h.remove()
