@@ -103,6 +103,7 @@ class ExpertGQALayer(nn.Module):
         kv_mask=None,
         prefix_k_concat=None,
         prefix_v_concat=None,
+        attn_mask=None,
     ):
         """Run one transformer layer.
 
@@ -161,6 +162,11 @@ class ExpertGQALayer(nn.Module):
             # Cross-attn padded KV mask: set padded scores to large negative.
             mask = kv_mask[:, None, None, :]
             scores = scores.masked_fill(~mask, -1e9)
+        elif use_prefix_concat and attn_mask is not None:
+            # Prefix-concat path bool mask: [B, 1, s, kv_len]. True = attendable.
+            # Used by pi0's block-attention pattern (state isolated from actions,
+            # actions mutually visible, both see prefix bidirectionally).
+            scores = scores.masked_fill(~attn_mask, -1e9)
         attn = F.softmax(scores, dim=-1)
         x = res + self.o_proj(torch.matmul(attn, v).transpose(1, 2).contiguous().view(b, s, -1))
         res = x

@@ -263,12 +263,25 @@ class Pi0VLA(BaseVLA):
         # must NOT pre-scale here — let stock do the work. Net math: identical
         # to lerobot's `pre-scale + skip-internal`. Confirmed via source read
         # of transformers/models/gemma/modeling_gemma.py:400-401.
+        # PaliGemma's `get_image_features` divides by sqrt(text_hidden)
+        # (modeling_paligemma.py:244) — lerobot then multiplies BACK in
+        # embed_image (modeling_pi0.py:446), so net = ×1. We then pass
+        # to stock GemmaModel which internally scales × sqrt(text_hidden).
+        # To produce the SAME final image-emb scale that lerobot's
+        # PiGemma sees (which is `output_of_embed_image` = ×1 from raw
+        # vision+projector output), we must include the same /sqrt(h)
+        # division here. Then stock GemmaModel restores × sqrt(h)
+        # internally, net = ×sqrt(h) for our path. lerobot's path:
+        # ×sqrt(h) externally, no internal scale, net = ×sqrt(h). MATCH.
+        text_hidden = self.llm_backbone.text_hidden_size
+        inv_sqrt_h = 1.0 / (text_hidden ** 0.5)
         image_embeds_list: list[torch.Tensor] = []
         for img in images:
             # SigLIP: [B, 3, 224, 224] → [B, 256, vision_hidden=1152]
             img_emb = self.vision_backbone(img)
             # PaliGemma projection: [B, 256, 1152] → [B, 256, 2048]
             img_emb = self.llm_backbone.multi_modal_projector(img_emb)
+            img_emb = img_emb * inv_sqrt_h  # matches stock get_image_features:244
             image_embeds_list.append(img_emb)
 
         text_embs = self.llm_backbone.embed_tokens(lang_tokens)
@@ -363,6 +376,37 @@ class Pi0VLA(BaseVLA):
         suffix_pad_mask = torch.ones(batch, chunk_size + 1, dtype=torch.long, device=device)
         suffix_position_ids = prefix_len_per_batch + torch.cumsum(suffix_pad_mask, dim=1) - 1  # [B, chunk_size+1]
 
+        # Build the suffix-attends-to-(prefix+suffix) 4D bool mask. lerobot's
+        # `make_att_2d_masks` (modeling_pi0.py:111-140) uses an `att_masks`
+        # per-token vector where `1` opens a new attention block. For the full
+        # sequence [prefix..., state, action_0, action_1..chunk_size-1]:
+        #   prefix att_masks = [0]*prefix_len      → all in block 0 (mutual)
+        #   state att_mask   = 1                   → state opens block 1
+        #   action_0 att_mask = 1                  → first action opens block 2
+        #   action_i (i>=1) att_mask = 0           → remaining actions stay in block 2
+        # Then attn[i,j] = cumsum[j] <= cumsum[i]. The query side is the suffix
+        # only (the expert receives suffix queries; prefix queries already had
+        # their hiddens computed in the prefill).
+        prefix_len = prefix_pad_mask.shape[1]
+        suffix_len = chunk_size + 1
+        total_len = prefix_len + suffix_len
+        full_att = torch.zeros(batch, total_len, dtype=torch.long, device=device)
+        full_att[:, prefix_len] = 1         # state opens new block
+        full_att[:, prefix_len + 1] = 1     # first action opens new block
+        # Remaining actions stay in same block (att=0 default).
+        cumsum = torch.cumsum(full_att, dim=1)  # [B, total_len]
+        # att_2d[b, i, j] = cumsum[b, j] <= cumsum[b, i]
+        att_2d = cumsum[:, None, :] <= cumsum[:, :, None]  # [B, total_len, total_len]
+        # Pad mask combined: full_pad = prefix_pad ⊕ suffix_pad
+        full_pad = torch.cat([prefix_pad_mask, suffix_pad_mask.bool()], dim=1)  # [B, total_len]
+        pad_2d = full_pad[:, None, :] & full_pad[:, :, None]
+        full_2d_mask = att_2d & pad_2d
+        # Slice to suffix queries only: [B, suffix_len, total_len]
+        suffix_2d_mask = full_2d_mask[:, prefix_len:, :]
+        # Expert layer expects [B, 1, suffix_len, total_kv_len] for broadcasting
+        # across n_heads.
+        suffix_attn_mask = suffix_2d_mask.unsqueeze(1)
+
         dt = -1.0 / num_steps
         x_t = noise
 
@@ -376,6 +420,7 @@ class Pi0VLA(BaseVLA):
                 prefix_k=prefix_k,
                 prefix_v=prefix_v,
                 state_emb=state_emb,
+                attn_mask=suffix_attn_mask,
             )
             x_t = x_t + dt * v_t
 

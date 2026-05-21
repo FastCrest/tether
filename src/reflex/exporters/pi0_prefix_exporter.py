@@ -503,6 +503,7 @@ class Pi0ExpertStackWithPrefix(nn.Module):
         prefix_k: torch.Tensor,
         prefix_v: torch.Tensor,
         state_emb: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         from reflex.models.heads.expert_stack import _sinusoidal_pos_embedding
 
@@ -529,6 +530,7 @@ class Pi0ExpertStackWithPrefix(nn.Module):
                 position_ids,
                 prefix_k_concat=prefix_k[i],
                 prefix_v_concat=prefix_v[i],
+                attn_mask=attn_mask,
             )
 
         x = self.final_norm(x)

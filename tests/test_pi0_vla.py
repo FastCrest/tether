@@ -341,15 +341,21 @@ class _StubPrefixHead(VLAHead, nn.Module):
         self.scale = nn.Parameter(torch.tensor(0.01))
 
     def forward(self, noisy_actions, timestep=None, position_ids=None, *,
-                prefix_k=None, prefix_v=None, state_emb=None, **kwargs):
+                prefix_k=None, prefix_v=None, state_emb=None, attn_mask=None,
+                **kwargs):
         if prefix_k is None or prefix_v is None:
             raise ValueError("prefix-aware stub head requires prefix_k + prefix_v")
         if state_emb is None:
             raise ValueError("prefix-aware stub head requires state_emb (suffix's first token)")
+        if attn_mask is None:
+            raise ValueError("prefix-aware stub head requires attn_mask (lerobot block pattern)")
         assert prefix_k.shape[0] == self.num_layers
         assert state_emb.shape[-1] == self.expert_hidden, (
             f"state_emb hidden ({state_emb.shape[-1]}) != expert_hidden ({self.expert_hidden})"
         )
         # position_ids should be suffix-shaped: [B, chunk_size+1]
         assert position_ids.shape[-1] == noisy_actions.shape[1] + 1
+        # attn_mask should be [B, 1, chunk_size+1, prefix_len + chunk_size + 1]
+        assert attn_mask.ndim == 4
+        assert attn_mask.shape[2] == noisy_actions.shape[1] + 1
         return noisy_actions * self.scale
