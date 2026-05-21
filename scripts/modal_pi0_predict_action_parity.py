@@ -381,18 +381,18 @@ def run_parity(
         # vs my expert's forward. Isolates the expert bug.
         print(f"\n  --- Expert one-step v_t comparison (chunk_size={chunk_size}) ---")
         import copy as _copy
-        # Lerobot's denoise_step computes one step internally. We give it the
-        # SAME inputs and capture the result. Then back out v_t = (noise - x_t_out) / 1.0
-        # since dt = -1 for num_steps=1, x_t_new = x_t - v_t → v_t = x_t - x_t_new.
+        # CRITICAL: lerobot's denoise_step returns v_t directly (NOT x_t_new).
+        # See modeling_pi0.py:931 `return self.action_out_proj(suffix_out)`.
+        # The Euler step `x_t += dt * v_t` happens in sample_actions, not in
+        # denoise_step.
         ler_pkv_copy = _copy.deepcopy(ler_pkv)
-        x_t_ler = _temp_policy.model.denoise_step(
+        v_t_ler = _temp_policy.model.denoise_step(
             state_tensor.to(torch.float32),
             ler_prefix_pad,
             ler_pkv_copy,
             noise.clone(),
             torch.tensor([1.0], dtype=torch.float32),
         )
-        v_t_ler = noise.clone() - x_t_ler  # for dt=-1, x_t_new = x_t + dt*v_t = x_t - v_t
 
         # Mine: rebuild my masks + run expert
         # (Mirrors pi0.py:303-394 for one step)
