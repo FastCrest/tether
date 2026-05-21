@@ -376,6 +376,63 @@ def run_parity(
             d = (ler_li - my_li).abs()
             print(f"  Layer-{li} K diff: max {d.max():.4e}  mean {d.mean():.4e}  (ler norm {ler_li.norm():.2f} vs mine {my_li.norm():.2f})")
 
+        # ─── Expert one-step v_t comparison ────────────────────────────
+        # Same input noise + same prefix-KV; compare lerobot's denoise_step
+        # vs my expert's forward. Isolates the expert bug.
+        print(f"\n  --- Expert one-step v_t comparison (chunk_size={chunk_size}) ---")
+        import copy as _copy
+        # Lerobot's denoise_step computes one step internally. We give it the
+        # SAME inputs and capture the result. Then back out v_t = (noise - x_t_out) / 1.0
+        # since dt = -1 for num_steps=1, x_t_new = x_t - v_t → v_t = x_t - x_t_new.
+        ler_pkv_copy = _copy.deepcopy(ler_pkv)
+        x_t_ler = _temp_policy.model.denoise_step(
+            state_tensor.to(torch.float32),
+            ler_prefix_pad,
+            ler_pkv_copy,
+            noise.clone(),
+            torch.tensor([1.0], dtype=torch.float32),
+        )
+        v_t_ler = noise.clone() - x_t_ler  # for dt=-1, x_t_new = x_t + dt*v_t = x_t - v_t
+
+        # Mine: rebuild my masks + run expert
+        # (Mirrors pi0.py:303-394 for one step)
+        prefix_len_per_batch = ler_prefix_pad.long().sum(dim=-1, keepdim=True)
+        suffix_pad_mask = torch.ones(1, chunk_size + 1, dtype=torch.long)
+        suffix_position_ids = prefix_len_per_batch + torch.cumsum(suffix_pad_mask, dim=1) - 1
+        # Build attn mask (lerobot block pattern)
+        prefix_len_int = ler_prefix_pad.shape[1]
+        total_len = prefix_len_int + chunk_size + 1
+        full_att = torch.zeros(1, total_len, dtype=torch.long)
+        full_att[:, prefix_len_int] = 1
+        full_att[:, prefix_len_int + 1] = 1
+        cumsum_full = torch.cumsum(full_att, dim=1)
+        att_2d = cumsum_full[:, None, :] <= cumsum_full[:, :, None]
+        full_pad = torch.cat([ler_prefix_pad, suffix_pad_mask.bool()], dim=1)
+        pad_2d = full_pad[:, None, :] & full_pad[:, :, None]
+        suffix_2d = (att_2d & pad_2d)[:, prefix_len_int:, :].unsqueeze(1)
+
+        # Stack my pkv into [L, B, nkv, prefix_len, hd]
+        my_pk_list = [layer.keys for layer in (my_pkv.layers if hasattr(my_pkv, "layers") else my_pkv.key_cache)]
+        my_pv_list = [layer.values for layer in (my_pkv.layers if hasattr(my_pkv, "layers") else my_pkv.value_cache)]
+        my_prefix_k = torch.stack(my_pk_list, dim=0)
+        my_prefix_v = torch.stack(my_pv_list, dim=0)
+
+        v_t_mine = vla.vla_head(
+            noisy_actions=noise.clone(),
+            timestep=torch.tensor([1.0], dtype=torch.float32),
+            position_ids=suffix_position_ids,
+            prefix_k=my_prefix_k,
+            prefix_v=my_prefix_v,
+            state_emb=my_state_emb.unsqueeze(1),
+            attn_mask=suffix_2d,
+        )
+
+        v_t_diff = (v_t_ler - v_t_mine).abs()
+        print(f"  v_t shapes: lerobot {v_t_ler.shape}, mine {v_t_mine.shape}")
+        print(f"  v_t diff: max {v_t_diff.max():.4e}  mean {v_t_diff.mean():.4e}")
+        print(f"  v_t norm: lerobot {v_t_ler.norm():.4f}  mine {v_t_mine.norm():.4f}")
+        print(f"  v_t[0, 0, :8]: lerobot {v_t_ler[0, 0, :8]}  mine {v_t_mine[0, 0, :8]}")
+
         del _temp_policy
         gc.collect()
     step("intermediate_parity", "pass", "see prints above")
