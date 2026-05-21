@@ -1,0 +1,182 @@
+"""FlowMatchingHead — pi0/pi05/smolvla shared flow-matching head wrapped for the BaseVLA spine.
+
+Per the Day 4 design (lift #1 plan): pi0/pi05/smolvla all share a single
+expert-decoder + suffix architecture for action prediction. The existing
+implementation lives in `src/reflex/exporters/smolvla_exporter.ExpertStack`
+(history: it was added for SmolVLA first then reused for pi0/pi05 via
+each exporter's `build_*_expert_stack()` constructor).
+
+FlowMatchingHead is a thin spine-compatible wrapper around an `ExpertStack`
+instance. It:
+
+- Provides the `VLAHead` ABC contract (`forward()` + `prepare_triton()`)
+- Delegates the actual denoising computation to the wrapped ExpertStack
+- Does NOT reimplement the expert — preserves bit-identical behavior with
+  the existing pi0/pi05/smolvla exporters
+
+Construction is via a pre-built ExpertStack (the Pi0VLA / Pi05VLA /
+SmolVLA classes in Day 4f use `build_pi0_expert_stack()` from the
+existing exporter to produce the stack, then wrap it here).
+
+TODO(Day 4g cleanup): `ExpertStack` should move from `exporters/smolvla_exporter.py`
+to `models/heads/expert_stack.py` so the spine doesn't reach into the
+exporters package. Deferred to Day 4g sunset commit which removes the OLD
+per-model exporters anyway. For now we keep the cross-package import.
+
+Registered under `VLA_HEADS` per decision S-3 hybrid-registration.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+import torch
+import torch.nn as nn
+
+from reflex.models.heads import VLAHead
+from reflex.registry.components import VLA_HEADS
+
+if TYPE_CHECKING:
+    pass
+
+
+@VLA_HEADS.register
+class FlowMatchingHead(VLAHead, nn.Module):
+    """Spine wrapper for pi0/pi05/smolvla's ExpertStack.
+
+    Args (exactly one of expert_stack / state_dict required):
+        expert_stack: A pre-built `ExpertStack` instance from
+            `src/reflex/exporters/smolvla_exporter.py`. Produced by
+            `build_pi0_expert_stack(state_dict)` /
+            `build_pi05_expert_stack(state_dict)` /
+            `build_expert_stack(state_dict, head_dim)` per VLA family.
+        state_dict: Raw checkpoint state_dict + `vla_family` (one of
+            "pi0", "pi05", "smolvla") — head dispatches to the right
+            builder. Convenience constructor; same shape as direct
+            expert_stack=.
+        vla_family: Required when `state_dict` is provided. Picks the
+            build function. Must be one of "pi0" / "pi05" / "smolvla".
+        head_dim: Required for SmolVLA's build_expert_stack (which needs
+            the VLM head_dim — typically 64 for SmolLM2). Ignored for
+            pi0/pi05.
+
+    Raises:
+        ValueError: if neither or both of expert_stack / state_dict
+            provided; if state_dict provided without vla_family.
+    """
+
+    SUPPORTED_FAMILIES: tuple[str, ...] = ("pi0", "pi05", "smolvla")
+
+    def __init__(
+        self,
+        *,
+        expert_stack: Any = None,
+        state_dict: dict[str, torch.Tensor] | None = None,
+        vla_family: str | None = None,
+        head_dim: int | None = None,
+    ) -> None:
+        nn.Module.__init__(self)
+        if (expert_stack is None) == (state_dict is None):
+            raise ValueError(
+                "Provide exactly one of `expert_stack` or `state_dict` "
+                f"(got expert_stack={type(expert_stack).__name__ if expert_stack else None!r}, "
+                f"state_dict={'<dict>' if state_dict else None!r})."
+            )
+
+        if state_dict is not None:
+            if vla_family not in self.SUPPORTED_FAMILIES:
+                raise ValueError(
+                    f"vla_family must be one of {self.SUPPORTED_FAMILIES} when "
+                    f"state_dict is provided (got {vla_family!r})."
+                )
+            expert_stack = self._build_from_state_dict(
+                state_dict, vla_family=vla_family, head_dim=head_dim,
+            )
+
+        self.expert_stack = expert_stack
+
+    @staticmethod
+    def _build_from_state_dict(
+        state_dict: dict[str, torch.Tensor],
+        *,
+        vla_family: str,
+        head_dim: int | None,
+    ) -> Any:
+        """Dispatch to the right exporter-side builder by VLA family.
+
+        Imports are lazy — they pull in heavy model code (PyTorch +
+        transformers) that tests don't want at import time.
+        """
+        if vla_family == "pi0":
+            from reflex.exporters.pi0_exporter import build_pi0_expert_stack
+            stack, _meta = build_pi0_expert_stack(state_dict)
+            return stack
+        elif vla_family == "pi05":
+            from reflex.exporters.pi0_exporter import build_pi05_expert_stack
+            stack, _meta = build_pi05_expert_stack(state_dict)
+            return stack
+        elif vla_family == "smolvla":
+            from reflex.exporters.smolvla_exporter import build_expert_stack
+            if head_dim is None:
+                raise ValueError(
+                    "head_dim required for SmolVLA (the VLM head_dim — "
+                    "typically 64 for SmolLM2). pi0/pi05 don't need it."
+                )
+            stack, _meta = build_expert_stack(state_dict, head_dim=head_dim)
+            return stack
+        else:
+            # Unreachable per SUPPORTED_FAMILIES validation above; defensive.
+            raise ValueError(f"Unknown vla_family: {vla_family!r}")
+
+    # ── ABC contract ────────────────────────────────────────────────────
+
+    def forward(
+        self,
+        noisy_actions: torch.Tensor,
+        timestep: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        *args: Any,
+        vlm_k: torch.Tensor | None = None,
+        vlm_v: torch.Tensor | None = None,
+        prefix_offset: torch.Tensor | None = None,
+        kv_mask: torch.Tensor | None = None,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        """One denoising step — delegates to the wrapped ExpertStack.
+
+        The first positional arg is the flow-matching "context" per the
+        VLAHead ABC, which in this head's case IS the noisy_actions tensor.
+        Naming kept as `noisy_actions` for clarity.
+
+        Args:
+            noisy_actions: `[batch, chunk, action_dim]` noised action tensor.
+            timestep: `[batch]` flow-matching timestep.
+            position_ids: `[batch, chunk]` action position indices.
+            vlm_k: optional VLM per-layer K cache for cross-attention layers
+                (only pi05/smolvla have cross-attn; pi0 ignores).
+            vlm_v: paired V cache.
+            prefix_offset: VLM prefix length per batch element (for position-id
+                offsetting in self-attention layers).
+            kv_mask: optional KV-attention mask.
+
+        Returns:
+            `[batch, chunk, action_dim]` denoised actions.
+        """
+        return self.expert_stack(
+            noisy_actions=noisy_actions,
+            timestep=timestep,
+            position_ids=position_ids,
+            vlm_k=vlm_k,
+            vlm_v=vlm_v,
+            prefix_offset=prefix_offset,
+            kv_mask=kv_mask,
+        )
+
+    def prepare_triton(self, prefix: str = "") -> dict[str, torch.Tensor]:
+        """Flatten every parameter in the wrapped ExpertStack under prefix."""
+        return {
+            f"{prefix}expert_stack.{name}": param.detach()
+            for name, param in self.expert_stack.named_parameters()
+        }
+
+
+__all__ = ["FlowMatchingHead"]
