@@ -147,7 +147,10 @@ def run_parity(
     img_np = rng.randint(0, 255, (224, 224, 3), dtype=np.uint8)
     img_t = torch.from_numpy(img_np).permute(2, 0, 1).float() / 255.0
     img_t = img_t * 2.0 - 1.0
-    state = torch.from_numpy(rng.randn(14).astype(np.float32) * 0.1)
+    # pi0.5_libero uses Franka 8-dim state (vs pi0_base's 14-dim Aloha state).
+    # Specific to the libero finetune. Mismatched state shape hits the
+    # NormalizeProcessor and crashes during preprocess.
+    state = torch.from_numpy(rng.randn(8).astype(np.float32) * 0.1)
 
     batch_raw = {
         "observation.images.base_0_rgb": img_t.unsqueeze(0),
