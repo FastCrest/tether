@@ -10,6 +10,7 @@ Phase 1 (consumer-side):
 - tool: `validate_dataset(dataset_path)` → {summary, checks: [...]}
 - resource: `metrics://prometheus` → current Prometheus exposition text
 
+
 Phase 1.5 (producer-side, agents-can-plan-without-executing):
 - tool: `bench_latency(export_dir, iterations, warmup)` → p50/p95/p99 stats.
   Synchronous; defaults sized to fit MCP timeout budgets (~30s).
@@ -57,6 +58,7 @@ Available tools:
 - validate_dataset: pre-flight check a LeRobot v3.0 training dataset
 
 Available resources:
+- version://current: reflex-vla package version (for client compatibility checks)
 - metrics://prometheus: current Prometheus metrics in text exposition format
 
 Safety note: tool `act` returns actions but does NOT actuate them. The caller is
@@ -500,6 +502,17 @@ def create_mcp_server(
             "registry_hit": entry is not None,
             "notes": notes,
         }
+
+    @mcp.resource("version://current")
+    async def version_resource() -> str:
+        """Current reflex-vla package version.
+
+        Clients can read this resource to check compatibility before issuing
+        tool calls. Returns a JSON string with ``version`` and ``package`` keys.
+        """
+        import json
+        from reflex import __version__
+        return json.dumps({"version": __version__, "package": "reflex-vla"})
 
     @mcp.resource("metrics://prometheus")
     async def prometheus_metrics() -> str:
