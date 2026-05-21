@@ -247,6 +247,38 @@ async def test_validate_dataset_tool_returns_error_on_missing_path():
 
 
 # ---------------------------------------------------------------------------
+# Resource: version://current
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_version_resource_registered():
+    mcp = create_mcp_server(_mock_reflex_server())
+    resources = await mcp.list_resources()
+    uris = {str(r.uri) for r in resources}
+    assert any("version" in uri for uri in uris)
+
+
+@pytest.mark.asyncio
+async def test_version_resource_returns_package_version():
+    import json
+    from reflex import __version__
+
+    mcp = create_mcp_server(_mock_reflex_server())
+    result = await mcp.read_resource("version://current")
+    if isinstance(result, list):
+        raw = "".join(
+            (item.text if hasattr(item, "text") else str(item)) for item in result
+        )
+    else:
+        raw = result.text if hasattr(result, "text") else str(result)
+
+    data = json.loads(raw)
+    assert data["version"] == __version__
+    assert data["package"] == "reflex-vla"
+
+
+# ---------------------------------------------------------------------------
 # Resource: metrics://prometheus
 # ---------------------------------------------------------------------------
 
