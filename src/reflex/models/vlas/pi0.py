@@ -258,36 +258,30 @@ class Pi0VLA(BaseVLA):
         action_dim = state.shape[-1]
 
         # ─── 1-3. Vision + projection + text embed ──────────────────────
-        # NOTE: stock HF GemmaModel scales `inputs_embeds *= sqrt(hidden_size)`
-        # internally (modeling_gemma.py:400-401). lerobot's PiGemma deliberately
-        # omits that internal scale and pre-scales externally in embed_image +
-        # embed_prefix. We use stock GemmaModel via PaliGemmaBackbone, so we
-        # must NOT pre-scale here — let stock do the work. Net math: identical
-        # to lerobot's `pre-scale + skip-internal`. Confirmed via source read
-        # of transformers/models/gemma/modeling_gemma.py:400-401.
-        # PaliGemma's `get_image_features` divides by sqrt(text_hidden)
-        # (modeling_paligemma.py:244) — lerobot then multiplies BACK in
-        # embed_image (modeling_pi0.py:446), so net = ×1. We then pass
-        # to stock GemmaModel which internally scales × sqrt(text_hidden).
-        # To produce the SAME final image-emb scale that lerobot's
-        # PiGemma sees (which is `output_of_embed_image` = ×1 from raw
-        # vision+projector output), we must include the same /sqrt(h)
-        # division here. Then stock GemmaModel restores × sqrt(h)
-        # internally, net = ×sqrt(h) for our path. lerobot's path:
-        # ×sqrt(h) externally, no internal scale, net = ×sqrt(h). MATCH.
+        # CRITICAL: lerobot's PiGemmaModel (the language tower used by
+        # paligemma_with_expert.paligemma) OMITS the `inputs_embeds *= sqrt(hidden)`
+        # internal scaling that stock GemmaModel applies (modeling_gemma.py:400-401
+        # vs pi_gemma.py:194-300 — line removed). lerobot compensates by
+        # PRE-SCALING externally in embed_prefix (modeling_pi0.py:669 for text)
+        # and via patched_embed_image (cancels stock get_image_features' /sqrt(h)
+        # to net ×1 for image). Since our llm_backbone wraps lerobot's PiGemma
+        # variant (extracted from the loaded policy), we follow the same
+        # protocol: pre-scale text externally; image is raw multi_modal_projector
+        # output (no additional scaling needed because the get_image_features
+        # path isn't used — we call multi_modal_projector directly).
         text_hidden = self.llm_backbone.text_hidden_size
-        inv_sqrt_h = 1.0 / (text_hidden ** 0.5)
+        sqrt_h = text_hidden ** 0.5
         image_embeds_list: list[torch.Tensor] = []
         for img in images:
             # SigLIP: [B, 3, 224, 224] → [B, 256, vision_hidden=1152]
             img_emb = self.vision_backbone(img)
-            # PaliGemma projection: [B, 256, 1152] → [B, 256, 2048]
+            # PaliGemma projection: [B, 256, 1152] → [B, 256, 2048] (raw output;
+            # lerobot's patched_embed_image net = ×1, matching this directly).
             img_emb = self.llm_backbone.multi_modal_projector(img_emb)
-            if _scale_images:
-                img_emb = img_emb * inv_sqrt_h  # matches stock get_image_features:244
             image_embeds_list.append(img_emb)
 
-        text_embs = self.llm_backbone.embed_tokens(lang_tokens)
+        # Pre-scale text per lerobot embed_prefix at modeling_pi0.py:669.
+        text_embs = self.llm_backbone.embed_tokens(lang_tokens) * sqrt_h
 
         # ─── 4. Concat into prefix ──────────────────────────────────────
         prefix_embs = torch.cat([*image_embeds_list, text_embs], dim=1)
