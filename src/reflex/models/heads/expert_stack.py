@@ -57,7 +57,10 @@ def _sinusoidal_pos_embedding(t, dim, min_p=4e-3, max_p=4.0):
 
 
 class _DecomposedRoPE(nn.Module):
-    def __init__(self, dim, max_seq_len=512, base=10000.0):
+    # max_seq_len=2048 covers pi0 full inference (3 images × 256 + lang ~256 +
+    # state 1 + chunk_size 50 ≈ 1100 absolute positions; was 512 which OOB'd
+    # at position ~775 during the Day 4h parity run).
+    def __init__(self, dim, max_seq_len=2048, base=10000.0):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         freqs = torch.outer(torch.arange(max_seq_len).float(), inv_freq)
@@ -100,6 +103,7 @@ class ExpertGQALayer(nn.Module):
         kv_mask=None,
         prefix_k_concat=None,
         prefix_v_concat=None,
+        attn_mask=None,
     ):
         """Run one transformer layer.
 
@@ -158,11 +162,21 @@ class ExpertGQALayer(nn.Module):
             # Cross-attn padded KV mask: set padded scores to large negative.
             mask = kv_mask[:, None, None, :]
             scores = scores.masked_fill(~mask, -1e9)
+        elif use_prefix_concat and attn_mask is not None:
+            # Prefix-concat path bool mask: [B, 1, s, kv_len]. True = attendable.
+            # Used by pi0's block-attention pattern (state isolated from actions,
+            # actions mutually visible, both see prefix bidirectionally).
+            scores = scores.masked_fill(~attn_mask, -1e9)
         attn = F.softmax(scores, dim=-1)
         x = res + self.o_proj(torch.matmul(attn, v).transpose(1, 2).contiguous().view(b, s, -1))
         res = x
         x = self.post_attention_layernorm(x)
-        return res + self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+        # MLP: GeMM uses `gelu_pytorch_tanh` (Gemma's default hidden_act per
+        # transformers/models/gemma/configuration_gemma.py:119). SmolVLA / SmolLM2
+        # uses silu but that's a different family. Verified via parity diff:
+        # gate_proj, up_proj outputs match lerobot bit-identically; the composition
+        # step (gate's activation * up) was the divergence.
+        return res + self.down_proj(F.gelu(self.gate_proj(x), approximate="tanh") * self.up_proj(x))
 
 
 class ExpertStack(nn.Module):
