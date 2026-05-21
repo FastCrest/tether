@@ -429,6 +429,52 @@ def run_parity(
         print(f"  v_t norm: lerobot {v_t_ler.norm():.4f}  mine {v_t_mine.norm():.4f}")
         print(f"  v_t[0, 0, :8]: lerobot {v_t_ler[0, 0, :8]}  mine {v_t_mine[0, 0, :8]}")
 
+        # ─── Layer-by-layer expert output diff ─────────────────────────
+        # Register hooks on lerobot's gemma_expert.model.layers and on my
+        # vla.vla_head.expert_stack.layers. Re-run one denoise step with same
+        # inputs; capture per-layer output; diff.
+        print(f"\n  --- Per-layer expert output diff (layer-0, layer-8, layer-17) ---")
+        captured: dict = {}
+        def make_hook(name):
+            def hook(module, inp, out):
+                captured[name] = out[0] if isinstance(out, tuple) else out
+            return hook
+
+        ler_layers = _temp_policy.model.paligemma_with_expert.gemma_expert.model.layers
+        my_layers = vla.vla_head.expert_stack.layers
+
+        target_layers = [0, 8, 17]
+        ler_handles = [ler_layers[i].register_forward_hook(make_hook(f"ler_{i}")) for i in target_layers]
+        my_handles = [my_layers[i].register_forward_hook(make_hook(f"my_{i}")) for i in target_layers]
+        try:
+            ler_pkv_copy2 = _copy.deepcopy(ler_pkv)
+            _temp_policy.model.denoise_step(
+                state_tensor.to(torch.float32), ler_prefix_pad, ler_pkv_copy2,
+                noise.clone(), torch.tensor([1.0], dtype=torch.float32),
+            )
+            _ = vla.vla_head(
+                noisy_actions=noise.clone(),
+                timestep=torch.tensor([1.0], dtype=torch.float32),
+                position_ids=suffix_position_ids,
+                prefix_k=my_prefix_k, prefix_v=my_prefix_v,
+                state_emb=my_state_emb.unsqueeze(1), attn_mask=suffix_2d,
+            )
+            for i in target_layers:
+                ler_li = captured[f"ler_{i}"]
+                my_li = captured[f"my_{i}"]
+                # lerobot's layer output is for FULL sequence (state + actions = 51); mine same.
+                if ler_li.shape != my_li.shape:
+                    print(f"  Layer-{i} shape mismatch: lerobot {ler_li.shape}, mine {my_li.shape}")
+                    continue
+                d = (ler_li.float() - my_li.float()).abs()
+                print(f"  Layer-{i}: shape {ler_li.shape}, lerobot norm {ler_li.norm():.4f}, mine norm {my_li.norm():.4f}, diff max {d.max():.4e}, mean {d.mean():.4e}")
+                if i == 0:
+                    # Sample a row for inspection
+                    print(f"    layer-0 first row [:8]: lerobot {ler_li[0, 0, :8]}  mine {my_li[0, 0, :8]}")
+        finally:
+            for h in ler_handles + my_handles:
+                h.remove()
+
         del _temp_policy, policy
         gc.collect()
     step("intermediate_parity", "pass", "see prints above")
