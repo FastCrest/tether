@@ -32,7 +32,7 @@ import torch.nn.functional as F
 from reflex.config import ExportConfig, get_hardware_profile
 from reflex.checkpoint import load_checkpoint
 from reflex.exporters.onnx_export import export_module_to_onnx, optimize_onnx
-from reflex.exporters.smolvla_exporter import (
+from reflex.models.heads.expert_stack import (
     ExpertGQALayer, ExpertStack, _DecomposedRoPE, _sinusoidal_pos_embedding,
 )
 from reflex.exporters.trt_build import build_engine, check_trtexec

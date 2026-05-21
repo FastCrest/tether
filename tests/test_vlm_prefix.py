@@ -33,7 +33,7 @@ from reflex.runtime.vlm_components import (
     assemble_prefix,
     pad_state,
 )
-from reflex.exporters.smolvla_exporter import ExpertGQALayer, ExpertStack
+from reflex.models.heads.expert_stack import ExpertGQALayer, ExpertStack
 from reflex.runtime.vlm_orchestrator import VLMPrefixOrchestrator
 from reflex.runtime.server import ReflexServer
 

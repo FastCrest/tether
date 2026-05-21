@@ -1,10 +1,10 @@
 """FlowMatchingHead — pi0/pi05/smolvla shared flow-matching head wrapped for the BaseVLA spine.
 
 Per the Day 4 design (lift #1 plan): pi0/pi05/smolvla all share a single
-expert-decoder + suffix architecture for action prediction. The existing
-implementation lives in `src/reflex/exporters/smolvla_exporter.ExpertStack`
-(history: it was added for SmolVLA first then reused for pi0/pi05 via
-each exporter's `build_*_expert_stack()` constructor).
+expert-decoder + suffix architecture for action prediction. The `ExpertStack`
+primitive lives at `reflex.models.heads.expert_stack` (moved there in
+Day 4g cleanup; previously lived in `exporters/smolvla_exporter.py` and
+the spine reached into the exporters package — now cleanly separated).
 
 FlowMatchingHead is a thin spine-compatible wrapper around an `ExpertStack`
 instance. It:
@@ -14,14 +14,9 @@ instance. It:
 - Does NOT reimplement the expert — preserves bit-identical behavior with
   the existing pi0/pi05/smolvla exporters
 
-Construction is via a pre-built ExpertStack (the Pi0VLA / Pi05VLA /
-SmolVLA classes in Day 4f use `build_pi0_expert_stack()` from the
-existing exporter to produce the stack, then wrap it here).
-
-TODO(Day 4g cleanup): `ExpertStack` should move from `exporters/smolvla_exporter.py`
-to `models/heads/expert_stack.py` so the spine doesn't reach into the
-exporters package. Deferred to Day 4g sunset commit which removes the OLD
-per-model exporters anyway. For now we keep the cross-package import.
+Construction is via a pre-built ExpertStack or via state_dict + family
+dispatch (which still uses the exporter-side build helpers — those stay
+in exporters/* because they're tightly coupled to checkpoint-key parsing).
 
 Registered under `VLA_HEADS` per decision S-3 hybrid-registration.
 """

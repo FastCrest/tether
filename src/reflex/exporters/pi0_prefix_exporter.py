@@ -497,7 +497,7 @@ class Pi0ExpertStackWithPrefix(nn.Module):
         prefix_k: torch.Tensor,
         prefix_v: torch.Tensor,
     ) -> torch.Tensor:
-        from reflex.exporters.smolvla_exporter import _sinusoidal_pos_embedding
+        from reflex.models.heads.expert_stack import _sinusoidal_pos_embedding
 
         b, c, _ = noisy_actions.shape
         act = self.action_in_proj(noisy_actions)
