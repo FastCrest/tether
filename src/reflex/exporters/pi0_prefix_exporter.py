@@ -451,9 +451,15 @@ class Pi0ExpertStackWithPrefix(nn.Module):
     Inputs to `forward`:
         noisy_actions: [B, chunk_size, action_dim]
         timestep:      [B]
-        position_ids:  [1, chunk_size]   (absolute positions AFTER prefix_len)
+        position_ids:  [B, chunk_size+1] if state_emb given, else [B, chunk_size]
+                       (absolute positions OFFSET by prefix_len)
         prefix_k:      [L, B, prefix_len, nkv, hd]  per-layer, RoPE-applied
         prefix_v:      [L, B, prefix_len, nkv, hd]  per-layer, no RoPE
+        state_emb:     [B, 1, expert_hidden]  optional — pi0's state token,
+                       embedded externally via state_proj. When provided, the
+                       suffix becomes [state_token, action_token_1..chunk_size]
+                       and the output is sliced to drop the state token. Matches
+                       lerobot's embed_suffix at modeling_pi0.py:687-748.
 
     Output:
         velocity: [B, chunk_size, action_dim]
@@ -496,6 +502,7 @@ class Pi0ExpertStackWithPrefix(nn.Module):
         position_ids: torch.Tensor,
         prefix_k: torch.Tensor,
         prefix_v: torch.Tensor,
+        state_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         from reflex.models.heads.expert_stack import _sinusoidal_pos_embedding
 
@@ -503,9 +510,17 @@ class Pi0ExpertStackWithPrefix(nn.Module):
         act = self.action_in_proj(noisy_actions)
         t_emb = _sinusoidal_pos_embedding(timestep, self.expert_hidden)
         t_emb = t_emb.unsqueeze(1).expand(-1, c, -1)
-        x = self.action_time_mlp_out(
+        action_time_emb = self.action_time_mlp_out(
             F.silu(self.action_time_mlp_in(torch.cat([act, t_emb], dim=-1)))
         )
+
+        # When state_emb is provided, prepend it as the first suffix token
+        # (matches lerobot embed_suffix at modeling_pi0.py:687-748). Caller is
+        # responsible for the corresponding position_ids extension.
+        if state_emb is not None:
+            x = torch.cat([state_emb, action_time_emb], dim=1)
+        else:
+            x = action_time_emb
 
         for i, layer in enumerate(self.layers):
             # prefix_k[i], prefix_v[i]: [B, prefix_len, nkv, hd]
@@ -517,6 +532,10 @@ class Pi0ExpertStackWithPrefix(nn.Module):
             )
 
         x = self.final_norm(x)
+        # Drop the state token from the output when it was prepended; matches
+        # lerobot denoise_step's `suffix_out = outputs[:, -chunk_size:]` slice.
+        if state_emb is not None:
+            x = x[:, -c:]
         return self.action_out_proj(x)
 
 
@@ -550,9 +569,12 @@ def build_pi0_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[P
         "w": state_dict[PI0_ACTION_KEYS["out_w"]],
         "b": state_dict[PI0_ACTION_KEYS["out_b"]],
     }
-    # Final norm
+    # Final norm — pi0 uses Gemma-style RMSNorm `y = x_normed * (1 + w)`,
+    # so pre-transform stored weight: `w_decomposed = 1 + w_gemma`. Matches
+    # the per-layer norm convention in pi0_exporter.py:148-150.
     base_prefix = "paligemma_with_expert.gemma_expert.model."
-    final_norm_w = state_dict.get(f"{base_prefix}norm.weight", torch.ones(meta["expert_hidden"]))
+    final_norm_w_raw = state_dict.get(f"{base_prefix}norm.weight", torch.zeros(meta["expert_hidden"]))
+    final_norm_w = final_norm_w_raw + 1.0
 
     stack = Pi0ExpertStackWithPrefix(
         layers=layers,

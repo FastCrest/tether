@@ -137,9 +137,22 @@ class Pi0VLA(BaseVLA):
                 # this way, downstream Day 4g handles the fallback.
                 state_dict = {}
 
-        text_hidden = llm.text_hidden_size
-        action_dim = 32  # pi0 padded action dim — matches pi0_exporter's PI0_MAX_ACTION_DIM
-        projector = LinearProjector(in_dim=action_dim, out_dim=text_hidden)
+        # 5. Head: build the prefix-aware pi0 expert FIRST (so we know expert_hidden
+        #    for the projector dim). pi0's inference path concatenates per-layer
+        #    VLM prefix-KV onto every expert layer's self-attention via
+        #    Pi0ExpertStackWithPrefix; the bare ExpertStack would be correct only
+        #    for expert-only ONNX export, not end-to-end inference.
+        from reflex.exporters.pi0_prefix_exporter import build_pi0_expert_with_prefix
+        expert_with_prefix, expert_meta = build_pi0_expert_with_prefix(state_dict)
+        head = FlowMatchingHead(expert_stack=expert_with_prefix)
+
+        # 4. Projector: pi0's state_proj is action_dim → expert_hidden (NOT
+        #    text_hidden — the state token lives in the expert's residual
+        #    stream, not paligemma's). lerobot modeling_pi0.py:582:
+        #    `nn.Linear(config.max_state_dim, action_expert_config.width)`.
+        action_dim = 32  # pi0 padded action dim — matches PI0_MAX_ACTION_DIM
+        expert_hidden = expert_meta["expert_hidden"]
+        projector = LinearProjector(in_dim=action_dim, out_dim=expert_hidden)
         # Try to load state_proj weights from the checkpoint if available.
         state_proj_w = state_dict.get("model.state_proj.weight")
         state_proj_b = state_dict.get("model.state_proj.bias")
@@ -148,17 +161,6 @@ class Pi0VLA(BaseVLA):
                 projector.linear.weight.copy_(state_proj_w)
                 if state_proj_b is not None:
                     projector.linear.bias.copy_(state_proj_b)
-
-        # 5. Head: build the prefix-aware pi0 expert (NOT the bare
-        #    ExpertStack — pi0's inference path concatenates per-layer VLM
-        #    prefix-KV onto every expert layer's self-attention, see
-        #    Pi0ExpertStackWithPrefix in exporters/pi0_prefix_exporter.py).
-        #    The default FlowMatchingHead route via vla_family="pi0" builds
-        #    the bare ExpertStack which is correct for expert-only ONNX
-        #    export but NOT for end-to-end inference.
-        from reflex.exporters.pi0_prefix_exporter import build_pi0_expert_with_prefix
-        expert_with_prefix, _expert_meta = build_pi0_expert_with_prefix(state_dict)
-        head = FlowMatchingHead(expert_stack=expert_with_prefix)
 
         return cls(
             vision_backbone=vision,
@@ -251,10 +253,16 @@ class Pi0VLA(BaseVLA):
 
         device = lang_tokens.device
         batch = lang_tokens.shape[0]
-        text_hidden = self.llm_backbone.text_hidden_size
         action_dim = state.shape[-1]
 
         # ─── 1-3. Vision + projection + text embed ──────────────────────
+        # NOTE: stock HF GemmaModel scales `inputs_embeds *= sqrt(hidden_size)`
+        # internally (modeling_gemma.py:400-401). lerobot's PiGemma deliberately
+        # omits that internal scale and pre-scales externally in embed_image +
+        # embed_prefix. We use stock GemmaModel via PaliGemmaBackbone, so we
+        # must NOT pre-scale here — let stock do the work. Net math: identical
+        # to lerobot's `pre-scale + skip-internal`. Confirmed via source read
+        # of transformers/models/gemma/modeling_gemma.py:400-401.
         image_embeds_list: list[torch.Tensor] = []
         for img in images:
             # SigLIP: [B, 3, 224, 224] → [B, 256, vision_hidden=1152]
@@ -263,11 +271,7 @@ class Pi0VLA(BaseVLA):
             img_emb = self.llm_backbone.multi_modal_projector(img_emb)
             image_embeds_list.append(img_emb)
 
-        # Token embed + Gemma scale-by-sqrt-d (matches PaliGemma's input scaling).
-        # lerobot's embed_prefix at modeling_pi0.py:645-686 multiplies token
-        # embeds by sqrt(hidden) before feeding the LM; mirroring keeps the
-        # prefix forward bit-identical to the lerobot reference path.
-        text_embs = self.llm_backbone.embed_tokens(lang_tokens) * (text_hidden ** 0.5)
+        text_embs = self.llm_backbone.embed_tokens(lang_tokens)
 
         # ─── 4. Concat into prefix ──────────────────────────────────────
         prefix_embs = torch.cat([*image_embeds_list, text_embs], dim=1)
@@ -283,58 +287,84 @@ class Pi0VLA(BaseVLA):
             img_masks_per_token.append(m[:, None].expand(batch, img_token_count))
         prefix_pad_mask = torch.cat([*img_masks_per_token, lang_masks.bool()], dim=1)
 
-        # PaliGemma block-attention pattern: image patches are mutually
-        # bidirectional; language is causal-on-itself + can attend to images.
-        # For prefix prefill we use the simpler "attention_mask = pad_mask"
-        # equivalent to lerobot's prefix_att_masks (modeling_pi0.py:833-841).
-        # The LM internally masks future positions per causal config.
+        # PaliGemma prefix attention pattern is FULLY BIDIRECTIONAL within the
+        # prefix block (lerobot modeling_pi0.py:837-841 builds att_masks=[0]*N
+        # and converts via make_att_2d_masks). Stock HF GemmaModel applies a
+        # CAUSAL mask by default if we pass a 1D pad mask; we override with a
+        # pre-built 4D bidirectional mask (`create_causal_mask` returns 4D as-is).
+        # See transformers/masking_utils.py:768-770.
+        # 4D mask shape: [B, 1, prefix_len, prefix_len].
+        # value 0.0 = attendable, large negative = masked. We use 0/-inf via
+        # the float dtype's neg-infinity since stock attention adds these to logits.
+        valid_pair = prefix_pad_mask[:, :, None] & prefix_pad_mask[:, None, :]  # [B, N, N]
+        # Convert bool → additive bias: 0 where attendable, large_neg where not.
+        # Use a representative small dtype min — bf16 if model is bf16, else fp32.
+        prefix_dtype = prefix_embs.dtype
+        neg_inf = torch.finfo(prefix_dtype).min
+        prefix_4d_mask = torch.where(
+            valid_pair, torch.zeros((), dtype=prefix_dtype, device=device),
+            torch.full((), neg_inf, dtype=prefix_dtype, device=device),
+        ).unsqueeze(1)  # [B, 1, prefix_len, prefix_len]
         prefix_position_ids = torch.cumsum(prefix_pad_mask.long(), dim=1) - 1
 
-        # ─── 5. Run language_model prefill → past_key_values ────────────
-        # use_cache=True returns per-layer K/V we need for the expert.
-        prefix_out = self.llm_backbone(
-            inputs_embeds=prefix_embs,
-            attention_mask=prefix_pad_mask,
-            position_ids=prefix_position_ids,
-            use_cache=True,
-        )
+        # Force eager attention for the prefill — SDPA/flash mask handling
+        # for custom 4D masks differs across transformers versions. lerobot
+        # does the same at modeling_pi0.py:844 before its own prefill.
+        prev_attn_impl = self.llm_backbone.language_model.config._attn_implementation
+        self.llm_backbone.language_model.config._attn_implementation = "eager"
+        try:
+            # ─── 5. Run language_model prefill → past_key_values ────────
+            prefix_out = self.llm_backbone(
+                inputs_embeds=prefix_embs,
+                attention_mask=prefix_4d_mask,
+                position_ids=prefix_position_ids,
+                use_cache=True,
+            )
+        finally:
+            self.llm_backbone.language_model.config._attn_implementation = prev_attn_impl
         past_key_values = prefix_out.past_key_values
 
-        # Extract per-layer K and V as [L, B, prefix_len, nkv, hd] (Pi0ExpertStackWithPrefix
-        # accepts either pre- or post-transpose layout; we pass post-transpose).
-        # past_key_values may be either a tuple-of-tuples (legacy) or a Cache
-        # object (modern transformers DynamicCache). Both expose per-layer K/V.
+        # Extract per-layer K and V. past_key_values may be DynamicCache
+        # (`.layers[i].keys/.values`), older Cache (`.key_cache/.value_cache`),
+        # or legacy tuple-of-tuples. Both layouts arrive as [B, nkv, prefix_len, hd].
         prefix_k_list: list[torch.Tensor] = []
         prefix_v_list: list[torch.Tensor] = []
         if hasattr(past_key_values, "layers"):
-            # transformers DynamicCache — each layer has .keys + .values
             for layer in past_key_values.layers:
                 prefix_k_list.append(layer.keys)
                 prefix_v_list.append(layer.values)
         elif hasattr(past_key_values, "key_cache"):
-            # older Cache API — list per layer
             for k, v in zip(past_key_values.key_cache, past_key_values.value_cache):
                 prefix_k_list.append(k)
                 prefix_v_list.append(v)
         else:
-            # tuple-of-tuples (very old transformers)
             for (k, v) in past_key_values:
                 prefix_k_list.append(k)
                 prefix_v_list.append(v)
         prefix_k = torch.stack(prefix_k_list, dim=0)  # [L, B, nkv, prefix_len, hd]
         prefix_v = torch.stack(prefix_v_list, dim=0)
 
-        # ─── 6. Build noise if not provided ─────────────────────────────
+        # ─── 6. State embedding (suffix's first token) ─────────────────
+        # self.projector is state_proj: [B, action_dim=32] → [B, expert_hidden=1024].
+        state_emb = self.projector(state).unsqueeze(1)  # [B, 1, expert_hidden]
+
+        # ─── 7. Build noise if not provided ─────────────────────────────
         if noise is None:
             noise = torch.randn(batch, chunk_size, action_dim, device=device, dtype=torch.float32)
 
-        # ─── 7. Denoise loop (Euler) ────────────────────────────────────
+        # ─── 8. Denoise loop (Euler) ────────────────────────────────────
+        # Suffix is [state_token, action_token_1..chunk_size] = chunk_size + 1 tokens.
+        # position_ids for suffix tokens are ABSOLUTE, continuing from prefix_len.
+        # lerobot modeling_pi0.py:912-913:
+        #     prefix_offsets = sum(prefix_pad_masks); position_ids = prefix_offsets + cumsum(suffix_pad_masks) - 1.
+        # With suffix_pad_masks all 1, suffix positions become
+        # [prefix_len, prefix_len+1, ..., prefix_len+chunk_size].
+        prefix_len_per_batch = prefix_pad_mask.long().sum(dim=-1, keepdim=True)  # [B, 1]
+        suffix_pad_mask = torch.ones(batch, chunk_size + 1, dtype=torch.long, device=device)
+        suffix_position_ids = prefix_len_per_batch + torch.cumsum(suffix_pad_mask, dim=1) - 1  # [B, chunk_size+1]
+
         dt = -1.0 / num_steps
         x_t = noise
-        # Action position_ids start at 0 (Pi0ExpertStackWithPrefix handles the
-        # prefix offset internally via prefix_concat; the expert sees the
-        # action tokens at positions [0..chunk_size-1] within their own block).
-        action_position_ids = torch.arange(chunk_size, device=device).unsqueeze(0).expand(batch, -1)
 
         for step in range(num_steps):
             time_val = 1.0 + step * dt
@@ -342,13 +372,14 @@ class Pi0VLA(BaseVLA):
             v_t = self.vla_head(
                 noisy_actions=x_t,
                 timestep=time_tensor,
-                position_ids=action_position_ids,
+                position_ids=suffix_position_ids,
                 prefix_k=prefix_k,
                 prefix_v=prefix_v,
+                state_emb=state_emb,
             )
             x_t = x_t + dt * v_t
 
-        # ─── 8. Return denoised action chunk ────────────────────────────
+        # ─── 9. Return denoised action chunk ────────────────────────────
         return x_t
 
 

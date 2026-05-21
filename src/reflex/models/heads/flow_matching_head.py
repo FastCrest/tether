@@ -136,6 +136,7 @@ class FlowMatchingHead(VLAHead, nn.Module):
         prefix_v: torch.Tensor | None = None,
         prefix_offset: torch.Tensor | None = None,
         kv_mask: torch.Tensor | None = None,
+        state_emb: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         """One denoising step — delegates to the wrapped expert module.
@@ -186,6 +187,7 @@ class FlowMatchingHead(VLAHead, nn.Module):
                 position_ids=position_ids,
                 prefix_k=prefix_k,
                 prefix_v=prefix_v,
+                state_emb=state_emb,
             )
 
         # Default path — ExpertStack (cross-attn or self-attn).
