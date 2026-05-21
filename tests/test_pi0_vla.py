@@ -141,21 +141,64 @@ def test_forward_routes_to_llm_backbone():
     assert out.last_hidden_state.shape == (1, 5, 8)
 
 
-# ─── predict_action deferred ────────────────────────────────────────────
+# ─── predict_action — Day 4g full inference pipeline ───────────────────
 
 
-def test_predict_action_raises_not_implemented():
-    """Day 4f scope: composition shape only. Day 4g wires the full
-    inference pipeline + parity gate. Until then predict_action is an
-    explicit NotImplementedError (NOT a silent stub returning None)."""
+def test_predict_action_runs_end_to_end_with_stubs():
+    """Day 4g: predict_action wires SigLIP → multi_modal_projector → text
+    embed → concat prefix → language_model prefill → denoise loop.
+
+    Validated here with stub components that simulate the right tensor
+    shapes. The shape-checked happy path. Numerical parity vs the lerobot
+    reference path is deferred to Day 4h (Modal-fired, requires the
+    lerobot/pi0_base checkpoint)."""
+    batch, chunk_size, action_dim, text_hidden = 1, 50, 32, 2048
+    img_tokens, seq_len = 256, 16
+    num_layers, nkv, head_dim = 2, 1, 256
+
     vla = Pi0VLA(
-        vision_backbone=_StubVision(),
-        llm_backbone=_StubLLM(),
+        vision_backbone=_StubVisionForPi0(img_tokens=img_tokens, hidden=1152),
+        llm_backbone=_StubPaliGemmaForPi0(
+            text_hidden=text_hidden, num_layers=num_layers, nkv=nkv, head_dim=head_dim,
+        ),
         projector=_StubProjector(),
-        vla_head=_StubHead(),
+        vla_head=_StubPrefixHead(num_layers=num_layers, chunk_size=chunk_size, action_dim=action_dim),
     )
-    with pytest.raises(NotImplementedError, match="Day 4g"):
-        vla.predict_action(images=None, state=None, instruction="x")
+
+    images = [torch.randn(batch, 3, 224, 224) for _ in range(3)]
+    state = torch.randn(batch, action_dim)
+    lang_tokens = torch.randint(0, 100, (batch, seq_len), dtype=torch.long)
+    lang_masks = torch.ones(batch, seq_len, dtype=torch.bool)
+    noise = torch.randn(batch, chunk_size, action_dim)
+
+    actions = vla.predict_action(
+        images=images, state=state, lang_tokens=lang_tokens, lang_masks=lang_masks,
+        noise=noise, num_steps=2, chunk_size=chunk_size,
+    )
+    assert actions.shape == (batch, chunk_size, action_dim)
+    # Each denoise step changes x_t by `dt * v_t` (Euler) — assert it's not the
+    # pristine input (proves the loop ran).
+    assert not torch.allclose(actions, noise)
+
+
+def test_predict_action_raises_if_required_slot_missing():
+    """RuntimeError if a required slot was somehow cleared between
+    construction and predict_action call (defensive — REQUIRED_SLOTS
+    prevents the bad construction path)."""
+    vla = Pi0VLA(
+        vision_backbone=_StubVisionForPi0(),
+        llm_backbone=_StubPaliGemmaForPi0(),
+        projector=_StubProjector(),
+        vla_head=_StubPrefixHead(),
+    )
+    vla.vision_backbone = None  # type: ignore[assignment]
+    with pytest.raises(RuntimeError, match="vision_backbone is None"):
+        vla.predict_action(
+            images=[torch.randn(1, 3, 224, 224)],
+            state=torch.zeros(1, 32),
+            lang_tokens=torch.zeros(1, 4, dtype=torch.long),
+            lang_masks=torch.ones(1, 4, dtype=torch.bool),
+        )
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────
@@ -194,3 +237,91 @@ class _StubProjector(Projector):
 
 class _StubHead(VLAHead):
     def forward(self, context, *args, **kwargs): return context
+
+
+# ─── Day 4g predict_action stubs ───────────────────────────────────────
+
+
+class _StubVisionForPi0(VisionBackbone, nn.Module):
+    """SigLIP-shaped stub: [B, 3, H, W] → [B, img_tokens, hidden].
+
+    Uses an avg-pool + small linear to keep parameter count tiny — a naive
+    `Linear(3*224*224, img_tokens*hidden)` is 44B params (176 GB) which OOMs
+    the test process. The output shape contract matches real SigLIP."""
+
+    def __init__(self, img_tokens: int = 256, hidden: int = 1152):
+        nn.Module.__init__(self)
+        self.img_tokens = img_tokens
+        self.hidden = hidden
+        self.proj = nn.Linear(3, hidden)  # tiny per-pixel projection
+
+    def forward(self, images):
+        b = images.shape[0]
+        # Downsample to img_tokens tokens via adaptive pool, then per-token linear.
+        # AdaptiveAvgPool2d → [B, 3, sqrt(img_tokens), sqrt(img_tokens)]
+        side = int(self.img_tokens ** 0.5)
+        pooled = nn.functional.adaptive_avg_pool2d(images, (side, side))
+        tokens = pooled.permute(0, 2, 3, 1).reshape(b, side * side, 3)
+        return self.proj(tokens)
+
+
+class _StubPaliGemmaForPi0(LLMBackbone, nn.Module):
+    """Stub PaliGemma exposing the property accessors Pi0VLA.predict_action
+    relies on. Returns past_key_values that look like a transformers Cache."""
+
+    def __init__(
+        self,
+        text_hidden: int = 2048,
+        vision_hidden: int = 1152,
+        vocab: int = 1024,  # small vocab — test only embeds tokens in [0, 100)
+        num_layers: int = 2,
+        nkv: int = 1,
+        head_dim: int = 256,
+    ):
+        nn.Module.__init__(self)
+        self.multi_modal_projector = nn.Linear(vision_hidden, text_hidden)
+        self.embed_tokens = nn.Embedding(vocab, text_hidden)
+        self.text_hidden_size = text_hidden
+        self.num_layers = num_layers
+        self.nkv = nkv
+        self.head_dim = head_dim
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        *args,
+        inputs_embeds=None,
+        past_key_values=None,
+        position_ids=None,
+        use_cache=False,
+        **kwargs,
+    ):
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+        b, seq_len, _ = inputs_embeds.shape
+        kv_shape = (b, self.nkv, seq_len, self.head_dim)
+        pkv = SimpleNamespace(
+            layers=[
+                SimpleNamespace(keys=torch.randn(*kv_shape), values=torch.randn(*kv_shape))
+                for _ in range(self.num_layers)
+            ],
+        )
+        return SimpleNamespace(last_hidden_state=inputs_embeds, past_key_values=pkv)
+
+
+class _StubPrefixHead(VLAHead, nn.Module):
+    """Stub FlowMatchingHead that simulates a prefix-aware expert. Returns
+    a velocity tensor shaped like the noisy actions input."""
+
+    def __init__(self, num_layers: int = 2, chunk_size: int = 50, action_dim: int = 32):
+        nn.Module.__init__(self)
+        self.num_layers = num_layers
+        self.scale = nn.Parameter(torch.tensor(0.01))
+
+    def forward(self, noisy_actions, timestep=None, position_ids=None, *,
+                prefix_k=None, prefix_v=None, **kwargs):
+        if prefix_k is None or prefix_v is None:
+            raise ValueError("prefix-aware stub head requires prefix_k + prefix_v")
+        assert prefix_k.shape[0] == self.num_layers
+        return noisy_actions * self.scale

@@ -132,30 +132,63 @@ class FlowMatchingHead(VLAHead, nn.Module):
         *args: Any,
         vlm_k: torch.Tensor | None = None,
         vlm_v: torch.Tensor | None = None,
+        prefix_k: torch.Tensor | None = None,
+        prefix_v: torch.Tensor | None = None,
         prefix_offset: torch.Tensor | None = None,
         kv_mask: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
-        """One denoising step — delegates to the wrapped ExpertStack.
+        """One denoising step — delegates to the wrapped expert module.
 
-        The first positional arg is the flow-matching "context" per the
-        VLAHead ABC, which in this head's case IS the noisy_actions tensor.
-        Naming kept as `noisy_actions` for clarity.
+        Supports both expert flavors:
+
+        - `ExpertStack` (SmolVLA / pi0.5 cross-attn-only or expert-only path):
+          pass `vlm_k`/`vlm_v` for the cross-attn layers, plus optional
+          `prefix_offset` + `kv_mask`.
+        - `Pi0ExpertStackWithPrefix` (pi0 prefix-concat-on-every-layer path):
+          pass `prefix_k`/`prefix_v` (per-layer K/V from PaliGemma's
+          past_key_values). No `vlm_k`/`vlm_v`, no `kv_mask`.
+
+        Dispatch is by signature inspection — the wrapped expert's `forward`
+        signature determines which kwargs are forwarded. This keeps the
+        wrapped class blissfully unaware of FlowMatchingHead.
 
         Args:
             noisy_actions: `[batch, chunk, action_dim]` noised action tensor.
             timestep: `[batch]` flow-matching timestep.
             position_ids: `[batch, chunk]` action position indices.
-            vlm_k: optional VLM per-layer K cache for cross-attention layers
-                (only pi05/smolvla have cross-attn; pi0 ignores).
+            vlm_k: SmolVLA cross-attn per-layer K cache (mutually exclusive
+                with prefix_k).
             vlm_v: paired V cache.
+            prefix_k: pi0 prefix-concat per-layer K
+                `[L, B, prefix_len, nkv, hd]` (mutually exclusive with vlm_k).
+            prefix_v: paired V.
             prefix_offset: VLM prefix length per batch element (for position-id
-                offsetting in self-attention layers).
-            kv_mask: optional KV-attention mask.
+                offsetting in ExpertStack's self-attention layers; ignored by
+                Pi0ExpertStackWithPrefix).
+            kv_mask: optional KV-attention mask (ExpertStack cross-attn only).
 
         Returns:
             `[batch, chunk, action_dim]` denoised actions.
         """
+        # Pi0ExpertStackWithPrefix has a narrower forward signature — only
+        # the prefix_k/prefix_v path. Detect + route.
+        from reflex.exporters.pi0_prefix_exporter import Pi0ExpertStackWithPrefix
+        if isinstance(self.expert_stack, Pi0ExpertStackWithPrefix):
+            if prefix_k is None or prefix_v is None:
+                raise ValueError(
+                    "Pi0ExpertStackWithPrefix requires prefix_k + prefix_v "
+                    "(per-layer VLM prefix K/V from PaliGemma's past_key_values)."
+                )
+            return self.expert_stack(
+                noisy_actions=noisy_actions,
+                timestep=timestep,
+                position_ids=position_ids,
+                prefix_k=prefix_k,
+                prefix_v=prefix_v,
+            )
+
+        # Default path — ExpertStack (cross-attn or self-attn).
         return self.expert_stack(
             noisy_actions=noisy_actions,
             timestep=timestep,
