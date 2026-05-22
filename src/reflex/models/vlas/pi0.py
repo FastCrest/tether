@@ -6,7 +6,10 @@ Lift #1 Day 4f per `features/03_export/basevla-spine_plan.md`. Wires:
         vision_backbone = SigLIPBackbone (extracted from paligemma.vision_tower)
         llm_backbone    = PaliGemmaBackbone (PaliGemma minus vision_tower)
         projector       = LinearProjector (state_proj)
-        vla_head        = FlowMatchingHead (wraps ExpertStack from build_pi0_expert_stack)
+        vla_head        = FlowMatchingHead (wraps Pi0ExpertStackWithPrefix from
+                          build_pi0_expert_with_prefix in exporters/pi0_prefix.py
+                          — prefix-concat variant used for inference, NOT the
+                          cross-attn build_pi0_expert_stack used by export_pi0)
     )
 
 The 4 component classes were added in Days 4a-e. This file wires them
@@ -88,8 +91,13 @@ class Pi0VLA(BaseVLA):
            it's no longer called at runtime) → PaliGemmaBackbone
         3. Builds projector from PaliGemma's `state_proj` weights if present,
            else random-init (parity tests will validate against checkpoint)
-        4. Builds the ExpertStack via `build_pi0_expert_stack(state_dict)`
-           → wraps as FlowMatchingHead
+        4. Builds the Pi0ExpertStackWithPrefix via
+           `build_pi0_expert_with_prefix(state_dict)` (from exporters/pi0_prefix.py)
+           → wraps as FlowMatchingHead. Note: this is the **prefix-concat**
+           variant used for end-to-end inference, distinct from the
+           cross-attn ExpertStack that `export_pi0` consumes via
+           `build_pi0_expert_stack`. The two share weights but differ in
+           attention pattern (every-layer prefix-K/V concat vs cross-attn).
         5. Returns Pi0VLA composed of the 4 components
 
         Args:

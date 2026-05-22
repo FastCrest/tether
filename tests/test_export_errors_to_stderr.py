@@ -56,3 +56,30 @@ def test_cli_export_routes_errors_to_stderr_via_err_console():
 
     # The "Missing monolithic dep" message specifically must go to stderr.
     assert "err_console.print(f\"Missing monolithic dep: {exc}\"" in src
+
+
+def test_no_stdout_error_paints_remain_in_cli():
+    """Post-2026-05-22 sweep: zero `console.print(...[red]...)` calls remain
+    in cli.py. All error/warning paints route through `err_console.print`
+    so subprocess wrappers see them in stderr.
+
+    Regression-pin: catches a contributor accidentally adding a new
+    error path via `console.print` instead of `err_console.print`. Same
+    class of bug as the Day 7 modal_test_gr00t empty-stderr issue.
+    """
+    import re
+    from pathlib import Path
+
+    cli_path = Path(__file__).parent.parent / "src" / "reflex" / "cli.py"
+    src = cli_path.read_text()
+
+    # Match `console.print(...)` (NOT `err_console.print(...)`) calls
+    # that contain `[red]` markup somewhere in the args. The word-boundary
+    # negative lookbehind ensures `err_console.print` is excluded.
+    pattern = re.compile(r"(?<![a-zA-Z_])console\.print\([^()]*\[red\]", re.DOTALL)
+    matches = pattern.findall(src)
+    assert len(matches) == 0, (
+        f"Found {len(matches)} stdout error path(s) in cli.py — these must "
+        "route through `err_console.print` so subprocess wrappers see them "
+        "in stderr.\nFirst few: " + "\n".join(m[:120] for m in matches[:3])
+    )

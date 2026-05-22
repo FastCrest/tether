@@ -248,7 +248,7 @@ def export(
         # Check memory fit
         weight_gb = total_params * 2 / 1e9  # FP16
         if weight_gb > hardware.memory_gb * 0.7:
-            console.print(f"  [red]Model ({weight_gb:.1f}GB) may not fit on {hardware.name} ({hardware.memory_gb}GB)[/red]")
+            err_console.print(f"  [red]Model ({weight_gb:.1f}GB) may not fit on {hardware.name} ({hardware.memory_gb}GB)[/red]")
         else:
             console.print(f"  [green]Model ({weight_gb:.1f}GB) fits on {hardware.name} ({hardware.memory_gb}GB)[/green]")
 
@@ -313,7 +313,7 @@ def export(
         raise typer.Exit(0)
 
     if requested_export_mode != ExportMode.AUTO:
-        console.print(
+        err_console.print(
             "[red]--export-mode is only implemented for pi0.5 decomposed exports "
             "handled by the vlm_prefix/expert_denoise exporter. Re-run with "
             "--export-mode auto, or use a pi0.5 model ref.[/red]"
@@ -542,16 +542,16 @@ def validate(
         try:
             emit_ci_template(out, reflex_version=__version__)
         except FileExistsError as exc:
-            console.print(f"[red]{exc}[/red]")
+            err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(2)
         except Exception as exc:
-            console.print(f"[red]Failed to emit CI template: {exc}[/red]")
+            err_console.print(f"[red]Failed to emit CI template: {exc}[/red]")
             raise typer.Exit(2)
         console.print(f"[green]Wrote CI template:[/green] {out}")
         raise typer.Exit(0)
 
     if not target:
-        console.print("[red]Export directory or model ID is required (unless --init-ci).[/red]")
+        err_console.print("[red]Export directory or model ID is required (unless --init-ci).[/red]")
         raise typer.Exit(2)
 
     # --pre-export: check a raw checkpoint (replaces old `reflex check`)
@@ -637,7 +637,7 @@ def validate(
     export_dir = target  # rename for legacy code paths below
 
     if device not in ("cpu", "cuda"):
-        console.print(f"[red]--device must be 'cpu' or 'cuda', got: {device}[/red]")
+        err_console.print(f"[red]--device must be 'cpu' or 'cuda', got: {device}[/red]")
         raise typer.Exit(2)
 
     from reflex.validate_roundtrip import ValidateRoundTrip
@@ -652,10 +652,10 @@ def validate(
             device=device,
         )
     except FileNotFoundError as exc:
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
 
     try:
@@ -664,16 +664,16 @@ def validate(
         console.print("\n[yellow]Validation interrupted by user.[/yellow]")
         raise typer.Exit(130)
     except FileNotFoundError as exc:
-        console.print(f"[red]Missing required file: {exc}[/red]")
+        err_console.print(f"[red]Missing required file: {exc}[/red]")
         raise typer.Exit(2)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
     except Exception as exc:
         if verbose:
             import traceback
             traceback.print_exc()
-        console.print(f"[red]Validation failed with unexpected error: {exc}[/red]")
+        err_console.print(f"[red]Validation failed with unexpected error: {exc}[/red]")
         console.print("[yellow]Re-run with --verbose for the full traceback.[/yellow]")
         raise typer.Exit(2)
 
@@ -781,12 +781,12 @@ def benchmark_cmd(
 
     export_path = Path(export_dir)
     if not export_path.exists():
-        console.print(f"[red]Export directory not found: {export_dir}[/red]")
+        err_console.print(f"[red]Export directory not found: {export_dir}[/red]")
         raise typer.Exit(1)
 
     onnx_files = list(export_path.glob("*.onnx"))
     if not onnx_files:
-        console.print(f"[red]No ONNX file in {export_dir}[/red]")
+        err_console.print(f"[red]No ONNX file in {export_dir}[/red]")
         raise typer.Exit(1)
 
     # If --benchmark was requested, gate on the eval extra being installed
@@ -803,7 +803,7 @@ def benchmark_cmd(
             raise typer.Exit(2)
         valid = ("simpler", "maniskill")
         if benchmark not in valid:
-            console.print(f"[red]Unknown benchmark '{benchmark}'. Try one of: {', '.join(valid)}[/red]")
+            err_console.print(f"[red]Unknown benchmark '{benchmark}'. Try one of: {', '.join(valid)}[/red]")
             raise typer.Exit(2)
 
     console.print(f"\n[bold]Reflex Benchmark[/bold]")
@@ -821,7 +821,7 @@ def benchmark_cmd(
     server.load()
     load_s = _t.perf_counter() - t0
     if not server.ready:
-        console.print("[red]Model failed to load.[/red]")
+        err_console.print("[red]Model failed to load.[/red]")
         raise typer.Exit(1)
     console.print(
         f"  Loaded:    {load_s:.1f}s  (mode={server._inference_mode})"
@@ -908,7 +908,7 @@ def benchmark_cmd(
         try:
             from reflex.eval import run_task_benchmark
         except ImportError as exc:
-            console.print(
+            err_console.print(
                 f"[red]reflex.eval module missing: {exc}[/red]\n"
                 f"  The benchmark-plugin framework ships in v0.2 — see GOALS.yaml."
             )
@@ -1023,18 +1023,18 @@ def eval_cmd(
     # ---- Validate inputs at the CLI layer (fail loud) ----
     export_path = Path(export_dir)
     if not export_path.exists():
-        console.print(f"[red]Export directory not found: {export_dir}[/red]")
+        err_console.print(f"[red]Export directory not found: {export_dir}[/red]")
         raise typer.Exit(1)
 
     if suite != "libero":
-        console.print(
+        err_console.print(
             f"[red]Unknown suite: {suite!r}. Phase 1 ships LIBERO only.[/red]\n"
             f"  Phase 2 will add: simpler, customer."
         )
         raise typer.Exit(2)
 
     if runtime not in ALL_RUNTIMES:
-        console.print(
+        err_console.print(
             f"[red]Unknown runtime: {runtime!r}. "
             f"Choose one of: {', '.join(ALL_RUNTIMES)}[/red]"
         )
@@ -1058,7 +1058,7 @@ def eval_cmd(
             cost_preview=cost_preview,
         )
     except ValueError as exc:
-        console.print(f"[red]Invalid configuration: {exc}[/red]")
+        err_console.print(f"[red]Invalid configuration: {exc}[/red]")
         raise typer.Exit(2)
 
     # ---- Banner echo ----
@@ -1099,7 +1099,7 @@ def eval_cmd(
         )
         console.print(f"  {cost_estimate.notes}")
         if cost_estimate.exceeds_guardrail:
-            console.print(
+            err_console.print(
                 f"\n[red]Estimate exceeds ${COST_PREVIEW_GUARDRAIL_USD:.0f} "
                 f"guardrail.[/red] Run with smaller --num-episodes "
                 f"or fewer --tasks to lower the cost."
@@ -1113,7 +1113,7 @@ def eval_cmd(
     )
     preflight_result = PreflightSmokeTest.run(timeout_s=preflight_timeout)
     if not preflight_result.passed:
-        console.print(
+        err_console.print(
             f"\n[red]Pre-flight FAILED[/red] "
             f"({preflight_result.failure_mode}, "
             f"{preflight_result.elapsed_s:.1f}s)\n"
@@ -1153,7 +1153,7 @@ def eval_cmd(
         try:
             report = suite_runner(runtime_config, export_path)
         except ModalNotInstalledError as exc:
-            console.print(f"\n[red]{exc}[/red]")
+            err_console.print(f"\n[red]{exc}[/red]")
             raise typer.Exit(6)
     else:
         # local
@@ -1292,7 +1292,7 @@ def guard(
                 console.print(f"    {v}")
 
     else:
-        console.print(f"[red]Unknown action: {action}. Use 'init' or 'check'.[/red]")
+        err_console.print(f"[red]Unknown action: {action}. Use 'init' or 'check'.[/red]")
         raise typer.Exit(1)
 
 
@@ -1730,13 +1730,13 @@ def serve(
 
     export_path = Path(export_dir)
     if not export_path.exists():
-        console.print(f"[red]Export directory not found: {export_dir}[/red]")
+        err_console.print(f"[red]Export directory not found: {export_dir}[/red]")
         console.print(f"[dim]Run 'reflex export' first to create an export.[/dim]")
         raise typer.Exit(1)
 
     onnx_files = list(export_path.glob("*.onnx"))
     if not onnx_files:
-        console.print(f"[red]No ONNX files found in {export_dir}[/red]")
+        err_console.print(f"[red]No ONNX files found in {export_dir}[/red]")
         raise typer.Exit(1)
 
     # ---- Policy-versioning Day 5 validation ----
@@ -1744,7 +1744,7 @@ def serve(
     # exclusive with --shadow-policy. --no-rtc enforced in 2-policy mode.
     two_policy_mode = bool(policy_a or policy_b)
     if two_policy_mode and not (policy_a and policy_b):
-        console.print(
+        err_console.print(
             "[red]--policy-a and --policy-b must be set together for "
             "2-policy mode.[/red]\n"
             "[dim]To roll out a single policy, drop both flags and pass "
@@ -1752,7 +1752,7 @@ def serve(
         )
         raise typer.Exit(1)
     if two_policy_mode and shadow_policy:
-        console.print(
+        err_console.print(
             "[red]--policy-b and --shadow-policy are mutually exclusive.[/red]\n"
             "[dim]Pick A/B for production rollout, OR shadow for risk-free "
             "comparison.[/dim]"
@@ -1763,12 +1763,12 @@ def serve(
         try:
             validate_split_and_no_rtc(split_a_percent=split, no_rtc=no_rtc)
         except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
+            err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1)
         # Verify both policy paths exist before attempting to load
         for label, path in (("--policy-a", policy_a), ("--policy-b", policy_b)):
             if not Path(path).exists():
-                console.print(
+                err_console.print(
                     f"[red]{label} export not found: {path}[/red]"
                 )
                 raise typer.Exit(1)
@@ -1812,7 +1812,7 @@ def serve(
             else:
                 embodiment_cfg = EmbodimentConfig.load_preset(embodiment)
         except (FileNotFoundError, ValueError) as exc:
-            console.print(f"[red]Failed to load embodiment config: {exc}[/red]")
+            err_console.print(f"[red]Failed to load embodiment config: {exc}[/red]")
             console.print(
                 f"[dim]Available presets: {list_presets() or '(none)'}[/dim]"
             )
@@ -1820,7 +1820,7 @@ def serve(
 
         ok, errs = validate_embodiment_config(embodiment_cfg)
         if not ok:
-            console.print(
+            err_console.print(
                 f"[red]Embodiment config '{embodiment_cfg.embodiment}' failed "
                 f"validation:[/red]"
             )
@@ -1851,7 +1851,7 @@ def serve(
                 debug=rtc_debug,
             )
         except ValueError as exc:
-            console.print(f"[red]Invalid RTC config: {exc}[/red]")
+            err_console.print(f"[red]Invalid RTC config: {exc}[/red]")
             raise typer.Exit(1)
 
     # ROS2 mode short-circuits the HTTP path — hand off to the bridge.
@@ -1859,7 +1859,7 @@ def serve(
         try:
             from reflex.runtime.ros2_bridge import run_ros2_bridge
         except ImportError as exc:
-            console.print(f"[red]ros2 bridge unavailable: {exc}[/red]")
+            err_console.print(f"[red]ros2 bridge unavailable: {exc}[/red]")
             raise typer.Exit(2)
         console.print(f"[bold green]reflex serve --ros2[/bold green]")
         console.print(f"  export:   {export_dir}")
@@ -1889,7 +1889,7 @@ def serve(
         import onnxruntime as ort
         available = ort.get_available_providers()
     except ImportError:
-        console.print(
+        err_console.print(
             "[red]onnxruntime is not installed.[/red]\n"
             "For GPU: [cyan]pip install onnxruntime-gpu[/cyan]\n"
             "For CPU: [cyan]pip install onnxruntime[/cyan]"
@@ -1938,7 +1938,7 @@ def serve(
         console.print(f"  Wedges:  {' · '.join(composed)}")
 
     if cuda_requested and not cuda_available_in_ort:
-        console.print(
+        err_console.print(
             "\n[red]⚠ CUDAExecutionProvider not available in this ORT install.[/red]\n"
             "  Likely cause: you installed `onnxruntime` (CPU-only).\n"
             "  Fix:   [cyan]pip uninstall onnxruntime && pip install onnxruntime-gpu[/cyan]\n"
@@ -1964,20 +1964,20 @@ def serve(
         raise typer.Exit(1)
 
     if replan_hz > 0 and execute_hz <= 0:
-        console.print(
+        err_console.print(
             "[red]--replan-hz requires --execute-hz > 0 (the robot's pop rate).[/red]"
         )
         raise typer.Exit(1)
 
     if not (0.0 <= otel_sample <= 1.0):
-        console.print(
+        err_console.print(
             f"[red]--otel-sample must be in [0.0, 1.0], got {otel_sample}[/red]"
         )
         raise typer.Exit(1)
 
     # chunk-budget-batching CLI validation + --max-batch deprecation
     if not (10.0 <= max_batch_cost_ms <= 500.0):
-        console.print(
+        err_console.print(
             f"[red]--max-batch-cost-ms must be in [10, 500], got {max_batch_cost_ms}[/red]"
         )
         raise typer.Exit(1)
@@ -1991,7 +1991,7 @@ def serve(
 
     # auto-calibration mutual-exclusion validation
     if calibrate_force and not auto_calibrate:
-        console.print(
+        err_console.print(
             "[red]--calibrate-force requires --auto-calibrate.[/red]"
         )
         raise typer.Exit(1)
@@ -2002,7 +2002,7 @@ def serve(
         try:
             _calib_cache_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            console.print(
+            err_console.print(
                 f"[red]--calibration-cache parent dir not writable: "
                 f"{_calib_cache_path.parent} — {exc}[/red]"
             )
@@ -2018,7 +2018,7 @@ def serve(
             _slo_mode_validated = validate_slo_mode(slo_mode)
             slo_tracker = SLOTracker(_slo_spec)
         except ValueError as exc:
-            console.print(f"[red]SLO config invalid: {exc}[/red]")
+            err_console.print(f"[red]SLO config invalid: {exc}[/red]")
             raise typer.Exit(1)
         composed.append(f"[cyan]slo={slo}/{slo_mode}[/cyan]")
     else:
@@ -2102,7 +2102,7 @@ def serve(
     # no --mcp: FastAPI only (legacy behavior).
     if mcp:
         if mcp_transport not in ("stdio", "http"):
-            console.print(
+            err_console.print(
                 f"[red]Invalid --mcp-transport {mcp_transport!r}; expected 'stdio' or 'http'.[/red]"
             )
             raise typer.Exit(1)
@@ -2118,7 +2118,7 @@ def serve(
         # Pull the live ReflexServer out of the FastAPI app's state
         reflex_srv = getattr(app_instance.state, "reflex_server", None)
         if reflex_srv is None:
-            console.print(
+            err_console.print(
                 "[red]Could not find ReflexServer on the app state; MCP needs a live "
                 "inference engine. Report this at github.com/FastCrest/reflex-vla/issues.[/red]"
             )
@@ -2221,11 +2221,11 @@ def ros2_serve(
     try:
         from reflex.runtime.ros2_bridge import run_ros2_bridge
     except ImportError as exc:
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
 
     if mcp and mcp_transport not in ("stdio", "http"):
-        console.print(
+        err_console.print(
             f"[red]Invalid --mcp-transport {mcp_transport!r}; "
             f"expected 'stdio' or 'http'.[/red]"
         )
@@ -2258,10 +2258,10 @@ def ros2_serve(
     except ValueError as exc:
         # _resolve_state_msg_class / create_ros2_bridge_node raise ValueError
         # for unknown --state-msg-type values.
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
     except ImportError as exc:
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
 
 
@@ -2310,7 +2310,7 @@ def replay(
     from reflex.replay.cli import run_replay
 
     if not no_replay and not model:
-        console.print(
+        err_console.print(
             "[red]--model is required (or pass --no-replay to inspect the trace "
             "without loading a model).[/red]"
         )
@@ -2675,7 +2675,7 @@ def doctor(
     import sys
 
     if output_format not in ("human", "json"):
-        console.print(
+        err_console.print(
             f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]"
         )
         raise typer.Exit(2)
@@ -2704,7 +2704,7 @@ def doctor(
         try:
             cache = CalibrationCache.load(cache_path)
         except Exception as exc:
-            console.print(f"[red]Failed to load cache: {exc}[/red]")
+            err_console.print(f"[red]Failed to load cache: {exc}[/red]")
             raise typer.Exit(1)
 
         current_fp = HardwareFingerprint.current()
@@ -3308,12 +3308,12 @@ def validate_dataset(
     )
 
     if output_format not in ("human", "json"):
-        console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
+        err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
         raise typer.Exit(2)
 
     dataset_path = Path(path)
     if not dataset_path.exists():
-        console.print(f"[red]Dataset path does not exist: {dataset_path}[/red]")
+        err_console.print(f"[red]Dataset path does not exist: {dataset_path}[/red]")
         raise typer.Exit(2)
 
     embodiment_cfg = None
@@ -3374,7 +3374,7 @@ def models_list(
     from reflex.registry import REGISTRY, filter_models
 
     if output_format not in ("human", "json"):
-        console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
+        err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
         raise typer.Exit(2)
 
     entries = filter_models(
@@ -3461,7 +3461,7 @@ def models_pull(
                 break
     if entry is None:
         available = sorted(e.model_id for e in REGISTRY)
-        console.print(f"[red]Unknown model_id: {model_id!r}[/red]")
+        err_console.print(f"[red]Unknown model_id: {model_id!r}[/red]")
         console.print(f"Available registry ids: {', '.join(available)}")
         console.print("Tip: you can also pass the HuggingFace repo id (e.g. lerobot/smolvla_base).")
         raise typer.Exit(2)
@@ -3481,7 +3481,7 @@ def models_pull(
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        console.print("[red]huggingface_hub not installed. pip install reflex-vla[/red]")
+        err_console.print("[red]huggingface_hub not installed. pip install reflex-vla[/red]")
         raise typer.Exit(2)
 
     try:
@@ -3492,7 +3492,7 @@ def models_pull(
             local_dir_use_symlinks=False,
         )
     except Exception as e:
-        console.print(f"[red]Download failed: {type(e).__name__}: {e}[/red]")
+        err_console.print(f"[red]Download failed: {type(e).__name__}: {e}[/red]")
         raise typer.Exit(1)
 
     if not no_verify:
@@ -3524,7 +3524,7 @@ def models_info(
 
     entry = by_id(model_id)
     if entry is None:
-        console.print(f"[red]Unknown model_id: {model_id!r}[/red]")
+        err_console.print(f"[red]Unknown model_id: {model_id!r}[/red]")
         raise typer.Exit(2)
 
     if output_format == "json":
@@ -3640,12 +3640,12 @@ def go(
     )
 
     if not model:
-        console.print("[red]--model is required (e.g. --model pi05-libero).[/red]")
+        err_console.print("[red]--model is required (e.g. --model pi05-libero).[/red]")
         console.print("Run [cyan]reflex models list[/cyan] to browse.")
         raise typer.Exit(2)
 
     if device_class and device_class not in CANONICAL_DEVICE_CLASSES:
-        console.print(
+        err_console.print(
             f"[red]--device-class {device_class!r} not in {CANONICAL_DEVICE_CLASSES}[/red]"
         )
         raise typer.Exit(2)
@@ -3661,7 +3661,7 @@ def go(
     try:
         resolution = resolve_model(model=model, device_class=probe.device_class, embodiment=embodiment)
     except ModelResolverError as e:
-        console.print(f"[red]{e}[/red]")
+        err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(2)
     entry = resolution.entry
     console.print(f"[bold cyan]model:[/bold cyan]    {entry.model_id} "
@@ -3688,7 +3688,7 @@ def go(
         try:
             from huggingface_hub import snapshot_download
         except ImportError:
-            console.print("[red]huggingface_hub not installed.[/red]")
+            err_console.print("[red]huggingface_hub not installed.[/red]")
             raise typer.Exit(2)
         try:
             snapshot_download(
@@ -3698,7 +3698,7 @@ def go(
                 local_dir_use_symlinks=False,
             )
         except Exception as e:
-            console.print(f"[red]Download failed: {type(e).__name__}: {e}[/red]")
+            err_console.print(f"[red]Download failed: {type(e).__name__}: {e}[/red]")
             raise typer.Exit(1)
 
     # Step 5: if model ships as raw weights, export inline before serving.
@@ -4100,7 +4100,7 @@ def traces_query(
     try:
         records = query_traces(dirs, filter_=flt)
     except ValueError as exc:
-        console.print(f"[red]Invalid filter: {exc}[/red]")
+        err_console.print(f"[red]Invalid filter: {exc}[/red]")
         raise typer.Exit(1)
 
     if not records:
@@ -4238,7 +4238,7 @@ def traces_summary(
             dirs, filter_=flt, by=cast("Any", by),
         )
     except ValueError as exc:
-        console.print(f"[red]Invalid filter: {exc}[/red]")
+        err_console.print(f"[red]Invalid filter: {exc}[/red]")
         raise typer.Exit(1)
 
     if not summaries:
@@ -4327,17 +4327,17 @@ def pro_activate(
     try:
         license = activate_license(code, endpoint=endpoint)
     except ActivationCodeError as exc:
-        console.print(f"[red]Activation failed:[/red] {exc}")
+        err_console.print(f"[red]Activation failed:[/red] {exc}")
         raise typer.Exit(1)
     except ActivationNetworkError as exc:
-        console.print(f"[red]Network error:[/red] {exc}")
+        err_console.print(f"[red]Network error:[/red] {exc}")
         raise typer.Exit(2)
     except LicenseSignatureError as exc:
-        console.print(f"[red]Signature verification failed:[/red] {exc}")
-        console.print("[red]Refusing to write a license that didn't verify.[/red]")
+        err_console.print(f"[red]Signature verification failed:[/red] {exc}")
+        err_console.print("[red]Refusing to write a license that didn't verify.[/red]")
         raise typer.Exit(3)
     except ActivationError as exc:
-        console.print(f"[red]Activation error:[/red] {exc}")
+        err_console.print(f"[red]Activation error:[/red] {exc}")
         raise typer.Exit(4)
 
     console.print("[green]✓[/green] License fetched, signature verified, written to ~/.reflex/pro.license")
@@ -4371,7 +4371,7 @@ def pro_status(
     try:
         data = _json.loads(path.read_text())
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]License file is corrupt:[/red] {exc}")
+        err_console.print(f"[red]License file is corrupt:[/red] {exc}")
         raise typer.Exit(2)
 
     expires_at = data.get("expires_at", "")
@@ -4681,7 +4681,7 @@ def curate_convert(
     )
 
     if format not in CONVERTER_REGISTRY:
-        console.print(
+        err_console.print(
             f"[red]Unknown format[/red] [cyan]{format}[/cyan]; available: "
             f"[cyan]{', '.join(sorted(CONVERTER_REGISTRY.keys()))}[/cyan]"
         )
@@ -4697,7 +4697,7 @@ def curate_convert(
         else:
             converter = CONVERTER_REGISTRY[format]()
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Failed to construct converter:[/red] {exc}")
+        err_console.print(f"[red]Failed to construct converter:[/red] {exc}")
         raise typer.Exit(2)
 
     try:
@@ -4708,13 +4708,13 @@ def curate_convert(
             canonical_only=canonical_only,
         )
     except ImportError as exc:
-        console.print(f"[red]Missing dependency:[/red] {exc}")
+        err_console.print(f"[red]Missing dependency:[/red] {exc}")
         raise typer.Exit(3)
     except NotImplementedError as exc:
         console.print(f"[yellow]Not yet implemented:[/yellow] {exc}")
         raise typer.Exit(4)
     except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Conversion failed:[/red] {exc}")
+        err_console.print(f"[red]Conversion failed:[/red] {exc}")
         raise typer.Exit(5)
 
     # Render summary table

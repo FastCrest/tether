@@ -41,7 +41,7 @@ The decomposition exposed 6 silent correctness bugs in production export paths t
 | `reflex.exporters.openvla_exporter` | `reflex.exporters.openvla` | 8 |
 | `reflex.exporters.pi0_prefix_exporter` | `reflex.exporters.pi0_prefix` | 9 |
 
-External callers must update import statements. The `from reflex.exporters.smolvla_exporter import ...` pattern raises `ModuleNotFoundError` after this release. `tests/test_day10_cli_vla_type.py::test_legacy_exporter_modules_deleted` pins this.
+External callers must update import statements. The `from reflex.exporters.smolvla_exporter import ...` pattern raises `ModuleNotFoundError` after this release. `tests/test_day10_cli_vla_type.py::test_legacy_exporter_modules_deleted` pins this. See [`docs/migration_v0.9_to_v0.10.md`](docs/migration_v0.9_to_v0.10.md) for the full rename table + a bulk-sed snippet.
 
 ### CLI additions
 
