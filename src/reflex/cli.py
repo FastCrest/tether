@@ -1664,6 +1664,17 @@ def serve(
              "overhead pattern). Default off — opt-in for Phase 1 per ADR "
              "2026-04-24-cuda-graphs-architecture.",
     ),
+    inference_only_weights: bool = typer.Option(
+        False,
+        "--inference-only-weights",
+        help="Lift #3 inference-only-weights mode: load + flatten the model's "
+             "weights into a single bf16 CUDA tensor dict at startup, bind via "
+             "ORT IOBinding, never instantiate the source nn.Module graph at "
+             "request time. Cuts peak RSS 30-40% on Pi0.5 + GR00T (Modal A100 "
+             "benchmark per features/01_serve/inference-only-weights.md). "
+             "Off by default; opt-in for Phase 1.5. Substrate for Lift #5 "
+             "Triton fast-kernels.",
+    ),
     action_similarity_threshold: float = typer.Option(
         0.0,
         "--action-similarity-threshold",
@@ -2053,6 +2064,7 @@ def serve(
         otel_sample=otel_sample,
         robot_id=robot_id or None,
         cuda_graphs_enabled=cuda_graphs,
+        inference_only_weights=inference_only_weights,
         action_similarity_threshold=action_similarity_threshold,
         max_similar_skips=max_similar_skips,
         max_batch_cost_ms=max_batch_cost_ms,
@@ -2085,6 +2097,12 @@ def serve(
         composed.append(f"[cyan]robot[/cyan]={robot_id}")
     if cuda_graphs:
         composed.append("[cyan]cuda-graphs[/cyan]")
+    if inference_only_weights:
+        composed.append("[cyan]inference-only-weights[/cyan]")
+        console.print(
+            "[dim]Inference-only-weights mode active — peak RSS savings "
+            "reported via /diag.[/dim]"
+        )
     if action_similarity_threshold > 0:
         composed.append(
             f"[cyan]action-fast-path[/cyan]"
