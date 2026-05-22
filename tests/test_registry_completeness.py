@@ -54,6 +54,7 @@ EXPECTED_FAMILIES = {
     # Validation in models.py uses 'groot' (existing convention).
     # NVIDIA's brand is "GR00T" with zeros but our family slug stays
     # consistent with the validator until/unless we bump the validator.
+    "gr00t.py": "groot",  # spine-based, lift #1 Day 7; supersedes gr00t_exporter.py at Day 11
     "gr00t_exporter.py": "groot",
     "openvla_exporter.py": "openvla",
     "pi0_exporter.py": "pi0",
