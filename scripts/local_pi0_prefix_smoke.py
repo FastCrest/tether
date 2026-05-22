@@ -1,6 +1,6 @@
-"""Smoke test for pi0_prefix_exporter — verify the fast (non-Optimum) paths.
+"""Smoke test for pi0_prefix exporter — verify the fast (non-Optimum) paths.
 
-Tests the two components pi0_prefix_exporter.py exports directly:
+Tests the two components pi0_prefix.py exports directly:
   1. multi_modal_projector (Linear 1152 -> 2048)
   2. text_embedder (Embedding 257152 x 2048, tied with lm_head)
 
@@ -29,7 +29,7 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
-from reflex.exporters.pi0_prefix_exporter import (
+from reflex.exporters.pi0_prefix import (
     build_embed_tokens,
     build_projector,
     export_embed_tokens_onnx,

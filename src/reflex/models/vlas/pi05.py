@@ -116,7 +116,7 @@ class Pi05VLA(BaseVLA):
                 state_dict = {}
 
         # 5. Head: build the prefix-aware pi0.5 expert (with AdaRMSNorm).
-        from reflex.exporters.pi0_prefix_exporter import build_pi05_expert_with_prefix
+        from reflex.exporters.pi0_prefix import build_pi05_expert_with_prefix
         expert_with_prefix, _meta = build_pi05_expert_with_prefix(state_dict)
         head = FlowMatchingHead(expert_stack=expert_with_prefix)
 

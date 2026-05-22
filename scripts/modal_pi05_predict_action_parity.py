@@ -205,7 +205,7 @@ def run_parity(
     from reflex.models.vision.siglip_backbone import SigLIPBackbone
     from reflex.models.llm.paligemma_backbone import PaliGemmaBackbone
     from reflex.models.heads.flow_matching_head import FlowMatchingHead
-    from reflex.exporters.pi0_prefix_exporter import build_pi05_expert_with_prefix
+    from reflex.exporters.pi0_prefix import build_pi05_expert_with_prefix
 
     paligemma = policy.model.paligemma_with_expert.paligemma
     vision = SigLIPBackbone(model=paligemma.model.vision_tower)

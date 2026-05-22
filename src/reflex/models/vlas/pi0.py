@@ -142,7 +142,7 @@ class Pi0VLA(BaseVLA):
         #    VLM prefix-KV onto every expert layer's self-attention via
         #    Pi0ExpertStackWithPrefix; the bare ExpertStack would be correct only
         #    for expert-only ONNX export, not end-to-end inference.
-        from reflex.exporters.pi0_prefix_exporter import build_pi0_expert_with_prefix
+        from reflex.exporters.pi0_prefix import build_pi0_expert_with_prefix
         expert_with_prefix, expert_meta = build_pi0_expert_with_prefix(state_dict)
         head = FlowMatchingHead(expert_stack=expert_with_prefix)
 

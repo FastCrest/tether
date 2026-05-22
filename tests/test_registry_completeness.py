@@ -35,7 +35,7 @@ EXPORTERS_INTERNAL = {
     "fp16_convert.py",        # FP32 → FP16 weight converter utility
     "monolithic.py",          # path-spec for all monolithic exports
     "onnx_export.py",         # generic torch.onnx.export wrapper
-    "pi0_prefix_exporter.py", # SigLIP/Gemma split; internal R&D path
+    "pi0_prefix.py",          # SigLIP/Gemma split; renamed from pi0_prefix_exporter.py at lift #1 Day 9
     # vlm_components.py moved to src/reflex/runtime/vlm_components.py
     # on 2026-05-20 (basevla-spine lift #1 Day 1 janitor) — it's an
     # inference-time helper, not an export-time helper, so it belongs in

@@ -176,7 +176,7 @@ class FlowMatchingHead(VLAHead, nn.Module):
         # Detect prefix-aware expert variants — Pi0 (with state) or Pi05
         # (action-only suffix + AdaRMSNorm time conditioning). Both consume
         # per-layer prefix K/V and route through this head.
-        from reflex.exporters.pi0_prefix_exporter import (
+        from reflex.exporters.pi0_prefix import (
             Pi0ExpertStackWithPrefix,
             Pi05ExpertStackWithPrefix,
         )

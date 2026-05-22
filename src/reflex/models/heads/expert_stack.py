@@ -23,7 +23,7 @@ path keeps working.
 Family-specific variants stay in their exporter files for now:
 
 - `Pi05ExpertStack` (AdaRMSNorm variant) → `exporters/pi0_exporter.py`
-- `Pi0ExpertStackWithPrefix` → `exporters/pi0_prefix_exporter.py`
+- `Pi0ExpertStackWithPrefix` → `exporters/pi0_prefix.py`
 - `GR00TExpertStack` → `exporters/gr00t_exporter.py`
 
 They'll migrate here when their families get spine-decomposed in
