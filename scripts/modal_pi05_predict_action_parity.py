@@ -345,8 +345,15 @@ def run_parity(
 
     # ─── 7. Compare ────────────────────────────────────────────────────
     print("\n=== Step 7: Parity comparison ===", flush=True)
+    # lerobot's predict_action_chunk unpads the action to action_dim (7 for
+    # Franka). My Pi05VLA returns the padded max_action_dim (32). Trim mine
+    # to the oracle's action_dim for direct comparison.
+    if oracle_actions.shape[-1] != vla_actions.shape[-1]:
+        trim_dim = oracle_actions.shape[-1]
+        print(f"  Trimming vla actions from {vla_actions.shape[-1]} → {trim_dim} for parity (lerobot unpads)")
+        vla_actions = vla_actions[..., :trim_dim]
     if oracle_actions.shape != vla_actions.shape:
-        step("compare", "fail", f"shape mismatch: oracle={oracle_actions.shape}, vla={vla_actions.shape}")
+        step("compare", "fail", f"shape mismatch after trim: oracle={oracle_actions.shape}, vla={vla_actions.shape}")
         return results
 
     diff = oracle_actions - vla_actions
