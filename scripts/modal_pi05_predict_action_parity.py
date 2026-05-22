@@ -349,6 +349,13 @@ def run_parity(
             ler_l0.self_attn.register_forward_hook(make_hook("ler_attn_out")),
             ler_l0.self_attn.o_proj.register_forward_hook(make_hook("ler_o_proj")),
             my_l0.o_proj.register_forward_hook(make_hook("my_o_proj")),
+            # Pre-hooks on o_proj to capture its INPUT = attention output before o_proj
+            ler_l0.self_attn.o_proj.register_forward_pre_hook(
+                lambda module, inp: captured.__setitem__("ler_o_proj_in", inp[0] if isinstance(inp, tuple) else inp)
+            ),
+            my_l0.o_proj.register_forward_pre_hook(
+                lambda module, inp: captured.__setitem__("my_o_proj_in", inp[0] if isinstance(inp, tuple) else inp)
+            ),
             ler_l0.post_attention_layernorm.register_forward_hook(make_hook("ler_post_ln")),
             my_l0.post_attention_layernorm.register_forward_hook(make_hook("my_post_ln")),
             ler_l0.mlp.gate_proj.register_forward_hook(make_hook("ler_gate")),
@@ -382,13 +389,15 @@ def run_parity(
                     continue
                 d = (ler_x.float() - my_x.float()).abs()
                 print(f"  {name}: shape {ler_x.shape}, ler norm {ler_x.norm():.4f}, my norm {my_x.norm():.4f}, diff max {d.max():.4e}, mean {d.mean():.4e}")
-            # Lerobot's self_attn returns the attention output BEFORE o_proj
-            # (the actual `softmax(QK/sqrt(d)) @ V` result). My custom layer
-            # doesn't expose this directly, but if my o_proj sees a different
-            # input despite Q/K/V matching, the attention computation diverges.
-            if "ler_attn_out" in captured:
-                attn_out = captured["ler_attn_out"]
-                print(f"  ler attention_out (before o_proj): shape {attn_out.shape}, norm {attn_out.norm():.4f}, sample[0,0,:8]={attn_out[0,0,:8]}")
+            # Attention output BEFORE o_proj — captured via forward_pre_hook
+            # on o_proj. If Q, K, V all bit-identical but THIS diverges, the
+            # softmax/matmul attention computation has a bug.
+            ler_a = captured.get("ler_o_proj_in")
+            my_a = captured.get("my_o_proj_in")
+            if ler_a is not None and my_a is not None:
+                d_a = (ler_a.float() - my_a.float()).abs()
+                print(f"  ATTN_OUT (pre-o_proj): shape {ler_a.shape}, ler norm {ler_a.norm():.4f}, my norm {my_a.norm():.4f}, diff max {d_a.max():.4e}, mean {d_a.mean():.4e}")
+                print(f"    sample[0, 0, :8]: ler {ler_a[0, 0, :8]}  my {my_a[0, 0, :8]}")
         finally:
             for h in sub_hooks:
                 h.remove()
