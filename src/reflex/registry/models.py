@@ -83,6 +83,27 @@ class ModelEntry:
                 return b
         return None
 
+    @property
+    def resolved_vla_type(self) -> str:
+        """Resolve this entry's vla_type for display + dispatch.
+
+        - If ``vla_type`` is set (e.g., ``_openvla_shim``), return it verbatim.
+        - Otherwise, derive from ``family``: pi0 → Pi0VLA, pi05 → Pi05VLA,
+          smolvla → SmolVLA, groot → GR00TVLA. The returned name matches
+          the spine ``VLAS`` registry key for that family.
+
+        Added lift #1 Day 10 for ``reflex models list`` + ``reflex models info``
+        + ``reflex export <model_id>`` dispatch.
+        """
+        if self.vla_type is not None:
+            return self.vla_type
+        return {
+            "pi0": "Pi0VLA",
+            "pi05": "Pi05VLA",
+            "smolvla": "SmolVLA",
+            "groot": "GR00TVLA",
+        }.get(self.family, self.family)
+
 
 # Lazy import — keeps `import reflex.registry` cheap if data.py grows large
 def _load_registry() -> list[ModelEntry]:

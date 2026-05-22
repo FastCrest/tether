@@ -311,9 +311,12 @@ def export(
 
     # Full export — auto-dispatch to the right exporter based on model type
     from reflex.checkpoint import load_checkpoint, detect_model_type
-    from reflex.exporters.smolvla_exporter import export_smolvla
+    # Spine-based exporters (lift #1 Days 6 + 7) for smolvla + groot.
+    # pi0/pi05 still use the legacy pi0_exporter direct-build until their
+    # spine exporters land (Day 11 sunset rewrites this dispatch).
+    from reflex.exporters.smolvla import export_smolvla
     from reflex.exporters.pi0_exporter import export_pi0, export_pi05
-    from reflex.exporters.gr00t_exporter import export_gr00t
+    from reflex.exporters.gr00t import export_gr00t
 
     # Load once, detect, then pass state_dict to the exporter (avoids double-load)
     console.print("[dim]Loading checkpoint...[/dim]")
@@ -335,8 +338,9 @@ def export(
     start = time.perf_counter()
     if model_type == "gr00t":
         # Use the full-stack exporter (wraps action_encoder + DiT + action_decoder)
-        # so `reflex serve` can run the standard denoising loop.
-        from reflex.exporters.gr00t_exporter import export_gr00t_full
+        # so `reflex serve` can run the standard denoising loop. Spine-based
+        # version from lift #1 Day 7 (src/reflex/exporters/gr00t.py).
+        from reflex.exporters.gr00t import export_gr00t_full
         result = export_gr00t_full(export_config, state_dict=state_dict)
     elif model_type == "openvla":
         from reflex.exporters.openvla import export_openvla
@@ -3373,6 +3377,7 @@ def models_list(
                 "model_id": e.model_id,
                 "hf_repo": e.hf_repo,
                 "family": e.family,
+                "vla_type": e.resolved_vla_type,
                 "action_dim": e.action_dim,
                 "size_mb": e.size_mb,
                 "supported_embodiments": list(e.supported_embodiments),
@@ -3397,6 +3402,7 @@ def models_list(
     table = Table(title=f"Reflex Model Registry ({len(entries)} of {len(REGISTRY)})")
     table.add_column("model_id", style="cyan", no_wrap=True)
     table.add_column("family", no_wrap=True)
+    table.add_column("vla_type", no_wrap=True)
     table.add_column("a_dim", justify="right")
     table.add_column("size", justify="right")
     table.add_column("embodiments")
@@ -3405,7 +3411,7 @@ def models_list(
     for e in entries:
         size_str = f"{e.size_mb / 1000:.1f}GB" if e.size_mb >= 1000 else f"{e.size_mb}MB"
         table.add_row(
-            e.model_id, e.family, str(e.action_dim), size_str,
+            e.model_id, e.family, e.resolved_vla_type, str(e.action_dim), size_str,
             ", ".join(e.supported_embodiments), ", ".join(e.supported_devices),
             e.description[:60] + ("..." if len(e.description) > 60 else ""),
         )
@@ -3517,6 +3523,7 @@ def models_info(
             "hf_repo": entry.hf_repo,
             "hf_revision": entry.hf_revision,
             "family": entry.family,
+            "vla_type": entry.resolved_vla_type,
             "action_dim": entry.action_dim,
             "size_mb": entry.size_mb,
             "supported_embodiments": list(entry.supported_embodiments),
@@ -3535,6 +3542,7 @@ def models_info(
 
     console.print(f"[bold cyan]{entry.model_id}[/bold cyan] ([dim]{entry.hf_repo}[/dim])")
     console.print(f"  family:        {entry.family}")
+    console.print(f"  vla_type:      {entry.resolved_vla_type}")
     console.print(f"  action_dim:    {entry.action_dim}")
     console.print(f"  size:          {entry.size_mb}MB")
     console.print(f"  license:       {entry.license}")
