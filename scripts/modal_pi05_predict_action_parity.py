@@ -322,6 +322,67 @@ def run_parity(
         print(f"  v_t norm: lerobot {v_t_ler.norm():.4f}  mine {v_t_mine.norm():.4f}")
         print(f"  v_t[0, 0, :8]: lerobot {v_t_ler[0, 0, :8]}  mine {v_t_mine[0, 0, :8]}")
 
+        # ─── Intra-attention diff via layer's debug_captures ───────────
+        from reflex.models.heads.expert_stack import Pi05ExpertGQALayer
+        Pi05ExpertGQALayer.debug_captures = {}
+        Pi05ExpertGQALayer.debug_layer_id = 0
+        ler_eager_captures: dict = {}
+        from transformers.models.gemma import modeling_gemma as _stock_gemma
+        _orig_eager = _stock_gemma.eager_attention_forward
+        def _patched_eager(module, query, key, value, attention_mask, scaling, dropout=0.0, **kw):
+            if not ler_eager_captures:  # capture only layer 0's first call
+                ler_eager_captures["q"] = query.detach().clone()
+                ler_eager_captures["k"] = key.detach().clone()
+                ler_eager_captures["v"] = value.detach().clone()
+                from transformers.models.gemma.modeling_gemma import repeat_kv
+                k_full = repeat_kv(key, module.num_key_value_groups)
+                v_full = repeat_kv(value, module.num_key_value_groups)
+                scores = torch.matmul(query, k_full.transpose(2, 3)) * scaling
+                if attention_mask is not None:
+                    cm = attention_mask[:, :, :, :k_full.shape[-2]]
+                    scores = scores + cm
+                attn = torch.nn.functional.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+                ler_eager_captures["attn_weights"] = attn.detach().clone()
+            return _orig_eager(module, query, key, value, attention_mask, scaling, dropout=dropout, **kw)
+        _stock_gemma.eager_attention_forward = _patched_eager
+        try:
+            ler_pkv_copy3 = _copy.deepcopy(ler_pkv)
+            _ = policy.model.denoise_step(
+                ler_prefix_pad, ler_pkv_copy3,
+                noise.clone(), torch.tensor([1.0], dtype=torch.float32),
+            )
+            _ = vla.vla_head(
+                noisy_actions=noise.clone(),
+                timestep=torch.tensor([1.0], dtype=torch.float32),
+                position_ids=suffix_position_ids,
+                prefix_k=my_prefix_k, prefix_v=my_prefix_v,
+                attn_mask=suffix_2d,
+            )
+            print(f"\n  --- Intra-attention diff (layer 0) ---")
+            for name, my_key, ler_key in [
+                ("Q_post_rope_action", "L0_q_post_rope", "q"),
+                ("K_post_rope_action_only", "L0_k_post_rope", None),
+                ("V_action_only", "L0_v", None),
+                ("K_full_concat", "L0_k_concat", "k"),
+                ("ATTN_WEIGHTS", "L0_attn_weights", "attn_weights"),
+            ]:
+                my_x = Pi05ExpertGQALayer.debug_captures.get(my_key)
+                ler_x = ler_eager_captures.get(ler_key) if ler_key else None
+                if my_x is None:
+                    print(f"  {name}: my missing")
+                    continue
+                if ler_x is None:
+                    print(f"  {name}: shape mine={tuple(my_x.shape)} norm {my_x.norm():.4f}")
+                    continue
+                if ler_x.shape != my_x.shape:
+                    print(f"  {name}: shape mismatch ler={tuple(ler_x.shape)} my={tuple(my_x.shape)}")
+                    continue
+                d = (ler_x.float() - my_x.float()).abs()
+                print(f"  {name}: shape {tuple(ler_x.shape)}, ler norm {ler_x.norm():.4f}, my norm {my_x.norm():.4f}, diff max {d.max():.4e}, mean {d.mean():.4e}")
+        finally:
+            _stock_gemma.eager_attention_forward = _orig_eager
+            Pi05ExpertGQALayer.debug_captures = None
+
         # ─── Layer-0 + sub-module diff (Day 4h methodology) ─────────────
         print(f"\n  --- Layer-0 + intra-layer-0 sub-module diff ---")
         captured: dict = {}

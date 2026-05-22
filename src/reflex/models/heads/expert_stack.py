@@ -298,6 +298,12 @@ class Pi05ExpertGQALayer(nn.Module):
         self.down_proj = nn.Linear(inter, hidden, bias=False)
         self.rope = _DecomposedRoPE(hd, base=rope_theta)
 
+    # Debug: set to a dict at class level to enable intra-attention capture.
+    # Each layer writes to debug_captures[f"{layer_id}_{stage}"]. Set
+    # to None (default) to disable.
+    debug_captures: dict | None = None
+    debug_layer_id: int = 0
+
     def forward(
         self,
         x,
@@ -328,6 +334,9 @@ class Pi05ExpertGQALayer(nn.Module):
         x_norm, gate_attn = self.input_layernorm(x, time_emb, return_gate=True)
 
         q = self.q_proj(x_norm).view(b, s, self.nq, self.hd).transpose(1, 2)
+        if Pi05ExpertGQALayer.debug_captures is not None:
+            lid = Pi05ExpertGQALayer.debug_layer_id
+            Pi05ExpertGQALayer.debug_captures[f"L{lid}_q_pre_rope"] = q.detach().clone()
 
         is_cross = cross_k is not None
         use_prefix_concat = prefix_k_concat is not None
@@ -340,6 +349,11 @@ class Pi05ExpertGQALayer(nn.Module):
         q = self.rope.apply(q, pos_ids)
         if not is_cross:
             k = self.rope.apply(k, pos_ids)
+        if Pi05ExpertGQALayer.debug_captures is not None:
+            lid = Pi05ExpertGQALayer.debug_layer_id
+            Pi05ExpertGQALayer.debug_captures[f"L{lid}_q_post_rope"] = q.detach().clone()
+            Pi05ExpertGQALayer.debug_captures[f"L{lid}_k_post_rope"] = k.detach().clone()
+            Pi05ExpertGQALayer.debug_captures[f"L{lid}_v"] = v.detach().clone()
 
         if use_prefix_concat:
             pk = prefix_k_concat
@@ -349,18 +363,30 @@ class Pi05ExpertGQALayer(nn.Module):
                 pv = pv.transpose(1, 2)
             k = torch.cat([pk, k], dim=2)
             v = torch.cat([pv, v], dim=2)
+        if Pi05ExpertGQALayer.debug_captures is not None:
+            lid = Pi05ExpertGQALayer.debug_layer_id
+            Pi05ExpertGQALayer.debug_captures[f"L{lid}_k_concat"] = k.detach().clone()
 
         kv_len = k.shape[2]
         k = k.unsqueeze(2).expand(-1, -1, self.kv_groups, -1, -1).reshape(b, self.nq, kv_len, self.hd)
         v = v.unsqueeze(2).expand(-1, -1, self.kv_groups, -1, -1).reshape(b, self.nq, kv_len, self.hd)
 
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.hd)
+        # Match stock GemmaAttention exactly: multiply by scaling, additive
+        # mask, explicit fp32 softmax. These should be mathematically equivalent
+        # for fp32 inputs.
+        scaling = self.hd ** -0.5
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scaling
         if is_cross and kv_mask is not None:
             mask = kv_mask[:, None, None, :]
             scores = scores.masked_fill(~mask, -1e9)
         elif use_prefix_concat and attn_mask is not None:
-            scores = scores.masked_fill(~attn_mask, -1e9)
-        attn = F.softmax(scores, dim=-1)
+            additive_mask = torch.zeros_like(scores)
+            additive_mask = additive_mask.masked_fill(~attn_mask, torch.finfo(scores.dtype).min)
+            scores = scores + additive_mask
+        attn = F.softmax(scores, dim=-1, dtype=torch.float32).to(scores.dtype)
+        if Pi05ExpertGQALayer.debug_captures is not None:
+            lid = Pi05ExpertGQALayer.debug_layer_id
+            Pi05ExpertGQALayer.debug_captures[f"L{lid}_attn_weights"] = attn.detach().clone()
 
         attn_out = self.o_proj(torch.matmul(attn, v).transpose(1, 2).contiguous().view(b, s, -1))
         # AdaLN gating: res + attn_out * gate (NOT plain residual)
