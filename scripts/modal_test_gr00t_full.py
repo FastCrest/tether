@@ -100,7 +100,10 @@ def run_full():
             if "Validation" in line or "max_diff" in line:
                 print(f"  {line}", flush=True)
     else:
-        log("export", "fail", r.stderr[-500:])
+        # Capture BOTH stderr + stdout — see modal_test_gr00t.py note
+        # for the 2026-05-22 stdout-only error-path bug + fix.
+        tail = (r.stderr or "")[-400:] + "\n---stdout tail---\n" + (r.stdout or "")[-600:]
+        log("export", "fail", tail)
         return results
 
     # Step 4: reflex serve

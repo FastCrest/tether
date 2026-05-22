@@ -23,6 +23,13 @@ app = typer.Typer(
     no_args_is_help=False,  # we render our own action-first summary in main()
 )
 console = Console()
+# Separate stderr console for error conditions — subprocess wrappers
+# typically capture stdout + stderr separately, so error messages
+# routed through err_console show up in stderr (where callers look
+# for failure detail). Fix-followup discovery: 2026-05-22 Day 7 Modal
+# CI showed `FAIL: export — ` with empty stderr because all CLI error
+# paths used `console.print` (stdout-only).
+err_console = Console(stderr=True)
 
 
 _NOARGS_SUMMARY = """[bold]reflex[/bold] — deploy any VLA model to any edge hardware.
@@ -150,12 +157,12 @@ def export(
         requested_export_mode = ExportMode(export_mode)
     except ValueError:
         valid = ", ".join(mode.value for mode in ExportMode)
-        console.print(f"[red]Invalid --export-mode {export_mode!r}. Valid: {valid}[/red]")
+        err_console.print(f"[red]Invalid --export-mode {export_mode!r}. Valid: {valid}[/red]")
         raise typer.Exit(2)
 
     if monolithic:
         if requested_export_mode != ExportMode.AUTO:
-            console.print(
+            err_console.print(
                 "[red]--export-mode only applies to --decomposed pi0.5 exports; "
                 "monolithic export has no parallel prefix/expert split.[/red]"
             )
@@ -179,8 +186,8 @@ def export(
             else:
                 from reflex.exporters.monolithic import export_monolithic
         except ImportError as exc:
-            console.print(f"[red]{exc}[/red]", markup=False)
-            console.print(
+            err_console.print(f"[red]{exc}[/red]", markup=False)
+            err_console.print(
                 "\nFix: pip install 'reflex-vla[monolithic]' "
                 "(pins transformers==5.3.0; use a clean venv to avoid "
                 "the base transformers<5.0 conflict)",
@@ -196,7 +203,11 @@ def export(
             else:
                 result = export_monolithic(model, output, num_steps=num_steps, target=target)
         except ImportError as exc:
-            console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
+            err_console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
+            err_console.print(
+                "\nFix: pip install 'reflex-vla[monolithic]'",
+                style="cyan", markup=False,
+            )
             raise typer.Exit(2)
         elapsed = time.perf_counter() - start
         console.print(f"\n[bold green]Monolithic export complete in {elapsed:.1f}s[/bold green]")
@@ -258,8 +269,8 @@ def export(
         try:
             from reflex.exporters.decomposed import export_pi05_decomposed
         except ImportError as exc:
-            console.print(f"[red]{exc}[/red]", markup=False)
-            console.print(
+            err_console.print(f"[red]{exc}[/red]", markup=False)
+            err_console.print(
                 "\nFix: pip install 'reflex-vla[monolithic]' "
                 "(pins transformers==5.3.0; use a clean venv to avoid "
                 "the base transformers<5.0 conflict)",

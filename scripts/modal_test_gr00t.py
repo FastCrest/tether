@@ -119,7 +119,13 @@ def run_gr00t_export():
             if "Validation" in line or "max_diff" in line:
                 print(f"  {line}", flush=True)
     else:
-        log("export", "fail", f"{r.stderr[-600:]}")
+        # Capture BOTH stderr + stdout — some CLI error paths print to
+        # stdout via rich (historical), so an empty stderr is misleading.
+        # Fixed in 2026-05-22 follow-up; this diagnostic ensures we see
+        # the cause even if a future regression re-introduces stdout-only
+        # error paths.
+        tail = (r.stderr or "")[-400:] + "\n---stdout tail---\n" + (r.stdout or "")[-600:]
+        log("export", "fail", tail)
 
     # Summary
     print("\n=== SUMMARY ===", flush=True)
