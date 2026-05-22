@@ -308,6 +308,19 @@ class BaseVLA(ABC):
                 continue
             slot_prefix = f"{prefix}{slot}."
             sub_weights = component.prepare_triton(prefix=slot_prefix)
+            # Defensive against accidental prefix collision (Lift #3 Day 2
+            # spec). Silently letting one slot's weights overwrite another's
+            # would corrupt inference. The slot_prefix design SHOULD prevent
+            # this, but check anyway in case a user-supplied component
+            # forgets to use the prefix.
+            duplicates = set(flat) & set(sub_weights)
+            if duplicates:
+                raise ValueError(
+                    f"prepare_inference_weights: duplicate key(s) when "
+                    f"merging slot {slot!r}: {sorted(duplicates)[:5]}"
+                    + (f" (and {len(duplicates) - 5} more)" if len(duplicates) > 5 else "")
+                    + ". A component is not honoring the prefix kwarg."
+                )
             flat.update(sub_weights)
         return flat
 
