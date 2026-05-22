@@ -234,13 +234,17 @@ def _build_synthetic_smolvla_state_dict() -> dict[str, torch.Tensor]:
     for the expert layers + top-level ``model.action_in_proj`` etc. Uses
     a tiny 2-layer expert (vs production 8 layers) for fast tests.
     """
-    expert_hidden = 432  # SmolVLA's 0.75 × 576 = 432
+    # SmolVLA-500M production GQA (must match build_expert_stack's
+    # AutoConfig lookup of HuggingFaceTB/SmolVLM2-500M-Video-Instruct):
+    # text_config.num_attention_heads=15, num_key_value_heads=5.
+    # Expert head_dim = expert_hidden / nq = 420 / 15 = 28 (integer).
+    expert_hidden = 420  # 15 nq × 28 expert_hd; 0.75 × 576 ≈ 432, close to actual
     action_dim = 32
-    nq, nkv, expert_hd = 9, 3, 48  # SmolVLA default GQA: nq=9, nkv=3, head_dim=48
+    nq, nkv, expert_hd = 15, 5, 28
     inter = 1024
     num_layers = 2  # tiny for tests
     cross_idxs = {0}  # layer 0 is cross-attn (to VLM), layer 1 is self-attn
-    vlm_kv_dim = 192  # 3 VLM kv heads × 64 head_dim
+    vlm_kv_dim = nkv * 64  # 5 VLM kv heads × 64 vlm head_dim = 320
 
     base = "model.vlm_with_expert.lm_expert.model."
     sd: dict[str, torch.Tensor] = {}
