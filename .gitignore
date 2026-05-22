@@ -23,6 +23,11 @@ reference/ray/
 reference/trtllm/
 reference/lerobot/
 reference/openpi/
+reference/FluxVLA/
+
+# Local eval-runner output — re-generated on each `reflex eval` run; the
+# diff churn (always present after a local fire) just clutters git status.
+eval_output/
 
 # Editor-agent session logs (never commit — were leaked to public repo in Apr 2026)
 .agents/
