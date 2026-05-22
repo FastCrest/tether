@@ -60,15 +60,22 @@ class _DecomposedRoPE(nn.Module):
     # max_seq_len=2048 covers pi0 full inference (3 images × 256 + lang ~256 +
     # state 1 + chunk_size 50 ≈ 1100 absolute positions; was 512 which OOB'd
     # at position ~775 during the Day 4h parity run).
-    def __init__(self, dim, max_seq_len=2048, base=10000.0):
+    def __init__(self, dim, max_seq_len=2048, base=10000.0, bf16_precision: bool = False):
         super().__init__()
         self.dim = dim
         self.base = base
         # Match stock GemmaRotaryEmbedding's inv_freq EXACTLY (incl. int64 arange).
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).float() / dim))
+        # For models loaded in bf16 (e.g., lerobot's pi0.5 default precision),
+        # stock's inv_freq buffer goes through bf16 cast on policy.to(bf16) and
+        # is then cast back to fp32 — losing precision irreversibly. To match
+        # lerobot's effective inv_freq for parity, simulate the same roundtrip.
+        if bf16_precision:
+            inv_freq = inv_freq.to(torch.bfloat16).to(torch.float32)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        # Keep legacy cached cos/sin for the SmolVLA / pi0 path that depends on them.
-        freqs = torch.outer(torch.arange(max_seq_len).float(), inv_freq)
+        # Cached cos/sin (used by SmolVLA / pi0 path). Computed from the
+        # (possibly bf16-rounded) inv_freq above for consistency.
+        freqs = torch.outer(torch.arange(max_seq_len).float(), inv_freq.float())
         self.register_buffer("cos_cached", torch.cat([freqs.cos(), freqs.cos()], dim=-1))
         self.register_buffer("sin_cached", torch.cat([freqs.sin(), freqs.sin()], dim=-1))
 
@@ -301,7 +308,7 @@ class Pi05ExpertGQALayer(nn.Module):
     cross-attn (SmolVLA), or block-causal prefix concat (pi0.5).
     """
 
-    def __init__(self, hidden, nq, nkv, hd, inter, kv_in=None, rope_theta=10000.0):
+    def __init__(self, hidden, nq, nkv, hd, inter, kv_in=None, rope_theta=10000.0, bf16_inv_freq: bool = True):
         super().__init__()
         from reflex.decompose import DecomposedAdaRMSNorm
         self.nq, self.nkv, self.hd = nq, nkv, hd
@@ -315,7 +322,10 @@ class Pi05ExpertGQALayer(nn.Module):
         self.gate_proj = nn.Linear(hidden, inter, bias=False)
         self.up_proj = nn.Linear(hidden, inter, bias=False)
         self.down_proj = nn.Linear(inter, hidden, bias=False)
-        self.rope = _DecomposedRoPE(hd, base=rope_theta)
+        # bf16_inv_freq=True: cast inv_freq through bf16 to match lerobot's pi0.5
+        # checkpoint precision (loaded in bf16 by default per
+        # PaliGemmaWithExpertModel.__init__ precision arg).
+        self.rope = _DecomposedRoPE(hd, base=rope_theta, bf16_precision=bf16_inv_freq)
 
     # Debug: set to a dict at class level to enable intra-attention capture.
     # Each layer writes to debug_captures[f"{layer_id}_{stage}"]. Set
