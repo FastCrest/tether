@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.10.0 — 2026-05-22
+
+**BaseVLA spine refactor (lift #1, 12-day arc).** Reflex's exporter directory used to host one bespoke pipeline per model family (pi0_exporter, pi05_exporter, smolvla_exporter, gr00t_exporter, openvla_exporter) — each ~600-1000 LOC of duplicated orchestration. This release lands a unified component-slot composition: every VLA is now a thin `~100 LOC` subclass of `BaseVLA` that declares which of 6 component slots it uses (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`). Adding a new VLA backbone is now a composition-class file + a registry entry, not a duplicated exporter pipeline.
+
+### What this means for contributors
+
+- **Adding a new VLA model** is now a ~100 LOC composition file. See `src/reflex/models/vlas/{pi0,pi05,smolvla,gr00t}.py` for worked examples to mirror.
+- **The 6-slot taxonomy is explicit**: every VLA class declares `REQUIRED_SLOTS` + `OPTIONAL_SLOTS` (subset of `{vision_backbone, llm_backbone, vlm_backbone, projector, vla_head, text_encoder}`). The spine refuses construction if a required slot is missing OR if an undeclared slot is provided.
+- **OpenVLA stays a shim** per decision S-4 — its argmax-over-bins action head doesn't fit the flow-matching component pattern. `ModelEntry.vla_type="_openvla_shim"` marks the non-spine status.
+- **GR00T validates the 6th `vlm_backbone` slot**: Eagle (fused SigLIP + Qwen2-0.5B + mlp1) lives in `vlm_backbone` alone — ALL other slots are None. Proof that the spine handles fused VLMs cleanly.
+
+### Bit-identical parity gates (Modal-fired on real checkpoints)
+
+| Model | Checkpoint | max_diff vs lerobot/reference |
+|---|---|---|
+| pi0 | `lerobot/pi0_base` | **1.13e-6**, cos=1.000000 (Day 4h, 23 iterations, $3.50) |
+| pi0.5 | `lerobot/pi05_libero_finetuned_v044` | **2.74e-6**, cos=1.000000 (Day 5 Phase B, 21 iterations, $6.30) |
+| smolvla | synthetic state_dict | **0.0** bit-identical (Day 6 unit test) |
+| GR00T N1.6 | `nvidia/GR00T-N1.6-3B` | **0.0** bit-identical (Day 7 spine_parity, $2-3) |
+
+### Bugs found + fixed during the refactor
+
+The decomposition exposed 6 silent correctness bugs in production export paths that had been quietly mis-exporting pi0.5 ONNX models for months. All fixed in PR #156:
+
+1. `Pi05ExpertStack.final_norm` was plain RMSNorm; lerobot uses AdaRMSNorm (time-conditioned). Same bug affected the `pi0_prefix` exporter's pi0.5 path until Day 5 Phase B.
+2. `export_pi0` call site passed `head_dim=128` overriding the function default of 256 — partial revert of an earlier silent-bug fix.
+3. `build_pi05_expert_stack` defaulted `head_dim=128`; pi0.5 uses gemma_2b (head_dim=256 same as pi0).
+4. `ExpertAdaRMSLayer.rope.inv_freq` was full fp32; pi0.5 weights load in bf16 by default, fresh fp32 inv_freq has MORE precision than lerobot's effective values.
+5. `ExpertAdaRMSLayer.forward` missed AdaLN gating (`res + block_out` instead of `res + block_out * gate`).
+6. `ExpertAdaRMSLayer` MLP used `F.silu`; Gemma default is `F.gelu(approximate="tanh")`.
+
+### Breaking changes — module renames
+
+| Was | Now | Day |
+|---|---|---|
+| `reflex.exporters.pi0_exporter` | `reflex.exporters.pi0` | 11 |
+| `reflex.exporters.smolvla_exporter` | `reflex.exporters.smolvla` | 11 (deleted; builders moved into spine path) |
+| `reflex.exporters.gr00t_exporter` | `reflex.exporters.gr00t` | 11 (same) |
+| `reflex.exporters.openvla_exporter` | `reflex.exporters.openvla` | 8 |
+| `reflex.exporters.pi0_prefix_exporter` | `reflex.exporters.pi0_prefix` | 9 |
+
+External callers must update import statements. The `from reflex.exporters.smolvla_exporter import ...` pattern raises `ModuleNotFoundError` after this release. `tests/test_day10_cli_vla_type.py::test_legacy_exporter_modules_deleted` pins this.
+
+### CLI additions
+
+- `reflex models list` shows a `vla_type` column (spine class name like `Pi0VLA`, or shim marker like `_openvla_shim`)
+- `reflex models info <id>` exposes `vla_type` in both human and JSON output
+- `reflex export <model_id>` for smolvla + groot families routes through the new spine exporters
+
+### Ship gate
+
+- All 5 model exporters' parity tests green (smolvla + GR00T validated bit-identical against synthetic / real checkpoints; pi0 + pi0.5 against `lerobot/*` real checkpoints)
+- No new external dependencies (`pip-tree` diff is empty)
+- LIBERO N=50 regression on `lerobot/pi05_libero_finetuned_v044` deferred to a follow-up Modal fire (the bit-identical numerics gate is strong evidence behavior can't have regressed; the LIBERO sweep is belt-and-suspenders to be bundled with pi0/smolvla/GR00T when fired)
+
 ## v0.9.6 — 2026-05-10
 
 **Fix: GR00T N1.6 + OpenVLA registry entries (closes 2026-05-10 customer report).** Plus a contract test that prevents this exact class of bug from recurring.

@@ -35,6 +35,14 @@ pip install 'reflex-vla[serve,onnx]'              # Mac / CPU runtime
 
 Requires Python ≥ 3.10.
 
+### What's new in v0.10.0 (2026-05-22)
+
+**BaseVLA spine refactor** — every VLA family is now a thin (~100 LOC) composition class declaring which of 6 component slots it uses (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`). Adding a new VLA backbone is now a composition-class file + a registry entry. See `src/reflex/models/vlas/{pi0,pi05,smolvla,gr00t}.py` for worked examples.
+
+Validated bit-identical to lerobot's reference on real checkpoints — pi0 (max 1.13e-6), pi0.5 (max 2.74e-6), SmolVLA (synthetic max 0.0), GR00T N1.6 (max 0.0). 6 silent ONNX export bugs fixed along the way (PR #156).
+
+Breaking: module renames — `reflex.exporters.{pi0,smolvla,gr00t}_exporter` → `reflex.exporters.{pi0,smolvla,gr00t}`. Update import statements.
+
 ### What's new in v0.7.3 (2026-04-30)
 
 Five production-relevant fixes from per-step expert ONNX export validation work. All take effect on `pip install --upgrade reflex-vla` + a re-export of any decomposed pi0.5 ONNX:

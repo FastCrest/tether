@@ -2,6 +2,8 @@
 
 The Reflex inference server uses a **Wedge composition pattern** to safely, adaptively, and reliably run vision-language-action (VLA) models in production. Four orthogonal "wedges" (Safety, Split, Adaptive, Deadline) layer safety constraints, cloud failover, latency optimization, and hard time limits around the core denoise-and-predict loop.
 
+> **Model layer (v0.10.0+):** the *model* the server runs on is composed via the **BaseVLA spine** — a 6-slot taxonomy (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`) where every supported VLA is a thin (~100 LOC) `BaseVLA` subclass declaring which slots it uses. Pi0VLA / Pi05VLA / SmolVLA use the 2-tower split (vision_backbone + llm_backbone separate); GR00TVLA uses the fused `vlm_backbone` slot for Eagle. OpenVLA stays as a non-spine shim per decision S-4. See `src/reflex/models/vlas/` for the worked composition examples; the per-VLA `NAME_MAPPING` ClassVar handles HF-checkpoint key renames per decision S-1.
+
 ---
 
 ## Overview

@@ -1,5 +1,7 @@
 # Adding a Robot — Embodiment Cookbook
 
+> Sibling cookbook: [`adding_a_vla.md`](./adding_a_vla.md) — for adding a new VLA model on the BaseVLA spine.
+
 Step-by-step guide to adding a new robot (arm, drone, or other manipulator) to Reflex VLA. Reflex ships four shipped presets out of the box (`franka`, `so100`, `ur5`, `quadcopter`); this guide shows how to add a fifth.
 
 The full schema lives at [`src/reflex/embodiments/schema.json`](../src/reflex/embodiments/schema.json) — that file is authoritative, this doc is a friendly walkthrough. The two examples below have been validated against the live schema at PR time so they parse without modification.
