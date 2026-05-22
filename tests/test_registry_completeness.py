@@ -54,12 +54,10 @@ EXPECTED_FAMILIES = {
     # Validation in models.py uses 'groot' (existing convention).
     # NVIDIA's brand is "GR00T" with zeros but our family slug stays
     # consistent with the validator until/unless we bump the validator.
-    "gr00t.py": "groot",  # spine-based, lift #1 Day 7; supersedes gr00t_exporter.py at Day 11
-    "gr00t_exporter.py": "groot",
+    "gr00t.py": "groot",  # spine-based, lift #1 Day 7; gr00t_exporter.py was deleted at Day 11 sunset
     "openvla.py": "openvla",  # lift #1 Day 8: renamed from openvla_exporter.py; remains a shim per decision S-4
-    "pi0_exporter.py": "pi0",
-    "smolvla.py": "smolvla",  # spine-based, lift #1 Day 6; supersedes smolvla_exporter.py at Day 11
-    "smolvla_exporter.py": "smolvla",
+    "pi0.py": "pi0",  # renamed from pi0_exporter.py at lift #1 Day 11 sunset
+    "smolvla.py": "smolvla",  # spine-based, lift #1 Day 6; smolvla_exporter.py was deleted at Day 11 sunset
     # pi05 is exported via decomposed.py (which has _export_pi05_*
     # callsites). It's listed as "internal" above but the registry must
     # still cover the pi05 family because that's the primary user-facing

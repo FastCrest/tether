@@ -107,7 +107,7 @@ class SmolVLA(BaseVLA):
 
         # 3. Action expert (cross-attn) from the SmolVLA state_dict.
         if state_dict is not None:
-            from reflex.exporters.smolvla_exporter import build_expert_stack
+            from reflex.exporters.smolvla import build_expert_stack
             stack, _meta = build_expert_stack(
                 state_dict=state_dict,
                 head_dim=llm.text_head_dim,

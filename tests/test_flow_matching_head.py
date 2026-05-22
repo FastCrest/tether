@@ -155,7 +155,7 @@ def test_state_dict_smolvla_requires_head_dim(monkeypatch):
         captured["head_dim"] = head_dim
         return _make_stub_expert_stack(), {}
 
-    import reflex.exporters.smolvla_exporter as smolvla_mod
+    import reflex.exporters.smolvla as smolvla_mod
     monkeypatch.setattr(smolvla_mod, "build_expert_stack", fake_build)
 
     with pytest.raises(ValueError, match="head_dim required"):

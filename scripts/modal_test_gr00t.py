@@ -67,7 +67,7 @@ def run_gr00t_export():
     print("\n=== Step 2: Build GR00T DiT expert stack ===", flush=True)
     start = time.time()
     try:
-        from reflex.exporters.gr00t_exporter import build_gr00t_expert_stack
+        from reflex.exporters.gr00t import build_gr00t_expert_stack
         expert_stack, meta = build_gr00t_expert_stack(state_dict, embodiment_id=0)
         elapsed = time.time() - start
         log("build_expert", "pass",

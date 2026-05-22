@@ -81,7 +81,7 @@ def run_parity(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import torch
 
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
     from reflex.models.vlas.gr00t import GR00TVLA
 
     print(f"[spine-parity] Loading {model_id}...")

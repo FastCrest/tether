@@ -44,7 +44,7 @@ class TestPi0ExpectedStructure:
 
     def test_pi0_action_keys_are_top_level(self):
         """pi0 has action projections at the top level (no 'model.' prefix)."""
-        from reflex.exporters.pi0_exporter import PI0_ACTION_KEYS
+        from reflex.exporters.pi0 import PI0_ACTION_KEYS
 
         for key_path in PI0_ACTION_KEYS.values():
             # pi0 keys are top-level, e.g. "action_in_proj.weight", not "model.action_in_proj.weight"
@@ -52,7 +52,7 @@ class TestPi0ExpectedStructure:
 
     def test_pi0_expert_prefix(self):
         """pi0 expert layers are under 'paligemma_with_expert.gemma_expert.model.'."""
-        from reflex.exporters.pi0_exporter import PI0_EXPERT_PREFIX
+        from reflex.exporters.pi0 import PI0_EXPERT_PREFIX
 
         assert PI0_EXPERT_PREFIX.startswith("paligemma_with_expert")
         assert "gemma_expert" in PI0_EXPERT_PREFIX
@@ -62,14 +62,14 @@ class TestPi05ExpectedStructure:
     """pi0.5 has time_mlp (separate from action) and AdaRMSNorm."""
 
     def test_pi05_action_keys_are_top_level(self):
-        from reflex.exporters.pi0_exporter import PI05_ACTION_KEYS
+        from reflex.exporters.pi0 import PI05_ACTION_KEYS
 
         for key_path in PI05_ACTION_KEYS.values():
             assert not key_path.startswith("model."), f"pi0.5 key should be top-level: {key_path}"
 
     def test_pi05_time_mlp_is_separate(self):
         """pi0.5 uses `time_mlp_in/out` (not `action_time_mlp_in/out` like pi0)."""
-        from reflex.exporters.pi0_exporter import PI05_ACTION_KEYS
+        from reflex.exporters.pi0 import PI05_ACTION_KEYS
 
         assert PI05_ACTION_KEYS["t_in_w"].startswith("time_mlp_")
         assert not PI05_ACTION_KEYS["t_in_w"].startswith("action_time_mlp_")

@@ -315,7 +315,7 @@ def export(
     # pi0/pi05 still use the legacy pi0_exporter direct-build until their
     # spine exporters land (Day 11 sunset rewrites this dispatch).
     from reflex.exporters.smolvla import export_smolvla
-    from reflex.exporters.pi0_exporter import export_pi0, export_pi05
+    from reflex.exporters.pi0 import export_pi0, export_pi05
     from reflex.exporters.gr00t import export_gr00t
 
     # Load once, detect, then pass state_dict to the exporter (avoids double-load)

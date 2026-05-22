@@ -168,7 +168,7 @@ def test_smolvla_spine_builds_same_expert_as_legacy(tmp_path: Any):
     sd = _build_synthetic_smolvla_state_dict()
 
     # Legacy path: build expert directly.
-    from reflex.exporters.smolvla_exporter import build_expert_stack
+    from reflex.exporters.smolvla import build_expert_stack
     legacy_stack, legacy_meta = build_expert_stack(sd, head_dim=64)
 
     # Spine path: build via SmolVLA composition. Stub out the VLM load to
@@ -208,7 +208,7 @@ def test_smolvla_spine_builds_same_expert_as_legacy(tmp_path: Any):
 
 def _build_smolvla_expert_via_spine(state_dict: dict[str, torch.Tensor]) -> Any:
     """Build SmolVLA's expert via the spine composition (no VLM load)."""
-    from reflex.exporters.smolvla_exporter import build_expert_stack
+    from reflex.exporters.smolvla import build_expert_stack
     from reflex.models.heads.flow_matching_head import FlowMatchingHead
     from reflex.models.projectors.linear_projector import LinearProjector
 

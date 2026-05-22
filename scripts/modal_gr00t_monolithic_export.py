@@ -98,7 +98,7 @@ def export_gr00t_monolithic_modal(
     import numpy as np
 
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[modal] Loading {model_id}...")
     t0 = time.time()
@@ -196,7 +196,7 @@ def parity_test_monolithic(
     import onnxruntime as ort
 
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[parity] Loading {model_id}...")
     t0 = time.time()
@@ -301,7 +301,7 @@ def denoise_loop_parity(
     import onnxruntime as ort
 
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[loop-parity] Loading {model_id}...")
     state_dict, _ = load_checkpoint(model_id)
@@ -406,7 +406,7 @@ def export_gr00t_with_vlm_modal(
     import torch
 
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[modal-vlm] Loading {model_id}...")
     t0 = time.time()
@@ -511,7 +511,7 @@ def parity_test_with_vlm(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import onnxruntime as ort
 
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[parity-vlm] Loading {model_id}...")
     state_dict, _ = load_checkpoint(model_id)

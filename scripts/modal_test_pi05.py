@@ -73,7 +73,7 @@ def run_pi05_export():
     print("\n=== Step 2: Build pi0.5 expert stack (AdaRMSNorm) ===", flush=True)
     start = time.time()
     try:
-        from reflex.exporters.pi0_exporter import build_pi05_expert_stack
+        from reflex.exporters.pi0 import build_pi05_expert_stack
         expert_stack, meta = build_pi05_expert_stack(state_dict, head_dim=128)
         elapsed = time.time() - start
         log("build_expert", "pass",

@@ -1213,7 +1213,7 @@ def export_gr00t_monolithic(
 
     import torch
     from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     logger.info("[gr00t] Loading %s", model_id)
     t0 = time.time()

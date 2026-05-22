@@ -106,22 +106,36 @@ def test_openvla_7b_resolves_to_shim():
 
 def test_cli_imports_spine_smolvla_exporter():
     """`reflex export` for smolvla family uses src/reflex/exporters/smolvla.py
-    (the Day 6 spine-based exporter), NOT the legacy smolvla_exporter."""
+    (the Day 6 spine-based exporter, sole source after Day 11 sunset)."""
     import reflex.cli as cli_module
     import inspect
     src = inspect.getsource(cli_module)
-    # The export function should import from the spine module.
     assert "from reflex.exporters.smolvla import export_smolvla" in src
-    # And NOT from the legacy module (smolvla_exporter) on the same import line.
-    assert "from reflex.exporters.smolvla_exporter import export_smolvla" not in src
 
 
 def test_cli_imports_spine_gr00t_exporter():
     """`reflex export` for groot family uses src/reflex/exporters/gr00t.py
-    (the Day 7 spine-based exporter), NOT the legacy gr00t_exporter."""
+    (the Day 7 spine-based exporter, sole source after Day 11 sunset)."""
     import reflex.cli as cli_module
     import inspect
     src = inspect.getsource(cli_module)
     assert "from reflex.exporters.gr00t import export_gr00t" in src
-    assert "from reflex.exporters.gr00t_exporter import export_gr00t" not in src or \
-        "from reflex.exporters.gr00t_exporter import export_gr00t_full" not in src
+
+
+def test_legacy_exporter_modules_deleted():
+    """Day 11 sunset: pi0_exporter / smolvla_exporter / gr00t_exporter
+    modules are GONE. Imports must use the renamed/refactored spine paths."""
+    import importlib
+    for legacy in (
+        "reflex.exporters.pi0_exporter",
+        "reflex.exporters.smolvla_exporter",
+        "reflex.exporters.gr00t_exporter",
+    ):
+        try:
+            importlib.import_module(legacy)
+        except ModuleNotFoundError:
+            continue
+        else:
+            raise AssertionError(
+                f"Legacy module {legacy} still importable — Day 11 sunset incomplete."
+            )

@@ -20,9 +20,9 @@ runtimes byte-identically.
 
 Per-model dispatch:
 
-* ``smolvla`` → :func:`reflex.exporters.smolvla_exporter.build_expert_stack`
-* ``pi0``     → :func:`reflex.exporters.pi0_exporter.build_pi0_expert_stack`
-* ``gr00t``   → :func:`reflex.exporters.gr00t_exporter.build_gr00t_full_stack`
+* ``smolvla`` → :func:`reflex.exporters.smolvla.build_expert_stack`
+* ``pi0``     → :func:`reflex.exporters.pi0.build_pi0_expert_stack`
+* ``gr00t``   → :func:`reflex.exporters.gr00t.build_gr00t_full_stack`
   pinned to ``embodiment_id=0`` (matches the ONNX export convention).
 * ``pi05`` / ``openvla`` raise :class:`NotImplementedError` with the v1
   unsupported-model message.
@@ -142,7 +142,7 @@ def _build_decomposed_model(
 ) -> torch.nn.Module:
     """Dispatch to the appropriate exporter helper and move to ``device``."""
     if model_type == "smolvla":
-        from reflex.exporters.smolvla_exporter import build_expert_stack
+        from reflex.exporters.smolvla import build_expert_stack
 
         # Match the exporter's head_dim heuristic: SmolVLA defaults to 64 and the
         # exporter only refines via AutoConfig when transformers is importable.
@@ -168,13 +168,13 @@ def _build_decomposed_model(
         return stack.to(device).eval()
 
     if model_type == "pi0":
-        from reflex.exporters.pi0_exporter import build_pi0_expert_stack
+        from reflex.exporters.pi0 import build_pi0_expert_stack
 
         stack, _meta = build_pi0_expert_stack(state_dict, head_dim=128)
         return stack.to(device).eval()
 
     if model_type == "gr00t":
-        from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+        from reflex.exporters.gr00t import build_gr00t_full_stack
 
         # Pin embodiment_id=0 to match the ONNX export convention.
         stack, _meta = build_gr00t_full_stack(state_dict, embodiment_id=0)

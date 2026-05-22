@@ -28,7 +28,138 @@ from reflex.config import ExportConfig, get_hardware_profile
 from reflex.exporters.onnx_export import export_module_to_onnx, optimize_onnx
 from reflex.exporters.trt_build import build_engine, check_trtexec
 
+# Re-exports — moved here from the deleted ``smolvla_exporter.py`` at Day 11
+# sunset. External callers still doing ``from reflex.exporters.smolvla import
+# ExpertGQALayer`` keep working through this surface.
+from reflex.models.heads.expert_stack import (  # noqa: F401
+    ExpertGQALayer, ExpertStack, _DecomposedRoPE, _sinusoidal_pos_embedding,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def build_expert_stack(
+    state_dict: dict[str, torch.Tensor], head_dim: int
+) -> tuple[ExpertStack, dict]:
+    """Build the full expert stack from SmolVLA state_dict.
+
+    Moved here from ``smolvla_exporter.py`` at Day 11 sunset (PR #...).
+    Behavior identical — same builder ``SmolVLA.from_pretrained``,
+    ``Pi05VLA.from_pretrained``, etc all depend on.
+
+    Note: ``head_dim`` is the **VLM's** head_dim (e.g. 64 for SmolLM2). The
+    expert's head_dim is DIFFERENT (expert_hidden / num_heads, typically 48
+    for SmolVLA's 0.75× width multiplier). We recover it from the q_proj shape.
+    """
+    expert_hidden = state_dict["model.action_in_proj.weight"].shape[0]
+    action_dim = state_dict["model.action_in_proj.weight"].shape[1]
+
+    all_expert_keys = [k for k in state_dict.keys() if "lm_expert" in k]
+    base_prefix = all_expert_keys[0][: all_expert_keys[0].index("layers.")]
+
+    layer_indices = set()
+    for k in all_expert_keys:
+        parts = k.split(".")
+        for i, p in enumerate(parts):
+            if p == "layers" and i + 1 < len(parts) and parts[i + 1].isdigit():
+                layer_indices.add(int(parts[i + 1]))
+    num_layers = max(layer_indices) + 1
+
+    q_shape = state_dict[f"{base_prefix}layers.0.self_attn.q_proj.weight"].shape
+    k_shape = state_dict[f"{base_prefix}layers.0.self_attn.k_proj.weight"].shape
+    gate_shape = state_dict[f"{base_prefix}layers.0.mlp.gate_proj.weight"].shape
+
+    try:
+        from transformers import AutoConfig
+        vlm_cfg = AutoConfig.from_pretrained("HuggingFaceTB/SmolVLM2-500M-Video-Instruct")
+        nq = int(vlm_cfg.text_config.num_attention_heads)
+        nkv = int(vlm_cfg.text_config.num_key_value_heads)
+    except Exception:
+        nq = q_shape[0] // head_dim
+        nkv = k_shape[0] // head_dim
+
+    expert_head_dim = q_shape[0] // nq
+    inter = gate_shape[0]
+    logger.info(
+        "[expert-stack] expert_hidden=%d, num_q_heads=%d, num_kv_heads=%d, "
+        "expert_head_dim=%d (vlm head_dim=%d), intermediate=%d",
+        expert_hidden, nq, nkv, expert_head_dim, head_dim, inter,
+    )
+    head_dim = expert_head_dim
+
+    layers = []
+    cross_indices = []
+    vlm_kv_dim = 0
+    for i in range(num_layers):
+        prefix = f"{base_prefix}layers.{i}"
+        kv_in = state_dict[f"{prefix}.self_attn.k_proj.weight"].shape[1]
+        is_cross = kv_in != expert_hidden
+        if is_cross:
+            cross_indices.append(i)
+            vlm_kv_dim = kv_in
+
+        layer = ExpertGQALayer(
+            expert_hidden, nq, nkv, head_dim, inter,
+            kv_in=kv_in if is_cross else None,
+        )
+        layer_sd = {
+            "input_layernorm.weight": state_dict[f"{prefix}.input_layernorm.weight"],
+            "post_attention_layernorm.weight": state_dict[f"{prefix}.post_attention_layernorm.weight"],
+            "q_proj.weight": state_dict[f"{prefix}.self_attn.q_proj.weight"],
+            "k_proj.weight": state_dict[f"{prefix}.self_attn.k_proj.weight"],
+            "v_proj.weight": state_dict[f"{prefix}.self_attn.v_proj.weight"],
+            "o_proj.weight": state_dict[f"{prefix}.self_attn.o_proj.weight"],
+            "gate_proj.weight": state_dict[f"{prefix}.mlp.gate_proj.weight"],
+            "up_proj.weight": state_dict[f"{prefix}.mlp.up_proj.weight"],
+            "down_proj.weight": state_dict[f"{prefix}.mlp.down_proj.weight"],
+        }
+        layer.load_state_dict(layer_sd, strict=False)
+        layers.append(layer)
+
+    final_norm_w = torch.ones(expert_hidden)
+    for candidate in [
+        f"{base_prefix}norm.weight",
+        "model.vlm_with_expert.lm_expert.norm.weight",
+    ]:
+        if candidate in state_dict:
+            final_norm_w = state_dict[candidate]
+            break
+
+    stack = ExpertStack(
+        layers=layers,
+        expert_hidden=expert_hidden,
+        action_dim=action_dim,
+        cross_indices=cross_indices,
+        vlm_kv_dim=vlm_kv_dim,
+        suffix_weights={
+            "in_w": state_dict["model.action_in_proj.weight"],
+            "in_b": state_dict["model.action_in_proj.bias"],
+            "t_in_w": state_dict["model.action_time_mlp_in.weight"],
+            "t_in_b": state_dict["model.action_time_mlp_in.bias"],
+            "t_out_w": state_dict["model.action_time_mlp_out.weight"],
+            "t_out_b": state_dict["model.action_time_mlp_out.bias"],
+        },
+        action_proj_weights={
+            "w": state_dict["model.action_out_proj.weight"],
+            "b": state_dict["model.action_out_proj.bias"],
+        },
+        final_norm_weight=final_norm_w,
+    )
+    stack.eval()
+
+    metadata = {
+        "expert_hidden": expert_hidden,
+        "action_dim": action_dim,
+        "num_layers": num_layers,
+        "n_q_heads": nq,
+        "n_kv_heads": nkv,
+        "head_dim": head_dim,
+        "intermediate": inter,
+        "cross_attn_layers": cross_indices,
+        "vlm_kv_dim": vlm_kv_dim,
+        "total_params_m": sum(p.numel() for p in stack.parameters()) / 1e6,
+    }
+    return stack, metadata
 
 
 def export_smolvla(
@@ -187,4 +318,10 @@ def export_smolvla(
     return result
 
 
-__all__ = ["export_smolvla"]
+__all__ = [
+    "export_smolvla",
+    "build_expert_stack",
+    # Re-exports moved here at Day 11 sunset:
+    "ExpertGQALayer",
+    "ExpertStack",
+]

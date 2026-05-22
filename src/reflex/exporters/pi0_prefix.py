@@ -551,14 +551,14 @@ def build_pi0_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[P
     2026-04-17). pi0_exporter.py's default of head_dim=128 was a silent bug that
     gave nq=16/nkv=2 instead of the correct nq=8/nkv=1 per Gemma config.
     """
-    from reflex.exporters.pi0_exporter import build_pi0_expert_stack
+    from reflex.exporters.pi0 import build_pi0_expert_stack
 
     base_stack, meta = build_pi0_expert_stack(state_dict, head_dim=256)
     # Pull layer list out of the base stack; rebuild with prefix-aware wrapper.
     layers = list(base_stack.layers)
 
     # Weights for suffix/time MLP + action projections from PI0_ACTION_KEYS
-    from reflex.exporters.pi0_exporter import PI0_ACTION_KEYS
+    from reflex.exporters.pi0 import PI0_ACTION_KEYS
     suffix = {
         "in_w": state_dict[PI0_ACTION_KEYS["in_w"]],
         "in_b": state_dict[PI0_ACTION_KEYS["in_b"]],
@@ -961,7 +961,7 @@ def build_pi05_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[
     keys + extract per-layer weights, then rebuilds with
     Pi05ExpertStackWithPrefix (prefix-aware Pi05ExpertGQALayer).
     """
-    from reflex.exporters.pi0_exporter import build_pi05_expert_stack, PI05_ACTION_KEYS, PI0_EXPERT_PREFIX
+    from reflex.exporters.pi0 import build_pi05_expert_stack, PI05_ACTION_KEYS, PI0_EXPERT_PREFIX
     from reflex.models.heads.expert_stack import Pi05ExpertGQALayer
 
     # pi0.5 expert: SAME dim config as pi0 (num_heads=8, num_kv_heads=1,

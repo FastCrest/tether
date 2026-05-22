@@ -51,7 +51,7 @@ def run_full():
     start = time.time()
     try:
         from reflex.checkpoint import load_checkpoint
-        from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+        from reflex.exporters.gr00t import build_gr00t_full_stack
         state_dict, _ = load_checkpoint("nvidia/GR00T-N1.6-3B")
         full, meta = build_gr00t_full_stack(state_dict, embodiment_id=0)
         elapsed = time.time() - start

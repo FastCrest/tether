@@ -102,15 +102,15 @@ class FlowMatchingHead(VLAHead, nn.Module):
         transformers) that tests don't want at import time.
         """
         if vla_family == "pi0":
-            from reflex.exporters.pi0_exporter import build_pi0_expert_stack
+            from reflex.exporters.pi0 import build_pi0_expert_stack
             stack, _meta = build_pi0_expert_stack(state_dict)
             return stack
         elif vla_family == "pi05":
-            from reflex.exporters.pi0_exporter import build_pi05_expert_stack
+            from reflex.exporters.pi0 import build_pi05_expert_stack
             stack, _meta = build_pi05_expert_stack(state_dict)
             return stack
         elif vla_family == "smolvla":
-            from reflex.exporters.smolvla_exporter import build_expert_stack
+            from reflex.exporters.smolvla import build_expert_stack
             if head_dim is None:
                 raise ValueError(
                     "head_dim required for SmolVLA (the VLM head_dim — "

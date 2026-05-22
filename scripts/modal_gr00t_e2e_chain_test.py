@@ -98,7 +98,7 @@ def chain_test(model_id: str = "nvidia/GR00T-N1.6-3B"):
 
     from reflex.checkpoint import load_checkpoint
     from reflex.exporters.eagle_export_stack import build_eagle_export_stack
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from reflex.exporters.gr00t import build_gr00t_full_stack
 
     eagle_onnx = Path(ONNX_OUTPUT_PATH) / "eagle_vlm" / "eagle_vlm.onnx"
     dit_onnx = Path(ONNX_OUTPUT_PATH) / "monolithic_with_vlm" / "expert_stack_with_vlm.onnx"

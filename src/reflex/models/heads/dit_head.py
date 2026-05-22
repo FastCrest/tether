@@ -13,7 +13,7 @@ And emits velocity tokens ``[B, chunk, raw_action_dim]`` (the diffusion
 step's predicted velocity at the current timestep).
 
 This wraps the existing ``GR00TFullStack`` from
-``reflex.exporters.gr00t_exporter`` — that module encapsulates:
+``reflex.exporters.gr00t`` — that module encapsulates:
 
 - ``GR00TActionEncoder`` (per-embodiment, embeds raw actions + time)
 - ``GR00TStateEncoder`` (per-embodiment, embeds state as a token)
@@ -70,7 +70,7 @@ class DITHead(VLAHead, nn.Module):
             self.full_stack = full_stack
             self.metadata: dict[str, Any] = {}
         else:
-            from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+            from reflex.exporters.gr00t import build_gr00t_full_stack
             self.full_stack, self.metadata = build_gr00t_full_stack(
                 state_dict=state_dict,
                 embodiment_id=embodiment_id,
