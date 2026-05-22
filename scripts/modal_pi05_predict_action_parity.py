@@ -411,9 +411,22 @@ def run_parity(
         my_layers = vla.vla_head.expert_stack.layers
         ler_l0 = ler_layers[0]
         my_l0 = my_layers[0]
+        # Also hook layer 17 (last) to localize where the chain diverges.
+        ler_l17 = ler_layers[17]
+        my_l17 = my_layers[17]
         sub_hooks = [
             ler_l0.register_forward_hook(make_hook("ler_layer_out")),
             my_l0.register_forward_hook(make_hook("my_layer_out")),
+            ler_l17.register_forward_hook(make_hook("ler_layer17_out")),
+            my_l17.register_forward_hook(make_hook("my_layer17_out")),
+            # Pre-hooks for layer 17 INPUT (= layer 16 output) to see if divergence
+            # is in layer 17's INPUT or in its forward.
+            ler_l17.register_forward_pre_hook(
+                lambda mod, inp: captured.__setitem__("ler_layer17_in", inp[0] if isinstance(inp, tuple) else inp)
+            ),
+            my_l17.register_forward_pre_hook(
+                lambda mod, inp: captured.__setitem__("my_layer17_in", inp[0] if isinstance(inp, tuple) else inp)
+            ),
             ler_l0.input_layernorm.register_forward_hook(make_hook("ler_input_ln")),
             my_l0.input_layernorm.register_forward_hook(make_hook("my_input_ln")),
             ler_l0.self_attn.q_proj.register_forward_hook(make_hook("ler_q_proj")),
@@ -455,7 +468,8 @@ def run_parity(
                 prefix_k=my_prefix_k, prefix_v=my_prefix_v,
                 attn_mask=suffix_2d,
             )
-            for name in ["layer_out", "input_ln", "q_proj", "k_proj", "v_proj",
+            for name in ["layer_out", "layer17_in", "layer17_out", "input_ln",
+                          "q_proj", "k_proj", "v_proj",
                           "o_proj", "post_ln", "gate", "up", "down"]:
                 ler_x = captured.get(f"ler_{name}")
                 my_x = captured.get(f"my_{name}")
