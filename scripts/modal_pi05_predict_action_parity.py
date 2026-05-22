@@ -383,6 +383,24 @@ def run_parity(
                 # Print first 8 values of [0, 0, 0, :] for direct comparison
                 print(f"    ler[0,0,0,:8] = {ler_x[0, 0, 0, :8] if ler_x.ndim >= 4 else ler_x[0, 0, :8]}")
                 print(f"    my [0,0,0,:8] = {my_x[0, 0, 0, :8] if my_x.ndim >= 4 else my_x[0, 0, :8]}")
+
+            # ─── Bisection: apply MY RoPE to LEROBOT's pre-RoPE q ───────
+            # If my RoPE math matches stock, this should produce stock's q_post_rope
+            # bit-identically. If not, my RoPE has a bug.
+            sub_q_proj_ler = sub_captured.get("ler_q_proj")
+            if sub_q_proj_ler is not None and "q" in ler_eager_captures:
+                ler_q_pre_rope = sub_q_proj_ler.view(1, 50, 8, 256).transpose(1, 2)
+                my_rope = vla.vla_head.expert_stack.layers[0].rope
+                my_applied_to_ler_q = my_rope.apply(ler_q_pre_rope.contiguous(), suffix_position_ids)
+                bisect_diff = (my_applied_to_ler_q - ler_eager_captures["q"]).abs()
+                print(f"\n  --- RoPE bisection ---")
+                print(f"  My RoPE applied to LER q_pre_rope vs LER q_post_rope:")
+                print(f"    diff max {bisect_diff.max():.4e}  mean {bisect_diff.mean():.4e}")
+                print(f"    pos_ids = {suffix_position_ids[0, :5]}...")
+                if bisect_diff.max() < 1e-3:
+                    print(f"    → my RoPE BIT-IDENTICAL to stock; bug is elsewhere")
+                else:
+                    print(f"    → my RoPE DIVERGES from stock at runtime")
         finally:
             _stock_gemma.eager_attention_forward = _orig_eager
             Pi05ExpertGQALayer.debug_captures = None
