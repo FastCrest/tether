@@ -152,5 +152,8 @@ REGISTRY: tuple[ModelEntry, ...] = (
                     "export openvla-7b` after pull.",
         license="mit",
         hf_revision=None,
+        # Decision S-4: OpenVLA stays a shim, not on the BaseVLA spine.
+        # argmax-over-bins doesn't fit the flow-matching component pattern.
+        vla_type="_openvla_shim",
     ),
 )

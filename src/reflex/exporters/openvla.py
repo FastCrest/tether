@@ -1,4 +1,21 @@
-"""OpenVLA — intentionally not a full Reflex exporter.
+"""OpenVLA — non-spine model, ships as a shim (per lift #1 decision S-4).
+
+OpenVLA is **intentionally NOT on the BaseVLA spine.** It's an autoregressive
+Llama-2-7B with an argmax-over-bins action head — doesn't fit the
+flow-matching component pattern that the spine's 6-slot taxonomy is
+built around. Forcing it onto the spine would require either a fake
+"argmax head" that doesn't share any abstraction with FlowMatchingHead
+/ DITHead, or contorting the spine to fit. Neither pulls its weight.
+
+Per decision S-4 (in
+``reflex_context/01_decisions/2026-05-19-fluxvla-lift-program-decisions.md``):
+
+  - OpenVLA stays a shim with the existing ``optimum-cli export onnx``
+    + bin-to-continuous postprocess flow.
+  - ``ModelEntry`` declares ``vla_type="_openvla_shim"`` to mark this
+    non-spine status.
+  - The spine's ABC enforcement (REQUIRED_SLOTS / OPTIONAL_SLOTS) is
+    not violated — there's no ``OpenVLAVLA(BaseVLA)`` class to misuse.
 
 OpenVLA is architecturally very different from the flow-matching VLAs
 that Reflex's custom exporters target (SmolVLA, pi0, pi0.5, GR00T).

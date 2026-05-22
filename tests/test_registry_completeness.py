@@ -56,7 +56,7 @@ EXPECTED_FAMILIES = {
     # consistent with the validator until/unless we bump the validator.
     "gr00t.py": "groot",  # spine-based, lift #1 Day 7; supersedes gr00t_exporter.py at Day 11
     "gr00t_exporter.py": "groot",
-    "openvla_exporter.py": "openvla",
+    "openvla.py": "openvla",  # lift #1 Day 8: renamed from openvla_exporter.py; remains a shim per decision S-4
     "pi0_exporter.py": "pi0",
     "smolvla.py": "smolvla",  # spine-based, lift #1 Day 6; supersedes smolvla_exporter.py at Day 11
     "smolvla_exporter.py": "smolvla",

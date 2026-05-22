@@ -52,6 +52,11 @@ class ModelEntry:
     description: str = ""
     license: str = "unknown"
     hf_revision: str | None = None
+    # Per lift #1 decision S-4 (Day 8): non-spine VLAs declare a special
+    # vla_type marker. Spine VLAs (pi0/pi05/smolvla/groot) leave this None
+    # (the BaseVLA registry name is the source of truth). OpenVLA sets
+    # "_openvla_shim" to mark it as the optimum-cli shim path.
+    vla_type: str | None = None
 
     def __post_init__(self):
         if not self.model_id:
@@ -64,6 +69,13 @@ class ModelEntry:
             raise ValueError(f"family must be one of pi0/pi05/smolvla/openvla/groot, got {self.family!r}")
         if self.action_dim <= 0:
             raise ValueError(f"action_dim must be positive, got {self.action_dim}")
+        if self.vla_type is not None and not self.vla_type.startswith("_"):
+            # Convention: marker types are prefixed with `_` so they don't
+            # collide with real spine VLA class names (Pi0VLA, Pi05VLA, etc).
+            raise ValueError(
+                f"vla_type markers must start with `_` (got {self.vla_type!r}). "
+                "Use e.g. `_openvla_shim` for non-spine VLAs."
+            )
 
     def benchmark_for(self, device: str) -> ModelBenchmark | None:
         for b in self.benchmarks:

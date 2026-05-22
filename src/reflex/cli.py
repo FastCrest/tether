@@ -339,7 +339,7 @@ def export(
         from reflex.exporters.gr00t_exporter import export_gr00t_full
         result = export_gr00t_full(export_config, state_dict=state_dict)
     elif model_type == "openvla":
-        from reflex.exporters.openvla_exporter import export_openvla
+        from reflex.exporters.openvla import export_openvla
         result = export_openvla(export_config, state_dict=state_dict)
     elif model_type == "pi05":
         result = export_pi05(export_config, state_dict=state_dict)
