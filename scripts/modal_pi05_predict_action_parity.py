@@ -514,8 +514,13 @@ def run_parity(
         # ler attention_scaling:
         print(f"  ler rotary_emb.attention_scaling = {ler_rotary_emb.attention_scaling}")
         print(f"  ler rotary_emb.rope_type = {ler_rotary_emb.rope_type}")
-        print(f"  ler config.head_dim = {policy.model.paligemma_with_expert.gemma_expert.model.config.head_dim}")
-        print(f"  ler config.rope_theta = {policy.model.paligemma_with_expert.gemma_expert.model.config.rope_theta}")
+        print(f"  ler rotary_emb.inv_freq[:5] = {ler_rotary_emb.inv_freq[:5]}")
+        print(f"  ler rotary_emb.inv_freq.shape = {ler_rotary_emb.inv_freq.shape}")
+        print(f"  my rotary_emb.inv_freq[:5] = {my_rope.inv_freq[:5]}")
+        print(f"  my rotary_emb.inv_freq.shape = {my_rope.inv_freq.shape}")
+        cfg = policy.model.paligemma_with_expert.gemma_expert.model.config
+        print(f"  ler config.head_dim = {cfg.head_dim}")
+        print(f"  ler config attrs = {[a for a in dir(cfg) if 'rope' in a.lower() or 'theta' in a.lower() or 'partial' in a.lower()]}")
 
         del policy
         gc.collect()
