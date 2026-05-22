@@ -225,7 +225,7 @@ class FlowMatchingHead(VLAHead, nn.Module):
     def prepare_triton(self, prefix: str = "") -> dict[str, torch.Tensor]:
         """Flatten every parameter in the wrapped ExpertStack under prefix."""
         return {
-            f"{prefix}expert_stack.{name}": param.detach()
+            f"{prefix}expert_stack.{name}": param.detach().clone()
             for name, param in self.expert_stack.named_parameters()
         }
 

@@ -106,7 +106,7 @@ class SigLIPBackbone(VisionBackbone, nn.Module):
         wrapped here, that's ~100M params (~400 MB FP32 / ~200 MB BF16).
         """
         return {
-            f"{prefix}{name}": param.detach()
+            f"{prefix}{name}": param.detach().clone()
             for name, param in self.named_parameters()
         }
 

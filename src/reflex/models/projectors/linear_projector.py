@@ -74,10 +74,10 @@ class LinearProjector(Projector, nn.Module):
             {prefix}linear.bias    (out_dim,)  — only present when bias=True
         """
         out: dict[str, torch.Tensor] = {
-            f"{prefix}linear.weight": self.linear.weight.detach()
+            f"{prefix}linear.weight": self.linear.weight.detach().clone()
         }
         if self.linear.bias is not None:
-            out[f"{prefix}linear.bias"] = self.linear.bias.detach()
+            out[f"{prefix}linear.bias"] = self.linear.bias.detach().clone()
         return out
 
 

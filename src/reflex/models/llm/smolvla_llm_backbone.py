@@ -145,7 +145,7 @@ class SmolVLALLMBackbone(LLMBackbone, nn.Module):
         for name, param in self.named_parameters():
             if ".vision_model." in name:
                 continue
-            out[f"{prefix}{name}"] = param.detach()
+            out[f"{prefix}{name}"] = param.detach().clone()
         return out
 
 

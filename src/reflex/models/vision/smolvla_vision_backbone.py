@@ -88,7 +88,7 @@ class SmolVLAVisionBackbone(VisionBackbone, nn.Module):
     def prepare_triton(self, prefix: str = "") -> dict[str, torch.Tensor]:
         """Flatten weights for ``--inference-only-weights`` mode (lift #3)."""
         return {
-            f"{prefix}{name}": param.detach()
+            f"{prefix}{name}": param.detach().clone()
             for name, param in self.named_parameters()
         }
 

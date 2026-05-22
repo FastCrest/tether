@@ -167,7 +167,7 @@ class PaliGemmaBackbone(LLMBackbone, nn.Module):
             # `model.model.vision_tower.vision_model.embeddings.patch_embedding.weight`.
             if ".vision_tower." in name:
                 continue
-            out[f"{prefix}{name}"] = param.detach()
+            out[f"{prefix}{name}"] = param.detach().clone()
         return out
 
 
