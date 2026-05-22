@@ -875,10 +875,11 @@ class Pi05ExpertStackWithPrefix(nn.Module):
         time_mlp_weights: dict,
         action_proj_weights: dict,
         in_proj_weights: dict,
-        final_norm_weight: torch.Tensor,
+        final_norm_weight: torch.Tensor | None = None,
+        final_norm_dense_weights: dict | None = None,
     ):
         super().__init__()
-        from reflex.decompose import DecomposedRMSNorm
+        from reflex.decompose import DecomposedAdaRMSNorm, DecomposedRMSNorm
         self.layers = nn.ModuleList(layers)
         self.expert_hidden = expert_hidden
 
@@ -901,8 +902,20 @@ class Pi05ExpertStackWithPrefix(nn.Module):
         self.action_out_proj.weight = nn.Parameter(action_proj_weights["w"])
         self.action_out_proj.bias = nn.Parameter(action_proj_weights["b"])
 
-        # Final RMSNorm — plain Gemma (1+w), NOT AdaRMSNorm
-        self.final_norm = DecomposedRMSNorm(final_norm_weight)
+        # Final norm — pi0.5 expert uses AdaRMSNorm (time-conditioned) per
+        # lerobot modeling_pi05.py:524-540 (`compute_final_norms` passes
+        # adarms_cond[1] to models[1].norm). Plain RMSNorm here gives bit-wrong
+        # final output even though all 18 expert layers match bit-identically.
+        if final_norm_dense_weights is not None:
+            self.final_norm = DecomposedAdaRMSNorm(expert_hidden, time_dim=expert_hidden)
+            self.final_norm.dense.weight = nn.Parameter(final_norm_dense_weights["w"])
+            self.final_norm.dense.bias = nn.Parameter(final_norm_dense_weights["b"])
+            self._final_norm_is_adarms = True
+        else:
+            # Legacy pi0 path — plain RMSNorm.
+            assert final_norm_weight is not None
+            self.final_norm = DecomposedRMSNorm(final_norm_weight)
+            self._final_norm_is_adarms = False
 
     def forward(
         self,
@@ -925,8 +938,6 @@ class Pi05ExpertStackWithPrefix(nn.Module):
 
         from reflex.models.heads.expert_stack import Pi05ExpertGQALayer as _Pi05Layer
         for i, layer in enumerate(self.layers):
-            # Update debug_layer_id so per-layer captures land at unique keys
-            # (otherwise L0 gets overwritten by every layer's forward).
             _Pi05Layer.debug_layer_id = i
             x = layer(
                 x, position_ids, t_emb,
@@ -935,7 +946,11 @@ class Pi05ExpertStackWithPrefix(nn.Module):
                 attn_mask=attn_mask,
             )
 
-        x = self.final_norm(x)
+        # Final norm — AdaRMSNorm path for pi0.5 expert (uses time conditioning).
+        if getattr(self, "_final_norm_is_adarms", False):
+            x = self.final_norm(x, t_emb)
+        else:
+            x = self.final_norm(x)
         return self.action_out_proj(x)
 
 
@@ -987,10 +1002,22 @@ def build_pi05_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[
         layer.load_state_dict(layer_sd, strict=False)
         layers.append(layer)
 
-    # Final norm — pi0.5 uses plain RMSNorm with Gemma (1+w) convention.
-    final_norm_key = f"{base_prefix}norm.weight"
-    final_norm_w_raw = state_dict.get(final_norm_key, torch.zeros(expert_hidden))
-    final_norm_w = final_norm_w_raw + 1.0  # Gemma (1+w) pre-transform
+    # Final norm — pi0.5 expert uses AdaRMSNorm (time-conditioned),
+    # NOT plain RMSNorm. State dict has `norm.dense.weight` + `norm.dense.bias`.
+    final_norm_dense_w_key = f"{base_prefix}norm.dense.weight"
+    final_norm_dense_b_key = f"{base_prefix}norm.dense.bias"
+    if final_norm_dense_w_key in state_dict:
+        final_norm_dense_weights = {
+            "w": state_dict[final_norm_dense_w_key],
+            "b": state_dict[final_norm_dense_b_key],
+        }
+        final_norm_w = None
+    else:
+        # Fallback: plain RMSNorm (legacy / pi0 path).
+        final_norm_key = f"{base_prefix}norm.weight"
+        final_norm_w_raw = state_dict.get(final_norm_key, torch.zeros(expert_hidden))
+        final_norm_w = final_norm_w_raw + 1.0
+        final_norm_dense_weights = None
 
     stack = Pi05ExpertStackWithPrefix(
         layers=layers,
@@ -1011,6 +1038,7 @@ def build_pi05_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[
             "b": state_dict[PI05_ACTION_KEYS["in_b"]],
         },
         final_norm_weight=final_norm_w,
+        final_norm_dense_weights=final_norm_dense_weights,
     )
     stack.eval()
     return stack, meta
