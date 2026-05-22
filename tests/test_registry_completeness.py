@@ -57,6 +57,7 @@ EXPECTED_FAMILIES = {
     "gr00t_exporter.py": "groot",
     "openvla_exporter.py": "openvla",
     "pi0_exporter.py": "pi0",
+    "smolvla.py": "smolvla",  # spine-based, lift #1 Day 6; supersedes smolvla_exporter.py at Day 11
     "smolvla_exporter.py": "smolvla",
     # pi05 is exported via decomposed.py (which has _export_pi05_*
     # callsites). It's listed as "internal" above but the registry must
