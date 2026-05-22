@@ -6,12 +6,10 @@ from Physical Intelligence (lerobot/pi0_base, lerobot/pi05_base).
 Key differences from SmolVLA:
 - State-dict prefix: `paligemma_with_expert.gemma_expert.model.layers.N.*`
 - Top-level action projections (no `model.` prefix): `action_in_proj.weight`, etc.
-- GQA config: 16 Q heads, 2 KV heads, head_dim=128 (vs SmolVLA's 15/5/64)
+- GQA config: 8 Q heads, 1 KV head, head_dim=256 (vs SmolVLA's 15/5/64)
 - Expert hidden = 1024 (vs 720)
 - 18 expert layers (vs 16)
-- pi0 has `state_proj`; pi0.5 uses AdaRMSNorm (not yet supported by this exporter)
-
-Only pi0 is fully supported in v0.1 of this exporter.
+- pi0 has `state_proj`; pi0.5 uses AdaRMSNorm on every layer AND on the final norm
 """
 
 from __future__ import annotations
@@ -33,10 +31,11 @@ from reflex.config import ExportConfig, get_hardware_profile
 from reflex.checkpoint import load_checkpoint
 from reflex.exporters.onnx_export import export_module_to_onnx, optimize_onnx
 from reflex.models.heads.expert_stack import (
-    ExpertGQALayer, ExpertStack, _DecomposedRoPE, _sinusoidal_pos_embedding,
+    ExpertGQALayer, ExpertStack, Pi05ExpertGQALayer, _DecomposedRoPE,
+    _sinusoidal_pos_embedding,
 )
 from reflex.exporters.trt_build import build_engine, check_trtexec
-from reflex.decompose import DecomposedAdaRMSNorm, DecomposedRMSNorm
+from reflex.decompose import DecomposedAdaRMSNorm
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +228,7 @@ def export_pi0(
 
     # 2. Build expert stack
     logger.info("Building pi0 expert stack...")
-    expert_stack, expert_meta = build_pi0_expert_stack(state_dict, head_dim=128)
+    expert_stack, expert_meta = build_pi0_expert_stack(state_dict)
     result["metadata"]["expert"] = expert_meta
 
     # 3. Export to ONNX
@@ -310,57 +309,16 @@ def export_pi0(
 
 # -------------------------------------------------------------------------
 # pi0.5 support — uses AdaRMSNorm (time-conditioned) instead of plain RMSNorm.
+# The per-layer expert is `Pi05ExpertGQALayer` from `expert_stack.py`
+# (canonical, with AdaLN gating + gelu(tanh) MLP + bf16 inv_freq).
 # -------------------------------------------------------------------------
-
-
-class ExpertAdaRMSLayer(nn.Module):
-    """pi0.5 expert layer: GQA attention + SwiGLU MLP with time-conditioned
-    AdaRMSNorm in place of the plain RMSNorm used by SmolVLA / pi0.
-
-    The layer takes the time embedding as an extra input and uses it to
-    modulate both the pre-attn and pre-MLP normalization.
-    """
-
-    def __init__(self, hidden, nq, nkv, hd, inter):
-        super().__init__()
-        self.nq, self.nkv, self.hd = nq, nkv, hd
-        self.kv_groups = nq // nkv
-        self.input_layernorm = DecomposedAdaRMSNorm(hidden, time_dim=hidden)
-        self.post_attention_layernorm = DecomposedAdaRMSNorm(hidden, time_dim=hidden)
-        self.q_proj = nn.Linear(hidden, nq * hd, bias=False)
-        self.k_proj = nn.Linear(hidden, nkv * hd, bias=False)
-        self.v_proj = nn.Linear(hidden, nkv * hd, bias=False)
-        self.o_proj = nn.Linear(nq * hd, hidden, bias=False)
-        self.gate_proj = nn.Linear(hidden, inter, bias=False)
-        self.up_proj = nn.Linear(hidden, inter, bias=False)
-        self.down_proj = nn.Linear(inter, hidden, bias=False)
-        self.rope = _DecomposedRoPE(hd)
-
-    def forward(self, x, pos_ids, time_emb):
-        b, s, _ = x.shape
-        res = x
-        x = self.input_layernorm(x, time_emb)
-
-        q = self.q_proj(x).view(b, s, self.nq, self.hd).transpose(1, 2)
-        k = self.k_proj(x).view(b, s, self.nkv, self.hd).transpose(1, 2)
-        v = self.v_proj(x).view(b, s, self.nkv, self.hd).transpose(1, 2)
-        q = self.rope.apply(q, pos_ids)
-        k = self.rope.apply(k, pos_ids)
-        k = k.unsqueeze(2).expand(-1, -1, self.kv_groups, -1, -1).reshape(b, self.nq, s, self.hd)
-        v = v.unsqueeze(2).expand(-1, -1, self.kv_groups, -1, -1).reshape(b, self.nq, s, self.hd)
-        attn = F.softmax(torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.hd), dim=-1)
-        x = res + self.o_proj(torch.matmul(attn, v).transpose(1, 2).contiguous().view(b, s, -1))
-
-        res = x
-        x = self.post_attention_layernorm(x, time_emb)
-        return res + self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
 class Pi05ExpertStack(nn.Module):
     """Expert stack for pi0.5 — time embedding flows through every layer."""
 
     def __init__(self, layers, expert_hidden, action_dim, time_mlp_weights,
-                 action_proj_weights, in_proj_weights, final_norm_weight):
+                 action_proj_weights, in_proj_weights, final_norm_weights):
         super().__init__()
         self.layers = nn.ModuleList(layers)
         self.expert_hidden = expert_hidden
@@ -383,7 +341,11 @@ class Pi05ExpertStack(nn.Module):
         self.action_out_proj.weight = nn.Parameter(action_proj_weights["w"])
         self.action_out_proj.bias = nn.Parameter(action_proj_weights["b"])
 
-        self.final_norm = DecomposedRMSNorm(final_norm_weight)
+        # Per lerobot modeling_pi05.py:524-540 (compute_final_norms), the pi0.5
+        # expert final norm is AdaRMSNorm (time-conditioned), NOT plain RMSNorm.
+        self.final_norm = DecomposedAdaRMSNorm(expert_hidden, time_dim=expert_hidden)
+        self.final_norm.dense.weight = nn.Parameter(final_norm_weights["w"])
+        self.final_norm.dense.bias = nn.Parameter(final_norm_weights["b"])
 
     def forward(self, noisy_actions, timestep, position_ids):
         b, c, _ = noisy_actions.shape
@@ -397,13 +359,13 @@ class Pi05ExpertStack(nn.Module):
         for layer in self.layers:
             x = layer(x, position_ids, t_emb)
 
-        x = self.final_norm(x)
+        x = self.final_norm(x, t_emb)
         return self.action_out_proj(x)
 
 
 def build_pi05_expert_stack(
     state_dict: dict[str, torch.Tensor],
-    head_dim: int = 128,
+    head_dim: int = 256,  # pi0.5 uses gemma_2b variant — head_dim=256 (same as pi0). Was silently 128.
 ) -> tuple[Pi05ExpertStack, dict]:
     """Build pi0.5 expert stack. Uses AdaRMSNorm instead of plain RMSNorm."""
     # 1. Sanity check: AdaRMSNorm markers should be present
@@ -451,7 +413,10 @@ def build_pi05_expert_stack(
     layers = []
     for i in range(num_layers):
         prefix = f"{base_prefix}layers.{i}"
-        layer = ExpertAdaRMSLayer(expert_hidden, nq, nkv, head_dim, inter)
+        # bf16_inv_freq=True: pi0.5 weights load in bf16 by default
+        # (PaliGemmaWithExpertModel.__init__ precision="bfloat16"); roundtripping
+        # inv_freq through bf16 matches lerobot's runtime cos/sin precision.
+        layer = Pi05ExpertGQALayer(expert_hidden, nq, nkv, head_dim, inter, bf16_inv_freq=True)
         layer_sd = {
             "input_layernorm.dense.weight": state_dict[f"{prefix}.input_layernorm.dense.weight"],
             "input_layernorm.dense.bias": state_dict[f"{prefix}.input_layernorm.dense.bias"],
@@ -468,9 +433,14 @@ def build_pi05_expert_stack(
         layer.load_state_dict(layer_sd, strict=False)
         layers.append(layer)
 
-    # 6. Final RMSNorm (non-adaptive at the end)
-    final_norm_key = f"{base_prefix}norm.weight"
-    final_norm_w = state_dict.get(final_norm_key, torch.ones(expert_hidden))
+    # 6. Final AdaRMSNorm (time-conditioned, per lerobot modeling_pi05.py:524-540)
+    final_norm_w_key = f"{base_prefix}norm.dense.weight"
+    final_norm_b_key = f"{base_prefix}norm.dense.bias"
+    if final_norm_w_key not in state_dict or final_norm_b_key not in state_dict:
+        raise ValueError(
+            f"pi0.5 final norm expects AdaRMSNorm keys ({final_norm_w_key} + .bias). "
+            "Either the checkpoint is malformed or this is a pi0 checkpoint mis-routed here."
+        )
 
     # 7. Assemble stack
     stack = Pi05ExpertStack(
@@ -491,7 +461,10 @@ def build_pi05_expert_stack(
             "w": state_dict[PI05_ACTION_KEYS["in_w"]],
             "b": state_dict[PI05_ACTION_KEYS["in_b"]],
         },
-        final_norm_weight=final_norm_w,
+        final_norm_weights={
+            "w": state_dict[final_norm_w_key],
+            "b": state_dict[final_norm_b_key],
+        },
     )
     stack.eval()
 
@@ -526,7 +499,7 @@ def export_pi05(
     logger.info("Loaded %d tensors, %.1fM params", len(state_dict), total_params / 1e6)
 
     logger.info("Building pi0.5 expert stack...")
-    expert_stack, expert_meta = build_pi05_expert_stack(state_dict, head_dim=128)
+    expert_stack, expert_meta = build_pi05_expert_stack(state_dict)
     result["metadata"]["expert"] = expert_meta
 
     action_dim = expert_meta["action_dim"]
