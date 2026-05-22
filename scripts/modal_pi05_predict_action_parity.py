@@ -360,6 +360,7 @@ def run_parity(
             )
             print(f"\n  --- Intra-attention diff (layer 0) ---")
             for name, my_key, ler_key in [
+                ("Q_pre_rope_action", "L0_q_pre_rope", None),
                 ("Q_post_rope_action", "L0_q_post_rope", "q"),
                 ("K_post_rope_action_only", "L0_k_post_rope", None),
                 ("V_action_only", "L0_v", None),
@@ -379,6 +380,9 @@ def run_parity(
                     continue
                 d = (ler_x.float() - my_x.float()).abs()
                 print(f"  {name}: shape {tuple(ler_x.shape)}, ler norm {ler_x.norm():.4f}, my norm {my_x.norm():.4f}, diff max {d.max():.4e}, mean {d.mean():.4e}")
+                # Print first 8 values of [0, 0, 0, :] for direct comparison
+                print(f"    ler[0,0,0,:8] = {ler_x[0, 0, 0, :8] if ler_x.ndim >= 4 else ler_x[0, 0, :8]}")
+                print(f"    my [0,0,0,:8] = {my_x[0, 0, 0, :8] if my_x.ndim >= 4 else my_x[0, 0, :8]}")
         finally:
             _stock_gemma.eager_attention_forward = _orig_eager
             Pi05ExpertGQALayer.debug_captures = None
