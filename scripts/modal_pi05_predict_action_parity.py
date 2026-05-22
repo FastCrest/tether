@@ -343,6 +343,10 @@ def run_parity(
             my_l0.q_proj.register_forward_hook(make_hook("my_q_proj")),
             ler_l0.self_attn.k_proj.register_forward_hook(make_hook("ler_k_proj")),
             my_l0.k_proj.register_forward_hook(make_hook("my_k_proj")),
+            ler_l0.self_attn.v_proj.register_forward_hook(make_hook("ler_v_proj")),
+            my_l0.v_proj.register_forward_hook(make_hook("my_v_proj")),
+            # Also hook self_attn itself to capture the attention output BEFORE o_proj
+            ler_l0.self_attn.register_forward_hook(make_hook("ler_attn_out")),
             ler_l0.self_attn.o_proj.register_forward_hook(make_hook("ler_o_proj")),
             my_l0.o_proj.register_forward_hook(make_hook("my_o_proj")),
             ler_l0.post_attention_layernorm.register_forward_hook(make_hook("ler_post_ln")),
@@ -367,8 +371,8 @@ def run_parity(
                 prefix_k=my_prefix_k, prefix_v=my_prefix_v,
                 attn_mask=suffix_2d,
             )
-            for name in ["layer_out", "input_ln", "q_proj", "k_proj", "o_proj",
-                          "post_ln", "gate", "up", "down"]:
+            for name in ["layer_out", "input_ln", "q_proj", "k_proj", "v_proj",
+                          "o_proj", "post_ln", "gate", "up", "down"]:
                 ler_x = captured.get(f"ler_{name}")
                 my_x = captured.get(f"my_{name}")
                 if ler_x is None or my_x is None:
@@ -378,6 +382,13 @@ def run_parity(
                     continue
                 d = (ler_x.float() - my_x.float()).abs()
                 print(f"  {name}: shape {ler_x.shape}, ler norm {ler_x.norm():.4f}, my norm {my_x.norm():.4f}, diff max {d.max():.4e}, mean {d.mean():.4e}")
+            # Lerobot's self_attn returns the attention output BEFORE o_proj
+            # (the actual `softmax(QK/sqrt(d)) @ V` result). My custom layer
+            # doesn't expose this directly, but if my o_proj sees a different
+            # input despite Q/K/V matching, the attention computation diverges.
+            if "ler_attn_out" in captured:
+                attn_out = captured["ler_attn_out"]
+                print(f"  ler attention_out (before o_proj): shape {attn_out.shape}, norm {attn_out.norm():.4f}, sample[0,0,:8]={attn_out[0,0,:8]}")
         finally:
             for h in sub_hooks:
                 h.remove()
