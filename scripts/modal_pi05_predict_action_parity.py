@@ -491,6 +491,32 @@ def run_parity(
             else:
                 print(f"    → my RoPE DIVERGES from stock at runtime")
 
+        # ─── Direct cos/sin diff ───────────────────────────────────────
+        # Extract cos/sin from LEROBOT's actual GemmaRotaryEmbedding instance
+        # (which is what stock attention uses) and compare against my RoPE's.
+        ler_rotary_emb = policy.model.paligemma_with_expert.gemma_expert.model.rotary_emb
+        with torch.no_grad():
+            # Stock returns (cos, sin) for given position_ids
+            dummy_hidden = ler_q_pre_rope[:, 0]  # shape [B, S, head_dim]; only used for dtype/device
+            ler_cos, ler_sin = ler_rotary_emb(dummy_hidden, suffix_position_ids)
+        print(f"\n  --- Direct cos/sin comparison ---")
+        print(f"  ler_cos shape {tuple(ler_cos.shape)}, norm {ler_cos.norm():.4f}")
+        my_cos_runtime = my_rope.cos_cached[suffix_position_ids]  # [B, S, head_dim]
+        my_sin_runtime = my_rope.sin_cached[suffix_position_ids]
+        print(f"  my_cos shape {tuple(my_cos_runtime.shape)}, norm {my_cos_runtime.norm():.4f}")
+        if ler_cos.shape == my_cos_runtime.shape:
+            cd = (ler_cos - my_cos_runtime).abs()
+            sd = (ler_sin - my_sin_runtime).abs()
+            print(f"  cos diff max {cd.max():.4e} mean {cd.mean():.4e}")
+            print(f"  sin diff max {sd.max():.4e} mean {sd.mean():.4e}")
+            print(f"  ler_cos[0, 0, :8] = {ler_cos[0, 0, :8]}")
+            print(f"  my_cos[0, 0, :8]  = {my_cos_runtime[0, 0, :8]}")
+        # ler attention_scaling:
+        print(f"  ler rotary_emb.attention_scaling = {ler_rotary_emb.attention_scaling}")
+        print(f"  ler rotary_emb.rope_type = {ler_rotary_emb.rope_type}")
+        print(f"  ler config.head_dim = {policy.model.paligemma_with_expert.gemma_expert.model.config.head_dim}")
+        print(f"  ler config.rope_theta = {policy.model.paligemma_with_expert.gemma_expert.model.config.rope_theta}")
+
         del policy
         gc.collect()
     step("intermediate_parity", "pass", "see prints above")
