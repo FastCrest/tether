@@ -824,15 +824,28 @@ class Pi05FastKernelsInference:
     # ─── Internal ───────────────────────────────────────────────────────
 
     def _prepare_action_time_triton(self) -> dict:
-        """Collect action-time projection weights from the expert stack."""
-        # Expert stack has action_in_proj, action_out_proj, action_time_mlp_in/out
-        # as nn.Linear modules per ExpertStack.__init__.
+        """Collect action-time projection weights from the expert stack.
+
+        Reflex's ``Pi05ExpertStackWithPrefix`` names the time MLP as
+        ``time_mlp_in/out`` (no ``action_`` prefix) — distinct from pi0's
+        ``Pi0ExpertStackWithPrefix`` which uses ``action_time_mlp_in/out``.
+        Detect which is present + use the right name.
+        """
         es = self._expert_stack
         weights: dict = {}
         weights.update(_projector_prepare_triton(_LinearWrapper(es.action_in_proj), "decoder_action_in_proj"))
         weights.update(_projector_prepare_triton(_LinearWrapper(es.action_out_proj), "decoder_action_out_proj"))
-        weights.update(_projector_prepare_triton(_LinearWrapper(es.action_time_mlp_in), "decoder_time_mlp_in"))
-        weights.update(_projector_prepare_triton(_LinearWrapper(es.action_time_mlp_out), "decoder_time_mlp_out"))
+
+        # Time MLP attribute name differs between pi0 and pi0.5 expert stacks.
+        time_in = getattr(es, "time_mlp_in", None) or getattr(es, "action_time_mlp_in", None)
+        time_out = getattr(es, "time_mlp_out", None) or getattr(es, "action_time_mlp_out", None)
+        if time_in is None or time_out is None:
+            raise AttributeError(
+                "expert stack must expose `time_mlp_in/out` (pi0.5) or "
+                "`action_time_mlp_in/out` (pi0); got neither"
+            )
+        weights.update(_projector_prepare_triton(_LinearWrapper(time_in), "decoder_time_mlp_in"))
+        weights.update(_projector_prepare_triton(_LinearWrapper(time_out), "decoder_time_mlp_out"))
         return weights
 
     def _init_buffers(self) -> None:
