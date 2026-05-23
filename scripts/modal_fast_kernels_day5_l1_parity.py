@@ -84,7 +84,10 @@ def run_day5_l1(model_id: str = "lerobot/pi05_libero_finetuned_v044", n_runs: in
     policy = PI05Policy.from_pretrained(model_id)
     policy = policy.to(dtype=torch.float32).to("cpu")
     from reflex.models.vlas.pi05 import Pi05VLA
-    vla = Pi05VLA.from_lerobot_policy(policy).to("cuda")
+    vla = Pi05VLA.from_lerobot_policy(policy)
+    vla.vision_backbone.to("cuda")
+    vla.llm_backbone.to("cuda")
+    vla.vla_head.to("cuda")
     from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
     runtime = Pi05FastKernelsInference(vla, capture=False)
     runtime.prepare_triton_inference()
