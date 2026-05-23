@@ -126,6 +126,62 @@ class Pi05VLA(BaseVLA):
             vla_head=head,
         )
 
+    @classmethod
+    def from_lerobot_policy(cls, policy: Any) -> "Pi05VLA":
+        """Build Pi05VLA from a loaded lerobot `PI05Policy` instance.
+
+        This is the **working** loader for real lerobot/pi05_* checkpoints,
+        which nest PaliGemma weights under
+        ``model.paligemma_with_expert.paligemma.*``. Stock
+        ``PaliGemmaForConditionalGeneration.from_pretrained`` can't see that
+        nesting and falls back to random init — `from_pretrained` is broken
+        for those checkpoints.
+
+        The parity script at ``scripts/modal_pi05_predict_action_parity.py``
+        used this pattern (Day 5 Phase B bit-identical fire); ``Lift #3``
+        prereq #1 promotes it to a first-class spine API.
+
+        Args:
+            policy: A constructed ``lerobot.common.policies.pi05.modeling_pi05.PI05Policy``
+                instance. Typically loaded via
+                ``PI05Policy.from_pretrained("lerobot/pi05_libero_finetuned_v044")``
+                + cast to fp32 + cpu before passing in.
+
+        Returns:
+            Pi05VLA ready for forward()/predict_action(), bit-identical to
+            the source policy on the same inputs (validated Day 5 Phase B).
+        """
+        from reflex.exporters.pi0_prefix import build_pi05_expert_with_prefix
+        from reflex.models.heads.flow_matching_head import FlowMatchingHead
+        from reflex.models.llm.paligemma_backbone import PaliGemmaBackbone
+        from reflex.models.vision.siglip_backbone import SigLIPBackbone
+
+        # 1. Extract PaliGemma submodule — lerobot nests it.
+        paligemma = policy.model.paligemma_with_expert.paligemma
+
+        # 2. Split into vision_backbone + llm_backbone slots.
+        vision = SigLIPBackbone(model=paligemma.model.vision_tower)
+        llm = PaliGemmaBackbone(model=paligemma)
+
+        # 3. Build the prefix-aware expert from the full policy state_dict
+        # (the expert weights live at policy.model.* outside the paligemma
+        # sub-tree; build_pi05_expert_with_prefix knows how to find them).
+        full_state = policy.state_dict()
+        # Strip the leading "model." prefix lerobot adds — the builders
+        # expect bare keys like "paligemma_with_expert.gemma_expert.model...".
+        unprefixed = {
+            k[len("model."):] if k.startswith("model.") else k: v
+            for k, v in full_state.items()
+        }
+        expert_with_prefix, _meta = build_pi05_expert_with_prefix(unprefixed)
+        head = FlowMatchingHead(expert_stack=expert_with_prefix)
+
+        return cls(
+            vision_backbone=vision,
+            llm_backbone=llm,
+            vla_head=head,
+        )
+
     # ── ABC contract ────────────────────────────────────────────────────
 
     def forward(self, batch: dict[str, Any]) -> Any:

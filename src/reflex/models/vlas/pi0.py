@@ -177,6 +177,68 @@ class Pi0VLA(BaseVLA):
             vla_head=head,
         )
 
+    @classmethod
+    def from_lerobot_policy(cls, policy: Any) -> "Pi0VLA":
+        """Build Pi0VLA from a loaded lerobot `PI0Policy` instance.
+
+        The working loader for real lerobot/pi0_* checkpoints, which nest
+        PaliGemma weights under ``model.paligemma_with_expert.paligemma.*``.
+        Stock ``PaliGemmaForConditionalGeneration.from_pretrained`` can't
+        see that nesting and falls back to random init — `from_pretrained`
+        is broken for those checkpoints.
+
+        Used by Day 4h Modal parity (bit-identical vs lerobot PI0Policy
+        at max 1.13e-6). Lift #3 prereq #1 promotes the parity-script
+        pattern to a first-class spine API.
+
+        Args:
+            policy: A constructed ``lerobot.common.policies.pi0.modeling_pi0.PI0Policy``
+                instance. Typically loaded via
+                ``PI0Policy.from_pretrained("lerobot/pi0_base")`` + cast
+                to fp32 + cpu before passing in.
+
+        Returns:
+            Pi0VLA ready for forward()/predict_action(), bit-identical to
+            the source policy on the same inputs.
+        """
+        from reflex.exporters.pi0_prefix import build_pi0_expert_with_prefix
+        from reflex.models.heads.flow_matching_head import FlowMatchingHead
+        from reflex.models.llm.paligemma_backbone import PaliGemmaBackbone
+        from reflex.models.projectors.linear_projector import LinearProjector
+        from reflex.models.vision.siglip_backbone import SigLIPBackbone
+
+        paligemma = policy.model.paligemma_with_expert.paligemma
+        vision = SigLIPBackbone(model=paligemma.model.vision_tower)
+        llm = PaliGemmaBackbone(model=paligemma)
+
+        # Build expert + projector from the unprefixed state_dict (same
+        # discipline as from_pretrained).
+        full_state = policy.state_dict()
+        unprefixed = {
+            k[len("model."):] if k.startswith("model.") else k: v
+            for k, v in full_state.items()
+        }
+        expert_with_prefix, expert_meta = build_pi0_expert_with_prefix(unprefixed)
+        head = FlowMatchingHead(expert_stack=expert_with_prefix)
+
+        action_dim = 32
+        expert_hidden = expert_meta["expert_hidden"]
+        projector = LinearProjector(in_dim=action_dim, out_dim=expert_hidden)
+        state_proj_w = unprefixed.get("state_proj.weight")
+        state_proj_b = unprefixed.get("state_proj.bias")
+        if state_proj_w is not None:
+            with torch.no_grad():
+                projector.linear.weight.copy_(state_proj_w)
+                if state_proj_b is not None:
+                    projector.linear.bias.copy_(state_proj_b)
+
+        return cls(
+            vision_backbone=vision,
+            llm_backbone=llm,
+            projector=projector,
+            vla_head=head,
+        )
+
     # ── ABC contract ────────────────────────────────────────────────────
 
     def forward(self, batch: dict[str, Any]) -> Any:
