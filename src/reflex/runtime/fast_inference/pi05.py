@@ -498,6 +498,9 @@ def _llm_prepare_triton(language_model: Any, role: str = "llm") -> dict:
         weights["encoder_ffn_down_w"] = torch.stack(ffn_down_w)
 
     elif role == "expert":
+        # Reflex's Pi05ExpertGQALayer has FLAT attribute names — no .self_attn / .mlp
+        # parents (unlike HF Gemma layers used in the 'llm' role above). Walk
+        # the projections directly off each layer.
         attn_qkv_w, attn_o_w = [], []
         ffn_gate_w, ffn_up_w, ffn_down_w = [], [], []
         pre_attn_mod_w, pre_attn_mod_b = [], []
@@ -515,19 +518,19 @@ def _llm_prepare_triton(language_model: Any, role: str = "llm") -> dict:
             )
             pre_ffn_mod_b.append(layer.post_attention_layernorm.dense.bias.data.bfloat16().cuda())
 
-            q_w = layer.self_attn.q_proj.weight.data.float()
-            k_w = layer.self_attn.k_proj.weight.data.float()
-            v_w = layer.self_attn.v_proj.weight.data.float()
-            o_w = layer.self_attn.o_proj.weight.data.float()
+            q_w = layer.q_proj.weight.data.float()
+            k_w = layer.k_proj.weight.data.float()
+            v_w = layer.v_proj.weight.data.float()
+            o_w = layer.o_proj.weight.data.float()
 
             q_w, k_w = _rope_format_conversion(q_w, k_w)
             qkv_w = torch.cat([q_w.T, k_w.T, v_w.T], dim=1)
             attn_qkv_w.append(qkv_w.bfloat16().cuda())
             attn_o_w.append(o_w.T.contiguous().bfloat16().cuda())
 
-            ffn_gate_w.append(layer.mlp.gate_proj.weight.data.T.contiguous().bfloat16().cuda())
-            ffn_up_w.append(layer.mlp.up_proj.weight.data.T.contiguous().bfloat16().cuda())
-            ffn_down_w.append(layer.mlp.down_proj.weight.data.T.contiguous().bfloat16().cuda())
+            ffn_gate_w.append(layer.gate_proj.weight.data.T.contiguous().bfloat16().cuda())
+            ffn_up_w.append(layer.up_proj.weight.data.T.contiguous().bfloat16().cuda())
+            ffn_down_w.append(layer.down_proj.weight.data.T.contiguous().bfloat16().cuda())
 
         weights["decoder_attn_qkv_w"] = torch.stack(attn_qkv_w)
         weights["decoder_attn_o_w"] = torch.stack(attn_o_w)
@@ -539,10 +542,24 @@ def _llm_prepare_triton(language_model: Any, role: str = "llm") -> dict:
         weights["decoder_pre_ffn_norm_mod_w"] = torch.stack(pre_ffn_mod_w)
         weights["decoder_pre_ffn_norm_mod_b"] = torch.stack(pre_ffn_mod_b)
 
-        weights["decoder_final_norm_mod_w"] = (
-            language_model.norm.dense.weight.data.T.contiguous().bfloat16().cuda()
+        # Final norm — reflex's expert_stack has a `norm` attribute that's a
+        # DecomposedAdaRMSNorm (matches FluxVLA's pattern). FluxVLA's
+        # condition_gemma_inference.py reads `language_model.norm.dense.*`.
+        # Reflex stores this on the expert_stack itself (not nested).
+        # Falls back to `final_norm` if `norm` isn't present (some expert
+        # builds use a different attribute name).
+        final_norm = getattr(language_model, "norm", None) or getattr(
+            language_model, "final_norm", None
         )
-        weights["decoder_final_norm_mod_b"] = language_model.norm.dense.bias.data.bfloat16().cuda()
+        if final_norm is None:
+            raise AttributeError(
+                "expert stack must expose `.norm` or `.final_norm` "
+                "(DecomposedAdaRMSNorm); got neither"
+            )
+        weights["decoder_final_norm_mod_w"] = (
+            final_norm.dense.weight.data.T.contiguous().bfloat16().cuda()
+        )
+        weights["decoder_final_norm_mod_b"] = final_norm.dense.bias.data.bfloat16().cuda()
     else:
         raise ValueError(f"role must be 'llm' or 'expert'; got {role!r}")
     return weights
