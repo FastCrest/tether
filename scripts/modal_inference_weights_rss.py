@@ -57,8 +57,9 @@ image = (
         "torch", "safetensors>=0.4.0", "huggingface_hub",
         "transformers<5.4,>=4.40",
         "numpy", "Pillow", "pydantic>=2.0", "pyyaml",
-        "onnx>=1.16", "onnxruntime-gpu>=1.20", "onnxscript>=0.1",
+        "onnx>=1.16", "onnxscript>=0.1",
         "psutil", "typer", "rich",
+        "lerobot==0.5.1",  # for PI05Policy in from_lerobot_policy
     )
     .run_commands(
         f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
@@ -97,42 +98,45 @@ def run_rss_benchmark(model_id: str = "lerobot/pi05_libero_finetuned_v044"):
     rss_initial = _rss_mb()
     print(f"[rss] Initial RSS: {rss_initial:.1f} MB")
 
-    # ─── PATH A: standard nn.Module instantiation ───────────────
-    print("\n[rss] PATH A: standard nn.Module residency")
+    # Load the lerobot policy ONCE — this is the working loader path for
+    # real lerobot/pi05_* checkpoints (per the from_lerobot_policy fix in
+    # prereq #1 PR #173). Both PATH A and PATH B reload from this baseline.
+    def _load_pi05_policy():
+        # Lazy import — lerobot is an [rtc] extra, not a base dep.
+        from lerobot.common.policies.pi05.modeling_pi05 import PI05Policy
+        policy = PI05Policy.from_pretrained(model_id)
+        policy.to(dtype=torch.float32).to("cpu")
+        return policy
+
+    # ─── PATH A: standard nn.Module residency ────────────────────
+    print("\n[rss] PATH A: standard nn.Module residency (Pi05VLA via from_lerobot_policy)")
     t0 = time.time()
-    from reflex.checkpoint import load_checkpoint
-    state_dict, _ = load_checkpoint(model_id)
-    print(f"[rss]   state_dict loaded ({len(state_dict)} tensors) in {time.time()-t0:.1f}s, RSS={_rss_mb():.1f} MB")
+    policy = _load_pi05_policy()
+    rss_after_policy = _rss_mb()
+    print(f"[rss]   policy loaded in {time.time()-t0:.1f}s, RSS={rss_after_policy:.1f} MB")
 
     from reflex.models.vlas.pi05 import Pi05VLA
     t0 = time.time()
-    vla = Pi05VLA.from_pretrained(state_dict=state_dict)
+    vla = Pi05VLA.from_lerobot_policy(policy)
     rss_after_module = _rss_mb()
     print(f"[rss]   Pi05VLA instantiated in {time.time()-t0:.1f}s, RSS={rss_after_module:.1f} MB")
 
-    # Drop the state_dict to isolate the cost of the nn.Module graph.
-    del state_dict
-    gc.collect()
-    rss_after_drop = _rss_mb()
-    print(f"[rss]   after dropping state_dict, RSS={rss_after_drop:.1f} MB")
-
-    # PATH A peak: nn.Module + (transient) state_dict at load time.
-    peak_a = max(rss_after_module, rss_after_drop)
+    # PATH A peak: nn.Module + the source lerobot policy (both resident).
+    peak_a = max(rss_after_policy, rss_after_module)
     print(f"[rss] PATH A peak RSS: {peak_a:.1f} MB")
 
     # Free PATH A before measuring PATH B.
     del vla
+    del policy
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     rss_after_a_free = _rss_mb()
     print(f"[rss]   after freeing PATH A, RSS={rss_after_a_free:.1f} MB")
 
-    # ─── PATH B: inference-only-weights ─────────────────────────
+    # ─── PATH B: inference-only-weights (flat dict + drop module) ─
     print("\n[rss] PATH B: inference-only-weights (flat dict, no nn.Module residence)")
-    t0 = time.time()
-    state_dict, _ = load_checkpoint(model_id)
-    vla_b = Pi05VLA.from_pretrained(state_dict=state_dict)
+    vla_b = Pi05VLA.from_lerobot_policy(policy)
     rss_after_b_module = _rss_mb()
     print(f"[rss]   built nn.Module (transient) in {time.time()-t0:.1f}s, RSS={rss_after_b_module:.1f} MB")
 
@@ -141,14 +145,14 @@ def run_rss_benchmark(model_id: str = "lerobot/pi05_libero_finetuned_v044"):
     rss_after_flat = _rss_mb()
     print(f"[rss]   flat-dict ({len(flat)} tensors) built in {time.time()-t0:.1f}s, RSS={rss_after_flat:.1f} MB")
 
-    # The win comes from dropping the nn.Module after extracting the flat dict.
+    # The win comes from dropping the nn.Module + source policy after extracting the flat dict.
     del vla_b
-    del state_dict
+    del policy
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     rss_after_drop_b = _rss_mb()
-    print(f"[rss]   after dropping nn.Module + state_dict, RSS={rss_after_drop_b:.1f} MB")
+    print(f"[rss]   after dropping nn.Module + policy, RSS={rss_after_drop_b:.1f} MB")
 
     peak_b = rss_after_drop_b
     print(f"[rss] PATH B steady RSS (flat dict only): {peak_b:.1f} MB")
