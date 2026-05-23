@@ -39,7 +39,6 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "torch==2.6.0",
         "safetensors>=0.4.0",
         "huggingface_hub",
         "transformers<5.4,>=4.40",
@@ -50,7 +49,8 @@ image = (
         "psutil",
         "typer",
         "rich",
-        "lerobot==0.5.1",
+        "lerobot==0.5.1",  # transitively pulls torch>=2.7 + matching triton
+        "triton>=3.1",
     )
     .run_commands(
         f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_BRANCH}"',

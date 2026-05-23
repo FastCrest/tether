@@ -238,17 +238,22 @@ jetson = [
 
 # Opt-in Triton fast-kernels path (Lift #5). `reflex serve --fast-kernels` falls
 # back to ORT silently if these aren't installed, so the extra is genuinely
-# optional. Per decision T-5, PyTorch is pinned to the exact FluxVLA-tested
-# version (`torch==2.6.0`); Triton resolves transitively to a compatible release.
-# Drift beyond this window breaks the vendored kernels until re-vendor; the
-# kill-trigger ADR (2026-05-20-fast-kernels-kill-triggers.md) governs that path.
+# optional.
 #
-# The initial research-sidecar pin `triton>=3.0,<3.2` conflicted with torch
-# 2.7+'s required `triton>=3.2` (caught by Modal Day 4 smoke 2026-05-23).
-# Locking to torch 2.6.0 + auto-resolved triton matches FluxVLA's
-# reference/requirements.txt and unblocks the Day 4-7 build.
+# T-5 pinning revision (2026-05-23): the initial pin `triton>=3.0,<3.2` was
+# defeated by two transitive constraints surfaced on first Modal fire:
+#   1. torch 2.7+ requires triton>=3.2 (excluded by our upper bound)
+#   2. lerobot 0.5.1 requires torch>=2.7 (excluded by FluxVLA's torch==2.6.0)
+# Resolution: bring `triton` only (no torch lower bound — torch is supplied by
+# the host stack: serve/gpu/jetson extras or whatever the user installs).
+# `triton>=3.1` matches what torch 2.6-2.8 transitively bring in; we don't
+# constrain torch here because the [serve,gpu] / [monolithic] / [jetson]
+# extras already do.
+#
+# Re-vendor cadence in src/reflex/kernels/ATTRIBUTION.txt covers when
+# torch+triton drift breaks the vendored kernels.
 fast-kernels = [
-    "torch==2.6.0",
+    "triton>=3.1",
 ]
 
 [project.scripts]
