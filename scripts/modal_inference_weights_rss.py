@@ -103,8 +103,7 @@ def run_rss_benchmark(model_id: str = "lerobot/pi05_libero_finetuned_v044"):
     # prereq #1 PR #173). Both PATH A and PATH B reload from this baseline.
     def _load_pi05_policy():
         # Lazy import — lerobot is an [rtc] extra, not a base dep.
-        # Modern lerobot uses lerobot.policies.* (no .common.* in the path).
-        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+        from lerobot.common.policies.pi05.modeling_pi05 import PI05Policy
         policy = PI05Policy.from_pretrained(model_id)
         policy.to(dtype=torch.float32).to("cpu")
         return policy
@@ -137,8 +136,6 @@ def run_rss_benchmark(model_id: str = "lerobot/pi05_libero_finetuned_v044"):
 
     # ─── PATH B: inference-only-weights (flat dict + drop module) ─
     print("\n[rss] PATH B: inference-only-weights (flat dict, no nn.Module residence)")
-    t0 = time.time()
-    policy = _load_pi05_policy()  # PATH A's policy was freed; reload for B
     vla_b = Pi05VLA.from_lerobot_policy(policy)
     rss_after_b_module = _rss_mb()
     print(f"[rss]   built nn.Module (transient) in {time.time()-t0:.1f}s, RSS={rss_after_b_module:.1f} MB")
