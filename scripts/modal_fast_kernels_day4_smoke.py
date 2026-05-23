@@ -39,8 +39,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "torch>=2.6,<2.8",
-        "triton>=3.0,<3.2",
+        "torch==2.6.0",
         "safetensors>=0.4.0",
         "huggingface_hub",
         "transformers<5.4,>=4.40",

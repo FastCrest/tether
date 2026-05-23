@@ -238,13 +238,17 @@ jetson = [
 
 # Opt-in Triton fast-kernels path (Lift #5). `reflex serve --fast-kernels` falls
 # back to ORT silently if these aren't installed, so the extra is genuinely
-# optional. Per decision T-5, Triton + PyTorch are pinned at install — reflex
-# is the first project to lock these to the FluxVLA-tested window. Drift
-# beyond this window breaks the vendored kernels until re-vendor; the
+# optional. Per decision T-5, PyTorch is pinned to the exact FluxVLA-tested
+# version (`torch==2.6.0`); Triton resolves transitively to a compatible release.
+# Drift beyond this window breaks the vendored kernels until re-vendor; the
 # kill-trigger ADR (2026-05-20-fast-kernels-kill-triggers.md) governs that path.
+#
+# The initial research-sidecar pin `triton>=3.0,<3.2` conflicted with torch
+# 2.7+'s required `triton>=3.2` (caught by Modal Day 4 smoke 2026-05-23).
+# Locking to torch 2.6.0 + auto-resolved triton matches FluxVLA's
+# reference/requirements.txt and unblocks the Day 4-7 build.
 fast-kernels = [
-    "triton>=3.0,<3.2",
-    "torch>=2.6,<2.8",
+    "torch==2.6.0",
 ]
 
 [project.scripts]
