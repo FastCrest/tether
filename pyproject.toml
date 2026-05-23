@@ -235,6 +235,18 @@ jetson = [
     "scipy",
     "num2words",
 ]
+
+# Opt-in Triton fast-kernels path (Lift #5). `reflex serve --fast-kernels` falls
+# back to ORT silently if these aren't installed, so the extra is genuinely
+# optional. Per decision T-5, Triton + PyTorch are pinned at install — reflex
+# is the first project to lock these to the FluxVLA-tested window. Drift
+# beyond this window breaks the vendored kernels until re-vendor; the
+# kill-trigger ADR (2026-05-20-fast-kernels-kill-triggers.md) governs that path.
+fast-kernels = [
+    "triton>=3.0,<3.2",
+    "torch>=2.6,<2.8",
+]
+
 [project.scripts]
 reflex = "reflex.cli:app"
 
