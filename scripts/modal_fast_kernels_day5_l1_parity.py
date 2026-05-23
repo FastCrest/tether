@@ -40,7 +40,7 @@ _BRANCH = "lift/5-day1-2-vendor-triton-kernels"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")
+    .apt_install("git", "ninja-build")
     .pip_install(
         "safetensors>=0.4.0",
         "huggingface_hub",
@@ -49,6 +49,7 @@ image = (
         "psutil", "typer", "rich",
         "lerobot==0.5.1",
         "triton>=3.1",
+        "ninja",
     )
     .run_commands(
         f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',

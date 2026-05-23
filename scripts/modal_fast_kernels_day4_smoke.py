@@ -37,7 +37,7 @@ _BRANCH = "lift/5-day1-2-vendor-triton-kernels"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")
+    .apt_install("git", "ninja-build")
     .pip_install(
         "safetensors>=0.4.0",
         "huggingface_hub",
@@ -51,6 +51,7 @@ image = (
         "rich",
         "lerobot==0.5.1",  # transitively pulls torch>=2.7 + matching triton
         "triton>=3.1",
+        "ninja",  # required by torch.utils.cpp_extension.load() JIT compiler
     )
     .run_commands(
         # Reference HEAD SHA (not branch name) so each new commit forces a
