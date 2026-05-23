@@ -239,6 +239,65 @@ class Pi0VLA(BaseVLA):
             vla_head=head,
         )
 
+    # ── Phase B safetensors-direct loader (Lift #3) ─────────────────────
+
+    @classmethod
+    def flat_dict_from_safetensors(
+        cls,
+        safetensors_path: str,
+        *,
+        dtype: torch.dtype | None = torch.bfloat16,
+        device: str = "cuda",
+        device_id: int = 0,
+    ) -> dict[str, torch.Tensor]:
+        """Load a pi0 safetensors checkpoint directly into a flat
+        ``{key: tensor}`` dict — never instantiating any ``nn.Module``.
+
+        Lift #3 Phase B. Produces a flat dict whose keys + values are
+        identical to ``Pi0VLA.from_lerobot_policy(policy).prepare_inference_weights()``,
+        but at a fraction of the peak RSS (the source path holds both the
+        ``nn.Module`` and the cloned flat dict simultaneously; this path
+        materializes the flat dict directly from the safetensors file).
+
+        Args:
+            safetensors_path: Path to the lerobot pi0 ``model.safetensors``.
+                Sharded multi-file checkpoints not yet supported — call
+                ``load_flat_dict_from_safetensors_dir`` for those.
+            dtype: Target tensor dtype. Default ``torch.bfloat16`` (the
+                Lift #5 Triton kernel target). Pass ``None`` to preserve
+                source dtype.
+            device: ``"cuda"`` (default) or ``"cpu"``.
+            device_id: CUDA device ordinal.
+
+        Returns:
+            Flat dict matching ``prepare_inference_weights()`` output:
+            ``vision_backbone.model.*``, ``llm_backbone.model.model.*``,
+            ``llm_backbone.model.lm_head.*``, ``projector.linear.*``,
+            ``vla_head.expert_stack.*``. Tied weights expanded
+            (``embed_tokens.weight`` populated from ``lm_head.weight``).
+        """
+        from safetensors import safe_open
+
+        from reflex.models.vlas._pi0_safetensors_mapping import (
+            expand_tied_pi0,
+            pi0_safetensors_to_flat,
+        )
+
+        device_str = f"{device}:{device_id}" if device == "cuda" else device
+
+        flat: dict[str, torch.Tensor] = {}
+        with safe_open(safetensors_path, framework="pt", device=device_str) as f:
+            for src_key in f.keys():
+                target_key = pi0_safetensors_to_flat(src_key)
+                if target_key is None:
+                    continue  # skip buffer-backed or unused keys; don't read tensor
+                tensor = f.get_tensor(src_key)
+                if dtype is not None and tensor.dtype != dtype:
+                    tensor = tensor.to(dtype=dtype)
+                flat[target_key] = tensor
+
+        return expand_tied_pi0(flat)
+
     # ── ABC contract ────────────────────────────────────────────────────
 
     def forward(self, batch: dict[str, Any]) -> Any:
