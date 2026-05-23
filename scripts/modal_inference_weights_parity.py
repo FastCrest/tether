@@ -51,11 +51,16 @@ image = (
         "torch", "safetensors>=0.4.0", "huggingface_hub",
         "transformers<5.4,>=4.40",
         "numpy", "Pillow", "pydantic>=2.0", "pyyaml",
-        "onnx>=1.16", "onnxruntime-gpu>=1.20", "onnxscript>=0.1",
+        "onnx>=1.16", "onnxscript>=0.1",
         "typer", "rich",
     )
     .run_commands(
+        # reflex-vla first (may pull plain onnxruntime as transitive)
         f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        # Force GPU build (uninstall plain ORT first to avoid the silent
+        # CUDAExecutionProvider-unavailable failure we hit on first fire).
+        "pip uninstall -y onnxruntime || true",
+        "pip install --force-reinstall 'onnxruntime-gpu>=1.20'",
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
