@@ -89,10 +89,14 @@ def run_day4_smoke(model_id: str = "lerobot/pi05_libero_finetuned_v044") -> dict
     vla = Pi05VLA.from_lerobot_policy(policy)
     print(f"[d4] [{time.time()-t0:.1f}s] Pi05VLA built on spine", flush=True)
 
-    # Move VLA to CUDA so weight extraction lands on the GPU directly.
+    # Move VLA components to CUDA so weight extraction lands on the GPU directly.
+    # Pi05VLA is an ABC composition (not an nn.Module), so move the underlying
+    # component nn.Modules individually.
     t0 = time.time()
-    vla = vla.to("cuda")
-    print(f"[d4] [{time.time()-t0:.1f}s] Pi05VLA moved to CUDA", flush=True)
+    vla.vision_backbone.to("cuda")
+    vla.llm_backbone.to("cuda")
+    vla.vla_head.to("cuda")
+    print(f"[d4] [{time.time()-t0:.1f}s] Pi05VLA components moved to CUDA", flush=True)
 
     # ── Build the FastKernels runtime ──────────────────────────────────
     t0 = time.time()
