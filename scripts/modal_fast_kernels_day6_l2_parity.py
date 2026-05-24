@@ -144,7 +144,9 @@ def run_day6_l2(model_id: str = "lerobot/pi05_libero_finetuned_v044", n_pairs: i
                 )
                 t_a = time.time() - t0
             except Exception as e:
+                import traceback
                 print(f"[d6]   pair {i} Path A FAILED: {type(e).__name__}: {e}", flush=True)
+                traceback.print_exc()
                 continue
 
         # ── Path B: Triton (bf16) ──
