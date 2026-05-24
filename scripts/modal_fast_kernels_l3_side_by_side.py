@@ -117,7 +117,7 @@ def run_side_by_side(
     torch.load = _compat_load
 
     if task_indices is None:
-        task_indices = [0, 1]
+        task_indices = [3, 4, 6]  # single-object tasks with higher baseline success
 
     print(f"[sbs] Side-by-side — model={model_id}, tasks={task_indices}, N={num_episodes}", flush=True)
     print(f"[sbs] CUDA: {torch.cuda.get_device_name(0)}", flush=True)
@@ -266,6 +266,12 @@ def run_side_by_side(
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(action)
                         t += 1
+
+                        # Progress logging every 100 steps
+                        if t % 100 == 0:
+                            elapsed = time.time() - t_total
+                            print(f"[sbs] [{arm_name}] task {task_idx} ep {ep} step {t}/{max_steps+num_steps_wait} ({elapsed:.0f}s elapsed)", flush=True)
+
                         if done:
                             break
 
