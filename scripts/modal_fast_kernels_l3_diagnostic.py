@@ -31,6 +31,16 @@ def _repo_head_sha() -> str:
 
 _HEAD = _repo_head_sha()
 
+def _hf_secret():
+    token = os.environ.get("HF_TOKEN", "")
+    if token:
+        return modal.Secret.from_dict({"HF_TOKEN": token})
+    try:
+        return modal.Secret.from_name("huggingface")
+    except Exception:
+        return modal.Secret.from_dict({})
+
+
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04",
@@ -60,7 +70,7 @@ image = (
 
 @app.function(
     image=image, gpu="A100-40GB", timeout=3600,
-    secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})],
+    secrets=[_hf_secret()],
 )
 def run_l3_diagnostic(
     model_id: str = "lerobot/pi05_libero_finetuned_v044",
