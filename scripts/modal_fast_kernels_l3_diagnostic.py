@@ -169,6 +169,14 @@ def run_l3_diagnostic(
     print(f"[l3-diag] Pre/post processors loaded", flush=True)
 
     # ── LIBERO setup ──────────────────────────────────────────────────
+    # PyTorch 2.6+ changed torch.load default to weights_only=True, which
+    # refuses to unpickle LIBERO's init_state files (they embed numpy globals).
+    _orig_torch_load = torch.load
+    def _compat_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _orig_torch_load(*args, **kwargs)
+    torch.load = _compat_load
+
     np.random.seed(42)
     from libero.libero import benchmark, get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
