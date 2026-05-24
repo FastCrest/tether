@@ -104,7 +104,7 @@ image = (
 
 
 @app.function(
-    image=image, gpu="A100-40GB", timeout=3600,
+    image=image, gpu="A100-40GB", timeout=7200,
     secrets=[_hf_secret()],
 )
 def run_l3_diagnostic(
