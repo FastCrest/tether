@@ -42,29 +42,56 @@ def _hf_secret():
 
 
 image = (
+    # CUDA-devel base for Triton JIT C++ extension compilation (nvcc needed).
+    # The existing modal_libero_lerobot_native.py uses debian_slim, but we need
+    # nvcc for the vendored CUDA kernels. Merge both image requirements.
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04",
         add_python="3.12",
     )
-    .apt_install("git", "ninja-build", "clang", "build-essential", "libgl1-mesa-glx", "libosmesa6")
-    .env({"CUDA_HOME": "/usr/local/cuda", "MUJOCO_GL": "osmesa"})
+    .apt_install(
+        "git", "ninja-build", "clang", "build-essential",
+        "libgl1-mesa-glx", "libglib2.0-0", "libegl1-mesa", "libglvnd0", "ffmpeg",
+        "cmake", "libosmesa6", "libosmesa6-dev",
+    )
     .pip_install(
         "safetensors>=0.4.0",
         "huggingface_hub",
         "transformers<5.4,>=4.40",
         "numpy", "Pillow", "pydantic>=2.0", "pyyaml",
         "psutil", "typer", "rich",
-        "lerobot==0.5.1",
-        "triton>=3.1",
-        "ninja",
+        "triton>=3.1", "ninja",
+        # LIBERO deps (matching the working modal_libero_lerobot_native.py image)
+        "mujoco==3.3.2",
         "robosuite==1.4.1",
-        "mujoco==3.1.6",
-        "libero @ git+https://github.com/Lifelong-Robot-Learning/LIBERO@master",
+        "h5py", "bddl==1.0.1", "future", "robomimic",
+        "hydra-core>=1.1", "easydict", "einops",
+        "opencv-python-headless", "gym", "gymnasium",
+        "lerobot==0.5.1",
+        "num2words", "imageio",
     )
+    # Clone + install LIBERO the same way the working eval script does
+    .run_commands(
+        "git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO"
+        " && cd /opt/LIBERO && pip install . --no-deps"
+    )
+    # Patch LIBERO (fixes pickle issues with numpy globals)
+    .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
+    .run_commands("python /root/patch_libero.py")
     .run_commands(
         f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
+    .env({
+        "CUDA_HOME": "/usr/local/cuda",
+        "MUJOCO_GL": "osmesa",
+        "PYOPENGL_PLATFORM": "osmesa",
+        "LIBERO_DATA_DIR": "/tmp/libero_data",
+        "LIBERO_ASSET_DIR": "/opt/LIBERO/libero/libero/assets",
+        "LIBERO_BASE": "/tmp/libero_data",
+        "PYTHONPATH": "/opt/LIBERO",
+    })
+    .run_commands("mkdir -p /tmp/libero_data")
 )
 
 
