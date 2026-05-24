@@ -103,9 +103,8 @@ def run_l3_diagnostic(
     print(f"[l3-diag] [{time.time()-t0:.1f}s] Triton adapter ready", flush=True)
 
     # ── Load preprocessor / postprocessor ─────────────────────────────
-    from lerobot.policies.pi05.configuration_pi05 import PI05Config
-    from lerobot.utils.policies import (
-        PolicyProcessorPipeline,
+    from lerobot.processor.pipeline import PolicyProcessorPipeline
+    from lerobot.processor.converters import (
         policy_action_to_transition,
         transition_to_policy_action,
     )
