@@ -119,6 +119,12 @@ def run_side_by_side(
     if task_indices is None:
         task_indices = [3, 4, 6]  # single-object tasks with higher baseline success
 
+    # Disable PyTorch's Triton autotuner — it blocks the GPU for 30+ seconds
+    # per matmul shape on first call, causing Modal to kill the task for
+    # "failed to respond to cancellation." Set before any torch operations.
+    os.environ["TORCHINDUCTOR_DISABLE"] = "1"
+    torch.backends.cuda.matmul.allow_tf32 = True
+
     print(f"[sbs] Side-by-side — model={model_id}, tasks={task_indices}, N={num_episodes}", flush=True)
     print(f"[sbs] CUDA: {torch.cuda.get_device_name(0)}", flush=True)
     t_total = time.time()
