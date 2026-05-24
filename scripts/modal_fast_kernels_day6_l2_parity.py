@@ -79,37 +79,32 @@ def run_day6_l2(model_id: str = "lerobot/pi05_libero_finetuned_v044", n_pairs: i
     print(f"[d6] CUDA: {torch.cuda.get_device_name(0)}, sm {torch.cuda.get_device_capability(0)}", flush=True)
     t_total = time.time()
 
-    # ── Load policy once, build both paths ───────────────────────────
+    # ── Load policy ONCE, build both paths from same VLA ────────────
+    # Loading PI05Policy twice on A100-40GB OOMs (~26 GB × 2 > 40 GB).
+    # Instead: one policy → one Pi05VLA → both paths share the nn.Module.
+    # Triton weight reshaping creates separate bf16 tensors (~3-4 GB) so
+    # total is ~30 GB (fits 40GB).
     t0 = time.time()
     from lerobot.policies.pi05.modeling_pi05 import PI05Policy
     policy = PI05Policy.from_pretrained(model_id)
     policy = policy.to(dtype=torch.float32).to("cpu")
     print(f"[d6] [{time.time()-t0:.1f}s] PI05Policy loaded", flush=True)
 
-    # Path A: Pi05VLA spine (PyTorch nn.Module, fp32)
     t0 = time.time()
     from reflex.models.vlas.pi05 import Pi05VLA
-    vla_a = Pi05VLA.from_lerobot_policy(policy)
-    vla_a.vision_backbone.to("cuda")
-    vla_a.llm_backbone.to("cuda")
-    vla_a.vla_head.to("cuda")
-    print(f"[d6] [{time.time()-t0:.1f}s] Path A (Pi05VLA spine, fp32) ready", flush=True)
+    vla = Pi05VLA.from_lerobot_policy(policy)
+    del policy
+    vla.vision_backbone.to("cuda")
+    vla.llm_backbone.to("cuda")
+    vla.vla_head.to("cuda")
+    print(f"[d6] [{time.time()-t0:.1f}s] Pi05VLA on CUDA (shared by both paths)", flush=True)
 
-    # Path B: Pi05FastKernelsInference (Triton, bf16)
-    # Reload policy to avoid shared weight references between paths
+    # Path B: Triton runtime built from the SAME VLA
     t0 = time.time()
-    policy_b = PI05Policy.from_pretrained(model_id)
-    policy_b = policy_b.to(dtype=torch.float32).to("cpu")
-    vla_b = Pi05VLA.from_lerobot_policy(policy_b)
-    vla_b.vision_backbone.to("cuda")
-    vla_b.llm_backbone.to("cuda")
-    vla_b.vla_head.to("cuda")
-
     from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
-    triton_runtime = Pi05FastKernelsInference(vla_b, capture=False)
+    triton_runtime = Pi05FastKernelsInference(vla, capture=False)
     triton_runtime.prepare_triton_inference()
-    del policy_b
-    print(f"[d6] [{time.time()-t0:.1f}s] Path B (Triton, bf16) ready", flush=True)
+    print(f"[d6] [{time.time()-t0:.1f}s] Triton runtime ready (bf16 weights reshaped from same VLA)", flush=True)
 
     # ── N paired comparisons ─────────────────────────────────────────
     cos_vals = []
@@ -138,7 +133,7 @@ def run_day6_l2(model_id: str = "lerobot/pi05_libero_finetuned_v044", n_pairs: i
         t0 = time.time()
         with torch.no_grad():
             try:
-                out_a = vla_a.predict_action(
+                out_a = vla.predict_action(
                     images=images_list,
                     lang_tokens=lang_tokens,
                     lang_masks=lang_masks,
