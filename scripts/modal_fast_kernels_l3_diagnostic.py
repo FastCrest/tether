@@ -42,17 +42,25 @@ def _hf_secret():
 
 
 image = (
-    # CUDA-devel base for Triton JIT C++ extension compilation (nvcc needed).
-    # The existing modal_libero_lerobot_native.py uses debian_slim, but we need
-    # nvcc for the vendored CUDA kernels. Merge both image requirements.
-    modal.Image.from_registry(
-        "nvidia/cuda:12.4.0-devel-ubuntu22.04",
-        add_python="3.12",
-    )
+    # debian_slim base (same as the working modal_libero_lerobot_native.py).
+    # The nvidia/cuda-devel base timed out on Modal image build (~5 GB pull).
+    # Instead: install CUDA dev headers via the NVIDIA apt repo so nvcc is
+    # available for JIT C++ extension compile, without the full devel image.
+    modal.Image.debian_slim(python_version="3.12")
     .apt_install(
         "git", "ninja-build", "clang", "build-essential",
         "libgl1-mesa-glx", "libglib2.0-0", "libegl1-mesa", "libglvnd0", "ffmpeg",
         "cmake", "libosmesa6", "libosmesa6-dev",
+        "gnupg", "wget",
+    )
+    .run_commands(
+        # Install CUDA toolkit 12.4 headers + nvcc via NVIDIA apt repo.
+        # This gives us nvcc for JIT without the full 5GB cuda-devel image.
+        "wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+        " && dpkg -i cuda-keyring_1.1-1_all.deb"
+        " && apt-get update"
+        " && apt-get install -y cuda-toolkit-12-4 --no-install-recommends"
+        " && rm cuda-keyring_1.1-1_all.deb",
     )
     .pip_install(
         "safetensors>=0.4.0",
