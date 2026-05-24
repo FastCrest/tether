@@ -284,13 +284,19 @@ def run_l3_diagnostic(
                         # Triton ARM
                         chunk = adapter.predict_chunk(batch_pp)
 
-                        # Denormalize via postprocessor (same as native ARM)
-                        chunk_pp = {"action": chunk}
-                        chunk_denorm = postprocessor(chunk_pp)
-                        chunk_np = chunk_denorm["action"].cpu().numpy()[0]
-
-                        for a in chunk_np[:replan_steps]:
-                            action_plan.append(a[:7])
+                        # Denormalize via postprocessor (same pattern as native ARM
+                        # in modal_libero_lerobot_native.py lines 548-558).
+                        # Postprocessor takes a raw tensor, NOT a dict.
+                        post = postprocessor(chunk.detach().cpu())
+                        chunk_np = (
+                            post.detach().cpu().numpy()
+                            if hasattr(post, "detach")
+                            else np.asarray(post)
+                        )
+                        if chunk_np.ndim == 3:
+                            chunk_np = chunk_np[0]  # (1, chunk_size, N) → (chunk_size, N)
+                        chunk_np = chunk_np[:, :7]  # trim to LIBERO 7-dim action
+                        action_plan.extend(chunk_np[:replan_steps])
 
                     action = action_plan.popleft()
                     obs, _, done, info = env.step(action)
