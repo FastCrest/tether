@@ -156,4 +156,27 @@ REGISTRY: tuple[ModelEntry, ...] = (
         # argmax-over-bins doesn't fit the flow-matching component pattern.
         vla_type="_openvla_shim",
     ),
+    # ──────────────────────────────────────────────────────────────────────
+    # Lift #4: FluxVLA pi0.5 LIBERO-10 fine-tuned checkpoint (Apache-2.0).
+    # Published 97.85% on LIBERO-10 across 4 subsuites (FluxVLA paper).
+    # Points to limxdynamics/FluxVLAEngine subdirectory until republished
+    # to fastcrest/pi05-libero10-finetune-v1 (pending HF upload).
+    # ──────────────────────────────────────────────────────────────────────
+    ModelEntry(
+        model_id="pi05-libero10-fluxvla",
+        hf_repo="limxdynamics/FluxVLAEngine",
+        family="pi05",
+        action_dim=7,
+        size_mb=14000,
+        supported_embodiments=("franka",),
+        supported_devices=("a10g", "a100", "h100", "h200"),
+        benchmarks=(),
+        requires_export=True,
+        description="FluxVLA's pi0.5 finetuned on LIBERO-10 (BS=64, 24 epochs). "
+                    "Published 97.85% average success. Apache-2.0 from LimX Dynamics. "
+                    "Use `reflex export pi05-libero10-fluxvla` after pull. "
+                    "Weights at pi05_paligemma_libero_10_full_finetune_bs64/ subdirectory.",
+        license="apache-2.0",
+        hf_revision=None,
+    ),
 )
