@@ -173,7 +173,7 @@ def run_headline_bench(
     vla.vla_head.to("cuda")
 
     from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
-    triton_rt = Pi05FastKernelsInference(vla, capture=True)
+    triton_rt = Pi05FastKernelsInference(vla, capture=True, num_views=num_views)
     triton_rt.prepare_triton_inference()
     print(f"[bench] [{time.time()-t0:.1f}s] Triton runtime ready", flush=True)
 
