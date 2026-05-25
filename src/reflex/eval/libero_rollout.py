@@ -431,11 +431,16 @@ def load_pi05_policy_and_processors(
     student_checkpoint: str,
     decomposed_dir: str,
     preprocessor_ref: str | None = None,
+    force_teacher: bool = False,
 ) -> tuple[Any, Any, Any]:
     """Load PyTorch policy (for config + _preprocess_images) + processor pipelines.
 
     Extracted from the same Modal script for reuse. Returns (policy, preprocessor,
     postprocessor). Handles the SnapFlow-student vs fallback-HF dispatch.
+
+    Args:
+        force_teacher: when True, load via PI05Policy.from_pretrained even if
+            model.safetensors exists (for non-SnapFlow fine-tunes like FluxVLA).
 
     Caller is expected to already have torch + lerobot importable.
     """
@@ -450,23 +455,24 @@ def load_pi05_policy_and_processors(
         policy_action_to_transition, transition_to_policy_action,
     )
 
-    # Two ways to source the policy:
-    # 1) SnapFlow student dir on the volume (has model.safetensors) — preferred
-    # 2) Fallback: load PI05Policy from preprocessor_ref (HF id)
     student_ckpt_path = Path(student_checkpoint)
-    if (student_ckpt_path / "model.safetensors").exists():
+    if not force_teacher and (student_ckpt_path / "model.safetensors").exists():
         print(f"[load] Loading SnapFlow student from {student_checkpoint}")
         from reflex.distill.snapflow_pi0_model import load_snapflow_student
         policy = load_snapflow_student(student_checkpoint)
     else:
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
-        fallback = preprocessor_ref or "lerobot/pi05_libero_finetuned_v044"
-        print(
-            f"[load] No model.safetensors at {student_checkpoint}; "
-            f"loading PI05Policy from {fallback} (config + preprocessing only — "
-            f"inference still runs through decomposed ONNX)"
-        )
-        policy = PI05Policy.from_pretrained(fallback)
+        if force_teacher and (student_ckpt_path / "model.safetensors").exists():
+            print(f"[load] Loading teacher fine-tune from {student_checkpoint}")
+            policy = PI05Policy.from_pretrained(student_checkpoint)
+        else:
+            fallback = preprocessor_ref or "lerobot/pi05_libero_finetuned_v044"
+            print(
+                f"[load] No model.safetensors at {student_checkpoint}; "
+                f"loading PI05Policy from {fallback} (config + preprocessing only — "
+                f"inference still runs through decomposed ONNX)"
+            )
+            policy = PI05Policy.from_pretrained(fallback)
     policy.eval().to("cuda").to(torch.float32)
 
     # Student-distillation checkpoints don't always ship the processor JSONs —

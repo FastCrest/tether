@@ -514,15 +514,11 @@ def _run_libero_suite(
     )
     from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
-    # Load policy + processors from the converted (lerobot-format) checkpoint.
-    # The student_checkpoint arg is the converted dir — it has model.safetensors,
-    # so the SnapFlow-student branch fires (which then dispatches to the
-    # FluxVLA-derived weights via load_snapflow_student or the fallback PI05Policy
-    # path depending on what's present after _convert_fluxvla_to_lerobot).
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=CONVERTED_CHECKPOINT_DIR,
         decomposed_dir=export_dir,
-        preprocessor_ref="lerobot/pi05_libero_finetuned_v044",  # baseline preprocessor stats
+        preprocessor_ref="lerobot/pi05_libero_finetuned_v044",
+        force_teacher=True,
     )
 
     inference = Pi05DecomposedInference(
