@@ -270,50 +270,48 @@ def _convert_fluxvla_to_lerobot(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    # Detect already-converted (cached)
-    if (output / "model.safetensors").exists() and (output / "config.json").exists():
-        logging.info("Converted checkpoint already at %s", output)
-        return str(output)
-
     src = Path(fluxvla_safetensors_path)
     src_dir = src.parent
+    weights_cached = (output / "model.safetensors").exists()
 
-    logging.info("Loading FluxVLA state_dict from %s", src)
-    state_dict = load_file(str(src))
-    logging.info("FluxVLA state_dict has %d entries", len(state_dict))
+    if not weights_cached:
+        logging.info("Loading FluxVLA state_dict from %s", src)
+        state_dict = load_file(str(src))
+        logging.info("FluxVLA state_dict has %d entries", len(state_dict))
 
-    # Print a sample of keys for debugging (first 10).
-    keys_sample = sorted(state_dict.keys())[:10]
-    for k in keys_sample:
-        logging.info("  key: %s  shape: %s", k, tuple(state_dict[k].shape))
+        keys_sample = sorted(state_dict.keys())[:10]
+        for k in keys_sample:
+            logging.info("  key: %s  shape: %s", k, tuple(state_dict[k].shape))
 
-    PREFIX_MAP = [
-        ('vision_backbone.vision.', 'paligemma_with_expert.paligemma.model.vision_tower.'),
-        ('llm_backbone.', 'paligemma_with_expert.paligemma.model.language_model.model.'),
-        ('llm_expert.', 'paligemma_with_expert.gemma_expert.model.'),
-        ('projector.projector.', 'paligemma_with_expert.paligemma.model.multi_modal_projector.linear.'),
-        ('action_in_proj.projector.', 'action_in_proj.'),
-        ('action_out_proj.projector.', 'action_out_proj.'),
-        ('time_mlp_in.projector.', 'action_time_mlp_in.'),
-        ('time_mlp_out.projector.', 'action_time_mlp_out.'),
-    ]
+        PREFIX_MAP = [
+            ('vision_backbone.vision.', 'paligemma_with_expert.paligemma.model.vision_tower.'),
+            ('llm_backbone.', 'paligemma_with_expert.paligemma.model.language_model.model.'),
+            ('llm_expert.', 'paligemma_with_expert.gemma_expert.model.'),
+            ('projector.projector.', 'paligemma_with_expert.paligemma.model.multi_modal_projector.linear.'),
+            ('action_in_proj.projector.', 'action_in_proj.'),
+            ('action_out_proj.projector.', 'action_out_proj.'),
+            ('time_mlp_in.projector.', 'action_time_mlp_in.'),
+            ('time_mlp_out.projector.', 'action_time_mlp_out.'),
+        ]
 
-    def rename(k: str) -> str:
-        for src_prefix, dst_prefix in PREFIX_MAP:
-            if k.startswith(src_prefix):
-                return dst_prefix + k[len(src_prefix):]
-        return k
+        def rename(k: str) -> str:
+            for src_prefix, dst_prefix in PREFIX_MAP:
+                if k.startswith(src_prefix):
+                    return dst_prefix + k[len(src_prefix):]
+            return k
 
-    renamed = {rename(k): v for k, v in state_dict.items()}
+        renamed = {rename(k): v for k, v in state_dict.items()}
 
-    embed_key = 'paligemma_with_expert.paligemma.model.language_model.model.embed_tokens.weight'
-    lm_head_key = 'paligemma_with_expert.paligemma.lm_head.weight'
-    if embed_key in renamed and lm_head_key not in renamed:
-        renamed[lm_head_key] = renamed[embed_key].clone()
-        logging.info("Added tied lm_head weight")
+        embed_key = 'paligemma_with_expert.paligemma.model.language_model.model.embed_tokens.weight'
+        lm_head_key = 'paligemma_with_expert.paligemma.lm_head.weight'
+        if embed_key in renamed and lm_head_key not in renamed:
+            renamed[lm_head_key] = renamed[embed_key].clone()
+            logging.info("Added tied lm_head weight")
 
-    logging.info("After rename: %d entries", len(renamed))
-    save_file(renamed, str(output / "model.safetensors"))
+        logging.info("After rename: %d entries", len(renamed))
+        save_file(renamed, str(output / "model.safetensors"))
+    else:
+        logging.info("Weights already converted at %s", output)
 
     # Copy/generate config.json from FluxVLA's checkpoint directory or
     # synthesize from their training config.
@@ -328,13 +326,13 @@ def _convert_fluxvla_to_lerobot(
             break
 
     if config_src is None:
-        # Fallback: pull base pi0.5 config from lerobot
-        logging.warning(
-            "No config.json found at %s; falling back to lerobot/pi05_base config",
+        # Use LIBERO-specific config (correct image feature names + action dim)
+        logging.info(
+            "No config.json found at %s; using lerobot/pi05_libero_finetuned_v044 config",
             src_dir,
         )
         from huggingface_hub import hf_hub_download
-        config_src = Path(hf_hub_download(repo_id="lerobot/pi05_base", filename="config.json"))
+        config_src = Path(hf_hub_download(repo_id="lerobot/pi05_libero_finetuned_v044", filename="config.json"))
 
     with open(config_src) as f:
         config = json.load(f)
