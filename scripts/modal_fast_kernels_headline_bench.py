@@ -92,37 +92,27 @@ def run_headline_bench(
     print(f"[bench] warmup={n_warmup}, measure={n_measure}", flush=True)
     t_total = time.time()
 
-    # ── Load ──────────────────────────────────────────────────────────
-    t0 = time.time()
+    import gc
     from lerobot.policies.pi05.modeling_pi05 import PI05Policy
-    policy = PI05Policy.from_pretrained(model_id)
-    policy = policy.to(dtype=torch.float32).cpu()
-    policy.eval()
-    print(f"[bench] [{time.time()-t0:.1f}s] PI05Policy loaded (CPU)", flush=True)
 
-    # Build Triton runtime
-    t0 = time.time()
-    from reflex.models.vlas.pi05 import Pi05VLA
-    vla = Pi05VLA.from_lerobot_policy(policy)
-    vla.vision_backbone.to("cuda")
-    vla.llm_backbone.to("cuda")
-    vla.vla_head.to("cuda")
+    # ══════════════════════════════════════════════════════════════════
+    # Sequential ARMs — only ONE model on CUDA at a time (avoids OOM
+    # on 40GB and device-mismatch from shared weights).
+    # ══════════════════════════════════════════════════════════════════
 
-    from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
-    triton_rt = Pi05FastKernelsInference(vla, capture=True)
-    triton_rt.prepare_triton_inference()
-    print(f"[bench] [{time.time()-t0:.1f}s] Triton runtime ready", flush=True)
-
-    # Move policy to CUDA for baseline ARM
-    policy.to("cuda")
-
-    # ── Fixed synthetic inputs ────────────────────────────────────────
-    torch.manual_seed(42)
-    batch_size = 1
-    num_views = 3  # pi0.5 uses 3 views
+    num_views = 3
     img_size = 224
 
-    # For predict_action_chunk: need preprocessed batch
+    # ── ARM A: PyTorch baseline (predict_action_chunk) ────────────────
+    print(f"\n[bench] ARM A: PyTorch baseline (predict_action_chunk, fp32)", flush=True)
+
+    t0 = time.time()
+    policy = PI05Policy.from_pretrained(model_id)
+    policy = policy.to(dtype=torch.float32).to("cuda")
+    policy.eval()
+    print(f"[bench] [{time.time()-t0:.1f}s] PI05Policy loaded (CUDA)", flush=True)
+
+    # Preprocessor for building batch_pp
     from lerobot.processor.pipeline import PolicyProcessorPipeline
     from huggingface_hub import snapshot_download
     repo_dir = snapshot_download(repo_id=model_id)
@@ -131,7 +121,6 @@ def run_headline_bench(
         config_filename="policy_preprocessor.json",
     )
 
-    # Build a dummy batch
     dummy_img = torch.randn(1, 3, img_size, img_size, device="cuda")
     dummy_batch = {
         "observation.images.image": dummy_img,
@@ -141,16 +130,6 @@ def run_headline_bench(
     }
     batch_pp = preprocessor(dummy_batch)
     batch_pp = {k: (v.to("cuda") if isinstance(v, torch.Tensor) else v) for k, v in batch_pp.items()}
-
-    # For Triton: concat images + lang tokens
-    images_concat = torch.randn(1, num_views * 3, img_size, img_size, device="cuda")
-    lang_tokens = torch.randint(0, 256000, (1, 16), dtype=torch.int64, device="cuda")
-    lang_masks = torch.ones(1, 16, dtype=torch.bool, device="cuda")
-    states = torch.zeros(1, 32, device="cuda")
-    noise = torch.randn(1, 50, 32, device="cuda")
-
-    # ── ARM A: PyTorch baseline (predict_action_chunk) ────────────────
-    print(f"\n[bench] ARM A: PyTorch baseline (predict_action_chunk, fp32)", flush=True)
 
     # Warmup
     for _ in range(n_warmup):
@@ -172,14 +151,40 @@ def run_headline_bench(
     baseline_p95 = sorted(baseline_times)[int(len(baseline_times) * 0.95)]
     print(f"[bench] Baseline: median={baseline_median:.1f}ms, p95={baseline_p95:.1f}ms", flush=True)
 
-    # Free CUDA for Triton
-    policy.to("cpu")
+    # Full teardown — free ALL CUDA memory before Triton ARM
+    del policy, batch_pp, dummy_batch, dummy_img, preprocessor
+    gc.collect()
     torch.cuda.empty_cache()
+    print(f"[bench] Baseline ARM torn down, CUDA freed", flush=True)
 
     # ── ARM B: Triton + CUDA Graph ────────────────────────────────────
     print(f"\n[bench] ARM B: Triton + CUDA Graph (bf16)", flush=True)
 
-    # Warmup (includes graph build on first call)
+    t0 = time.time()
+    policy_b = PI05Policy.from_pretrained(model_id)
+    policy_b = policy_b.to(dtype=torch.float32).cpu()
+
+    from reflex.models.vlas.pi05 import Pi05VLA
+    vla = Pi05VLA.from_lerobot_policy(policy_b)
+    del policy_b
+    gc.collect()
+    vla.vision_backbone.to("cuda")
+    vla.llm_backbone.to("cuda")
+    vla.vla_head.to("cuda")
+
+    from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
+    triton_rt = Pi05FastKernelsInference(vla, capture=True)
+    triton_rt.prepare_triton_inference()
+    print(f"[bench] [{time.time()-t0:.1f}s] Triton runtime ready", flush=True)
+
+    # Triton inputs
+    images_concat = torch.randn(1, num_views * 3, img_size, img_size, device="cuda")
+    lang_tokens = torch.randint(0, 256000, (1, 16), dtype=torch.int64, device="cuda")
+    lang_masks = torch.ones(1, 16, dtype=torch.bool, device="cuda")
+    states = torch.zeros(1, 32, device="cuda")
+    noise = torch.randn(1, 50, 32, device="cuda")
+
+    # Warmup (includes JIT compile + graph build on first call)
     for _ in range(n_warmup):
         _ = triton_rt.predict_action(
             images=images_concat, lang_tokens=lang_tokens,
