@@ -43,7 +43,7 @@ class TestRegistryInvariants:
             assert "/" in e.hf_repo, f"{e.model_id}: hf_repo missing org/: {e.hf_repo!r}"
 
     def test_every_family_is_canonical(self):
-        canonical = {"pi0", "pi05", "smolvla", "openvla", "groot"}
+        canonical = {"pi0", "pi05", "smolvla", "openvla", "groot", "dreamzero"}
         for e in REGISTRY:
             assert e.family in canonical, f"{e.model_id}: bad family {e.family!r}"
 
