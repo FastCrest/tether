@@ -439,13 +439,6 @@ def run_fluxvla_libero_eval(
     for suite in suites:
         logging.info("--- LIBERO suite: %s (N=%d) ---", suite, num_episodes)
         suite_start = time.time()
-        # Delegate to the proven rollout loop in modal_libero_pi05_decomposed.
-        # This function will be importable in-container because reflex-vla is
-        # installed from the same SHA.
-        from scripts.modal_libero_pi05_decomposed import run_decomposed_libero
-        # Note: run_decomposed_libero is a @app.function decorated remotely —
-        # we call its underlying function. For Phase 1, we inline the loop
-        # here in a TODO callout (next fire iteration).
         suite_result = _run_libero_suite(
             export_dir=EXPORTED_ONNX_DIR,
             suite=suite,
