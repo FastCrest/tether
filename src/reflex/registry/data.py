@@ -179,4 +179,25 @@ REGISTRY: tuple[ModelEntry, ...] = (
         license="apache-2.0",
         hf_revision=None,
     ),
+    # ──────────────────────────────────────────────────────────────────────
+    # Lift #7: DreamZero WAM (World-Action Model) — NVIDIA Research via FluxVLA.
+    # 6th model family on the spine. Joint video + action diffusion.
+    # 94.65% LIBERO average per FluxVLA benchmarks.
+    # ──────────────────────────────────────────────────────────────────────
+    ModelEntry(
+        model_id="dreamzero-libero10",
+        hf_repo="limxdynamics/FluxVLAEngine",
+        family="dreamzero",
+        action_dim=7,
+        size_mb=28000,  # ~14B params (Wan2.1 DiT + T5 + CLIP + VAE)
+        supported_embodiments=("franka",),
+        supported_devices=("a100", "h100", "h200"),  # 14B model needs >=40GB VRAM
+        benchmarks=(),
+        requires_export=True,
+        description="DreamZero — NVIDIA Research World-Action Model. Joint video + action "
+                    "diffusion on Wan 2.1 DiT backbone. 94.65% LIBERO average. Apache-2.0 "
+                    "via FluxVLA. Use `reflex export dreamzero-libero10` after pull.",
+        license="apache-2.0",
+        hf_revision=None,
+    ),
 )
