@@ -88,7 +88,7 @@ _BUILD_BUST = _build_bust()
 # Pinned FluxVLA HF reference. If they update upstream, we re-pin deliberately.
 FLUXVLA_HF_REPO = "limxdynamics/FluxVLAEngine"
 FLUXVLA_SUBDIR = "pi05_paligemma_libero_10_full_finetune_bs64"
-FLUXVLA_CHECKPOINT_FILE = "step-038064-epoch-24-loss=0.0170.safetensors"
+FLUXVLA_CHECKPOINT_FILE = "checkpoints/step-038064-epoch-24-loss=0.0170.safetensors"
 
 # FluxVLA's published numbers for verification (their README table, 2026-04-08+):
 FLUXVLA_PUBLISHED = {
