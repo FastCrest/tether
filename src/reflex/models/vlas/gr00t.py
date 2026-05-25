@@ -91,6 +91,57 @@ class GR00TVLA(BaseVLA):
 
         return cls(vlm_backbone=vlm, vla_head=head)
 
+    # ── Phase B safetensors-direct loader ─────────────────────────────
+
+    @classmethod
+    def flat_dict_from_safetensors(
+        cls,
+        safetensors_path: str,
+        *,
+        dtype: torch.dtype | None = torch.bfloat16,
+        device: str = "cuda",
+        device_id: int = 0,
+    ) -> dict[str, torch.Tensor]:
+        """Load a GR00T safetensors checkpoint directly into a flat dict.
+
+        Supports both single-file and sharded (index.json) checkpoints.
+        For sharded: pass the directory containing the .safetensors files.
+        """
+        from pathlib import Path
+
+        from reflex.models.vlas._groot_safetensors_mapping import (
+            expand_tied_groot,
+            groot_safetensors_to_flat,
+        )
+
+        path = Path(safetensors_path)
+        if path.is_dir():
+            from reflex.runtime.inference_weights.safetensors_direct import (
+                load_flat_dict_from_safetensors_dir,
+            )
+            raw = load_flat_dict_from_safetensors_dir(
+                path, dtype=dtype, device=device, device_id=device_id,
+            )
+        else:
+            from safetensors import safe_open
+            device_str = f"{device}:{device_id}" if device == "cuda" else device
+            raw = {}
+            with safe_open(str(path), framework="pt", device=device_str) as f:
+                for k in f.keys():
+                    tensor = f.get_tensor(k)
+                    if dtype is not None and tensor.dtype != dtype:
+                        tensor = tensor.to(dtype=dtype)
+                    raw[k] = tensor
+
+        flat: dict[str, torch.Tensor] = {}
+        for src_key, tensor in raw.items():
+            target_key = groot_safetensors_to_flat(src_key)
+            if target_key is None:
+                continue
+            flat[target_key] = tensor
+
+        return expand_tied_groot(flat)
+
     # ── ABC contract ────────────────────────────────────────────────────
 
     def forward(self, batch: dict[str, Any]) -> Any:
