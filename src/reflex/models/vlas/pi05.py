@@ -142,7 +142,7 @@ class Pi05VLA(BaseVLA):
         prereq #1 promotes it to a first-class spine API.
 
         Args:
-            policy: A constructed ``lerobot.common.policies.pi05.modeling_pi05.PI05Policy``
+            policy: A constructed ``lerobot.policies.pi05.modeling_pi05.PI05Policy``
                 instance. Typically loaded via
                 ``PI05Policy.from_pretrained("lerobot/pi05_libero_finetuned_v044")``
                 + cast to fp32 + cpu before passing in.

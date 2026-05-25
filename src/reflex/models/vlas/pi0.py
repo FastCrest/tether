@@ -192,7 +192,7 @@ class Pi0VLA(BaseVLA):
         pattern to a first-class spine API.
 
         Args:
-            policy: A constructed ``lerobot.common.policies.pi0.modeling_pi0.PI0Policy``
+            policy: A constructed ``lerobot.policies.pi0.modeling_pi0.PI0Policy``
                 instance. Typically loaded via
                 ``PI0Policy.from_pretrained("lerobot/pi0_base")`` + cast
                 to fp32 + cpu before passing in.
