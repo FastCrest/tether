@@ -352,8 +352,18 @@ class Pi05VLA(BaseVLA):
         past_key_values = prefix_out.past_key_values
 
         # Extract per-layer K and V — same as Pi0VLA.
+        # Transformers 5.x DynamicCache changed its interface:
+        # - No .key_cache / .value_cache attributes
+        # - Iteration yields 3-tuples (key, value, extra) not 2-tuples
+        # Handle all three variants for forward/backward compat.
         prefix_k_list: list[torch.Tensor] = []
         prefix_v_list: list[torch.Tensor] = []
+        if past_key_values is None:
+            raise RuntimeError(
+                "Pi05VLA.predict_action: language_model returned None for "
+                "past_key_values despite use_cache=True. Check transformers "
+                f"version ({__import__('transformers').__version__}) compatibility."
+            )
         if hasattr(past_key_values, "layers"):
             for layer in past_key_values.layers:
                 prefix_k_list.append(layer.keys)
@@ -363,9 +373,14 @@ class Pi05VLA(BaseVLA):
                 prefix_k_list.append(k)
                 prefix_v_list.append(v)
         else:
-            for (k, v) in past_key_values:
-                prefix_k_list.append(k)
-                prefix_v_list.append(v)
+            for layer_cache in past_key_values:
+                if isinstance(layer_cache, (tuple, list)):
+                    prefix_k_list.append(layer_cache[0])
+                    prefix_v_list.append(layer_cache[1])
+                else:
+                    raise TypeError(
+                        f"Unexpected past_key_values layer type: {type(layer_cache)}"
+                    )
         prefix_k = torch.stack(prefix_k_list, dim=0)
         prefix_v = torch.stack(prefix_v_list, dim=0)
 
