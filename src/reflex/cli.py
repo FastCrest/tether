@@ -1301,6 +1301,14 @@ def serve(
     export_dir: str = typer.Argument(help="Path to exported model directory"),
     port: int = typer.Option(8000, help="Server port"),
     host: str = typer.Option("0.0.0.0", help="Server host"),
+    transport: str = typer.Option(
+        "http",
+        "--transport",
+        help="Wire transport: 'http' (default, FastAPI + uvicorn) or 'zmq' "
+             "(ZeroMQ REP + msgpack, Lift #2). ZMQ is 20× lower bandwidth for "
+             "3-camera setups via JPEG-on-wire and 40%+ lower tail jitter. "
+             "ROS2 reserved for v1.0.",
+    ),
     device: str = typer.Option("cuda", help="Device: cuda or cpu"),
     providers: str = typer.Option(
         "",
@@ -2161,8 +2169,19 @@ def serve(
             f"(streamable-http)[/bold green]"
         )
 
-    console.print("[bold green]Starting server...[/bold green]")
-    uvicorn.run(app_instance, host=host, port=port, log_level="info" if verbose else "warning")
+    if transport == "zmq":
+        console.print("[bold green]Starting ZMQ server...[/bold green]")
+        from reflex.runtime.transports.zmq.factory import create_zmq_server
+        zmq_server = create_zmq_server(app_instance, host=host, port=port)
+        composed.append("[cyan]transport=zmq[/cyan]")
+        console.print(f"[dim]Features: {' + '.join(composed)}[/dim]")
+        zmq_server.run()
+    elif transport == "http":
+        console.print("[bold green]Starting HTTP server...[/bold green]")
+        uvicorn.run(app_instance, host=host, port=port, log_level="info" if verbose else "warning")
+    else:
+        err_console.print(f"[red]Unknown transport: {transport!r}. Use 'http' or 'zmq'.[/red]")
+        raise typer.Exit(1)
 
 
 @app.command(name="ros2-serve", hidden=True)
