@@ -91,7 +91,7 @@ class InferenceProtocol(Protocol):
 
 def run_libero_rollout(
     *,
-    inference: InferenceProtocol,
+    inference: InferenceProtocol | None = None,
     policy: Any,  # PI05Policy or load_snapflow_student output — must expose .config + ._preprocess_images
     preprocessor: Any,  # PolicyProcessorPipeline
     postprocessor: Any,  # PolicyProcessorPipeline
@@ -104,6 +104,7 @@ def run_libero_rollout(
     seed: int = 7,
     save_video_dir: str = "",
     label: str = "rollout",
+    use_native: bool = False,
 ) -> dict[str, Any]:
     """Run LIBERO rollouts through the given inference + processor pipeline.
 
@@ -314,56 +315,63 @@ def run_libero_rollout(
                                 k: (v.to("cuda") if isinstance(v, torch.Tensor) else v)
                                 for k, v in batch_pp.items()
                             }
-                            with torch.no_grad():
-                                images, img_masks = policy._preprocess_images(batch_pp)
-                                lang_tokens = batch_pp[OBS_LANGUAGE_TOKENS]
-                                lang_masks = batch_pp[OBS_LANGUAGE_ATTENTION_MASK]
-                                bsize = images[0].shape[0]
-                                noise = torch.randn(
-                                    bsize, chunk_size, action_dim_pad,
-                                    device=images[0].device, dtype=torch.float32,
-                                )
-                                # v0.5 state-out path: pass state explicitly.
-                                # predict_action_chunk accepts state=None for default
-                                # exports and uses it for state-out exports
-                                # (auto-detects from reflex_config.json's
-                                # expert_takes_state flag).
-                                state_np = (
-                                    batch_pp[OBS_STATE].cpu().numpy()
-                                    if OBS_STATE in batch_pp else None
-                                )
-                                # Episode id stable within one LIBERO episode
-                                # → lang-only cache hits after the first frame.
-                                _episode_id = f"t{task_idx}_ep{ep}"
-                                chunk_np = inference.predict_action_chunk(
-                                    img_base=images[0].cpu().numpy(),
-                                    img_wrist_l=images[1].cpu().numpy(),
-                                    img_wrist_r=images[2].cpu().numpy(),
-                                    mask_base=img_masks[0].cpu().numpy(),
-                                    mask_wrist_l=img_masks[1].cpu().numpy(),
-                                    mask_wrist_r=img_masks[2].cpu().numpy(),
-                                    lang_tokens=lang_tokens.cpu().numpy(),
-                                    lang_masks=lang_masks.cpu().numpy(),
-                                    noise=noise.cpu().numpy(),
-                                    state=state_np,
-                                    episode_id=_episode_id,
-                                )
-                                chunk = torch.from_numpy(chunk_np).to(images[0].device)
-                                # Trim padded max_action_dim → real env action dim
-                                chunk = chunk[:, :, :real_action_dim]
 
-                            # Postprocessor pipeline; same path as
-                            # modal_libero_lerobot_native.
-                            post = postprocessor(chunk.detach().cpu())
-                            chunk_np_post = (
-                                post.detach().cpu().numpy()
-                                if hasattr(post, "detach")
-                                else np.asarray(post)
-                            )
-                            if chunk_np_post.ndim == 3:
-                                chunk_np_post = chunk_np_post[0]
-                            chunk_np_post = chunk_np_post[:, :7]  # LIBERO 7D
-                            action_plan.extend(chunk_np_post[:replan_steps])
+                            if use_native:
+                                with torch.no_grad():
+                                    action = policy.select_action(batch_pp)
+                                post = postprocessor(action.detach().cpu())
+                                chunk_np_post = (
+                                    post.detach().cpu().numpy()
+                                    if hasattr(post, "detach")
+                                    else np.asarray(post)
+                                )
+                                if chunk_np_post.ndim == 3:
+                                    chunk_np_post = chunk_np_post[0]
+                                if chunk_np_post.ndim == 1:
+                                    chunk_np_post = chunk_np_post[np.newaxis, :]
+                                chunk_np_post = chunk_np_post[:, :7]
+                                action_plan.extend(chunk_np_post[:replan_steps])
+                            else:
+                                with torch.no_grad():
+                                    images, img_masks = policy._preprocess_images(batch_pp)
+                                    lang_tokens = batch_pp[OBS_LANGUAGE_TOKENS]
+                                    lang_masks = batch_pp[OBS_LANGUAGE_ATTENTION_MASK]
+                                    bsize = images[0].shape[0]
+                                    noise = torch.randn(
+                                        bsize, chunk_size, action_dim_pad,
+                                        device=images[0].device, dtype=torch.float32,
+                                    )
+                                    state_np = (
+                                        batch_pp[OBS_STATE].cpu().numpy()
+                                        if OBS_STATE in batch_pp else None
+                                    )
+                                    _episode_id = f"t{task_idx}_ep{ep}"
+                                    chunk_np = inference.predict_action_chunk(
+                                        img_base=images[0].cpu().numpy(),
+                                        img_wrist_l=images[1].cpu().numpy(),
+                                        img_wrist_r=images[2].cpu().numpy(),
+                                        mask_base=img_masks[0].cpu().numpy(),
+                                        mask_wrist_l=img_masks[1].cpu().numpy(),
+                                        mask_wrist_r=img_masks[2].cpu().numpy(),
+                                        lang_tokens=lang_tokens.cpu().numpy(),
+                                        lang_masks=lang_masks.cpu().numpy(),
+                                        noise=noise.cpu().numpy(),
+                                        state=state_np,
+                                        episode_id=_episode_id,
+                                    )
+                                    chunk = torch.from_numpy(chunk_np).to(images[0].device)
+                                    chunk = chunk[:, :, :real_action_dim]
+
+                                post = postprocessor(chunk.detach().cpu())
+                                chunk_np_post = (
+                                    post.detach().cpu().numpy()
+                                    if hasattr(post, "detach")
+                                    else np.asarray(post)
+                                )
+                                if chunk_np_post.ndim == 3:
+                                    chunk_np_post = chunk_np_post[0]
+                                chunk_np_post = chunk_np_post[:, :7]
+                                action_plan.extend(chunk_np_post[:replan_steps])
 
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(np.asarray(action).tolist())

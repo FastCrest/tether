@@ -415,20 +415,9 @@ def run_fluxvla_libero_eval(
     )
     logging.info("Converted: %s", converted_dir)
 
-    # Stage 3: Export via reflex
-    logging.info("[Stage 3/4] Run reflex export pipeline...")
-    if not Path(EXPORTED_ONNX_DIR + "/vlm_prefix.onnx").exists():
-        from reflex.exporters.decomposed import export_pi05_decomposed
-        export_pi05_decomposed(
-            model_id=converted_dir,
-            output_dir=EXPORTED_ONNX_DIR,
-            target="desktop",
-            num_steps=10,
-        )
-        onnx_output.commit()
-        logging.info("Exported to %s", EXPORTED_ONNX_DIR)
-    else:
-        logging.info("Export already cached at %s", EXPORTED_ONNX_DIR)
+    # Stage 3: Skip ONNX export — using native PyTorch inference (select_action)
+    # to validate checkpoint quality directly. ORT export parity is a separate concern.
+    logging.info("[Stage 3/4] Skipped (using native PyTorch inference)")
 
     # Stage 4: Run LIBERO eval per suite
     logging.info("[Stage 4/4] Run LIBERO eval...")
@@ -512,7 +501,6 @@ def _run_libero_suite(
         load_pi05_policy_and_processors,
         run_libero_rollout,
     )
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=CONVERTED_CHECKPOINT_DIR,
@@ -521,14 +509,7 @@ def _run_libero_suite(
         force_teacher=True,
     )
 
-    inference = Pi05DecomposedInference(
-        export_dir=export_dir,
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        enable_cache=False,  # cache modes are an orthogonal lift; this eval is bare-baseline
-    )
-
     rollout_results = run_libero_rollout(
-        inference=inference,
         policy=policy,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
@@ -537,6 +518,7 @@ def _run_libero_suite(
         seed=seed,
         save_video_dir=save_video_dir,
         label=f"fluxvla:{suite}",
+        use_native=True,
     )
     # Caller wants {"successes": int, "total": int, "per_task": [...]}; map.
     return {
