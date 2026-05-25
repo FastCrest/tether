@@ -235,6 +235,27 @@ jetson = [
     "scipy",
     "num2words",
 ]
+
+# Opt-in Triton fast-kernels path (Lift #5). `reflex serve --fast-kernels` falls
+# back to ORT silently if these aren't installed, so the extra is genuinely
+# optional.
+#
+# T-5 pinning revision (2026-05-23): the initial pin `triton>=3.0,<3.2` was
+# defeated by two transitive constraints surfaced on first Modal fire:
+#   1. torch 2.7+ requires triton>=3.2 (excluded by our upper bound)
+#   2. lerobot 0.5.1 requires torch>=2.7 (excluded by FluxVLA's torch==2.6.0)
+# Resolution: bring `triton` only (no torch lower bound — torch is supplied by
+# the host stack: serve/gpu/jetson extras or whatever the user installs).
+# `triton>=3.1` matches what torch 2.6-2.8 transitively bring in; we don't
+# constrain torch here because the [serve,gpu] / [monolithic] / [jetson]
+# extras already do.
+#
+# Re-vendor cadence in src/reflex/kernels/ATTRIBUTION.txt covers when
+# torch+triton drift breaks the vendored kernels.
+fast-kernels = [
+    "triton>=3.1",
+]
+
 [project.scripts]
 reflex = "reflex.cli:app"
 
@@ -243,6 +264,13 @@ packages = ["src/reflex"]
 # Note: embodiment preset JSONs at src/reflex/embodiments/presets/*.json are
 # auto-included by hatchling because they live inside the package directory.
 # Explicit force-include caused duplicate entries — removed in v0.5.2.
+
+# CUDA C++ extension sources (Lift #5 — src/reflex/kernels/cuda/*/src/*.{cpp,cu}).
+# These need to be in the wheel so the JIT loader can find them at first import
+# on a CUDA host. Hatchling defaults to Python files only; explicit include
+# pulls in the C++/CUDA sources.
+[tool.hatch.build.targets.wheel.force-include]
+"src/reflex/kernels" = "reflex/kernels"
 
 [tool.ruff]
 target-version = "py310"

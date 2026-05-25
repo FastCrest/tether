@@ -1180,6 +1180,7 @@ def create_app(
     robot_id: str | None = None,  # fleet-telemetry: human-readable per-process identity
     cuda_graphs_enabled: bool = False,  # opt-in ORT cuda-graphs on decomposed sessions
     inference_only_weights: bool = False,  # Lift #3 — bind weights via IOBinding, skip nn.Module graph instantiation
+    fast_kernels: bool = False,  # Lift #5 — Triton + CUDA Graph path; FastKernelsPolicyRuntime dispatch
     # Action-similarity fast path (FlashVLA, arxiv 2505.21200). Decomposed
     # pi0.5 only — Pi05DecomposedServer wires it; legacy + monolithic ignore.
     # 0.0 = disabled (default); 0.05 = paper default.
@@ -1528,6 +1529,7 @@ def create_app(
     server.robot_id = robot_id or ""  # type: ignore[attr-defined]
     server._cuda_graphs_enabled = bool(cuda_graphs_enabled)  # type: ignore[attr-defined]
     server._inference_only_weights = bool(inference_only_weights)  # type: ignore[attr-defined]
+    server._fast_kernels = bool(fast_kernels)  # type: ignore[attr-defined]
 
     # Auto-calibration cache load (Phase 1 auto-calibration Day 4 plumbing).
     # Day 5 wires the actual measurement + apply; Day 4 just loads + exposes

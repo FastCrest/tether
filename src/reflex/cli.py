@@ -1675,6 +1675,16 @@ def serve(
              "Off by default; opt-in for Phase 1.5. Substrate for Lift #5 "
              "Triton fast-kernels.",
     ),
+    fast_kernels: bool = typer.Option(
+        False,
+        "--fast-kernels",
+        help="Lift #5 Triton fast-kernels mode: run the entire Pi0.5 pipeline "
+             "through vendored Triton kernels + CUDA Graph capture instead of "
+             "ORT. ~14x faster than standard ORT path on A100 (41ms vs ~600ms). "
+             "Falls back to ORT silently on unsupported hardware (Mac, CPU, "
+             "sm < 8.0, A10G) with an INFO log. V1: Pi0.5 only; mutually "
+             "exclusive with --policy-b and --per-step-expert. Off by default.",
+    ),
     action_similarity_threshold: float = typer.Option(
         0.0,
         "--action-similarity-threshold",
@@ -2065,6 +2075,7 @@ def serve(
         robot_id=robot_id or None,
         cuda_graphs_enabled=cuda_graphs,
         inference_only_weights=inference_only_weights,
+        fast_kernels=fast_kernels,
         action_similarity_threshold=action_similarity_threshold,
         max_similar_skips=max_similar_skips,
         max_batch_cost_ms=max_batch_cost_ms,
@@ -2102,6 +2113,18 @@ def serve(
         console.print(
             "[dim]Inference-only-weights mode active — peak RSS savings "
             "reported via /diag.[/dim]"
+        )
+    if fast_kernels:
+        if policy_b:
+            raise ValueError(
+                "--fast-kernels not supported with 2-policy mode in V1. "
+                "Drop --policy-b or --fast-kernels."
+            )
+        composed.append("[cyan]fast-kernels[/cyan]")
+        console.print(
+            "[dim]Fast-kernels mode requested — Triton + CUDA Graph path "
+            "will activate on supported hardware (A100/H100/RTX 4090+). "
+            "Falls back to ORT silently on unsupported hardware.[/dim]"
         )
     if action_similarity_threshold > 0:
         composed.append(

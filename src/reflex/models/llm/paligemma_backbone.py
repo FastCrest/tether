@@ -124,6 +124,8 @@ class PaliGemmaBackbone(LLMBackbone, nn.Module):
         *args: Any,
         inputs_embeds: torch.Tensor | None = None,
         past_key_values: Any | None = None,
+        position_ids: torch.Tensor | None = None,
+        use_cache: bool | None = None,
         **kwargs: Any,
     ) -> Any:
         """Run the language path.
@@ -150,6 +152,8 @@ class PaliGemmaBackbone(LLMBackbone, nn.Module):
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
+            position_ids=position_ids,
+            use_cache=use_cache,
             **kwargs,
         )
 
