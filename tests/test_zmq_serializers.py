@@ -8,6 +8,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+cv2 = pytest.importorskip("cv2", reason="opencv-python-headless not installed")
+
 from reflex.runtime.transports.zmq.serializers import (
     JPEG_WHITELIST,
     SCHEMA_VERSION,

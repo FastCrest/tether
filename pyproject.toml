@@ -117,6 +117,7 @@ serve = [
     # so `pip install reflex-vla[serve]` gives you BOTH transports.
     "pyzmq>=25.0",
     "msgpack>=1.0",
+    "opencv-python-headless>=4.8",  # JPEG-on-wire serialization for ZMQ transport
 ]
 safety = ["yourdfpy"]
 # Native parity verification — installs lerobot + its deps so
