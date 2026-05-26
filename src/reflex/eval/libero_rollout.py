@@ -287,7 +287,8 @@ def run_libero_rollout(
                 init_idx = ep % len(initial_states)
                 obs = env.set_init_state(initial_states[init_idx])
                 policy.reset()
-                inference.reset_cache()  # fresh cache per episode
+                if inference is not None:
+                    inference.reset_cache()
                 action_plan = collections.deque()
                 t = 0
                 done = False
@@ -423,7 +424,7 @@ def run_libero_rollout(
         results["total_eps"] += task_result["total"]
         print(f"  TASK {task_idx}: {task_result['success']}/{task_result['total']}")
 
-    results["cache_stats"] = inference.get_stats()
+    results["cache_stats"] = inference.get_stats() if inference is not None else {}
     if results["total_eps"]:
         results["success_rate_pct"] = 100.0 * results["total_success"] / results["total_eps"]
     print(
