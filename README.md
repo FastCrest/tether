@@ -13,7 +13,7 @@
 
 **Verified parity across ALL four major open VLAs.** Reflex's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
 
-One CLI, seven verbs, plus a chat agent.
+One CLI, eleven verbs, plus a chat agent.
 
 ## Install
 
@@ -35,6 +35,16 @@ pip install 'reflex-vla[serve,onnx]'              # Mac / CPU runtime
 
 Requires Python ≥ 3.10.
 
+### What's new in v0.11.0 (2026-05-25)
+
+- **Triton fast kernels** — 2.5x PyTorch, ~12x ORT on A100. Opt in with `reflex serve --fast-kernels` (requires the `[fast-kernels]` extra). Falls back to ORT silently when Triton is unavailable.
+- **ZMQ transport** — `reflex serve --transport zmq` for low-latency robot communication. JPEG-on-wire image serialization via msgpack. Ships with the `[serve]` extra (pyzmq + msgpack included).
+- **DreamZero WAM** — 6th VLA family on the BaseVLA spine. NVIDIA Research's world-action model: joint video + action diffusion on Wan 2.1 DiT backbone. 94.65% LIBERO average. Apache-2.0 via FluxVLA.
+- **Safetensors-direct loading** — 67% RSS reduction, no nn.Module overhead. Weights load from safetensors into flat dicts without constructing a PyTorch module tree.
+- **FluxVLA pi0.5 LIBERO-10 checkpoint** — LimX Dynamics' finetuned pi0.5 (Apache-2.0), published 97.85% LIBERO-10 average. Registry ID: `pi05-libero10-fluxvla`.
+- **transformers 5.x DynamicCache compat** — fixes compatibility with transformers 5.x DynamicCache API changes.
+- **ROS2 robot adapter starter kits** — Aloha + UR3 templates in `contrib/ros2/` for integrating Reflex with real robot hardware.
+
 ### What's new in v0.10.0 (2026-05-22)
 
 **BaseVLA spine refactor** — every VLA family is now a thin (~100 LOC) composition class declaring which of 6 component slots it uses (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`). Adding a new VLA backbone is now a composition-class file + a registry entry. See `src/reflex/models/vlas/{pi0,pi05,smolvla,gr00t}.py` for worked examples.
@@ -42,18 +52,6 @@ Requires Python ≥ 3.10.
 Validated bit-identical to lerobot's reference on real checkpoints — pi0 (max 1.13e-6), pi0.5 (max 2.74e-6), SmolVLA (synthetic max 0.0), GR00T N1.6 (max 0.0). 6 silent ONNX export bugs fixed along the way (PR #156).
 
 Breaking: module renames — `reflex.exporters.{pi0,smolvla,gr00t}_exporter` → `reflex.exporters.{pi0,smolvla,gr00t}`. Update import statements.
-
-### What's new in v0.7.3 (2026-04-30)
-
-Five production-relevant fixes from per-step expert ONNX export validation work. All take effect on `pip install --upgrade reflex-vla` + a re-export of any decomposed pi0.5 ONNX:
-
-- **pi0.5 decomposed export precision** — freeze-flag for the `DynamicLayer.update` cache mutation, now applied to `PI05Pytorch.denoise_step` (was only applied to pi0). Removes stale-suffix K/V from attention in the baked-loop trace.
-- **Expert ONNX precision** — `optimize=False` on `torch.onnx.export` to skip the constant-folding pass that evaluates fp64 sin/cos in fp32 (3e-5 max_abs error).
-- **CUDA EP loadchain** — eager-dlopen `libcurand` / `libcufft` / `libcusparse` / `libnvJitLink`. Independently load-bearing for any consumer on a fresh image where torch's transitive curand path doesn't happen to be loadable.
-- **`--rtc` actually works on decomposed servers** — pre-fix, `--rtc` constructed `RtcAdapter` with `action_buffer=None` whenever `--replan-hz`/`--execute-hz` weren't also passed, and `merge_and_update` silently no-op'd RTC's carry-forward. Now auto-builds the buffer.
-- **Per-step expert ORT IOBinding** (preview for v0.8.0 per-step export feature) — pin past_kvs to device once per chunk via `OrtValue.ortvalue_from_numpy`. Drops per-step Euler loop overhead from +36% to +13%.
-
-Full per-fix details + commit refs in [CHANGELOG.md](CHANGELOG.md).
 
 ### Upgrading
 
@@ -78,14 +76,14 @@ only needed for caches built by v0.5.3 or earlier.
 
 ## Performance
 
-`reflex-vla[serve,gpu]` (v0.7+) uses ONNX Runtime's TensorRT execution provider out of the box. Measured on Modal A10G (Ampere, sm_8.6) on 2026-04-29 against SmolVLA monolithic (5 warmup + 20 measured forward passes, batch=1):
+`reflex-vla[serve,gpu]` uses ONNX Runtime's TensorRT execution provider out of the box. Measured on Modal A10G (Ampere, sm_8.6) on 2026-04-29 against SmolVLA monolithic (5 warmup + 20 measured forward passes, batch=1):
 
 | Provider | Mean latency | p95 |
 |---|---|---|
 | `CUDAExecutionProvider` (ORT-CUDA fallback) | 108.11 ms | 108.68 ms |
-| **`TensorrtExecutionProvider` (default in v0.7+)** | **19.49 ms** | 19.71 ms |
+| **`TensorrtExecutionProvider` (default)** | **19.49 ms** | 19.71 ms |
 
-**5.55× faster.** The win comes from TensorRT's FP16 kernels + engine fusion. Older releases silently fell back to ORT-CUDA on most installs because `libnvinfer.so.10` and CUDA libs weren't on `LD_LIBRARY_PATH` — v0.7's `[serve,gpu]` extras pull `tensorrt>=10` and `reflex` patches `LD_LIBRARY_PATH` automatically at import.
+**5.55x faster.** The win comes from TensorRT's FP16 kernels + engine fusion. The `[serve,gpu]` extras pull `tensorrt>=10` and `reflex` patches `LD_LIBRARY_PATH` automatically at import.
 
 ### How to verify you're getting the win
 
@@ -112,8 +110,8 @@ Full reproducer + 9-iteration debug log: [`reflex_context/03_experiments/2026-04
 
 ### Caveats
 
-- Measured only on A10G + SmolVLA monolithic so far. Other model architectures (pi0.5 decomposed, GR00T) and other hardware tiers (Orin Nano, T4, H100) may show different ratios — broader matrix planned for v0.7.x.
-- **Blackwell (RTX 50-series, B200, GB200) still not supported** in v0.7 — ORT's bundled cuBLAS/cuDNN don't ship sm_120 kernels yet. v0.5.5 documents this in detail; nothing changed here. Tracking ORT upstream for the fix.
+- Measured only on A10G + SmolVLA monolithic so far. Other model architectures (pi0.5 decomposed, GR00T) and other hardware tiers (Orin Nano, T4, H100) may show different ratios.
+- **Blackwell (RTX 50-series, B200, GB200)** — ORT 1.25.1+ ships sm_120 kernels. Smoke validation recommended before declaring fully production-ready (open threading issue #27621).
 
 ### Opt-out
 
@@ -153,7 +151,7 @@ Want me to show which models support each target, or run reflex doctor?
 
 Chat understands 16 reflex commands (export, serve, bench, eval, distill, finetune, traces, doctor, etc.) and runs them as subprocess on your behalf. Powered by GPT-5 Mini through a proxy hosted at `chat.fastcrest.com` — free tier is 100 calls/day per machine, no signup, no API key.
 
-> Bring your own key? `export FASTCREST_PROXY_URL=https://api.openai.com/v1` (coming in v0.3 — for now, the hosted proxy is the path).
+> Bring your own key? `export FASTCREST_PROXY_URL=https://api.openai.com/v1`
 
 ## Quickstart — explicit deploy
 
@@ -265,7 +263,7 @@ reflex contribute  {opt-in, opt-out, status}    # Curate data contribution
 
 11 visible verbs. 8 advanced/SO-100/internal commands stay callable directly (config, calibrate, bench-game, status, inspect bench/targets/guard/doctor) but hidden from `--help` to reduce cognitive load. Power-users can still invoke them; they just don't crowd the discovery surface.
 
-Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable for one release as alias bridges. Removed in v0.3.
+Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alias bridges.
 
 ### Install notes
 
@@ -393,7 +391,9 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | SmolVLA | `lerobot/smolvla_base` | 450M | ONNX + validated (max_diff=3.3e-06) |
 | pi0 | `lerobot/pi0_base` | 3.5B | ONNX + validated (max_diff=6.0e-08) |
 | pi0.5 | `lerobot/pi05_base` | 3.62B | ONNX + validated (max_diff=2.38e-07) |
+| pi0.5 LIBERO-10 (FluxVLA) | `Rylinjames/pi05-libero10-finetune-v1` | 3.62B | ONNX + validated. 97.85% LIBERO-10 avg. Apache-2.0. |
 | GR00T N1.6 | `nvidia/GR00T-N1.6-3B` | 3.29B | ONNX + validated (max_diff=8.34e-07, **live VLM conditioning**) |
+| DreamZero WAM | `limxdynamics/FluxVLAEngine` | ~14B | ONNX + export. Joint video + action diffusion. 94.65% LIBERO avg. |
 | OpenVLA | `openvla/openvla-7b` | 7.5B | `optimum-cli export onnx` + `reflex.postprocess.openvla.decode_actions` |
 
 `reflex models list` browses the curated registry; `reflex models info <id>` shows benchmarks; `reflex models pull <id>` downloads. OpenVLA is a vanilla Llama-2-7B VLM — there's no custom action expert to reconstruct, so we defer to the standard HuggingFace export path and ship only the bin-to-continuous postprocess helper.
@@ -408,7 +408,7 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | `thor` | Jetson Thor | 128 GB | fp8 |
 | `desktop` | RTX / A100 | 40 GB | fp16 |
 
-**Memory fit (monolithic ONNX on disk, FP32):** SmolVLA 1.6GB, pi0 12.5GB, pi0.5 13.0GB, GR00T 4.4GB. SmolVLA fits comfortably on Orin Nano 8GB; **pi0 realistically needs Orin 16GB+ or a desktop NVIDIA GPU** — the 12.5GB monolithic ONNX cannot load on the 8GB Orin Nano even in FP16 (~6GB weights plus activations + OS). FP16 engine rebuild + Orin Nano fit work is tracked for v0.3.
+**Memory fit (monolithic ONNX on disk, FP32):** SmolVLA 1.6GB, pi0 12.5GB, pi0.5 13.0GB, GR00T 4.4GB, DreamZero ~28GB. SmolVLA fits comfortably on Orin Nano 8GB; **pi0 realistically needs Orin 16GB+ or a desktop NVIDIA GPU** — the 12.5GB monolithic ONNX cannot load on the 8GB Orin Nano even in FP16 (~6GB weights plus activations + OS). DreamZero (~14B params) requires A100/H100-class hardware (40GB+ VRAM).
 
 `reflex inspect targets` lists current profiles.
 
@@ -427,7 +427,7 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 
 **For Blackwell users right now:** the bootstrap installer accepts your hardware and the package installs cleanly, but `reflex go` will segfault at server startup. The real fix requires ORT to ship Blackwell-aware bundled binaries (no published timeline). Workarounds: chat-only mode (no GPU needed), `reflex doctor`, `reflex models list` all work fine. `/act` and TRT-engine inference need a non-Blackwell GPU temporarily.
 
-A Blackwell-specific runtime path via TensorRT-LLM (which DOES support sm_100) is planned for v0.7+ — see [reflex_context ADR queue](https://github.com/FastCrest/reflex-vla/issues).
+A Blackwell-specific runtime path via TensorRT-LLM (which supports sm_100) is tracked upstream.
 
 ## Composable runtime wedges
 
@@ -449,7 +449,7 @@ Every response surfaces telemetry from each enabled wedge (`guard_clamped`, `gua
 
 ## What Reflex is and isn't
 
-**Is:** the deployment layer between a trained VLA and a real robot. Cross-framework export verified at cos=+1.0000000 on all four major open VLAs — SmolVLA + pi0 + pi0.5 (flow-matching, num_steps=10) + GR00T N1.6 (DDPM DiT, num_steps=4, **with Eagle 2.5 VL backbone producing live image+language KV**) — plus a composable runtime (serve + safety + turbo + split), edge-first design targeting Jetson + desktop NVIDIA GPUs.
+**Is:** the deployment layer between a trained VLA and a real robot. Cross-framework export verified at cos=+1.0000000 on six VLA families — SmolVLA + pi0 + pi0.5 (flow-matching, num_steps=10) + GR00T N1.6 (DDPM DiT, num_steps=4, **with Eagle 2.5 VL backbone producing live image+language KV**) + DreamZero (world-action model, joint video + action diffusion) + OpenVLA (shim) — plus a composable runtime (serve + safety + turbo + split), edge-first design targeting Jetson + desktop NVIDIA GPUs.
 
 **Isn't:** a training framework (PyTorch/JAX own that) or a cloud inference provider (vLLM/Baseten own that). Reflex's moat is the deployment toolchain: cross-framework ONNX with verified numerical parity, composable safety wedges, ROS2 + Docker + HTTP serving, and a deterministic export receipt (`VERIFICATION.md`) your QA team can audit.
 
@@ -476,7 +476,7 @@ Plus PyTorch-level native-path sanity checks (`SmolVLAPolicy` with DecomposedRMS
 
 Full ledger: [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
 
-**Latency numbers are intentionally not in the README yet** — earlier TRT FP16 tables were measured on a now-abandoned decomposed-ONNX path. Desktop GPU + Jetson latency re-measurement is tracked for v0.3. `reflex bench <export_dir>` reproduces on any hardware.
+**Latency numbers are intentionally not in the README yet** — earlier TRT FP16 tables were measured on a now-abandoned decomposed-ONNX path. `reflex bench <export_dir>` reproduces on any hardware.
 
 Reproduce on your own GPU with one command:
 
@@ -486,15 +486,11 @@ reflex bench ./pi0 --iterations 100
 
 ### Multi-robot batching (`reflex serve --max-batch N`)
 
-Continuous batching on the HTTP layer: each `/act` request enters an asyncio queue; the server flushes the queue every `--batch-timeout-ms` (default 5ms) into one batched ONNX inference. Earlier measurements on the decomposed-ONNX path showed 2.3-2.9× throughput scaling at batch sizes 4-16; those numbers are being re-measured on the monolithic path for v0.3.
-
-## License
-
-Apache 2.0
+Continuous batching on the HTTP layer: each `/act` request enters an asyncio queue; the server flushes the queue every `--batch-timeout-ms` (default 5ms) into one batched ONNX inference. Earlier measurements on the decomposed-ONNX path showed 2.3-2.9x throughput scaling at batch sizes 4-16.
 
 ## Status
 
-**v0.5 — source-available under BSL 1.1.** Active development. Install, kick the tires, open issues loudly. We're looking for the first 20 robotics teams actually deploying this; your feedback shapes v0.6.
+**v0.11.0 — source-available under BSL 1.1.** Active development. Install, kick the tires, open issues loudly. Six VLA families (SmolVLA, pi0, pi0.5, GR00T, OpenVLA, DreamZero), Triton fast kernels, ZMQ transport, safetensors-direct loading.
 
 ## License
 
