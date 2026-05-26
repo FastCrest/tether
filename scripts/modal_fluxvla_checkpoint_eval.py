@@ -274,6 +274,12 @@ def _convert_fluxvla_to_lerobot(
     src_dir = src.parent
     weights_cached = (output / "model.safetensors").exists()
 
+    # v2 mapping fix: force re-conversion to fix LLM key nesting + time_mlp prefix
+    if weights_cached and not (output / ".v2_converted").exists():
+        logging.info("Invalidating stale v1 conversion (wrong LLM key nesting)")
+        (output / "model.safetensors").unlink()
+        weights_cached = False
+
     if not weights_cached:
         logging.info("Loading FluxVLA state_dict from %s", src)
         state_dict = load_file(str(src))
@@ -285,13 +291,13 @@ def _convert_fluxvla_to_lerobot(
 
         PREFIX_MAP = [
             ('vision_backbone.vision.', 'paligemma_with_expert.paligemma.model.vision_tower.'),
-            ('llm_backbone.', 'paligemma_with_expert.paligemma.model.language_model.model.'),
+            ('llm_backbone.', 'paligemma_with_expert.paligemma.model.language_model.'),
             ('llm_expert.', 'paligemma_with_expert.gemma_expert.model.'),
             ('projector.projector.', 'paligemma_with_expert.paligemma.model.multi_modal_projector.linear.'),
             ('action_in_proj.projector.', 'action_in_proj.'),
             ('action_out_proj.projector.', 'action_out_proj.'),
-            ('time_mlp_in.projector.', 'action_time_mlp_in.'),
-            ('time_mlp_out.projector.', 'action_time_mlp_out.'),
+            ('time_mlp_in.projector.', 'time_mlp_in.'),
+            ('time_mlp_out.projector.', 'time_mlp_out.'),
         ]
 
         def rename(k: str) -> str:
@@ -302,14 +308,21 @@ def _convert_fluxvla_to_lerobot(
 
         renamed = {rename(k): v for k, v in state_dict.items()}
 
-        embed_key = 'paligemma_with_expert.paligemma.model.language_model.model.embed_tokens.weight'
+        embed_key = 'paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight'
         lm_head_key = 'paligemma_with_expert.paligemma.lm_head.weight'
         if embed_key in renamed and lm_head_key not in renamed:
             renamed[lm_head_key] = renamed[embed_key].clone()
             logging.info("Added tied lm_head weight")
 
+        expert_embed = 'paligemma_with_expert.gemma_expert.model.embed_tokens.weight'
+        expert_lm_head = 'paligemma_with_expert.gemma_expert.lm_head.weight'
+        if expert_embed in renamed and expert_lm_head not in renamed:
+            renamed[expert_lm_head] = renamed[expert_embed].clone()
+            logging.info("Added expert lm_head weight")
+
         logging.info("After rename: %d entries", len(renamed))
         save_file(renamed, str(output / "model.safetensors"))
+        (output / ".v2_converted").touch()
     else:
         logging.info("Weights already converted at %s", output)
 
