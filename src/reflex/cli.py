@@ -4056,6 +4056,107 @@ app.add_typer(train_app, name="train")
 app.add_typer(validate_app, name="validate")
 app.add_typer(inspect_app, name="inspect")
 
+# ─── reflex connect {name} / disconnect / list ──────────────────────────────
+
+connect_app = typer.Typer(
+    help="Connect external tools (spatial memory, perception) to reflex.",
+)
+
+
+@connect_app.command("list")
+def connect_list():
+    """List available integrations."""
+    from rich.console import Console
+    from rich.table import Table
+    from reflex.integrations.registry import list_integrations
+
+    console = Console()
+    integrations = list_integrations()
+    table = Table(title="Available Integrations")
+    table.add_column("Name", style="cyan")
+    table.add_column("Status")
+    table.add_column("Description")
+    table.add_column("License")
+
+    for i in integrations:
+        if i.health_check():
+            status = "[green]running[/green]"
+        elif i.is_installed():
+            status = "[yellow]installed[/yellow]"
+        else:
+            status = "[dim]not installed[/dim]"
+        table.add_row(i.name, status, i.description, i.license)
+
+    console.print(table)
+
+
+@connect_app.command("up")
+def connect_up(
+    name: str = typer.Argument(help="Integration name (e.g. 'rtsm')"),
+    extra_args: list[str] = typer.Argument(default=None, help="Extra args passed to the integration"),
+):
+    """Install (if needed) and start an integration."""
+    from rich.console import Console
+    from reflex.integrations.connector import connect
+
+    console = Console()
+    try:
+        result = connect(name, extra_args=extra_args)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(2)
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if result["status"] == "already_running":
+        console.print(f"[green]{name}[/green] already running at {result['url']}")
+    else:
+        console.print(
+            f"[green]{name}[/green] started (pid {result['pid']}) at {result['url']}"
+        )
+    if result.get("mcp_tools"):
+        console.print(f"  MCP tools: {', '.join(result['mcp_tools'])}")
+
+
+@connect_app.command("down")
+def connect_down(
+    name: str = typer.Argument(help="Integration name to stop"),
+):
+    """Stop a running integration."""
+    from rich.console import Console
+    from reflex.integrations.connector import disconnect
+
+    console = Console()
+    result = disconnect(name)
+    console.print(f"[dim]{name}[/dim]: {result['status']}")
+
+
+@connect_app.command("status")
+def connect_status(
+    name: str = typer.Argument(help="Integration name to check"),
+):
+    """Check if an integration is running and healthy."""
+    from rich.console import Console
+    from reflex.integrations.registry import get_integration
+
+    console = Console()
+    integration = get_integration(name)
+    if integration is None:
+        console.print(f"[red]Unknown integration: {name}[/red]")
+        raise typer.Exit(2)
+
+    installed = integration.is_installed()
+    healthy = integration.health_check()
+    console.print(f"[cyan]{name}[/cyan]")
+    console.print(f"  Installed: {'yes' if installed else 'no'}")
+    console.print(f"  Running:   {'yes' if healthy else 'no'}")
+    console.print(f"  URL:       {integration.health_url}")
+    console.print(f"  MCP tools: {', '.join(integration.mcp_tools)}")
+
+
+app.add_typer(connect_app, name="connect")
+
 
 # ─── reflex traces {query, summary} ─────────────────────────────────────────
 # Customer trace archive (Phase 1.5 v1) per spec
