@@ -124,7 +124,7 @@ def _download_fluxvla_checkpoint(cache_dir: str) -> str:
 @app.function(
     image=image,
     gpu="A100-80GB",
-    timeout=10800,  # 3 hours
+    timeout=86400,  # 24 hours — N=50 takes ~7h per suite
     volumes={HF_CACHE_PATH: hf_cache, ONNX_OUT: onnx_output},
     secrets=[modal.Secret.from_name("huggingface")],
 )
