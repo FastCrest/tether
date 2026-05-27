@@ -43,6 +43,29 @@ with open(os.path.join(base, "bert_padding.py"), "w") as f:
 
 print(f"Created flash_attn stub at {base}")
 
+# Also patch transformers to not check flash_attn via importlib.metadata.
+# The KeyError happens because our stub isn't a real installed package.
+import importlib.metadata
+try:
+    tiu_path = os.path.join(
+        sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}",
+        "site-packages", "transformers", "utils", "import_utils.py"
+    )
+    if os.path.exists(tiu_path):
+        text = open(tiu_path).read()
+        # Add flash_attn to PACKAGE_DISTRIBUTION_MAPPING if it's missing
+        patched = text.replace(
+            'PACKAGE_DISTRIBUTION_MAPPING = {',
+            'PACKAGE_DISTRIBUTION_MAPPING = {\n    "flash_attn": ("flash-attn",),'
+        )
+        if patched != text:
+            open(tiu_path, 'w').write(patched)
+            print("Patched transformers import_utils.py to include flash_attn mapping")
+        else:
+            print("transformers import_utils.py already has flash_attn mapping")
+except Exception as e:
+    print(f"Warning: could not patch transformers: {e}")
+
 # Also stub FluxVLA's CUDA extension modules (not built without setup.py install).
 # PI05FlowMatching uses PyTorch SDPA, these are only needed for the Triton inference variant.
 fluxvla_ops = "/opt/FluxVLA/fluxvla/ops/cuda"
