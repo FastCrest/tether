@@ -119,6 +119,9 @@ image = (
         "tqdm-loggable",
         "thop",
         "cloudpickle",
+        "boto3",
+        "botocore",
+        "gcsfs",
     )
     .run_commands(
         "pip install tensorflow-datasets tensorflow-graphics"
