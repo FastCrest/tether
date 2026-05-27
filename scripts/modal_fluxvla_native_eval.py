@@ -73,7 +73,7 @@ image = (
         "libgl1-mesa-glx", "libglib2.0-0", "libegl1-mesa", "libglvnd0", "ffmpeg",
         "cmake", "build-essential",
         "libosmesa6", "libosmesa6-dev",
-        "clang",
+        "clang", "ninja-build",
     )
     .pip_install(
         "torch==2.6.0",
@@ -123,7 +123,8 @@ image = (
     .run_commands(
         "pip install tensorflow-datasets tensorflow-graphics"
         " && pip install --no-deps dlimp@git+https://github.com/kvablack/dlimp"
-        " && pip install flash-attn --no-build-isolation"
+        " && CUDA_HOME=/usr/local/cuda pip install flash-attn --no-build-isolation"
+    )
     )
     # Clone + patch LIBERO (same as modal_fluxvla_checkpoint_eval.py)
     .run_commands(
