@@ -277,7 +277,8 @@ def run_fluxvla_native_eval(
         # Build dataset transform with suite-specific settings
         suite_dataset_cfg = dict(eval_dataset_cfg)
         suite_dataset_cfg["task_suite_name"] = suite
-        suite_dataset_cfg["norm_stats_key"] = f"{suite}_no_noops"
+        # All suites share LIBERO-10 training stats (single key in dataset_statistics.json)
+        suite_dataset_cfg["norm_stats_key"] = "libero_10_no_noops"
         dataset_transform = build_dataset_from_cfg(suite_dataset_cfg)
 
         # Build denormalize_action
@@ -289,13 +290,8 @@ def run_fluxvla_native_eval(
         task_suite = benchmark_dict[suite]()
         num_tasks = task_suite.n_tasks
 
-        unnorm_key = suite
-        # FluxVLA uses the _no_noops suffix for norm_stats key
-        candidate_unnorm_key = f"{unnorm_key}_no_noops"
-        if (unnorm_key not in vla.norm_stats
-                and candidate_unnorm_key in vla.norm_stats):
-            unnorm_key = candidate_unnorm_key
-        norm_stats_key = f"{suite}_no_noops"
+        unnorm_key = "libero_10_no_noops"
+        norm_stats_key = "libero_10_no_noops"
 
         total_episodes = 0
         total_successes = 0
