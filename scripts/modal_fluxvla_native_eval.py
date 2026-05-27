@@ -281,6 +281,13 @@ def run_fluxvla_native_eval(
         _tiu.is_flash_attn_2_available = lambda *a, **k: False
         _tiu.is_flash_attn_greater_or_equal_2_10 = lambda *a, **k: False
 
+    # PyTorch 2.6+ defaults weights_only=True — LIBERO init-state pickles fail.
+    _orig_torch_load = torch.load
+    def _compat_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _orig_torch_load(*args, **kwargs)
+    torch.load = _compat_load
+
     # Import FluxVLA's builders (triggers mmengine registry population)
     from mmengine.config import Config as MmConfig
     from fluxvla.engines import build_vla_from_cfg, build_dataset_from_cfg, build_transform_from_cfg
