@@ -68,7 +68,6 @@ FLUXVLA_SRC = "/opt/FluxVLA"
 image = (
     modal.Image.from_dockerfile(
         os.path.join(REPO_ROOT, "scripts", "Dockerfile.fluxvla_eval"),
-        context_mount=modal.Mount.from_local_dir(REPO_ROOT, remote_path="/build"),
     )
     # Patch LIBERO input() calls
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
