@@ -384,13 +384,9 @@ def run_fluxvla_native_eval(
                 pbar.update(1)
                 env.close()
 
-            log.info(
-                "Task %d: %d/%d successes (%.1f%%)",
-                task_id,
-                task_successes,
-                num_episodes,
-                100 * task_successes / max(num_episodes, 1),
-            )
+            msg = f"Task {task_id}: {task_successes}/{num_episodes} successes ({100 * task_successes / max(num_episodes, 1):.1f}%)"
+            log.info(msg)
+            print(msg, flush=True)
 
         pbar.close()
 
@@ -429,12 +425,10 @@ def run_fluxvla_native_eval(
     }
     results["elapsed_sec"] = time.time() - start
 
-    log.info("=== Results ===")
+    print("=== Results ===", flush=True)
     for suite, r in results["suites"].items():
-        log.info(
-            "  %s: %.1f%% (target %.1f%%, delta %+.1fpp)",
-            suite, r["pct"], r["target_pct"], r["delta_pp"],
-        )
+        line = f"  {suite}: {r['pct']:.1f}% (target {r['target_pct']:.1f}%, delta {r['delta_pp']:+.1f}pp)"
+        print(line, flush=True)
     log.info(
         "  AVERAGE: %.2f%% (target %.2f%%, delta %+.2fpp)",
         avg_pct,
