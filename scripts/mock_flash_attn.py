@@ -42,3 +42,19 @@ with open(os.path.join(base, "bert_padding.py"), "w") as f:
     f.write("# stub\ndef unpad_input(*a, **k): raise RuntimeError('stub')\ndef pad_input(*a, **k): raise RuntimeError('stub')\n")
 
 print(f"Created flash_attn stub at {base}")
+
+# Also stub FluxVLA's CUDA extension modules (not built without setup.py install).
+# PI05FlowMatching uses PyTorch SDPA, these are only needed for the Triton inference variant.
+fluxvla_ops = "/opt/FluxVLA/fluxvla/ops/cuda"
+for ext_name, subdir in [
+    ("gemma_rotary_embedding_ext", "gemma_rotary_embedding"),
+    ("rotary_pos_embedding_ext", "rotary_pos_embedding"),
+    ("matmul_bias_ext", "matmul_bias"),
+]:
+    stub_path = os.path.join(fluxvla_ops, subdir, f"{ext_name}.py")
+    if os.path.isdir(os.path.join(fluxvla_ops, subdir)):
+        with open(stub_path, "w") as f:
+            f.write(f"# Stub for {ext_name} — CUDA extension not built\n"
+                    f"def forward(*a, **k): raise RuntimeError('{ext_name} stub')\n")
+        print(f"Created stub: {stub_path}")
+
