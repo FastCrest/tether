@@ -184,6 +184,7 @@ image = (
         "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers",
         "MUJOCO_GL": "osmesa",
         "PYOPENGL_PLATFORM": "osmesa",
+        "TORCHINDUCTOR_DISABLE": "1",
         "LIBERO_DATA_DIR": "/tmp/libero_data",
         "LIBERO_ASSET_DIR": "/opt/LIBERO/libero/libero/assets",
         "LIBERO_BASE": "/tmp/libero_data",
@@ -272,13 +273,14 @@ def _convert_fluxvla_to_lerobot(
 
     src = Path(fluxvla_safetensors_path)
     src_dir = src.parent
-    weights_cached = (output / "model.safetensors").exists()
 
-    # v2 mapping fix: force re-conversion to fix LLM key nesting + time_mlp prefix
-    if weights_cached and not (output / ".v3_converted").exists():
-        logging.info("Invalidating stale v1 conversion (wrong LLM key nesting)")
-        (output / "model.safetensors").unlink()
-        weights_cached = False
+    # Force clean re-conversion (nuke all cached files)
+    import shutil as _shutil
+    if output.exists():
+        _shutil.rmtree(output)
+        logging.info("Nuked cached conversion at %s — forcing fresh conversion", output)
+    output.mkdir(parents=True, exist_ok=True)
+    weights_cached = False
 
     if not weights_cached:
         logging.info("Loading FluxVLA state_dict from %s", src)
