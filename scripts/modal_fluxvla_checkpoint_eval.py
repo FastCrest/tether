@@ -275,7 +275,7 @@ def _convert_fluxvla_to_lerobot(
     weights_cached = (output / "model.safetensors").exists()
 
     # v2 mapping fix: force re-conversion to fix LLM key nesting + time_mlp prefix
-    if weights_cached and not (output / ".v2_converted").exists():
+    if weights_cached and not (output / ".v3_converted").exists():
         logging.info("Invalidating stale v1 conversion (wrong LLM key nesting)")
         (output / "model.safetensors").unlink()
         weights_cached = False
@@ -322,7 +322,7 @@ def _convert_fluxvla_to_lerobot(
 
         logging.info("After rename: %d entries", len(renamed))
         save_file(renamed, str(output / "model.safetensors"))
-        (output / ".v2_converted").touch()
+        (output / ".v3_converted").touch()
     else:
         logging.info("Weights already converted at %s", output)
 
@@ -352,23 +352,45 @@ def _convert_fluxvla_to_lerobot(
     with open(output / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    # Preprocessor configs: FluxVLA may ship dataset_statistics.json adjacent
-    # to the checkpoint; lerobot expects policy_preprocessor_*.safetensors.
-    # If we can't generate these on first fire, the eval will surface the
-    # gap loudly (the existing reflex export pipeline checks for them).
+    # Generate normalizer configs from FluxVLA's dataset_statistics.json.
+    # These contain action + state mean/std which MUST match FluxVLA's training
+    # distribution, NOT lerobot's (action std is ~3x tighter in FluxVLA).
     stats_src = src_dir / "dataset_statistics.json"
+    if not stats_src.exists():
+        stats_src = src_dir.parent / "dataset_statistics.json"
     if stats_src.exists():
-        # Convert FluxVLA's dataset_statistics → lerobot's preprocessor format.
-        # Stub — will be filled in once first fire surfaces the exact shape needed.
         import shutil
-        shutil.copy(stats_src, output / "dataset_statistics.json")
-        logging.info("Copied dataset_statistics.json (lerobot-format conversion pending first-fire validation)")
+        import torch
+        from safetensors.torch import load_file as _lf, save_file as _sf
+
+        with open(stats_src) as _f:
+            flux_stats = json.load(_f)
+        dataset_key = next(iter(flux_stats))
+        flux_stats = flux_stats[dataset_key]
+        logging.info("Using FluxVLA stats from %s (dataset: %s)", stats_src, dataset_key)
+
+        # Use lerobot's normalizer as template, replace action + state stats
+        for fname in ["policy_preprocessor.json", "policy_postprocessor.json"]:
+            tpl = Path(hf_hub_download(repo_id="lerobot/pi05_libero_finetuned_v044", filename=fname))
+            shutil.copy(tpl, output / fname)
+
+        for sf_name in [
+            "policy_preprocessor_step_2_normalizer_processor.safetensors",
+            "policy_postprocessor_step_0_unnormalizer_processor.safetensors",
+        ]:
+            tpl_path = hf_hub_download(repo_id="lerobot/pi05_libero_finetuned_v044", filename=sf_name)
+            tensors = _lf(tpl_path)
+            for prefix, stats_key in [("action", "action"), ("observation.state", "proprio")]:
+                if stats_key in flux_stats and f"{prefix}.mean" in tensors:
+                    s = flux_stats[stats_key]
+                    tensors[f"{prefix}.mean"] = torch.tensor(s["mean"], dtype=torch.float32)
+                    tensors[f"{prefix}.std"] = torch.tensor(s["std"], dtype=torch.float32)
+                    tensors[f"{prefix}.min"] = torch.tensor(s["min"], dtype=torch.float32)
+                    tensors[f"{prefix}.max"] = torch.tensor(s["max"], dtype=torch.float32)
+            _sf(tensors, str(output / sf_name))
+        logging.info("Generated FluxVLA normalizer configs (action std ~3x tighter than lerobot)")
     else:
-        logging.warning(
-            "No dataset_statistics.json next to checkpoint. "
-            "reflex serve will fall back to HF teacher preprocessor (lerobot/pi05_libero_finetuned_v044). "
-            "Confirm this is the right fallback for FluxVLA's training data."
-        )
+        logging.warning("No dataset_statistics.json found — using lerobot's normalizer (may produce wrong-scaled actions)")
 
     return str(output)
 
@@ -518,7 +540,7 @@ def _run_libero_suite(
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=CONVERTED_CHECKPOINT_DIR,
         decomposed_dir=export_dir,
-        preprocessor_ref="lerobot/pi05_libero_finetuned_v044",
+        preprocessor_ref=CONVERTED_CHECKPOINT_DIR,
         force_teacher=True,
     )
 
