@@ -23,8 +23,20 @@ flash_attn_supports_top_left_mask = False
 with open(os.path.join(base, "__init__.py"), "w") as f:
     f.write(init)
 
+interface = """\
+# Stub — all functions raise if actually called.
+def _stub(*args, **kwargs):
+    raise RuntimeError("flash_attn stub: use SDPA instead")
+
+flash_attn_func = _stub
+flash_attn_varlen_func = _stub
+flash_attn_unpadded_qkvpacked_func = _stub
+flash_attn_varlen_qkvpacked_func = _stub
+flash_attn_qkvpacked_func = _stub
+flash_attn_with_kvcache = _stub
+"""
 with open(os.path.join(base, "flash_attn_interface.py"), "w") as f:
-    f.write(init)
+    f.write(interface)
 
 with open(os.path.join(base, "bert_padding.py"), "w") as f:
     f.write("# stub\ndef unpad_input(*a, **k): raise RuntimeError('stub')\ndef pad_input(*a, **k): raise RuntimeError('stub')\n")
