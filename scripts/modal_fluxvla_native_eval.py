@@ -159,6 +159,8 @@ image = (
         "MUJOCO_GL": "osmesa",
         "PYOPENGL_PLATFORM": "osmesa",
         "TORCHINDUCTOR_DISABLE": "1",
+        "CUDA_VISIBLE_DEVICES_FOR_TF": "none",
+        "TF_CPP_MIN_LOG_LEVEL": "3",
         "TRANSFORMERS_NO_FLASH_ATTENTION": "1",
         "ATTN_BACKEND": "sdpa",
         "LIBERO_DATA_DIR": "/tmp/libero_data",
@@ -233,6 +235,11 @@ def run_fluxvla_native_eval(
     import logging
     import time
     from pathlib import Path
+
+    # Disable TF GPU access BEFORE any import — TF grabs CUDA and corrupts
+    # mujoco's osmesa GL context, causing SIGSEGV in OffScreenRenderEnv.
+    import tensorflow as tf
+    tf.config.set_visible_devices([], "GPU")
 
     import torch
     import tqdm
