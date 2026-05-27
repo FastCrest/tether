@@ -124,7 +124,6 @@ image = (
         "gcsfs",
         "types-boto3-s3",
         "av",
-        "lerobot==0.5.1",
     )
     .run_commands(
         "pip install tensorflow-datasets tensorflow-graphics"
