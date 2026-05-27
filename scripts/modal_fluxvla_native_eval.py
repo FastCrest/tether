@@ -125,7 +125,6 @@ image = (
         " && pip install --no-deps dlimp@git+https://github.com/kvablack/dlimp"
         " && CUDA_HOME=/usr/local/cuda pip install flash-attn --no-build-isolation"
     )
-    )
     # Clone + patch LIBERO (same as modal_fluxvla_checkpoint_eval.py)
     .run_commands(
         "git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO"
