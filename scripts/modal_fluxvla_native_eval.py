@@ -124,14 +124,8 @@ image = (
         "pip install tensorflow-datasets tensorflow-graphics"
         " && pip install --no-deps dlimp@git+https://github.com/kvablack/dlimp"
     )
-    # Mock flash_attn to avoid ABI mismatch — PI05FlowMatching uses SDPA, not FA2.
-    # The import only triggers via transformers' auto attention dispatch.
-    .run_commands(
-        "python -c \""
-        "import os; os.makedirs('/usr/local/lib/python3.12/site-packages/flash_attn', exist_ok=True); "
-        "open('/usr/local/lib/python3.12/site-packages/flash_attn/__init__.py', 'w').write("
-        "'# mock — PI05FlowMatching uses SDPA\\n')\""
-    )
+    .add_local_file("scripts/mock_flash_attn.py", "/root/mock_flash_attn.py", copy=True)
+    .run_commands("python /root/mock_flash_attn.py")
     # Clone + patch LIBERO (same as modal_fluxvla_checkpoint_eval.py)
     .run_commands(
         "git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO"
