@@ -19,6 +19,26 @@ def flash_attn_varlen_func(*args, **kwargs):
     raise RuntimeError("flash_attn stub: use SDPA instead")
 
 flash_attn_supports_top_left_mask = False
+
+# Auto-stub any submodule import
+import types as _types
+import sys as _sys
+
+class _StubFinder:
+    def find_module(self, name, path=None):
+        if name.startswith("flash_attn."):
+            return self
+        return None
+    def load_module(self, name):
+        if name in _sys.modules:
+            return _sys.modules[name]
+        mod = _types.ModuleType(name)
+        mod.__path__ = []
+        mod.__loader__ = self
+        _sys.modules[name] = mod
+        return mod
+
+_sys.meta_path.insert(0, _StubFinder())
 """
 with open(os.path.join(base, "__init__.py"), "w") as f:
     f.write(init)
