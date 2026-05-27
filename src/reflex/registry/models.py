@@ -65,8 +65,8 @@ class ModelEntry:
             raise ValueError(f"model_id must be kebab-case (no slashes): {self.model_id!r}")
         if "/" not in self.hf_repo:
             raise ValueError(f"hf_repo must be 'org/name' format: {self.hf_repo!r}")
-        if self.family not in ("pi0", "pi05", "smolvla", "openvla", "groot", "dreamzero"):
-            raise ValueError(f"family must be one of pi0/pi05/smolvla/openvla/groot/dreamzero, got {self.family!r}")
+        if self.family not in ("pi0", "pi05", "smolvla", "openvla", "groot", "dreamzero", "molmoact2"):
+            raise ValueError(f"family must be one of pi0/pi05/smolvla/openvla/groot/dreamzero/molmoact2, got {self.family!r}")
         if self.action_dim <= 0:
             raise ValueError(f"action_dim must be positive, got {self.action_dim}")
         if self.vla_type is not None and not self.vla_type.startswith("_"):
