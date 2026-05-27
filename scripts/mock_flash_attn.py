@@ -43,28 +43,22 @@ with open(os.path.join(base, "bert_padding.py"), "w") as f:
 
 print(f"Created flash_attn stub at {base}")
 
-# Also patch transformers to not check flash_attn via importlib.metadata.
-# The KeyError happens because our stub isn't a real installed package.
-import importlib.metadata
-try:
-    tiu_path = os.path.join(
-        sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}",
-        "site-packages", "transformers", "utils", "import_utils.py"
-    )
-    if os.path.exists(tiu_path):
-        text = open(tiu_path).read()
-        # Add flash_attn to PACKAGE_DISTRIBUTION_MAPPING if it's missing
-        patched = text.replace(
-            'PACKAGE_DISTRIBUTION_MAPPING = {',
-            'PACKAGE_DISTRIBUTION_MAPPING = {\n    "flash_attn": ("flash-attn",),'
-        )
-        if patched != text:
-            open(tiu_path, 'w').write(patched)
-            print("Patched transformers import_utils.py to include flash_attn mapping")
-        else:
-            print("transformers import_utils.py already has flash_attn mapping")
-except Exception as e:
-    print(f"Warning: could not patch transformers: {e}")
+# Create fake dist-info so importlib.metadata.distribution("flash-attn") works.
+# transformers checks this via PACKAGE_DISTRIBUTION_MAPPING.
+dist_info = os.path.join(
+    sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}",
+    "site-packages", "flash_attn-2.7.0.dist-info"
+)
+os.makedirs(dist_info, exist_ok=True)
+with open(os.path.join(dist_info, "METADATA"), "w") as f:
+    f.write("Metadata-Version: 2.1\nName: flash-attn\nVersion: 2.7.0\n")
+with open(os.path.join(dist_info, "RECORD"), "w") as f:
+    f.write("")
+with open(os.path.join(dist_info, "top_level.txt"), "w") as f:
+    f.write("flash_attn\n")
+with open(os.path.join(dist_info, "INSTALLER"), "w") as f:
+    f.write("pip\n")
+print(f"Created flash-attn dist-info at {dist_info}")
 
 # Also stub FluxVLA's CUDA extension modules (not built without setup.py install).
 # PI05FlowMatching uses PyTorch SDPA, these are only needed for the Triton inference variant.
