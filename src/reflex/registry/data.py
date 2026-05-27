@@ -198,4 +198,52 @@ REGISTRY: tuple[ModelEntry, ...] = (
         license="apache-2.0",
         hf_revision=None,
     ),
+    # ──────────────────────────────────────────────────────────────────────
+    # MolmoAct2 — Allen AI's VLA. SigLIP2 + Qwen3 Molmo2-ER + flow-matching
+    # action expert. 7th model family on the spine.
+    # ──────────────────────────────────────────────────────────────────────
+    ModelEntry(
+        model_id="molmoact2-base",
+        hf_repo="allenai/MolmoAct2",
+        family="molmoact2",
+        action_dim=7,
+        size_mb=21800,
+        supported_embodiments=("franka", "so100", "yam"),
+        supported_devices=("a10g", "a100", "h100", "h200"),
+        benchmarks=(),
+        requires_export=False,
+        description="MolmoAct2 base — Allen AI's VLA. SigLIP2 + Molmo2-ER (Qwen3) "
+                    "+ flow-matching action expert. 5B params. Apache-2.0.",
+        license="apache-2.0",
+        hf_revision=None,
+    ),
+    ModelEntry(
+        model_id="molmoact2-libero",
+        hf_repo="allenai/MolmoAct2-LIBERO",
+        family="molmoact2",
+        action_dim=7,
+        size_mb=21800,
+        supported_embodiments=("franka",),
+        supported_devices=("a10g", "a100", "h100", "h200"),
+        benchmarks=(),
+        requires_export=False,
+        description="MolmoAct2 LIBERO fine-tune — Allen AI's VLA on LIBERO benchmark. "
+                    "Franka 7-DoF. Apache-2.0.",
+        license="apache-2.0",
+        hf_revision=None,
+    ),
+    ModelEntry(
+        model_id="molmoact2-droid",
+        hf_repo="allenai/MolmoAct2-DROID",
+        family="molmoact2",
+        action_dim=7,
+        size_mb=21800,
+        supported_embodiments=("franka",),
+        supported_devices=("a10g", "a100", "h100", "h200"),
+        benchmarks=(),
+        requires_export=False,
+        description="MolmoAct2 DROID fine-tune — Franka DROID embodiment. Apache-2.0.",
+        license="apache-2.0",
+        hf_revision=None,
+    ),
 )
