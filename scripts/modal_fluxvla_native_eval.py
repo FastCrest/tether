@@ -109,6 +109,7 @@ image = (
         "rich",
         "tqdm",
         "datasets>=4.0",
+        "jsonlines",
     )
     # Clone + patch LIBERO (same as modal_fluxvla_checkpoint_eval.py)
     .run_commands(
