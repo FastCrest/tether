@@ -57,6 +57,13 @@ dependencies = [
     # transitively pulled by huggingface_hub on most installs. Required at
     # base level so `reflex pro` commands work on bare `pip install reflex-vla`.
     "cryptography>=42.0",
+    # HTTP client for the `reflex connect` integration framework (#188):
+    # integrations/registry.py + integrations/connector.py call requests.get()
+    # at module import, and the `reflex connect` / `reflex integrations`
+    # commands are core (not behind an extra). Undeclared since #188 — CI clean
+    # installs hit ModuleNotFoundError on tests/test_integrations.py collection
+    # (masked locally where requests is a transitive dep).
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
