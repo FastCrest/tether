@@ -18,7 +18,8 @@ a proven native run at that config to compare against.
 Usage:
     modal profile activate romirj-16723
     # FORMAL kill-trigger-3 gate (default): N=100/task × 3 tasks × both arms,
-    # sharded into 6 parallel A100 cells (~2.5 hr wall, retryable per cell):
+    # sharded into 6 parallel A100 cells (~3 hr wall = slowest native cell,
+    # retryable per cell; 4 hr per-cell timeout):
     modal run scripts/modal_fast_kernels_l3_side_by_side.py
     # cheap plumbing smoke (~$0.7): N=2, task 0, both arms, sharded path:
     modal run scripts/modal_fast_kernels_l3_side_by_side.py --smoke
@@ -300,7 +301,7 @@ def _assemble(
 
 
 @app.function(
-    image=image, gpu="A100-40GB", timeout=10800,
+    image=image, gpu="A100-40GB", timeout=14400,
     secrets=[_hf_secret()],
 )
 def run_cell(
@@ -313,10 +314,17 @@ def run_cell(
 ) -> dict:
     """One shard = one (arm × task). Thin Modal wrapper over _run_one_arm.
 
-    timeout=10800 (3 hr) gives N=100 on one task ample headroom (~2.5 hr observed
-    at ~89 s/ep). Spawned in parallel — one A100 container per (arm,task) — so the
-    full N=100/task × 3-task × both-arm gate completes in ~2.5 hr wall, and any
-    single cell can be retried in isolation without re-running the whole gate.
+    timeout=14400 (4 hr). The blended directional rate is ~89 s/ep (N=30/arm both
+    arms in one container, 2026-05-28: 60 eps / 5354.9 s), but that average hides
+    the per-cell long pole: the NATIVE arm runs ~1.5× slower per ep (fp32+TF32, and
+    its extra failures run to max episode length), so a native N=100 single-task
+    cell projects to ~2.95–3.05 hr — at or just over a 3 hr (10800 s) ceiling. For
+    an unattended monthly launchd gate that thin margin is a real timeout-kill risk
+    on the native arm, so the ceiling is 4 hr (triton cells land ~2 hr, well under).
+    Cost is unaffected — Modal bills GPU-seconds consumed, not the timeout ceiling.
+    Spawned in parallel (one A100 container per (arm,task)); the SLOWEST cell sets
+    the ~3 hr wall, and any single cell is retryable in isolation. First formal
+    N=100 fire should still confirm the native cells at the 30-min progress mark.
     """
     return _run_one_arm(
         arm=arm,
