@@ -44,6 +44,7 @@ EXPORTERS_INTERNAL = {
     "vlm_prefix_exporter.py", # vlm prefix exporter; consumed via decomposed
     "_export_mode.py",        # parallel/sequential mode selector
     "trt_build.py",           # TensorRT engine builder; consumed by all primary exporters
+    "weight_fusion.py",       # RMSNorm→MatMul fusion + external-data ONNX save; consumed by monolithic export, not a standalone model family
     "__init__.py",
 }
 
@@ -54,6 +55,7 @@ EXPECTED_FAMILIES = {
     # Validation in models.py uses 'groot' (existing convention).
     # NVIDIA's brand is "GR00T" with zeros but our family slug stays
     # consistent with the validator until/unless we bump the validator.
+    "dreamzero.py": "dreamzero",  # lift #7: DreamZero WAM exporter; registry has family="dreamzero" (dreamzero-libero10)
     "gr00t.py": "groot",  # spine-based, lift #1 Day 7; gr00t_exporter.py was deleted at Day 11 sunset
     "openvla.py": "openvla",  # lift #1 Day 8: renamed from openvla_exporter.py; remains a shim per decision S-4
     "pi0.py": "pi0",  # renamed from pi0_exporter.py at lift #1 Day 11 sunset

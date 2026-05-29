@@ -4103,10 +4103,10 @@ def connect_up(
     try:
         result = connect(name, extra_args=extra_args)
     except ValueError as e:
-        console.print(f"[red]{e}[/red]")
+        err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(2)
     except RuntimeError as e:
-        console.print(f"[red]{e}[/red]")
+        err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
 
     if result["status"] == "already_running":
@@ -4143,7 +4143,7 @@ def connect_status(
     console = Console()
     integration = get_integration(name)
     if integration is None:
-        console.print(f"[red]Unknown integration: {name}[/red]")
+        err_console.print(f"[red]Unknown integration: {name}[/red]")
         raise typer.Exit(2)
 
     installed = integration.is_installed()
