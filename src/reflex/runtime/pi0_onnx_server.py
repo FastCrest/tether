@@ -42,16 +42,27 @@ class Pi0OnnxServer:
         self,
         export_dir: str | Path,
         onnx_path: str | Path | None = None,
-        providers: list[str] | None = None,
+        providers: list[Any] | None = None,
+        device: str = "cpu",
+        max_batch: int = 1,
         strict_providers: bool = True,
     ):
         self.export_dir = Path(export_dir)
         self._explicit_onnx_path = Path(onnx_path) if onnx_path else None
-        self.providers = providers or ["CPUExecutionProvider"]
+        self._requested_providers = providers
+        self._requested_device = device
+        self._max_batch = max_batch
+        self.providers: list[Any] = providers or ["CPUExecutionProvider"]
         self._session: Any = None
         self.config: dict[str, Any] = {}
         self._ready = False
         self._inference_mode = "pi0_onnx_monolithic"
+        self._provider_mode = "onnx_cpu"
+        self._active_providers: list[str] = []
+        self._provider_plan: Any = None
+        self._strict_providers = strict_providers
+        self._tokenizer: Any = None
+        self._tokenizer_unavailable = False
 
     def _find_onnx_path(self) -> Path:
         if self._explicit_onnx_path is not None:
@@ -71,12 +82,53 @@ class Pi0OnnxServer:
 
     def load(self) -> None:
         import onnxruntime as ort
+        from reflex.runtime.ort_providers import (
+            build_ort_provider_plan,
+            gpu_provider_active,
+            gpu_provider_requested,
+            make_ort_session_options,
+        )
 
         onnx_path = self._find_onnx_path()
         logger.info("Loading pi0 monolithic ONNX: %s", onnx_path)
+        self._provider_plan = build_ort_provider_plan(
+            self.export_dir,
+            device=self._requested_device,
+            requested_providers=self._requested_providers,
+            available_providers=list(ort.get_available_providers()),
+            max_batch=self._max_batch,
+            onnx_path=onnx_path,
+        )
+        self.providers = self._provider_plan.providers
+        logger.info(
+            "Requested providers: %s; available: %s; trt=%s reason=%s",
+            self.providers,
+            self._provider_plan.available_providers,
+            self._provider_plan.used_trt,
+            self._provider_plan.trt_disabled_reason,
+        )
         start = time.perf_counter()
-        self._session = ort.InferenceSession(str(onnx_path), providers=self.providers)
+        self._session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=make_ort_session_options(onnx_path),
+            providers=self.providers,
+        )
         elapsed = time.perf_counter() - start
+        self._active_providers = self._session.get_providers()
+        if gpu_provider_requested(self.providers) and not gpu_provider_active(self._active_providers):
+            msg = (
+                "CUDA/TensorRT provider requested for pi0 monolithic runtime, but "
+                f"ONNX Runtime activated {self._active_providers}."
+            )
+            if self._strict_providers:
+                raise RuntimeError(msg)
+            logger.warning(msg)
+        if "TensorrtExecutionProvider" in self._active_providers:
+            self._provider_mode = "onnx_trt_fp16"
+        elif gpu_provider_active(self._active_providers):
+            self._provider_mode = "onnx_gpu"
+        else:
+            self._provider_mode = "onnx_cpu"
 
         # Load config if present (optional — may not exist for ad-hoc ONNX)
         cfg_path = self.export_dir / "reflex_config.json"
@@ -86,10 +138,26 @@ class Pi0OnnxServer:
         # Extract expected inputs from the ONNX graph for validation
         self._input_names = [i.name for i in self._session.get_inputs()]
         logger.info(
-            "Pi0OnnxServer ready in %.2fs (inputs: %s)",
-            elapsed, self._input_names,
+            "Pi0OnnxServer ready in %.2fs (inputs: %s, active_providers=%s)",
+            elapsed, self._input_names, self._active_providers,
         )
         self._ready = True
+
+    def _get_tokenizer(self):
+        if self._tokenizer_unavailable:
+            return None
+        if self._tokenizer is None:
+            from reflex.runtime.tokenizers import load_export_tokenizer
+            self._tokenizer = load_export_tokenizer(
+                self.export_dir,
+                self.config,
+                default_ref="google/paligemma-3b-pt-224",
+            )
+            if self._tokenizer is None:
+                self._tokenizer_unavailable = True
+                logger.warning("Tokenizer unavailable; using dummy tokens")
+                return None
+        return self._tokenizer
 
     @property
     def ready(self) -> bool:
@@ -150,22 +218,20 @@ class Pi0OnnxServer:
 
         # Lang: take externally-supplied tokens or tokenize the instruction
         if lang_tokens is None:
-            try:
-                from transformers import AutoTokenizer
-                tok = AutoTokenizer.from_pretrained("google/paligemma-3b-pt-224")
+            tok = self._get_tokenizer()
+            if tok is not None:
                 enc = tok(instruction or " ", return_tensors="np", padding="max_length",
                           max_length=16, truncation=True)
                 lang_tokens = enc["input_ids"].astype(np.int64)
                 lang_masks = enc["attention_mask"].astype(np.bool_)
-            except Exception as e:
-                logger.warning("Tokenizer unavailable (%s); using dummy tokens", e)
+            else:
                 lang_tokens = np.zeros((1, 16), dtype=np.int64)
                 lang_masks = np.ones((1, 16), dtype=np.bool_)
         if lang_masks is None:
             lang_masks = np.ones_like(lang_tokens, dtype=np.bool_)
 
         # State: pad to 32 if needed
-        state_dim = 32  # pi0_base max_state_dim
+        state_dim = int(self.config.get("max_state_dim", 32))
         if state is None:
             state_arr = np.zeros((1, state_dim), dtype=np.float32)
         else:
@@ -178,8 +244,8 @@ class Pi0OnnxServer:
 
         # Noise
         if noise is None:
-            chunk = 50
-            action_dim = 32
+            chunk = int(self.config.get("chunk_size", 50))
+            action_dim = int(self.config.get("action_dim", 32))
             noise = np.random.RandomState(0).randn(1, chunk, action_dim).astype(np.float32)
         noise = np.asarray(noise, dtype=np.float32)
 
@@ -214,6 +280,8 @@ class Pi0OnnxServer:
             "latency_ms": round(elapsed_ms, 1),
             "hz": round(1000.0 / elapsed_ms, 1) if elapsed_ms > 0 else 0,
             "inference_mode": self._inference_mode,
+            "provider_mode": self._provider_mode,
+            "active_providers": list(self._active_providers),
             "denoising_steps": steps,
             "num_denoising_steps": steps,
         }

@@ -5,7 +5,7 @@ consults the in-package registry (`reflex.registry.REGISTRY`) and applies
 preference rules:
 
 1. If the user passed a fully-qualified registry id (e.g. `pi05-libero`), use
-   that exact entry — no further resolution.
+   that exact entry unless the device is a strict memory-constrained edge target.
 2. Otherwise interpret the model arg as a family name (`pi05` / `smolvla` /
    `pi0`) and pick the variant whose `supported_devices` includes the probed
    device_class AND whose `supported_embodiments` includes the requested
@@ -20,9 +20,13 @@ actually pulls + serves.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
-
 from reflex.registry import ModelEntry, REGISTRY, by_id
+
+
+_STRICT_DEVICE_MATCH_CLASSES = {"orin_nano"}
+_DEVICE_LABELS = {
+    "orin_nano": "Jetson Orin Nano",
+}
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,38 @@ class ResolveResult:
 
 class ModelResolverError(Exception):
     """Raised when no entry matches the request."""
+
+
+def _device_label(device_class: str) -> str:
+    return _DEVICE_LABELS.get(device_class, device_class)
+
+
+def _alternatives_for_device(device_class: str, embodiment: str = "") -> list[str]:
+    return [
+        e.model_id for e in REGISTRY
+        if device_class in e.supported_devices
+        and (not embodiment or embodiment in e.supported_embodiments)
+    ]
+
+
+def _unsupported_device_error(
+    model: str,
+    device_class: str,
+    supported_devices: tuple[str, ...],
+    embodiment: str = "",
+) -> ModelResolverError:
+    alternatives = _alternatives_for_device(device_class, embodiment)
+    suggestion = (
+        f" Supported {_device_label(device_class)} choices: {alternatives}."
+        if alternatives else
+        f" Run `reflex models list --device {device_class}` to browse supported models."
+    )
+    return ModelResolverError(
+        f"{model!r} is not supported on {_device_label(device_class)} "
+        f"(supported devices: {list(supported_devices)})."
+        f" Refusing to fall back because this edge target is memory-constrained."
+        f"{suggestion}"
+    )
 
 
 def resolve_model(
@@ -67,6 +103,13 @@ def resolve_model(
     if entry is not None:
         notes: list[str] = []
         if device_class not in entry.supported_devices:
+            if device_class in _STRICT_DEVICE_MATCH_CLASSES:
+                raise _unsupported_device_error(
+                    model,
+                    device_class,
+                    entry.supported_devices,
+                    embodiment=embodiment,
+                )
             notes.append(
                 f"warning: {model!r} not listed as supported on {device_class!r} "
                 f"(supported: {list(entry.supported_devices)}). Proceeding because "
@@ -109,6 +152,18 @@ def resolve_model(
         and (not embodiment or embodiment in e.supported_embodiments)
     ]
     if family_only:
+        if device_class in _STRICT_DEVICE_MATCH_CLASSES:
+            supported_for_device = _alternatives_for_device(device_class, embodiment)
+            suffix = (
+                f" Supported {_device_label(device_class)} choices: {supported_for_device}."
+                if supported_for_device else
+                f" Run `reflex models list --device {device_class}` to browse supported models."
+            )
+            raise ModelResolverError(
+                f"No {family!r} variant explicitly supports {_device_label(device_class)}. "
+                f"Refusing family fallback because it can select an oversized model "
+                f"for an 8GB edge target.{suffix}"
+            )
         # Pick first by registry order (curated)
         picked = family_only[0]
         return ResolveResult(

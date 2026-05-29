@@ -58,6 +58,59 @@ _CCM_NONE_RATIONALE = (
     "num_steps=10. See 01_architecture/pi0_monolithic_wrap_pattern.md."
 )
 
+_TOKENIZER_REFS = {
+    "pi0": "google/paligemma-3b-pt-224",
+    "pi05": "google/paligemma-3b-pt-224",
+    "smolvla": "HuggingFaceTB/SmolLM2-135M",
+}
+
+
+def _quiet_noisy_export_loggers() -> None:
+    """Keep streamed export logs readable while preserving warnings/errors."""
+    for name in ("onnx_ir", "onnxscript"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
+    """Best-effort tokenizer bundle for offline serve/bench.
+
+    Tokenizer failure should not fail ONNX export: pi0's canonical PaliGemma
+    tokenizer may be gated on HF, while the model graph itself can still export
+    and serve pre-tokenized requests. When bundling succeeds, runtimes load from
+    ``export_dir/tokenizer`` with ``local_files_only=True``.
+    """
+    tokenizer_ref = _TOKENIZER_REFS.get(model_type)
+    meta: dict[str, Any] = {
+        "tokenizer_ref": tokenizer_ref,
+        "tokenizer_path": None,
+        "tokenizer_bundled": False,
+        "tokenizer_error": None,
+    }
+    if not tokenizer_ref:
+        return meta
+    try:
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(tokenizer_ref)
+        if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
+            tok.pad_token = tok.eos_token
+        tok_dir = output_dir / "tokenizer"
+        tok.save_pretrained(tok_dir)
+        meta.update(
+            {
+                "tokenizer_path": "tokenizer",
+                "tokenizer_bundled": True,
+            }
+        )
+    except Exception as exc:
+        meta["tokenizer_error"] = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "[export] tokenizer bundle skipped for %s (%s): %s",
+            model_type,
+            tokenizer_ref,
+            exc,
+        )
+    return meta
+
 
 def _require_monolithic_deps() -> None:
     """Check that the ``[monolithic]`` optional dep group is installed.
@@ -65,6 +118,7 @@ def _require_monolithic_deps() -> None:
     Raises ImportError with a clean message if anything's missing or a
     transformers version mismatch is detected (5.4+ has the q_length bug).
     """
+    _quiet_noisy_export_loggers()
     missing = []
     try:
         import transformers
@@ -161,6 +215,82 @@ def apply_export_patches() -> None:
             _pg.create_causal_mask = _ccm_shim
     except ImportError:
         pass
+
+    # SmolVLM's vision tower builds patch_attention_mask internally when it is
+    # omitted. Under torch.export + onnx-diagnostic FakeTensor tracing that
+    # internal path can produce a zero-length attention mask which later tries
+    # to broadcast against the real 1024-token vision sequence. LeRobot's
+    # SmolVLA always feeds dense, square images in this export path, so passing
+    # the equivalent all-true patch mask explicitly preserves semantics and
+    # keeps the mask shape concrete for export.
+    try:
+        from lerobot.policies.smolvla import modeling_smolvla as _smolvla
+
+        if not getattr(_smolvla.SmolVLMWithExpertModel.embed_image, "_reflex_patched", False):
+            def _embed_image_with_explicit_patch_mask(self, image):
+                patch_size = self.get_vlm_model().vision_model.patch_size
+                patch_attention_mask = torch.ones(
+                    (
+                        image.shape[0],
+                        image.shape[-2] // patch_size,
+                        image.shape[-1] // patch_size,
+                    ),
+                    dtype=torch.bool,
+                    device=image.device,
+                )
+                image_hidden_states = (
+                    self.get_vlm_model()
+                    .vision_model(
+                        pixel_values=image.to(dtype=self.get_vlm_model().vision_model.dtype),
+                        patch_attention_mask=patch_attention_mask,
+                    )
+                    .last_hidden_state
+                )
+                return self.get_vlm_model().connector(image_hidden_states)
+
+            _embed_image_with_explicit_patch_mask._reflex_patched = True
+            _smolvla.SmolVLMWithExpertModel.embed_image = _embed_image_with_explicit_patch_mask
+    except Exception as exc:
+        logger.debug("SmolVLA explicit patch-mask export patch not installed: %s", exc)
+
+    try:
+        from transformers.models.smolvlm import modeling_smolvlm as _smolvlm
+
+        if not getattr(_smolvlm.SmolVLMVisionAttention.forward, "_reflex_patched", False):
+            def _vision_attention_forward_no_dense_mask(self, hidden_states, attention_mask=None, **kwargs):
+                batch_size, seq_length, embed_dim = hidden_states.shape
+
+                queries = self.q_proj(hidden_states)
+                keys = self.k_proj(hidden_states)
+                values = self.v_proj(hidden_states)
+
+                queries = queries.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+                keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+                values = values.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+
+                attention_interface = _smolvlm.ALL_ATTENTION_FUNCTIONS.get_interface(
+                    self.config._attn_implementation,
+                    _smolvlm.eager_attention_forward,
+                )
+                attn_output, attn_weights = attention_interface(
+                    self,
+                    queries,
+                    keys,
+                    values,
+                    None,
+                    is_causal=False,
+                    scaling=self.scale,
+                    dropout=0.0 if not self.training else self.dropout,
+                )
+
+                attn_output = attn_output.reshape(batch_size, seq_length, embed_dim).contiguous()
+                attn_output = self.out_proj(attn_output)
+                return attn_output, attn_weights
+
+            _vision_attention_forward_no_dense_mask._reflex_patched = True
+            _smolvlm.SmolVLMVisionAttention.forward = _vision_attention_forward_no_dense_mask
+    except Exception as exc:
+        logger.debug("SmolVLM vision attention export patch not installed: %s", exc)
 
     # DynamicCache deepcopy bypass (FakeTensor can't be deepcopied)
     _orig_deepcopy = copy.deepcopy
@@ -516,6 +646,7 @@ def export_smolvla_monolithic(
         )
     logger.info("[smolvla] torch.export: %.1fs", time.time() - t0)
 
+    logger.info("[smolvla] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
         ep, tuple(dummy.values()), str(onnx_path),
@@ -638,6 +769,7 @@ def export_pi0_monolithic(
         )
     logger.info("[pi0] torch.export: %.1fs", time.time() - t0)
 
+    logger.info("[pi0] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
         ep, tuple(dummy.values()), str(onnx_path),
@@ -675,6 +807,7 @@ def _write_reflex_config(
     target: str = "desktop",
 ) -> None:
     """Write `reflex_config.json` + seed a VERIFICATION.md receipt."""
+    tokenizer_meta = _bundle_tokenizer(output_dir, model_type)
     cfg_dict = {
         "model_id": model_id,
         "model_type": model_type,
@@ -687,6 +820,7 @@ def _write_reflex_config(
         "opset": 19,
         "export_kind": "monolithic",
         "notes": _CCM_NONE_RATIONALE if num_steps > 1 else None,
+        **tokenizer_meta,
     }
     (output_dir / "reflex_config.json").write_text(
         json.dumps(cfg_dict, indent=2, default=str)
@@ -814,6 +948,7 @@ def export_pi05_monolithic(
         )
     logger.info("[pi05] torch.export: %.1fs", time.time() - t0)
 
+    logger.info("[pi05] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
         ep, tuple(dummy.values()), str(onnx_path),
@@ -1066,6 +1201,7 @@ def export_snapflow_student_monolithic(
         )
     logger.info("[snapflow-export] torch.export: %.1fs", time.time() - t0)
 
+    logger.info("[snapflow-export] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
         ep, tuple(dummy.values()), str(onnx_path),

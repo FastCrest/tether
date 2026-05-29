@@ -30,16 +30,27 @@ class SmolVLAOnnxServer:
         self,
         export_dir: str | Path,
         onnx_path: str | Path | None = None,
-        providers: list[str] | None = None,
+        providers: list[Any] | None = None,
+        device: str = "cpu",
+        max_batch: int = 1,
         strict_providers: bool = True,
     ):
         self.export_dir = Path(export_dir)
         self._explicit_onnx_path = Path(onnx_path) if onnx_path else None
-        self.providers = providers or ["CPUExecutionProvider"]
+        self._requested_providers = providers
+        self._requested_device = device
+        self._max_batch = max_batch
+        self.providers: list[Any] = providers or ["CPUExecutionProvider"]
         self._session: Any = None
         self.config: dict[str, Any] = {}
         self._ready = False
         self._inference_mode = "smolvla_onnx_monolithic"
+        self._provider_mode = "onnx_cpu"
+        self._active_providers: list[str] = []
+        self._provider_plan: Any = None
+        self._strict_providers = strict_providers
+        self._tokenizer: Any = None
+        self._tokenizer_unavailable = False
 
     def _find_onnx_path(self) -> Path:
         if self._explicit_onnx_path is not None:
@@ -59,12 +70,53 @@ class SmolVLAOnnxServer:
 
     def load(self) -> None:
         import onnxruntime as ort
+        from reflex.runtime.ort_providers import (
+            build_ort_provider_plan,
+            gpu_provider_active,
+            gpu_provider_requested,
+            make_ort_session_options,
+        )
 
         onnx_path = self._find_onnx_path()
         logger.info("Loading SmolVLA monolithic ONNX: %s", onnx_path)
+        self._provider_plan = build_ort_provider_plan(
+            self.export_dir,
+            device=self._requested_device,
+            requested_providers=self._requested_providers,
+            available_providers=list(ort.get_available_providers()),
+            max_batch=self._max_batch,
+            onnx_path=onnx_path,
+        )
+        self.providers = self._provider_plan.providers
+        logger.info(
+            "Requested providers: %s; available: %s; trt=%s reason=%s",
+            self.providers,
+            self._provider_plan.available_providers,
+            self._provider_plan.used_trt,
+            self._provider_plan.trt_disabled_reason,
+        )
         start = time.perf_counter()
-        self._session = ort.InferenceSession(str(onnx_path), providers=self.providers)
+        self._session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=make_ort_session_options(onnx_path),
+            providers=self.providers,
+        )
         elapsed = time.perf_counter() - start
+        self._active_providers = self._session.get_providers()
+        if gpu_provider_requested(self.providers) and not gpu_provider_active(self._active_providers):
+            msg = (
+                "CUDA/TensorRT provider requested for SmolVLA monolithic runtime, "
+                f"but ONNX Runtime activated {self._active_providers}."
+            )
+            if self._strict_providers:
+                raise RuntimeError(msg)
+            logger.warning(msg)
+        if "TensorrtExecutionProvider" in self._active_providers:
+            self._provider_mode = "onnx_trt_fp16"
+        elif gpu_provider_active(self._active_providers):
+            self._provider_mode = "onnx_gpu"
+        else:
+            self._provider_mode = "onnx_cpu"
 
         cfg_path = self.export_dir / "reflex_config.json"
         if cfg_path.exists():
@@ -72,8 +124,8 @@ class SmolVLAOnnxServer:
 
         self._input_names = [i.name for i in self._session.get_inputs()]
         logger.info(
-            "SmolVLAOnnxServer ready in %.2fs (inputs: %s)",
-            elapsed, self._input_names,
+            "SmolVLAOnnxServer ready in %.2fs (inputs: %s, active_providers=%s)",
+            elapsed, self._input_names, self._active_providers,
         )
         self._ready = True
 
@@ -89,13 +141,24 @@ class SmolVLAOnnxServer:
         and the silent-fallback path zeros out the instruction. Customer
         dogfood 2026-04-19 caught this silent failure.
         """
+        if self._tokenizer_unavailable:
+            return None
         if getattr(self, "_tokenizer", None) is None:
-            from transformers import AutoTokenizer
-            tok = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM2-135M")
-            # SmolLM2 ships without a pad_token. Set it to eos_token (standard HF pattern).
-            if tok.pad_token is None:
-                tok.pad_token = tok.eos_token
-            self._tokenizer = tok
+            from reflex.runtime.tokenizers import load_export_tokenizer
+            self._tokenizer = load_export_tokenizer(
+                self.export_dir,
+                self.config,
+                default_ref="HuggingFaceTB/SmolLM2-135M",
+                set_pad_to_eos=True,
+            )
+            if self._tokenizer is None:
+                self._tokenizer_unavailable = True
+                logger.error(
+                    "SEVERE: tokenizer failed. Instruction text will have NO "
+                    "effect until lang_tokens/lang_masks are supplied directly or "
+                    "the tokenizer is available.",
+                )
+                return None
         return self._tokenizer
 
     def predict(
@@ -142,8 +205,8 @@ class SmolVLAOnnxServer:
 
         # Lang: tokenize (SmolLM2 vocab ~49152) or use provided tokens
         if lang_tokens is None:
-            try:
-                tok = self._get_tokenizer()
+            tok = self._get_tokenizer()
+            if tok is not None:
                 enc = tok(
                     instruction or " ",
                     return_tensors="np", padding="max_length",
@@ -151,14 +214,7 @@ class SmolVLAOnnxServer:
                 )
                 lang_tokens = enc["input_ids"].astype(np.int64)
                 lang_masks = enc["attention_mask"].astype(np.bool_)
-            except Exception as e:
-                # Fall back silently BUT LOUDLY — this breaks instruction-following
-                # so we want it painfully visible in the log.
-                logger.error(
-                    "SEVERE: tokenizer failed (%s). Instruction '%s' has NO effect "
-                    "on the output — actions are a function of state+images only. "
-                    "Fix the tokenizer before trusting /act responses.", e, instruction,
-                )
+            else:
                 lang_tokens = np.zeros((1, 16), dtype=np.int64)
                 lang_masks = np.ones((1, 16), dtype=np.bool_)
         if lang_masks is None:
@@ -214,6 +270,8 @@ class SmolVLAOnnxServer:
             "latency_ms": round(elapsed_ms, 1),
             "hz": round(1000.0 / elapsed_ms, 1) if elapsed_ms > 0 else 0,
             "inference_mode": self._inference_mode,
+            "provider_mode": self._provider_mode,
+            "active_providers": list(self._active_providers),
             "denoising_steps": steps,
             "num_denoising_steps": steps,
         }

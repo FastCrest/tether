@@ -18,6 +18,7 @@ import pytest
 from reflex.runtime.hardware_probe import (
     CANONICAL_DEVICE_CLASSES,
     ProbeResult,
+    _try_tegrastats,
     probe_device_class,
 )
 from reflex.runtime.model_resolver import (
@@ -92,6 +93,18 @@ class TestHardwareProbe:
         assert r.device_class == "orin_nano"
         assert r.detection_method == "tegrastats"
 
+    def test_tegrastats_uses_partial_output_on_timeout(self):
+        exc = subprocess.TimeoutExpired(
+            cmd=["tegrastats", "--interval", "1000"],
+            timeout=0.1,
+            output="RAM 1512/7620MB SWAP 0/3810MB CPU [0%@729] Orin Nano\n",
+        )
+        with patch("subprocess.run", side_effect=exc):
+            r = _try_tegrastats(timeout_s=0.1)
+        assert r is not None
+        assert r[0] == "orin_nano"
+        assert "Orin Nano" in r[1]
+
     def test_canonical_device_classes_immutable(self):
         # Lock the canonical set — every device class in registry MUST be in here
         from reflex.registry import REGISTRY
@@ -114,12 +127,17 @@ class TestModelResolver:
         assert r.entry.model_id == "pi05-base"
         assert r.matched_strategy == "exact-id"
 
-    def test_exact_id_warns_on_unsupported_device(self):
-        # pi05-base is NOT marked orin_nano-compatible
-        r = resolve_model(model="pi05-base", device_class="orin_nano")
-        assert r.entry.model_id == "pi05-base"
+    def test_exact_id_warns_on_unsupported_non_strict_device(self):
+        # pi05-libero is not marked h200-compatible, but h200 is not a strict
+        # edge target, so explicit pinning still gets a warning instead of a hard stop.
+        r = resolve_model(model="pi05-libero", device_class="h200")
+        assert r.entry.model_id == "pi05-libero"
         assert r.matched_strategy == "exact-id"
         assert any("not listed as supported" in n for n in r.notes)
+
+    def test_exact_id_refuses_oversized_model_on_orin_nano(self):
+        with pytest.raises(ModelResolverError, match="Jetson Orin Nano"):
+            resolve_model(model="pi05-base", device_class="orin_nano")
 
     def test_family_match_picks_smallest_for_edge(self):
         # Family smolvla on orin_nano: should pick smallest (smolvla-base + smolvla-libero
@@ -139,12 +157,15 @@ class TestModelResolver:
         # Only smolvla-base satisfies (so100 ∈ supported_embodiments)
         assert r.entry.model_id == "smolvla-base"
 
-    def test_family_fallback_when_no_device_match(self):
-        # pi0 family doesn't list orin_nano in seed registry
-        r = resolve_model(model="pi0", device_class="orin_nano")
-        assert r.entry.family == "pi0"
+    def test_family_fallback_when_no_device_match_on_non_strict_device(self):
+        r = resolve_model(model="dreamzero", device_class="a10g")
+        assert r.entry.family == "dreamzero"
         assert r.matched_strategy == "family-fallback"
         assert any("falling back" in n for n in r.notes)
+
+    def test_family_refuses_oversized_model_on_orin_nano(self):
+        with pytest.raises(ModelResolverError, match="oversized"):
+            resolve_model(model="pi0", device_class="orin_nano")
 
     def test_unknown_model_raises(self):
         with pytest.raises(ModelResolverError, match="No registry entry"):
@@ -214,6 +235,22 @@ class TestReflexGoCli:
         assert result.exit_code == 0, result.output
         assert "smolvla" in result.output
         assert "DRY RUN" in result.output
+
+    def test_dry_run_refuses_pi05_on_orin_nano(self, runner, cli_app):
+        result = runner.invoke(cli_app, [
+            "go", "--model", "pi05-base", "--device-class", "orin_nano", "--dry-run",
+        ])
+        assert result.exit_code == 2
+        assert "Orin Nano" in result.output
+
+    def test_go_on_jetson_requires_preexported_onnx(self, runner, cli_app):
+        with patch("reflex.cli._is_jetson_linux_aarch64", return_value=True):
+            result = runner.invoke(cli_app, [
+                "go", "--model", "smolvla-base", "--device-class", "orin_nano", "--dry-run",
+            ])
+        assert result.exit_code == 2
+        assert "cannot export" in result.output
+        assert "reflex serve" in result.output
 
     def test_dry_run_unknown_model_exits_2(self, runner, cli_app):
         result = runner.invoke(cli_app, [

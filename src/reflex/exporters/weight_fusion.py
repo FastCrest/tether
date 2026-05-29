@@ -16,6 +16,8 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Sequence
 
@@ -29,10 +31,134 @@ def _load_onnx(path: Path):
     return onnx.load(str(path))
 
 
+def _iter_graph_tensors(graph):
+    """Yield every TensorProto reachable from a graph, including attributes."""
+    for tensor in graph.initializer:
+        yield tensor
+    for tensor in graph.sparse_initializer:
+        yield tensor.values
+        yield tensor.indices
+    for node in graph.node:
+        for attr in node.attribute:
+            yield from _iter_attribute_tensors(attr)
+
+
+def _iter_attribute_tensors(attr):
+    if attr.HasField("t"):
+        yield attr.t
+    yield from attr.tensors
+    if attr.HasField("g"):
+        yield from _iter_graph_tensors(attr.g)
+    for graph in attr.graphs:
+        yield from _iter_graph_tensors(graph)
+
+
+def _inline_tensor_bytes(tensor) -> int:
+    """Approximate protobuf payload bytes for TensorProto inline data fields."""
+    total = len(tensor.raw_data) if tensor.HasField("raw_data") else 0
+    total += len(tensor.float_data) * 4
+    total += len(tensor.int32_data) * 4
+    total += len(tensor.int64_data) * 8
+    total += len(tensor.double_data) * 8
+    total += len(tensor.uint64_data) * 8
+    total += sum(len(item) for item in tensor.string_data)
+    return total
+
+
+def _coerce_inline_tensor_data_to_raw(model, *, min_inline_bytes: int = 1024) -> tuple[int, int]:
+    """Convert repeated numeric TensorProto fields to raw_data before save.
+
+    ONNX's external-data conversion only externalizes tensors that use the
+    ``raw_data`` field. Some exporter paths leave large Constant attribute
+    tensors in repeated fields such as ``float_data`` or ``int64_data``; those
+    remain embedded in ``model.onnx`` even when ``convert_attribute=True`` is
+    passed to ``onnx.save``. Coercing them to raw_data lets the standard ONNX
+    writer move them into ``model.onnx.data``.
+    """
+    from onnx import numpy_helper
+
+    converted = 0
+    converted_bytes = 0
+    for tensor in _iter_graph_tensors(model.graph):
+        inline_bytes = _inline_tensor_bytes(tensor)
+        if inline_bytes < min_inline_bytes:
+            continue
+        if tensor.HasField("raw_data"):
+            continue
+        if len(tensor.string_data) > 0:
+            continue
+        try:
+            array = numpy_helper.to_array(tensor)
+            replacement = numpy_helper.from_array(array, name=tensor.name)
+            tensor.CopyFrom(replacement)
+        except Exception as exc:
+            logger.debug("Could not normalize inline ONNX tensor %s: %s", tensor.name, exc)
+            continue
+        converted += 1
+        converted_bytes += inline_bytes
+
+    if converted:
+        logger.info(
+            "Normalized %d inline ONNX tensor(s) (%.1f MB) to raw_data for external-data save",
+            converted,
+            converted_bytes / 1e6,
+        )
+    return converted, converted_bytes
+
+
 def _save_onnx(model, path: Path):
     import onnx
-    onnx.save(model, str(path))
-    logger.info("Saved fused ONNX: %s (%.1f MB)", path, path.stat().st_size / 1e6)
+    external_data = path.with_suffix(path.suffix + ".data")
+    _coerce_inline_tensor_data_to_raw(model)
+
+    with tempfile.TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as tmp_dir:
+        tmp_model = Path(tmp_dir) / path.name
+        onnx.save(
+            model,
+            str(tmp_model),
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location=external_data.name,
+            size_threshold=1024,
+            convert_attribute=True,
+        )
+        # onnx.save writes external data relative to the temporary model path,
+        # but preserves the relative location string that will also be correct
+        # once the model file is moved back beside the final external file.
+        tmp_external = Path(tmp_dir) / external_data.name
+        proto_size = tmp_model.stat().st_size
+        max_proto_size = 2 * 1024 * 1024 * 1024
+        if proto_size >= max_proto_size:
+            raise RuntimeError(
+                f"Saved ONNX protobuf is still {proto_size / 1e9:.2f}GB after "
+                "external-data conversion. ONNX Runtime cannot load protobufs "
+                ">=2GB; inspect embedded Constant tensors before benchmarking."
+            )
+
+        os.replace(tmp_model, path)
+        if tmp_external.exists():
+            os.replace(tmp_external, external_data)
+
+    proto_size = path.stat().st_size
+    max_proto_size = 2 * 1024 * 1024 * 1024
+    if proto_size >= max_proto_size:
+        raise RuntimeError(
+            f"Saved ONNX protobuf is still {proto_size / 1e9:.2f}GB after "
+            "external-data conversion. ONNX Runtime cannot load protobufs "
+            ">=2GB; inspect embedded Constant tensors before benchmarking."
+        )
+    total_size = proto_size
+    external_size = 0
+    if external_data.exists():
+        external_size = external_data.stat().st_size
+        total_size += external_size
+    logger.info(
+        "Saved fused ONNX: %s (proto=%.1f MB external=%.1f MB total=%.1f MB)",
+        path,
+        proto_size / 1e6,
+        external_size / 1e6,
+        total_size / 1e6,
+    )
 
 
 def _get_initializer(model, name: str) -> np.ndarray | None:

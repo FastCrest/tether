@@ -336,8 +336,14 @@ class ReflexServer:
                             h.update(chunk)
                 except Exception:
                     pass
-            # External data files (.bin, .data) too — they hold the weights.
-            for p in sorted(self.export_dir.glob("*.bin")):
+            # External data files (.bin, .data, .onnx.data) too — they hold
+            # the weights for large ONNX exports.
+            data_files = (
+                list(self.export_dir.glob("*.bin"))
+                + list(self.export_dir.glob("*.data"))
+                + list(self.export_dir.glob("*.onnx.data"))
+            )
+            for p in sorted(set(data_files)):
                 try:
                     h.update(p.name.encode())
                     with p.open("rb") as f:
@@ -372,12 +378,20 @@ class ReflexServer:
         start = time.perf_counter()
 
         expert_meta = self.config.get("expert", {})
-        self.action_dim = expert_meta.get("action_dim", 32)
-        self.chunk_size = self.config.get("action_chunk_size", 50)
+        self.action_dim = self.config.get("action_dim", expert_meta.get("action_dim", 32))
+        self.chunk_size = self.config.get(
+            "action_chunk_size",
+            self.config.get("chunk_size", 50),
+        )
         self.expert_hidden = expert_meta.get("expert_hidden", 720)
 
         # Try ONNX runtime first, fall back to PyTorch
         onnx_path = self.export_dir / "expert_stack.onnx"
+        if not onnx_path.exists() and self.config.get("model_type") == "gr00t":
+            # GR00T monolithic export is a per-step velocity graph named
+            # model.onnx. ReflexServer already owns the denoise loop for
+            # velocity graphs, so it can serve/bench this artifact directly.
+            onnx_path = self.export_dir / "model.onnx"
         if onnx_path.exists():
             self._load_onnx(onnx_path)
         else:
@@ -466,81 +480,43 @@ class ReflexServer:
         # What the installed ORT actually supports on this machine
         available = set(ort.get_available_providers())
 
-        # Decide which providers to request
-        if self._requested_providers is not None:
-            providers = list(self._requested_providers)
-        elif self._requested_device == "cuda":
-            providers = []
-            # Prefer TensorRT EP when available — gives FP16 kernels and
-            # engine caching transparently. ORT falls back to CUDA EP for
-            # ops the TRT EP doesn't support.
-            #
-            # CRITICAL: TRT EP is incompatible with continuous batching when
-            # the source ONNX has static shapes (which our exporters bake).
-            # Apr-14 verification showed TRT rebuilds the engine on each new
-            # batch shape, causing 34-second latencies instead of milliseconds.
-            # When max_batch > 1, fall through to CUDAExecutionProvider which
-            # handles dynamic shapes natively and gives the 2.88x batching
-            # speedup measured in Phase III.
-            #
-            # ALSO: ORT's bundled TensorRT runtime predates Blackwell (RTX
-            # 50-series, sm_100). On Blackwell GPUs, TRT EP segfaults at
-            # session-init with a NULL function pointer — caught 2026-04-28
-            # by first-tester Rob (RTX 5090, exit code 139). Auto-disable
-            # TRT EP on Blackwell + print a loud warning so users know
-            # they're on the slower CUDA-EP path until ORT bundles new TRT.
-            blackwell_detected = _gpu_is_blackwell()
-            use_trt_ep = (
-                "TensorrtExecutionProvider" in available
-                and self._max_batch <= 1
-                and not blackwell_detected
-            )
-            if blackwell_detected and "TensorrtExecutionProvider" in available:
-                _print_blackwell_trt_warning()
-            if use_trt_ep:
-                # Use a per-export-dir engine cache so subsequent serve calls
-                # skip the engine-build cost.
-                trt_cache = str(self.export_dir / ".trt_cache")
-                Path(trt_cache).mkdir(parents=True, exist_ok=True)
-                providers.append((
-                    "TensorrtExecutionProvider",
-                    {
-                        "device_id": 0,
-                        "trt_fp16_enable": True,
-                        "trt_engine_cache_enable": True,
-                        "trt_engine_cache_path": trt_cache,
-                        "trt_max_workspace_size": 4 * 1024 * 1024 * 1024,  # 4GB
-                    },
-                ))
-            elif "TensorrtExecutionProvider" in available and self._max_batch > 1:
-                logger.info(
-                    "TRT EP available but disabled because --max-batch=%d > 1. "
-                    "TRT EP rebuilds engines per batch shape on static-shape "
-                    "ONNX, causing 34s+ latencies. Using CUDAExecutionProvider "
-                    "which handles dynamic batch natively. (Re-export with "
-                    "dynamic batch shapes + TRT shape profiles is a v0.2 fix.)",
-                    self._max_batch,
-                )
-            providers.append("CUDAExecutionProvider")
-            providers.append("CPUExecutionProvider")
-        else:
-            providers = ["CPUExecutionProvider"]
+        from reflex.runtime.ort_providers import (
+            build_ort_provider_plan,
+            gpu_provider_active,
+            gpu_provider_requested,
+            make_ort_session_options,
+        )
 
-        logger.info("Requested providers: %s; available: %s", providers, sorted(available))
+        plan = build_ort_provider_plan(
+            self.export_dir,
+            device=self._requested_device,
+            requested_providers=self._requested_providers,
+            available_providers=sorted(available),
+            max_batch=self._max_batch,
+            onnx_path=onnx_path,
+        )
+        providers = plan.providers
+        logger.info(
+            "Requested providers: %s; available: %s; trt=%s reason=%s",
+            providers,
+            plan.available_providers,
+            plan.used_trt,
+            plan.trt_disabled_reason,
+        )
 
         # Create session
-        self._ort_session = ort.InferenceSession(str(onnx_path), providers=providers)
+        self._ort_session = ort.InferenceSession(
+            str(onnx_path),
+            sess_options=make_ort_session_options(onnx_path),
+            providers=providers,
+        )
         active = self._ort_session.get_providers()
         logger.info("Loaded ONNX model: %s — active providers: %s", onnx_path.name, active)
 
         # Strict check: if caller asked for any GPU provider (CUDA or TRT) but
         # we ended up on CPU, fail loudly.
-        def _provider_name(p):
-            return p[0] if isinstance(p, tuple) else p
-
-        gpu_provider_names = {"CUDAExecutionProvider", "TensorrtExecutionProvider"}
-        cuda_requested = any(_provider_name(p) in gpu_provider_names for p in providers)
-        cuda_active = any(p in gpu_provider_names for p in active)
+        cuda_requested = gpu_provider_requested(providers)
+        cuda_active = gpu_provider_active(active)
         if cuda_requested and not cuda_active and self._strict_providers:
             install_hint = ""
             if "CUDAExecutionProvider" not in available:
@@ -1311,28 +1287,50 @@ def create_app(
         )
     elif _monolithic_cfg.get("export_kind") == "monolithic":
         _model_type = _monolithic_cfg.get("model_type", "smolvla")
-        _ort_providers = providers or (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if device == "cuda" else ["CPUExecutionProvider"]
-        )
         if _model_type == "pi0":
             from reflex.runtime.pi0_onnx_server import Pi0OnnxServer
             server = Pi0OnnxServer(
                 export_dir,
-                providers=_ort_providers,
+                providers=providers,
+                device=device,
+                max_batch=max_batch,
+                strict_providers=strict_providers,
+            )
+        elif _model_type == "pi05":
+            from reflex.runtime.pi05_onnx_server import Pi05OnnxServer
+            server = Pi05OnnxServer(
+                export_dir,
+                providers=providers,
+                device=device,
+                max_batch=max_batch,
                 strict_providers=strict_providers,
             )
         elif _model_type == "smolvla":
             from reflex.runtime.smolvla_onnx_server import SmolVLAOnnxServer
             server = SmolVLAOnnxServer(
                 export_dir,
-                providers=_ort_providers,
+                providers=providers,
+                device=device,
+                max_batch=max_batch,
                 strict_providers=strict_providers,
+            )
+        elif _model_type == "gr00t":
+            server = ReflexServer(
+                export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
             )
         else:
             raise ValueError(
                 f"Monolithic runtime for model_type={_model_type!r} not yet "
-                f"supported. v0.2 covers smolvla + pi0."
+                f"supported. v0.2 covers smolvla, pi0, pi05, and gr00t."
             )
     else:
         server = ReflexServer(

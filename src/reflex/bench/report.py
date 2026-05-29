@@ -52,6 +52,8 @@ class BenchEnvironment:
     export_dir: str
     inference_mode: str  # e.g. "onnx_trt_fp16", "onnx_cpu"
     device: str  # "cuda" / "cpu"
+    provider_mode: str = ""  # e.g. "onnx_trt_fp16", "onnx_gpu", "onnx_cpu"
+    active_providers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -114,14 +116,30 @@ def _reflex_version() -> str:
         return "0.1.0+dev"
 
 
+def _sha256_prefix(path: Path, prefix_len: int = 16) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(16 * 1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()[:prefix_len]
+
+
 def _onnx_file_summary(export_dir: Path) -> list[dict]:
-    """Hash + size of each *.onnx file under the export dir."""
+    """Hash + size ONNX model files, including external-data weight files."""
     out: list[dict] = []
-    for p in sorted(export_dir.glob("*.onnx")):
+    patterns = ("*.onnx", "*.onnx.data", "*.data")
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend(export_dir.glob(pattern))
+    for p in sorted(set(files)):
         try:
-            data = p.read_bytes()
-            h = hashlib.sha256(data).hexdigest()[:16]
-            out.append({"name": p.name, "sha256_prefix": h, "bytes": len(data)})
+            out.append(
+                {
+                    "name": p.name,
+                    "sha256_prefix": _sha256_prefix(p),
+                    "bytes": p.stat().st_size,
+                }
+            )
         except Exception:
             out.append({"name": p.name, "sha256_prefix": "", "bytes": -1})
     return out
@@ -131,6 +149,8 @@ def capture_environment(
     export_dir: str | Path,
     device: str = "cuda",
     inference_mode: str = "",
+    provider_mode: str = "",
+    active_providers: list[str] | None = None,
     seed: int = 0,
     repo_dir: str | Path | None = None,
 ) -> BenchEnvironment:
@@ -153,6 +173,8 @@ def capture_environment(
         export_dir=str(export_path),
         inference_mode=inference_mode,
         device=device,
+        provider_mode=provider_mode,
+        active_providers=list(active_providers or []),
     )
 
 
@@ -225,6 +247,8 @@ class BenchReport:
             f"- **onnxruntime**: `{e.ort_version or 'n/a'}`",
             f"- **device**: `{e.device}`",
             f"- **inference_mode**: `{e.inference_mode or 'n/a'}`",
+            f"- **provider_mode**: `{e.provider_mode or 'n/a'}`",
+            f"- **active_providers**: `{', '.join(e.active_providers) or 'n/a'}`",
             f"- **seed**: `{e.seed}`",
             f"- **export_dir**: `{e.export_dir}`",
             "",

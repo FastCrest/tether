@@ -107,9 +107,78 @@ def test_smolvla_server_reports_num_steps_from_config(tmp_path):
     assert resp["inference_mode"] == "smolvla_onnx_monolithic"
 
 
+def test_pi05_server_uses_pi0_shape_without_state_input(tmp_path):
+    """Pi05OnnxServer reuses pi0-style camera/lang/noise inputs but should
+    not require a state input because pi0.5 carries proprio in language."""
+    from reflex.runtime.pi05_onnx_server import Pi05OnnxServer
+
+    (tmp_path / "reflex_config.json").write_text(json.dumps({
+        "model_type": "pi05",
+        "export_kind": "monolithic",
+        "num_denoising_steps": 10,
+        "chunk_size": 50,
+        "action_dim": 32,
+    }))
+
+    srv = Pi05OnnxServer(str(tmp_path))
+    srv._session = _mock_ort_session([
+        "img_base", "img_wrist_l", "img_wrist_r",
+        "mask_base", "mask_wrist_l", "mask_wrist_r",
+        "lang_tokens", "lang_masks", "noise",
+    ])
+    srv._input_names = [i.name for i in srv._session.get_inputs()]
+    srv._ready = True
+    srv.config = json.loads((tmp_path / "reflex_config.json").read_text())
+
+    resp = srv.predict(
+        image=np.zeros((224, 224, 3), dtype=np.uint8),
+        instruction="pick up",
+        noise=np.zeros((1, 50, 32), dtype=np.float32),
+        lang_tokens=np.zeros((1, 16), dtype=np.int64),
+        lang_masks=np.ones((1, 16), dtype=np.bool_),
+    )
+
+    assert resp["inference_mode"] == "pi05_onnx_monolithic"
+    assert resp["num_denoising_steps"] == 10
+    assert "state" not in srv._session.run.call_args.args[1]
+
+
+def test_reflex_server_uses_model_onnx_for_gr00t_monolithic(tmp_path, monkeypatch):
+    from reflex.runtime.server import ReflexServer
+
+    (tmp_path / "model.onnx").write_bytes(b"fake")
+    (tmp_path / "reflex_config.json").write_text(json.dumps({
+        "model_type": "gr00t",
+        "export_kind": "monolithic",
+        "chunk_size": 50,
+        "action_dim": 64,
+        "num_denoising_steps": 4,
+    }))
+
+    loaded = {}
+
+    def _fake_load_onnx(self, onnx_path):
+        loaded["path"] = Path(onnx_path)
+        self._ort_session = _mock_ort_session([
+            "noisy_actions", "timestep", "position_ids",
+        ], output_shape=(1, 50, 64))
+        self._inference_mode = "onnx_gpu"
+
+    monkeypatch.setattr(ReflexServer, "_load_onnx", _fake_load_onnx)
+    monkeypatch.setattr(ReflexServer, "_load_vlm_orchestrator", lambda self: None)
+
+    srv = ReflexServer(str(tmp_path), device="cpu")
+    srv.load()
+
+    assert loaded["path"] == tmp_path / "model.onnx"
+    assert srv.ready is True
+    assert srv.action_dim == 64
+
+
 def test_create_app_dispatch_monolithic(tmp_path, monkeypatch):
     """create_app routes to Pi0OnnxServer / SmolVLAOnnxServer when
     reflex_config.json declares `export_kind: monolithic`."""
+    pytest.importorskip("fastapi")
     from reflex.runtime import server as server_module
 
     # Write a fake model.onnx + config so _find_onnx_path succeeds

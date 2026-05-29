@@ -79,14 +79,26 @@ def _try_nvidia_smi(timeout_s: float = 5.0) -> tuple[str, str] | None:
 
 def _try_tegrastats(timeout_s: float = 3.0) -> tuple[str, str] | None:
     """Returns ('agx_orin' | 'orin_nano' | 'thor', raw_output) if tegrastats present."""
+    out = ""
     try:
         proc = subprocess.run(
             ["tegrastats", "--interval", "1000"],
             capture_output=True, text=True, timeout=timeout_s,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        out = proc.stdout or ""
+    except subprocess.TimeoutExpired as exc:
+        # tegrastats is a streaming monitor and normally does not exit on its
+        # own. subprocess.run preserves partial stdout on TimeoutExpired; use
+        # that first sample instead of treating a healthy Jetson as CPU-only.
+        partial = exc.stdout if exc.stdout is not None else exc.output
+        if isinstance(partial, bytes):
+            out = partial.decode(errors="ignore")
+        else:
+            out = partial or ""
+    except (FileNotFoundError, OSError):
         return None
-    out = proc.stdout or ""
+    if not out.strip():
+        return None
     # Heuristic: tegrastats output mentions hardware. Default to agx_orin if
     # we can't disambiguate; the override flag exists for edge cases.
     raw = out[:400]

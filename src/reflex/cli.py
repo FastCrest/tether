@@ -62,6 +62,17 @@ def _looks_like_pi05_model_ref(model: str) -> bool:
     return "pi05" in normalized or "pi0.5" in model.lower()
 
 
+def _is_jetson_linux_aarch64() -> bool:
+    """Return True when running on a Jetson-class Linux/aarch64 host."""
+    import platform
+
+    return (
+        platform.system().lower() == "linux"
+        and platform.machine().lower() in {"aarch64", "arm64"}
+        and Path("/etc/nv_tegra_release").exists()
+    )
+
+
 def _version_callback(value: bool) -> None:
     if value:
         typer.echo(
@@ -814,8 +825,51 @@ def benchmark_cmd(
     if benchmark:
         console.print(f"  Benchmark: [cyan]{benchmark}[/cyan] ({episodes_per_task} eps/task)")
 
-    from reflex.runtime.server import ReflexServer
-    server = ReflexServer(export_dir, device=device, strict_providers=False)
+    config_path = export_path / "reflex_config.json"
+    export_config = {}
+    if config_path.exists():
+        try:
+            export_config = json.loads(config_path.read_text())
+        except Exception:
+            export_config = {}
+
+    if export_config.get("export_kind") == "monolithic":
+        model_type = export_config.get("model_type", "smolvla")
+        if model_type == "pi0":
+            from reflex.runtime.pi0_onnx_server import Pi0OnnxServer
+            server = Pi0OnnxServer(
+                export_dir,
+                device=device,
+                max_batch=1,
+                strict_providers=False,
+            )
+        elif model_type == "pi05":
+            from reflex.runtime.pi05_onnx_server import Pi05OnnxServer
+            server = Pi05OnnxServer(
+                export_dir,
+                device=device,
+                max_batch=1,
+                strict_providers=False,
+            )
+        elif model_type == "smolvla":
+            from reflex.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+            server = SmolVLAOnnxServer(
+                export_dir,
+                device=device,
+                max_batch=1,
+                strict_providers=False,
+            )
+        elif model_type == "gr00t":
+            from reflex.runtime.server import ReflexServer
+            server = ReflexServer(export_dir, device=device, strict_providers=False)
+        else:
+            err_console.print(
+                f"[red]Benchmark does not support monolithic model_type={model_type!r} yet.[/red]"
+            )
+            raise typer.Exit(2)
+    else:
+        from reflex.runtime.server import ReflexServer
+        server = ReflexServer(export_dir, device=device, strict_providers=False)
     console.print("[dim]Loading model...[/dim]")
     t0 = _t.perf_counter()
     server.load()
@@ -823,9 +877,19 @@ def benchmark_cmd(
     if not server.ready:
         err_console.print("[red]Model failed to load.[/red]")
         raise typer.Exit(1)
+    provider_mode = getattr(server, "_provider_mode", getattr(server, "_inference_mode", ""))
+    active_providers = list(getattr(server, "_active_providers", []) or [])
+    if not active_providers and getattr(server, "_ort_session", None) is not None:
+        try:
+            active_providers = list(server._ort_session.get_providers())
+        except Exception:
+            active_providers = []
     console.print(
         f"  Loaded:    {load_s:.1f}s  (mode={server._inference_mode})"
     )
+    console.print(f"  Provider:  {provider_mode or 'unknown'}")
+    if active_providers:
+        console.print(f"  Active EP: {', '.join(active_providers)}")
 
     # Warmup
     console.print(f"[dim]Warming up ({warmup} iterations)...[/dim]")
@@ -864,7 +928,7 @@ def benchmark_cmd(
     console.print(
         f"\n  [dim]Inference mode:[/dim] [bold]{server._inference_mode}[/bold]"
     )
-    if server._inference_mode == "onnx_cpu" and device == "cuda":
+    if provider_mode == "onnx_cpu" and device == "cuda":
         console.print(
             "  [yellow]Note: requested device=cuda but ended up on CPU. "
             "Install onnxruntime-gpu and CUDA 12 + cuDNN 9 for GPU performance.[/yellow]"
@@ -887,6 +951,8 @@ def benchmark_cmd(
             export_dir=export_dir,
             device=device,
             inference_mode=server._inference_mode,
+            provider_mode=provider_mode,
+            active_providers=active_providers,
             seed=seed,
         )
         bench_report = BenchReport(
@@ -3729,6 +3795,20 @@ def go(
     console.print(f"  strategy: {resolution.matched_strategy}")
     for note in resolution.notes:
         console.print(f"  [yellow]note:[/yellow] {note}")
+
+    if entry.requires_export and _is_jetson_linux_aarch64():
+        err_console.print(
+            "[red]This registry entry ships raw PyTorch/LeRobot weights, and "
+            "`reflex go` cannot export those inline on Jetson.[/red]"
+        )
+        console.print(
+            "\nExport on a Python 3.12+ dev/cloud box, then copy the ONNX export "
+            "to the Jetson and serve it there:\n"
+            f"  [cyan]reflex export {entry.hf_repo} --target orin-nano --output ./export[/cyan]\n"
+            "  [cyan]scp -r ./export jetson:~/export[/cyan]\n"
+            "  [cyan]reflex serve ~/export --device cuda --port 8000[/cyan]"
+        )
+        raise typer.Exit(2)
 
     # Step 3: target dir
     target = Path(target_dir) if target_dir else (Path.home() / ".cache" / "reflex" / "models" / entry.model_id)

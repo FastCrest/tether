@@ -154,6 +154,15 @@ class TestCaptureEnvironment:
             assert f["bytes"] > 0
             assert len(f["sha256_prefix"]) == 16
 
+    def test_capture_includes_external_data_files(self, tmp_path):
+        # Large monolithic exports save weights as model.onnx.data; the bench
+        # receipt must hash that file too, not only the lightweight protobuf.
+        (tmp_path / "model.onnx").write_bytes(b"protobuf")
+        (tmp_path / "model.onnx.data").write_bytes(b"external-weights")
+        env = capture_environment(export_dir=tmp_path)
+        names = {f["name"] for f in env.onnx_files}
+        assert names == {"model.onnx", "model.onnx.data"}
+
 
 # ---------- report rendering ----------
 

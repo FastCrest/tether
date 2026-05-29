@@ -33,17 +33,16 @@ If `--device cuda` errors with "CUDAExecutionProvider not available," see [Troub
 Reflex auto-detects model type from the HuggingFace repo. Pick one based on what you have:
 
 ```bash
-# Smallest, fastest to download — good for first try
+# Orin Nano-safe first try. Export on a dev/cloud box, then copy to Jetson.
 reflex export lerobot/smolvla_base --target orin-nano --output ./smolvla
 
-# pi0 — Physical Intelligence's flagship 3.5B model
-reflex export lerobot/pi0_base --target orin-nano --output ./pi0
+# pi0 / pi0.5 are datacenter targets in Reflex's registry today.
+reflex export lerobot/pi0_base --target desktop --output ./pi0
 
-# pi0.5 — newer pi0 variant with AdaRMSNorm time conditioning
-reflex export lerobot/pi05_base --target orin-nano --output ./pi05
+reflex export lerobot/pi05_base --target desktop --output ./pi05
 
-# GR00T N1.6 — NVIDIA's humanoid model (3.29B)
-reflex export nvidia/GR00T-N1.6-3B --target orin-nano --output ./gr00t
+# GR00T N1.6 needs AGX Orin/Thor/datacenter-class memory, not Orin Nano.
+reflex export nvidia/GR00T-N1.6-3B --target orin --output ./gr00t
 ```
 
 Each command:
@@ -53,7 +52,7 @@ Each command:
 4. Validates the ONNX numerically against the PyTorch reference (max_diff < 1e-5)
 5. If trtexec is available, builds a TensorRT engine
 
-The `--target` flag picks per-hardware tuning (FP16 on Orin, FP8 on Thor, etc.). See `reflex targets` for the full list.
+The `--target` flag picks per-hardware tuning (FP16 on Orin, FP8 on Thor, etc.). It does not make an oversized model fit a small device. Use `reflex models list --device orin_nano` before targeting Jetson Orin Nano.
 
 After export your output directory looks like:
 
