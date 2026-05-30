@@ -1,5 +1,116 @@
 # Changelog
 
+## v0.11.2 — 2026-05-29
+
+**Hardening patch for the v0.11 lift program + the formal N=100/task L3 LIBERO parity gate clears `--fast-kernels`.** v0.11.1 shipped the FluxVLA lift program (fast-kernels, inference-only weights, ZMQ transport, two new families, `reflex connect`). This patch lands the post-tag hardening of those paths — a refactored monolithic serve/bench path with first-class external-data ONNX, `reflex connect`'s missing core dependency, and clean stderr/stdout separation — and records the formal N=100/task L3 parity verdict that keeps the opt-in `--fast-kernels` Triton runtime on. It also resets the version string to lockstep after a `__version__`/`pyproject` drift in v0.11.1.
+
+### Serve + export hardening
+
+- **Monolithic serve/bench path hardened, with external-data ONNX support** (`a5c10dd`). The single-graph (`--monolithic`) serve and bench paths get a dedicated ORT provider-options builder (`runtime/ort_providers.py`) and a standalone tokenizer-loading path (`runtime/tokenizers.py`), both extracted out of the per-request hot path so the monolithic server no longer reaches back into the decomposed runtime for them. ONNX models with **external weight data** (`.onnx` + sidecar `.onnx_data`, required once a single graph exceeds the 2 GB protobuf limit) now load correctly in both serve and the weight-fusion export pass. Covered by new `test_ort_providers.py`, `test_runtime_tokenizers.py`, `test_weight_fusion_external_data.py`, and a 10-step-decoder runtime test.
+- **`reflex connect` now declares `requests` as a core dependency** (`27e42af`, #188). The integration framework shipped in v0.11.1 but imported `requests` for its health-check probes without declaring it — on a clean `pip install reflex-vla` (no `[serve]` extra), `reflex connect status` raised `ModuleNotFoundError` (it only worked locally because `requests` was a transitive dep). `requests>=2.28.0` is now a core dependency, so the command group works out of the box.
+- **Integration-command errors route to stderr; two exporters classified in the registry audit** (`3ef1b37`). `reflex connect` / integration-command failures now print to stderr (not stdout), so `--json` consumers and shell pipelines get a clean stream; and two previously-unclassified exporters are now tagged in the registry-completeness audit so `test_registry_completeness.py` covers the full set.
+
+### L3 LIBERO parity gate — formal N=100/task (kill-trigger 3 clear)
+
+The `--fast-kernels` flag is governed by the kill-trigger ADR (`2026-05-20-fast-kernels-kill-triggers.md`), whose Trigger 3 disables the flag on a **>5pp L3 LIBERO regression at N=100/task on Pi0.5** (fast-kernels falling below the native runtime). The recurring monthly gate ran the two runtimes side-by-side through the proven `libero_rollout` loop, sharded across tasks with a server-side gather on a Modal Volume (`dc8a191`, `9f5055b` #193, plus eval-infra fixes `c973df6` / `1df33c4` / `e09ffaf` / `2a8b650`):
+
+| Runtime | task 0 | task 1 | task 2 | total | success |
+|---|---|---|---|---|---|
+| Triton (`--fast-kernels`) | 93/100 | 91/100 | 90/100 | **274/300** | **91.3%** |
+| native (ORT) | 81/100 | 86/100 | 89/100 | **256/300** | **85.3%** |
+
+**native − triton = −6.0pp** — the fast-kernels path is **6.0pp ahead** of native, the opposite direction from the kill-trigger. `kill_trigger_3_fires = false` → **PASS**, `--fast-kernels` stays on. Pi0.5 `lerobot/pi05_libero_finetuned_v044`, LIBERO-10 tasks 0–2, N=100/task per runtime (600 episodes total). Modal A100-40GB, ~157 min, ~$33.75 (`03_experiments/2026-05-29-l3-parity-monthly.md`, app `ap-dQIYkIGC3v9oTfECwrJ0Zc`).
+
+### Version lockstep
+
+At the v0.11.1 tag, `src/reflex/__init__.py` read `__version__ = "0.11.0"` while `pyproject.toml` read `version = "0.11.1"` — so `reflex --version` disagreed with the installed package metadata. Both are now bumped in lockstep to `0.11.2`, and that's the invariant going forward (the two strings move together every release).
+
+### Ship gate
+
+- New serve/export paths covered by `test_ort_providers.py` (+180), `test_runtime_tokenizers.py` (+61), `test_weight_fusion_external_data.py` (+67), `test_runtime_num_steps_10.py` (+69), plus `test_registry_completeness.py` / `test_one_command_deploy.py` updates.
+- `--fast-kernels` validated at the formal N=100/task L3 gate: +6.0pp vs native, kill-trigger 3 clear.
+- `reflex --version`, `reflex connect status`, and a clean install (`pip install reflex-vla`, no extras) all exercised.
+
+## v0.11.1 — 2026-05-27
+
+**The FluxVLA lift program ships (8 patterns lifted, 2 new VLA families, +1 integration framework).** This release is the largest single span since launch: a code-level audit of FluxVLA (LimX Dynamics, Apache-2.0) produced 8 lift candidates, and v0.11.1 lands the bulk of them on top of the v0.10.0 BaseVLA spine — an opt-in Triton fast-kernels runtime, inference-only weight loading, a ZMQ remote transport, two new VLA families (DreamZero WAM + MolmoAct2, taking the spine from 5 → 7), a curated FluxVLA pi0.5 LIBERO-10 checkpoint, ROS2 starter kits, and a `reflex connect` integration framework. Every lift carries upstream attribution (FluxVLA Apache-2.0; Triton kernels trace to dexmal/realtime-vla MIT; RTSM Apache-2.0). All of it is opt-in or additive — `reflex serve ./export/` behaves exactly as it did in v0.10.0.
+
+> **Note on versioning:** `0.10.0` and `0.11.0` were never published to PyPI — only `0.11.1` exists in the 0.11 line. The git subject `v0.11.0: ...` (`f2cabb5`) was an in-flight integration commit, not a release. This entry folds the entire 0.11 line into one.
+
+### Lift program at a glance
+
+| Lift | What shipped | CLI / surface | PRs |
+|---|---|---|---|
+| #5 | Triton fast kernels + full-pipeline CUDA Graph capture (Pi0.5 only, opt-in) | `reflex serve --fast-kernels` | #176 |
+| #3 | Inference-only weights (flat bf16 tensor dict via ORT IOBinding, no `nn.Module` at request time) | `reflex serve --inference-only-weights` | #168–#175, #182, #183 |
+| #2 | ZMQ remote transport + `ZmqRuntimeClient` (thin camera-side client, JPEG-on-wire) | `reflex serve --transport zmq` | #177, #178 |
+| #4 | FluxVLA pi0.5 LIBERO-10 checkpoint added to curated registry | `reflex models pull pi05-libero10-fluxvla` | #179, #186 |
+| #7 | DreamZero WAM exporter (6th model family) | `reflex export dreamzero-libero10` | #180 |
+| #8 | Aloha + UR3 ROS2 adapter starter kits | `contrib/ros2/` | #181 |
+| — | `reflex connect` integration framework + RTSM spatial memory | `reflex connect {list,up,down,status}` | #188 |
+| — | MolmoAct2 (7th VLA family on the spine) | `reflex models pull molmoact2-base` | #189 |
+| — | Weight-fusion ONNX export pass (algebraically-equivalent, zero accuracy cost) | automatic on `reflex export` | `cc0b31b` |
+
+### Lift #5 — Triton fast kernels (`--fast-kernels`, opt-in, off by default)
+
+`reflex serve --fast-kernels` runs the entire Pi0.5 pipeline (vision → LLM → projector → 10-step flow-matching decoder) through vendored Triton kernels captured in a single `torch.cuda.CUDAGraph`, replacing the per-op ORT session path. This is structurally a **second runtime alongside ORT**, not a wrap of the existing `PolicyRuntime`.
+
+- **Measured on Modal A100-SXM4-40GB (N=50, synthetic inputs):** Pi0.5 `predict_action` 127.4ms (PyTorch fp32 + `torch.compile`) → **51.0ms (Triton bf16 + CUDA Graph) = 2.5×**. Against the current ORT CUDA EP backend (~600ms from prior benchmarks) that's **~12× the standard `reflex serve` path**. (`2026-05-24-lift5-headline-bench.md`, ~$5.)
+- **V1 scope is Pi0.5 only.** GR00T / SmolVLA fast paths defer to a later release. Mutually exclusive with `--policy-b` (2-policy mode) and `--per-step-expert` — the CLI rejects those combinations.
+- **Hardware-gated + shape-whitelisted.** `src/reflex/kernels/_hardware_gate.py` requires sm ≥ 8.0; `src/reflex/kernels/_shape_whitelist.py` restricts the fused path to the PaliGemma SigLIP shapes the kernels were tuned for. On unsupported hardware (Mac, CPU, A10G capture-OOM) the flag **falls back to ORT silently with an INFO log** — `/act` never fails.
+- **Governed by a kill-trigger ADR** (`2026-05-20-fast-kernels-kill-triggers.md`): the flag is bounded by deal-loss, fallback-rate, parity-regression, and re-vendor-cadence triggers. The Triton kernels are vendored frozen with `ATTRIBUTION.txt` (FluxVLA Apache-2.0 + LimX CUDA extensions Apache-2.0 + dexmal-origin Triton MIT).
+
+New `[fast-kernels]` install extra (`triton>=3.1`) — the only new optional dependency in this release. `torch` is supplied by your existing `[serve,gpu]` / `[jetson]` stack, not re-pinned here.
+
+### Lift #3 — Inference-only weights (`--inference-only-weights`)
+
+`reflex serve --inference-only-weights` flattens the model into a single bf16 CUDA tensor dict at startup, binds it via ORT IOBinding, and never instantiates the source `nn.Module` graph at request time — cutting the PyTorch bookkeeping overhead (optimizer slots, gradient buffers, parameter wrappers) that inflates peak RSS.
+
+The binding substrate (`BaseVLA.prepare_inference_weights()`, per-component `prepare_triton(prefix)`, `InferenceWeightsRuntime`, `WeightBinder`, disk cache) landed across PRs #168–#175. The substrate alone was a **−15.7% RSS regression** (`2026-05-22-lift3-rss-bench-FAIL-architectural-finding.md`) — extracting flat tensors from a fully-loaded module doubles peak storage. The real fix is the safetensors-direct loader that materializes bf16 CUDA tensors **without ever building the `nn.Module`**, shipped as `flat_dict_from_safetensors` mappings:
+
+- **Pi0** (#175): validated **+67.0% peak RSS reduction** (39.2 GB → 12.9 GB) on `lerobot/pi0_base`, more than 2× the +30% target, and 7.8× faster end-to-end load (`2026-05-23-lift3-phase-b-pi0-rss-validation.md`, ~$2).
+- **Pi0.5 + SmolVLA** (#182) and **GR00T** (#183): mappings added (16 unit tests for the Pi0.5 keep/skip/map/tied-expansion branches; SmolVLA dynamic VLM depth handled). This is the substrate that the `--fast-kernels` Triton path binds against.
+
+### Lift #2 — ZMQ remote transport (`--transport zmq`)
+
+`reflex serve --transport zmq` adds a REQ/REP ZMQ transport alongside the default HTTP path, lifted from FluxVLA's 2-layer factory. The reflex `PolicyRuntime` is unchanged — each transport is a thin adapter over `runtime.predict()`. The win is the "fat camera client → thin model server" deployment shape: a `ZmqRuntimeClient` with no GPU/torch deps, JPEG-on-the-wire serialization (cv2 imencode, ~20× bandwidth reduction for 3-camera setups), and a rich per-stage profiling decomposition (`serialize_ms` / `zmq_roundtrip_ms` / `server_infer_ms` / `network_ms` / `deserialize_ms`). The ZMQ deps (`pyzmq`, `msgpack`, `opencv-python-headless`, ~2 MB) were added to the **existing `[serve]` extra**, so `pip install reflex-vla[serve]` gives you both transports — no new extra to learn.
+
+Honest framing: the "3–5× lower latency" claim holds only for small models (~30ms inference like SmolVLA). At Pi0.5-on-A100 (~208ms, model-dominated), the wire-time delta is ~11% wall-clock — the durable wins are bandwidth, robot-side install size, and tail-jitter, not raw latency.
+
+### Lifts #4 / #7 + MolmoAct2 — model coverage 5 → 7 families
+
+- **Lift #4 — FluxVLA pi0.5 LIBERO-10 checkpoint** added to the curated registry as `pi05-libero10-fluxvla` (FluxVLA's published **97.85% average on LIBERO-10**, BS=64 / 24 epochs, Apache-2.0, republished with attribution from `limxdynamics/FluxVLAEngine`). The 7.2 GB weights were uploaded and the registry pointer repointed at the hosted copy (#179, #186, `8419f9d`).
+- **Lift #7 — DreamZero WAM** (World-Action Model, NVIDIA Research via FluxVLA) ships as the **6th model family** with its own exporter, flow-matching head, and vendored modules under `models/third_party/dreamzero/` with `ATTRIBUTION.txt`. Pullable/exportable as `dreamzero-libero10` (#180).
+- **MolmoAct2** lands as the **7th VLA family** on the BaseVLA spine — a ~134 LOC composition file + safetensors mapping + 3 registry entries (`molmoact2-base`, `molmoact2-libero`, `molmoact2-droid`), exactly the ~100 LOC "add a model = a composition class + registry entry" pattern the v0.10.0 spine was built for (#189).
+
+### Lift #8 — Aloha + UR3 ROS2 starter kits
+
+Two ROS2 adapter starter kits land in `contrib/ros2/` (Aloha + UR3), with shared `_common/` helpers (`action_publisher`, `observation_builder`, `reflex_client`). These are reference integrations for wiring a real robot's topics to a running `reflex serve`, ahead of the first-class `--transport ros2` planned for v1.0 (#181).
+
+### `reflex connect` — integration framework + RTSM
+
+New `reflex connect {list, up, down, status}` command group: a registry of known external tools (each with a pip spec, health-check URL, start command, and MCP tool manifest) that reflex installs and lifecycle-manages while the tool owns its own code. The first integration is **RTSM** (`calabi-inc/rtsm`, Apache-2.0) — persistent 3D object map from RGB-D streams, exposing 6 MCP tools (`semantic_query`, `spatial_query`, `relational_query`, `list_objects`, `get_object`, `status`). Reflex ships the query interface; RTSM ships the perception pipeline (#188).
+
+### Weight-fusion export pass
+
+A new post-export ONNX pass (`exporters/weight_fusion.py`) fuses RMSNorm scales into adjacent MatMul weights and folds the Euler-step `dt` into output projections — algebraically-equivalent transforms with **zero accuracy cost** and fewer runtime graph ops. Technique analysis lifted from `dexmal/realtime-vla` (MIT, arxiv 2510.26742). Wired into both the decomposed (`onnx_export.py`) and monolithic (`monolithic.py`) export paths; non-fatal (fusion failure logs a warning and ships the un-fused ONNX). No new dependencies (`cc0b31b`).
+
+### Dependency / install story
+
+| Change | Where |
+|---|---|
+| `pyzmq>=25.0`, `msgpack>=1.0`, `opencv-python-headless>=4.8` | added to existing `[serve]` extra (both transports out of the box) |
+| `triton>=3.1` | **new** `[fast-kernels]` extra (opt-in; silent ORT fallback if absent) |
+
+`torch` is **not** re-pinned by `[fast-kernels]` — the initial `triton>=3.0,<3.2` pin was defeated by a torch 2.7 ↔ lerobot 0.5.1 ↔ FluxVLA torch==2.6.0 conflict, so the extra brings `triton` only and lets the host stack supply torch (see the T-5 pinning note in `pyproject.toml`).
+
+### Ship gate
+
+- All four new CLI surfaces are live and verified in `src/reflex/cli.py`: `--fast-kernels`, `--inference-only-weights`, `--transport zmq`, and `reflex connect`.
+- Fast-kernels headline measured on real A100 hardware (2.5× vs PyTorch / ~12× vs ORT); inference-only-weights RSS win measured at +67.0% on a real Pi0 checkpoint.
+- Every lift ships with upstream `ATTRIBUTION.txt` (FluxVLA / LimX / dexmal / RTSM); `--fast-kernels` is additionally bounded by a locked kill-trigger ADR.
+- Build fix `c0f8771` removed a duplicate `force-include` that was breaking the PyPI upload — this is the commit tagged `v0.11.1`.
+
 ## v0.10.0 — 2026-05-22
 
 **BaseVLA spine refactor (lift #1, 12-day arc).** Reflex's exporter directory used to host one bespoke pipeline per model family (pi0_exporter, pi05_exporter, smolvla_exporter, gr00t_exporter, openvla_exporter) — each ~600-1000 LOC of duplicated orchestration. This release lands a unified component-slot composition: every VLA is now a thin `~100 LOC` subclass of `BaseVLA` that declares which of 6 component slots it uses (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`). Adding a new VLA backbone is now a composition-class file + a registry entry, not a duplicated exporter pipeline.

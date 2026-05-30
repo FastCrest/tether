@@ -1,6 +1,6 @@
 """Reflex — Deploy any VLA model to any edge hardware. One command."""
 
-__version__ = "0.11.1"
+__version__ = "0.11.2"
 
 # Heavy submodules (validate_roundtrip pulls in torch) are lazy-loaded so that
 # `reflex --version`, `reflex --help`, `reflex chat`, etc. don't pay the
