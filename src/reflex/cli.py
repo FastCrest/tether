@@ -1754,7 +1754,8 @@ def serve(
         "--fast-kernels",
         help="Lift #5 Triton fast-kernels mode: run the entire Pi0.5 pipeline "
              "through vendored Triton kernels + CUDA Graph capture instead of "
-             "ORT. ~14x faster than standard ORT path on A100 (41ms vs ~600ms). "
+             "ORT. ~12x faster than standard ORT path on A100 (51ms full-pipeline "
+             "predict_action vs ~600ms). "
              "Falls back to ORT silently on unsupported hardware (Mac, CPU, "
              "sm < 8.0, A10G) with an INFO log. V1: Pi0.5 only; mutually "
              "exclusive with --policy-b and --per-step-expert. Off by default.",
