@@ -35,7 +35,7 @@ pip install 'reflex-vla[serve,onnx]'              # Mac / CPU runtime
 
 Requires Python ≥ 3.10.
 
-### What's new in v0.11.0 (2026-05-25)
+### What's new in v0.11.1 (2026-05-27)
 
 - **Triton fast kernels** — 2.5x PyTorch, ~12x ORT on A100. Opt in with `reflex serve --fast-kernels` (requires the `[fast-kernels]` extra). Falls back to ORT silently when Triton is unavailable.
 - **ZMQ transport** — `reflex serve --transport zmq` for low-latency robot communication. JPEG-on-wire image serialization via msgpack. Ships with the `[serve]` extra (pyzmq + msgpack included).
@@ -490,7 +490,7 @@ Continuous batching on the HTTP layer: each `/act` request enters an asyncio que
 
 ## Status
 
-**v0.11.0 — source-available under BSL 1.1.** Active development. Install, kick the tires, open issues loudly. Six VLA families (SmolVLA, pi0, pi0.5, GR00T, OpenVLA, DreamZero), Triton fast kernels, ZMQ transport, safetensors-direct loading.
+**v0.11.2 — source-available under BSL 1.1.** Active development. Install, kick the tires, open issues loudly. Six VLA families (SmolVLA, pi0, pi0.5, GR00T, OpenVLA, DreamZero), Triton fast kernels, ZMQ transport, safetensors-direct loading.
 
 ## License
 
