@@ -432,7 +432,7 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | Older NVIDIA (Turing RTX 20, GTX 16) | sm_7.5 | ⚠️ Best-effort | Should work but not in CI matrix |
 | Pre-Tensor-Core (Maxwell Jetson Nano 4GB, GTX 9-series) | sm_5.x | ❌ Not supported | NVIDIA EOL'd this hardware at JetPack 4.6 (Python 3.6) — too old for modern ML stacks regardless. The bootstrap installer auto-detects and bails fast with redirect instructions. |
 
-**For Blackwell users right now:** the bootstrap installer accepts your hardware and the package installs cleanly, but `reflex go` will segfault at server startup. The real fix requires ORT to ship Blackwell-aware bundled binaries (no published timeline). Workarounds: chat-only mode (no GPU needed), `reflex doctor`, `reflex models list` all work fine. `/act` and TRT-engine inference need a non-Blackwell GPU temporarily.
+**For Blackwell users right now:** the bootstrap installer accepts your hardware and the package installs cleanly, but `reflex go` will segfault at server startup. The real fix requires ORT to ship Blackwell-aware bundled binaries (no published timeline). Workarounds: chat mode (no GPU needed — **but requires network**; chat routes to a hosted model and is not part of the offline serving path), `reflex doctor`, `reflex models list` all work fine. `/act` and TRT-engine inference need a non-Blackwell GPU temporarily.
 
 A Blackwell-specific runtime path via TensorRT-LLM (which supports sm_100) is tracked upstream.
 
@@ -471,19 +471,21 @@ Four ONNX artifacts in production, measured against PyTorch on shared seeded inp
 | **pi0.5 ONNX, num_steps=10** (production default) | `sample_actions(num_steps=10)` | **2.38e-07** | ✅ **machine precision** |
 | **GR00T N1.6 ONNX, single-step DiT** (DDPM, loop external) | `GR00TFullStack.forward` | **8.34e-07** | ✅ **machine precision** |
 | **GR00T N1.6 end-to-end 4-step denoise loop** | Python loop over PyTorch ref | **4.77e-07** | ✅ **machine precision** |
-| **GR00T N1.6 Eagle VLM ONNX** (SigLIP + Qwen3 + mlp1, 1.87B) | `EagleExportStack` PyTorch | **4.25e-04** | ✅ machine precision |
-| **GR00T N1.6 DiT with real VLM KV** (5-input `expert_stack_with_vlm.onnx`) | `GR00TFullStack(state, vlm_kv)` | **1.78e-05** | ✅ machine precision |
+| **GR00T N1.6 Eagle VLM ONNX** (SigLIP + Qwen3 + mlp1, 1.87B) | `EagleExportStack` PyTorch | **4.25e-04** | ✅ **fp16 tolerance** (NOT fp32 machine precision) |
+| **GR00T N1.6 DiT with real VLM KV** (5-input `expert_stack_with_vlm.onnx`) | `GR00TFullStack(state, vlm_kv)` | **1.78e-05** | ✅ **tight tolerance** (fp32 accum, not machine precision) |
 | **GR00T N1.6 end-to-end two-ONNX chain** (Eagle → DiT) | same chain in PyTorch | **1.90e-05** | ✅ parity + image-driven sensitivity verified (max_abs=0.21 on actions when input image changes) |
 | SmolVLA ONNX, num_steps=1 | `sample_actions(num_steps=1)` | 1.55e-06 | ✅ machine precision |
 | pi0 ONNX, num_steps=1 | `sample_actions(num_steps=1)` | 1.43e-06 | ✅ machine precision |
+
+_**Precision tiers (honest labels):** **machine precision (fp32)** ≤ 2e-6 (round-off floor) · **tight tolerance (fp32 accum)** ≤ 1e-4 · **fp16 tolerance** ≤ 5e-3. Only ≤ 2e-6 rows are true fp32 machine precision — the four production flow-matching VLAs (first-action ~1e-7) qualify; the GR00T Eagle VLM stack at 4.25e-4 is fp16-level and is labeled as such, not "machine precision."_
 
 Plus PyTorch-level native-path sanity checks (`SmolVLAPolicy` with DecomposedRMSNorm swap vs reference = cos=1.0; `PI0Policy.predict_action_chunk` vs raw `sample_actions` = bit-exact).
 
 **About the production defaults**: flow-matching VLAs (SmolVLA, pi0, pi0.5) canonically integrate the velocity field with 10 Euler steps — the ONNX bakes in the unrolled loop. GR00T is DDPM-style diffusion with 4 canonical steps — the ONNX exports one velocity step, and `reflex serve` wraps it in the loop. All four match canonical PyTorch to machine precision. Getting pi0 / pi0.5 there required three interacting patches under `torch.export` (F.pad causal mask, frozen `DynamicLayer.update`, `past_kv.get_seq_length()` for mask assembly); GR00T's simpler DiT graph (no DynamicCache, no PaliGemma masking) traces cleanly via plain `torch.onnx.export(opset=19)` — no patches needed. Details in `reflex_context/01_architecture/pi0_monolithic_wrap_pattern.md`.
 
-Full ledger: [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
+The full per-fixture ledger — with explicit precision tiers — is emitted into every export's `VERIFICATION.md` by `reflex validate` (the customer-facing trust receipt).
 
-**Latency numbers are intentionally not in the README yet** — earlier TRT FP16 tables were measured on a now-abandoned decomposed-ONNX path. `reflex bench <export_dir>` reproduces on any hardware.
+**Published latency:** the [Performance](#performance) table above (SmolVLA monolithic, A10G, TRT EP — 5.55× over ORT-CUDA, measured 2026-04-29) is the one measured latency number. Broader per-model / per-hardware tables are still being filled in; `reflex bench <export_dir>` reproduces on any hardware. (An earlier set of TRT FP16 tables measured on the now-abandoned decomposed-ONNX path was removed — do not cite those.)
 
 Reproduce on your own GPU with one command:
 
@@ -493,7 +495,7 @@ reflex bench ./pi0 --iterations 100
 
 ### Multi-robot batching (`reflex serve --max-batch N`)
 
-Continuous batching on the HTTP layer: each `/act` request enters an asyncio queue; the server flushes the queue every `--batch-timeout-ms` (default 5ms) into one batched ONNX inference. Earlier measurements on the decomposed-ONNX path showed 2.3-2.9x throughput scaling at batch sizes 4-16.
+Continuous batching on the HTTP layer: each `/act` request enters an asyncio queue; the server flushes the queue every `--batch-timeout-ms` (default 5ms) into one batched ONNX inference. **Throughput figure pending:** an earlier 2.3-2.9x scaling number (batch 4-16) was measured on the now-abandoned decomposed-ONNX path and is **deprecated** — monolithic-path batching has not been re-measured. `reflex bench` will publish the current number.
 
 ## Status
 
