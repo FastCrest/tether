@@ -1,4 +1,12 @@
-"""HTTP backend that talks to the FastCrest proxy (Cloudflare Worker)."""
+"""HTTP backend that talks to the FastCrest proxy (Cloudflare Worker).
+
+NOTE: `reflex chat` is an ONLINE convenience surface — it routes to a hosted
+model via this proxy and REQUIRES network. Reflex's offline / air-gapped
+guarantee is the *serving* path (`reflex serve` / `/act` inference runs fully
+on-device); it does NOT extend to chat. Network failures raise OfflineError
+that states this distinction. Set FASTCREST_PROXY_URL to self-host the proxy
+if you need chat inside a closed network.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +18,13 @@ from typing import Any, Callable, Iterator
 import httpx
 
 DEFAULT_PROXY_URL = "https://chat.fastcrest.com"
+
+_OFFLINE_MSG = (
+    "`reflex chat` needs network: it routes to a hosted model at {url}. "
+    "Reflex's offline/air-gapped guarantee covers `reflex serve` / `/act` "
+    "inference (fully on-device), NOT the chat helper. Self-host the proxy and "
+    "set FASTCREST_PROXY_URL to use chat inside a closed network."
+)
 
 
 @dataclass
@@ -30,8 +45,11 @@ class ChatBackend:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = tool_choice
-        with httpx.Client(timeout=self.timeout_s) as client:
-            r = client.post(f"{self.proxy_url}/chat", json=body)
+        try:
+            with httpx.Client(timeout=self.timeout_s) as client:
+                r = client.post(f"{self.proxy_url}/chat", json=body)
+        except httpx.HTTPError as e:  # ConnectError / timeout / DNS — i.e. no network
+            raise OfflineError(_OFFLINE_MSG.format(url=self.proxy_url)) from e
         if r.status_code == 429:
             raise RateLimitError(r.json().get("message", "rate limit"))
         if r.status_code >= 400:
@@ -49,22 +67,25 @@ class ChatBackend:
         if tools:
             body["tools"] = tools
             body["tool_choice"] = tool_choice
-        with httpx.Client(timeout=self.timeout_s) as client:
-            with client.stream("POST", f"{self.proxy_url}/chat", json=body) as r:
-                if r.status_code == 429:
-                    raise RateLimitError(r.read().decode().strip())
-                if r.status_code >= 400:
-                    raise ProxyError(f"HTTP {r.status_code}: {r.read().decode()[:300]}")
-                for line in r.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if payload == "[DONE]":
-                        return
-                    try:
-                        yield json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
+        try:
+            with httpx.Client(timeout=self.timeout_s) as client:
+                with client.stream("POST", f"{self.proxy_url}/chat", json=body) as r:
+                    if r.status_code == 429:
+                        raise RateLimitError(r.read().decode().strip())
+                    if r.status_code >= 400:
+                        raise ProxyError(f"HTTP {r.status_code}: {r.read().decode()[:300]}")
+                    for line in r.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            return
+                        try:
+                            yield json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+        except httpx.HTTPError as e:  # ConnectError / timeout / DNS — i.e. no network
+            raise OfflineError(_OFFLINE_MSG.format(url=self.proxy_url)) from e
 
     def health(self) -> dict[str, Any]:
         with httpx.Client(timeout=10.0) as client:
@@ -127,4 +148,14 @@ class ProxyError(RuntimeError):
 
 
 class RateLimitError(RuntimeError):
+    pass
+
+
+class OfflineError(RuntimeError):
+    """Raised when `reflex chat` can't reach the hosted proxy (no network).
+
+    Distinct from ProxyError (server reachable but errored): OfflineError means
+    the offline/air-gap boundary was hit. Its message states that Reflex's
+    offline guarantee is the serving path (`reflex serve` / `/act`), not chat.
+    """
     pass

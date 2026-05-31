@@ -59,6 +59,25 @@ def _collect_files(export_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _precision_tier(max_abs: float) -> str:
+    """Classify a max_abs_diff into an HONEST precision tier.
+
+    "Machine precision" is the fp32 round-off floor (~1e-6). Looser values are
+    NOT machine precision and must not be labeled as such: a ~1e-4 diff is
+    fp16-level tolerance, which a QA reviewer will (correctly) pull as the first
+    row. A verification receipt that calls 4e-4 "machine precision" loses the
+    room. Keep the tiers honest.
+    """
+    a = abs(float(max_abs))
+    if a <= 2e-6:
+        return "machine precision (fp32)"
+    if a <= 1e-4:
+        return "tight tolerance (fp32 accum)"
+    if a <= 5e-3:
+        return "fp16 tolerance"
+    return "DIVERGENT — review"
+
+
 def _format_parity(parity: dict[str, Any] | None) -> str:
     if not parity:
         return (
@@ -76,19 +95,28 @@ def _format_parity(parity: dict[str, Any] | None) -> str:
         f"**Threshold:** {parity.get('threshold')}",
         f"**Fixtures:** {parity.get('num_test_cases')}",
         f"**Seed:** {parity.get('seed')}",
-        f"**max_abs_diff across all fixtures:** {max_abs:.3e}",
+        f"**max_abs_diff across all fixtures:** {max_abs:.3e} — {_precision_tier(max_abs)}",
         "",
-        "| Fixture | max_abs_diff | mean_abs_diff | Passed |",
-        "|---|---|---|---|",
+        "| Fixture | max_abs_diff | mean_abs_diff | Precision tier | Passed |",
+        "|---|---|---|---|---|",
     ]
     for r in results:
         ok = "PASS" if r.get("passed") else "FAIL"
+        r_max = float(r.get("max_abs_diff", 0))
         lines.append(
             f"| {r.get('fixture_idx', '?')} | "
-            f"{float(r.get('max_abs_diff', 0)):.3e} | "
+            f"{r_max:.3e} | "
             f"{float(r.get('mean_abs_diff', 0)):.3e} | "
+            f"{_precision_tier(r_max)} | "
             f"{ok} |"
         )
+    lines += [
+        "",
+        "_Precision tiers: **machine precision (fp32)** ≤ 2e-6 (round-off floor) · "
+        "**tight tolerance (fp32 accum)** ≤ 1e-4 · **fp16 tolerance** ≤ 5e-3 · "
+        "**DIVERGENT — review** otherwise. Only ≤ 2e-6 is true fp32 machine precision; "
+        "a ~1e-4 diff is fp16-level and is labeled as such._",
+    ]
     return "\n".join(lines) + "\n"
 
 
