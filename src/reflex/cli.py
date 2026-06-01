@@ -1303,6 +1303,213 @@ def eval_cmd(
         raise typer.Exit(5)
 
 
+@app.command(name="verify")
+def verify_cmd(
+    checkpoint_or_export: str = typer.Argument(
+        help="Path / HF id of the OPTIMIZED export (ONNX/Triton) under test. "
+             "The native-PyTorch reference defaults to this same checkpoint "
+             "unless --original is passed.",
+    ),
+    target: str = typer.Option(
+        "unknown", "--target",
+        help="Hardware SKU the export targets (e.g. orin, orin-nano). Recorded "
+             "in the PARITY.md receipt; does not change scoring in v0.",
+    ),
+    eval_suite: str = typer.Option(
+        "libero", "--eval",
+        help="Eval suite for the paired rollout. v0 ships LIBERO only "
+             "(matches `reflex eval`); SimplerEnv / customer suites follow.",
+    ),
+    original: str = typer.Option(
+        "", "--original",
+        help="Path / HF id of the ORIGINAL native-PyTorch policy to compare "
+             "against. Default: the checkpoint the export was built from.",
+    ),
+    task_suite: str = typer.Option(
+        "libero_10", "--task-suite",
+        help="LIBERO task suite name (libero_spatial / libero_object / "
+             "libero_goal / libero_10 / libero_90).",
+    ),
+    num_episodes: int = typer.Option(
+        30, "--num-episodes",
+        help="Episodes per task per arm. The Pro gate REFUSES to score fewer "
+             "than 30 paired episodes (insufficient statistical power).",
+    ),
+    tasks: str = typer.Option(
+        "", "--tasks",
+        help="Comma-separated LIBERO task indices (e.g. 0,1,2). Empty = all "
+             "tasks in the suite.",
+    ),
+    seed: int = typer.Option(
+        7, "--seed",
+        help="RNG seed shared by both arms so episodes are paired (same "
+             "LIBERO initial state in the original + optimized arm).",
+    ),
+    output: str = typer.Option(
+        "./verify_output", "--output",
+        help="Directory for the PARITY.md receipt (+ JSON). Created if missing.",
+    ),
+    signing_key: str = typer.Option(
+        "", "--signing-key",
+        help="Optional Ed25519 private key for parity.cert.json. Accepts env:VAR, file:path, PEM, or base64 32-byte seed.",
+    ),
+    key_id: str = typer.Option(
+        "", "--key-id",
+        help="Optional key identifier embedded in the parity cert signature block.",
+    ),
+    output_json: bool = typer.Option(
+        False, "--json", help="Emit the machine-readable verdict to stdout.",
+    ),
+    verbose: bool = typer.Option(False, help="Verbose logging"),
+):
+    """Action-parity gate: does the OPTIMIZED export behave like the ORIGINAL?
+
+    Runs the native-PyTorch policy and the ONNX/Triton export through the SAME
+    LIBERO loop (paired by task + seed), then scores the paired outcomes through
+    the Reflex Pro 9-gate evaluator (original = baseline, optimized = candidate)
+    and writes a PARITY.md receipt. Exit code 0 = PASS, 1 = FAIL, 2 = error.
+
+    v0 reuses the shipped Pro gate + the proven rollout loop; the load-bearing
+    signal is success-rate parity (success-cliff + Wilson gates). The
+    distributional engine (MMD / energy-distance) and embodied metrics (jerk,
+    completion-time, motion-energy) are flagged follow-ups — see the
+    TODO(reflex-verify) anchors in src/reflex/verify.py.
+
+    Examples:
+        reflex verify ./my-export --target orin --eval libero
+        reflex verify ./my-export --tasks 0,1,2 --num-episodes 50
+        reflex verify ./my-export --original lerobot/pi05_libero --json
+    """
+    _setup_logging(verbose)
+
+    from reflex.verify import (
+        SUPPORTED_SUITES,
+        InsufficientEpisodes,
+        run_verify,
+    )
+
+    if eval_suite not in SUPPORTED_SUITES:
+        err_console.print(
+            f"[red]Unknown --eval suite: {eval_suite!r}. "
+            f"v0 supports: {', '.join(SUPPORTED_SUITES)}.[/red]"
+        )
+        raise typer.Exit(2)
+
+    parsed_task_indices: list[int] | None = None
+    if tasks.strip():
+        try:
+            parsed_task_indices = [
+                int(t.strip()) for t in tasks.split(",") if t.strip()
+            ]
+        except ValueError:
+            err_console.print(
+                f"[red]--tasks must be comma-separated integers, got: {tasks!r}[/red]"
+            )
+            raise typer.Exit(2)
+
+    console.print("\n[bold]Reflex Verify[/bold] [dim](action-parity gate · v0)[/dim]")
+    console.print(f"  Optimized:  {checkpoint_or_export}")
+    console.print(f"  Original:   {original or '[dim](same checkpoint)[/dim]'}")
+    console.print(f"  Eval suite: [cyan]{eval_suite}[/cyan] ({task_suite})")
+    console.print(f"  Target:     {target}")
+    console.print(f"  Episodes:   {num_episodes} per task per arm")
+    console.print(f"  Seed:       {seed}")
+    console.print(f"  Output:     {output}")
+
+    try:
+        verdict = run_verify(
+            optimized_ref=checkpoint_or_export,
+            original_ref=original or None,
+            suite=eval_suite,
+            target=target,
+            task_suite_name=task_suite,
+            num_episodes=num_episodes,
+            task_indices=parsed_task_indices,
+            seed=seed,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Verify interrupted by user.[/yellow]")
+        raise typer.Exit(130)
+    except InsufficientEpisodes as exc:
+        err_console.print(
+            f"[red]Insufficient paired episodes for a parity verdict: {exc}[/red]\n"
+            f"  Raise --num-episodes (>= 30 episodes recommended) and re-run."
+        )
+        raise typer.Exit(2)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    except Exception as exc:  # noqa: BLE001
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        err_console.print(f"[red]Verify failed with unexpected error: {exc}[/red]")
+        console.print("[yellow]Re-run with --verbose for the full traceback.[/yellow]")
+        raise typer.Exit(2)
+
+    if output_json:
+        print(json.dumps(verdict.to_dict(), indent=2, default=str))
+    else:
+        gate_table = Table(title="Parity gates", show_header=True, header_style="bold")
+        gate_table.add_column("Gate")
+        gate_table.add_column("Class")
+        gate_table.add_column("Result", justify="center")
+        gate_table.add_column("Measured", justify="right")
+        gate_table.add_column("Threshold", justify="right")
+        for g in verdict.eval_report.all_gates:
+            gate_table.add_row(
+                g.gate_id,
+                g.gate_class,
+                "[green]PASS[/green]" if g.passed else "[red]FAIL[/red]",
+                f"{g.measured:.4g}",
+                f"{g.threshold:.4g}",
+            )
+        console.print(gate_table)
+        console.print(
+            f"\n  Success rate: original "
+            f"[bold]{verdict.original_success_rate * 100:.1f}%[/bold] → "
+            f"optimized [bold]{verdict.optimized_success_rate * 100:.1f}%[/bold] "
+            f"({verdict.success_rate_delta * 100:+.1f}pp)"
+        )
+        if verdict.first_failing_gate_id:
+            err_console.print(
+                f"  First failing gate: [red]{verdict.first_failing_gate_id}[/red]"
+            )
+        verdict_render = (
+            "[green]PASS[/green]" if verdict.passed else "[red]FAIL[/red]"
+        )
+        console.print(f"\n  Verdict: {verdict_render}")
+
+    report_path = None
+    try:
+        from reflex.parity_report import write_parity_report
+        report_path = write_parity_report(output, verdict)
+        if not output_json:
+            console.print(f"  [dim]Parity receipt: {report_path}[/dim]")
+    except Exception as exc:  # noqa: BLE001
+        if not output_json:
+            console.print(f"[yellow]Parity receipt write skipped: {exc}[/yellow]")
+
+    try:
+        from reflex.parity_cert import write_parity_cert
+        cert_path, sig_path = write_parity_cert(
+            output,
+            verdict,
+            parity_md_path=report_path,
+            signing_key=signing_key,
+            key_id=key_id,
+        )
+        if not output_json:
+            console.print(f"  [dim]Parity cert: {cert_path}[/dim]")
+            if sig_path is not None:
+                console.print(f"  [dim]Parity cert signature: {sig_path}[/dim]")
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]Parity cert write failed: {exc}[/red]")
+        raise typer.Exit(2)
+
+    raise typer.Exit(0 if verdict.passed else 1)
+
+
 @app.command(hidden=True)
 def guard(
     action: str = typer.Argument(help="Action to check: 'init' to create config, 'check' to validate"),
@@ -4003,6 +4210,9 @@ validate_app = typer.Typer(
 inspect_app = typer.Typer(
     help="Diagnostic + forensic tools — bench, replay traces, hardware targets, guard state."
 )
+comply_app = typer.Typer(
+    help="Compliance evidence packs — export EU technical-file bundles and SBOMs.",
+)
 
 # Cross-register existing functions under the new verb-noun paths.
 # Same callable, two surface names: old hidden, new visible.
@@ -4132,10 +4342,163 @@ def inspect_traces(
         table.add_row(*r)
     console.print(table)
 
+
+@comply_app.command("export")
+def comply_export(
+    verify_dir: str = typer.Option(
+        ..., "--verify-dir",
+        help="Directory containing PARITY.md and parity.cert.json from `reflex verify`.",
+    ),
+    audit_log: Optional[str] = typer.Option(
+        None, "--audit-log",
+        help="Runtime audit JSONL file or directory from `reflex serve --record`.",
+    ),
+    actionguard: Optional[str] = typer.Option(
+        None, "--actionguard",
+        help="ActionGuard/SafetyLimits JSON config used for serving.",
+    ),
+    out: str = typer.Option(
+        "./eu_conformity_bundle", "--out",
+        help="Output directory for the conformity bundle.",
+    ),
+    product_name: str = typer.Option("Reflex robot deployment", "--product-name"),
+    deployment_id: str = typer.Option("", "--deployment-id"),
+    robot_id: str = typer.Option("", "--robot-id"),
+    manufacturer: str = typer.Option("", "--manufacturer"),
+    operator: str = typer.Option("", "--operator"),
+    data_residency: str = typer.Option("customer-controlled", "--data-residency"),
+    retention_days: int = typer.Option(30, "--retention-days"),
+    vulnerability_contact: str = typer.Option("security@example.com", "--vulnerability-contact"),
+    signing_key: str = typer.Option(
+        "", "--signing-key",
+        help="Optional Ed25519 private key: env:VAR, file:path, PEM, or base64 32-byte seed.",
+    ),
+    key_id: str = typer.Option("", "--key-id", help="Signing key identifier embedded in conformity.json."),
+    no_env_sbom: bool = typer.Option(
+        False, "--no-env-sbom",
+        help="Only include Reflex/artifact components in the SBOM, not the full Python environment.",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit the export summary as JSON."),
+) -> None:
+    """Export an EU conformity evidence bundle from Reflex runtime artifacts."""
+    try:
+        from reflex.comply.export import export_conformity_bundle
+        from reflex.comply.schemas import DeploymentMetadata
+
+        result = export_conformity_bundle(
+            verify_dir=verify_dir,
+            out_dir=out,
+            audit_log=audit_log,
+            actionguard=actionguard,
+            deployment=DeploymentMetadata(
+                product_name=product_name,
+                deployment_id=deployment_id,
+                robot_id=robot_id,
+                manufacturer=manufacturer,
+                operator=operator,
+                data_residency=data_residency,
+                retention_days=retention_days,
+                vulnerability_contact=vulnerability_contact,
+            ),
+            signing_key=signing_key,
+            key_id=key_id,
+            include_environment_sbom=not no_env_sbom,
+        )
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]Comply export failed: {exc}[/red]")
+        raise typer.Exit(2)
+
+    if output_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    console.print("\n[bold]Reflex Comply[/bold] evidence bundle exported")
+    console.print(f"  Bundle:          {result['bundle_dir']}")
+    console.print(f"  Technical file:  {result['technical_file_md']}")
+    console.print(f"  PDF:             {result['technical_file_pdf']}")
+    console.print(f"  SBOM:            {result['sbom']}")
+    console.print(f"  Conformity JSON: {result['conformity_json']}")
+    if result.get("signed"):
+        console.print(f"  Signature:       {result['conformity_sig']}")
+    else:
+        console.print("  [yellow]Unsigned bundle. Use --signing-key for auditor-facing exports.[/yellow]")
+    if result.get("gaps"):
+        console.print(f"  Gap report:      {result['gap_report']} ({len(result['gaps'])} open items)")
+
+
+@comply_app.command("sbom")
+def comply_sbom(
+    out: str = typer.Option("./SBOM.cyclonedx.json", "--out", help="Output CycloneDX JSON path."),
+    no_env: bool = typer.Option(False, "--no-env", help="Do not include installed Python packages."),
+) -> None:
+    """Generate a standalone CycloneDX-style SBOM for the Reflex environment."""
+    from reflex.comply.sbom import generate_sbom, write_sbom
+
+    path = write_sbom(out, generate_sbom(include_environment=not no_env))
+    console.print(f"SBOM written: {path}")
+
+
+@comply_app.command("verify-bundle")
+def comply_verify_bundle(
+    bundle_dir: str = typer.Argument(help="Directory produced by `reflex comply export`."),
+    require_signature: bool = typer.Option(False, "--require-signature"),
+    output_json: bool = typer.Option(False, "--json", help="Emit raw verification result JSON."),
+) -> None:
+    """Verify a conformity bundle's signature, parity cert, and artifact hashes."""
+    from reflex.comply.export import verify_conformity_bundle
+
+    result = verify_conformity_bundle(bundle_dir, require_signature=require_signature)
+    if output_json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif result["passed"]:
+        console.print("[green]Bundle verification PASS[/green]")
+        console.print(f"  Artifacts checked: {result['artifact_count']}")
+        console.print(f"  Signed: {result['signed']}")
+    else:
+        err_console.print("[red]Bundle verification FAIL[/red]")
+        for issue in result["issues"]:
+            err_console.print(f"  - {issue}")
+    raise typer.Exit(0 if result["passed"] else 1)
+
+
+@comply_app.command("gaps")
+def comply_gaps(
+    bundle_dir: str = typer.Argument(help="Directory produced by `reflex comply export`."),
+    output: Optional[str] = typer.Option(None, "--output", help="Optional path to write GAP_REPORT.md."),
+) -> None:
+    """Show the customer-owned gaps still open in a Comply bundle."""
+    path = Path(bundle_dir) / "conformity.json"
+    if not path.exists():
+        err_console.print(f"[red]Missing conformity.json in {bundle_dir}[/red]")
+        raise typer.Exit(2)
+    body = json.loads(path.read_text())
+    gaps = body.get("gap_report", [])
+    lines = ["# Reflex Comply Gap Report", ""]
+    if not gaps:
+        lines.append("No open gaps recorded in this bundle.")
+    else:
+        for gap in gaps:
+            lines.extend([
+                f"## {gap.get('control_id')}",
+                "",
+                f"- Regulation: {gap.get('regulation')}",
+                f"- Article/control: {gap.get('article')}",
+                f"- Status: {gap.get('status')}",
+                f"- Customer still needs: {gap.get('customer_gap')}",
+                "",
+            ])
+    text = "\n".join(lines) + "\n"
+    if output:
+        Path(output).write_text(text)
+        console.print(f"Gap report written: {output}")
+    else:
+        console.print(text, markup=False)
+
 app.add_typer(models_app, name="models")
 app.add_typer(train_app, name="train")
 app.add_typer(validate_app, name="validate")
 app.add_typer(inspect_app, name="inspect")
+app.add_typer(comply_app, name="comply")
 
 # ─── reflex connect {name} / disconnect / list ──────────────────────────────
 

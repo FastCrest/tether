@@ -4,9 +4,9 @@ Complete reference for every visible `reflex` command in v0.9.x. The exhaustive 
 
 ---
 
-## Quick orientation — 14 visible verbs
+## Quick orientation — 16 visible verbs
 
-After the v0.9.5 CLI cut, `reflex --help` shows these 14 top-level verbs. Each is described in its own section below.
+After the verify and comply promotions, `reflex --help` shows these 16 top-level verbs. Each is described in its own section below.
 
 | Verb | Purpose |
 |---|---|
@@ -14,6 +14,8 @@ After the v0.9.5 CLI cut, `reflex --help` shows these 14 top-level verbs. Each i
 | [`serve`](#reflex-serve) | Start an inference server from an exported model directory |
 | [`doctor`](#reflex-doctor) | Diagnose install + GPU issues + per-deploy traps |
 | [`eval`](#reflex-eval) | Task-success eval (LIBERO success rate + per-task numbers + optional video) |
+| [`verify`](#reflex-verify) | Action-parity gate that writes `PARITY.md` + `parity.cert.json` |
+| [`comply`](#reflex-comply) | Export EU conformity evidence bundles, SBOMs, gap reports, and trust docs |
 | [`chat`](#reflex-chat) | Natural-language agent that runs reflex commands for you |
 | [`models`](#reflex-models) | Browse + download Reflex-compatible VLA models from HuggingFace |
 | [`train`](#reflex-train) | Finetune checkpoints, distill teachers into 1-NFE students |
@@ -128,6 +130,98 @@ reflex eval ./reflex_export/ --task libero-spatial --episodes 50
 ```
 
 Full flag list: `reflex eval --help`. See [`docs/eval.md`](./eval.md) for the methodology.
+
+---
+
+## `reflex verify`
+
+Behavioral parity gate for optimized exports. Runs the optimized export against
+the original/native reference on paired eval episodes, writes the human receipt
+`PARITY.md`, and writes the machine-readable `parity.cert.json` that Reflex
+Cloud and Reflex Comply consume.
+
+```bash
+reflex verify ./reflex_export/ \
+  --target orin \
+  --num-episodes 30 \
+  --output ./verify_output
+
+reflex verify ./reflex_export/ \
+  --original lerobot/pi05_libero \
+  --signing-key env:REFLEX_SIGNING_KEY \
+  --key-id reflex-prod-2026-06 \
+  --output ./verify_output
+```
+
+| Key flag | Default | Purpose |
+|---|---|---|
+| `checkpoint_or_export` | _(required)_ | Optimized export under test |
+| `--original` | _(same as export)_ | Native/reference policy to compare against |
+| `--target` | `unknown` | Hardware target recorded in the receipt/cert |
+| `--num-episodes` | `30` | Paired episodes per task per arm |
+| `--tasks` | _(all)_ | Comma-separated task indices |
+| `--output` | `./verify_output` | Output directory for `PARITY.md`, `parity.cert.json`, and optional signature |
+| `--signing-key` | _(none)_ | Ed25519 key: `env:VAR`, `file:path`, PEM, or base64 32-byte seed |
+| `--key-id` | _(none)_ | Identifier embedded in the signature block |
+
+Exit code `0` means PASS, `1` means the parity gate failed, and `2` means input
+or artifact generation failed.
+
+---
+
+## `reflex comply`
+
+Offline compliance evidence-pack generator. It consumes Reflex verification and
+runtime audit artifacts, then exports the technical-file bundle a regulated
+robot maker can give to an auditor or notified body.
+
+```bash
+reflex comply export \
+  --verify-dir ./verify_output \
+  --audit-log ./robot_audit.jsonl \
+  --actionguard ./safety_config.json \
+  --out ./eu_conformity_bundle \
+  --product-name "Acme Mobile Manipulator" \
+  --manufacturer "Acme Robotics" \
+  --signing-key env:REFLEX_SIGNING_KEY \
+  --key-id acme-prod-2026-06
+
+reflex comply verify-bundle ./eu_conformity_bundle --require-signature
+```
+
+The export writes:
+
+```text
+eu_conformity_bundle/
+  TECHNICAL_FILE.md
+  TECHNICAL_FILE.pdf
+  conformity.json
+  conformity.sig
+  GAP_REPORT.md
+  SBOM.cyclonedx.json
+  VULNERABILITY_HANDLING.md
+  TRUST_PAGE.md
+  SECURITY_WHITEPAPER.md
+  artifacts/
+    PARITY.md
+    parity.cert.json
+    audit_summary.json
+    actionguard_config.json
+    safety_violations.jsonl
+    model_hashes.json
+```
+
+| Subcommand | Purpose |
+|---|---|
+| `reflex comply export` | Build the full conformity evidence bundle |
+| `reflex comply sbom` | Generate a standalone CycloneDX-style SBOM |
+| `reflex comply verify-bundle` | Verify conformity signature, parity cert, and artifact hashes |
+| `reflex comply gaps` | Print or write the customer-owned gap report |
+
+Reflex Comply does not declare a robot compliant. It produces signed evidence
+for the manufacturer's technical file: AI Act traceability/technical-doc links,
+ActionGuard safety-function evidence, CRA SBOM/vulnerability manifest, GDPR
+redaction/deletion mapping, and explicit customer-owned gaps.
 
 ---
 

@@ -29,6 +29,9 @@ reference/FluxVLA/
 # diff churn (always present after a local fire) just clutters git status.
 eval_output/
 
+# Local `reflex verify` output — PARITY.md receipt is re-generated each run.
+verify_output/
+
 # Editor-agent session logs (never commit — were leaked to public repo in Apr 2026)
 .agents/
 
