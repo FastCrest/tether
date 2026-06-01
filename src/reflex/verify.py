@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+import numpy as np
+
 from reflex.pro.eval_gate import (
     EvalGate,
     EvalReport,
@@ -48,6 +50,12 @@ from reflex.pro.eval_gate import (
     GateThresholds,
     InsufficientEpisodes,
     MIN_EPISODES_TO_EVALUATE,
+)
+from reflex.verify_metrics import (
+    EmbodiedParity,
+    TwoSampleResult,
+    aggregate_embodied,
+    two_sample_test,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +98,8 @@ class ParityVerdict:
             "%Y-%m-%d %H:%M:%S UTC"
         )
     )
+    two_sample: TwoSampleResult | None = None  # distributional parity (None if no per-step data)
+    embodied: EmbodiedParity | None = None  # kinematic parity (None if no per-step data)
 
     @property
     def success_rate_delta(self) -> float:
@@ -114,6 +124,8 @@ class ParityVerdict:
             "success_rate_delta": self.success_rate_delta,
             "first_failing_gate_id": self.first_failing_gate_id,
             "generated_at": self.generated_at,
+            "two_sample": self.two_sample.to_dict() if self.two_sample else None,
+            "embodied": self.embodied.to_dict() if self.embodied else None,
             "eval_report": self.eval_report.to_dict(),
         }
 
@@ -168,6 +180,36 @@ def _success_rate(samples: list[EvalSample]) -> float:
     if not samples:
         return 0.0
     return sum(1 for s in samples if s.success) / len(samples)
+
+
+def _collect_action_chunks(results: dict[str, Any]) -> np.ndarray:
+    """Stack every captured per-step action chunk (flattened) into ``(N, D)``.
+
+    Returns ``(0, 0)`` when the rollout didn't capture trajectories (tap off or
+    older results) — the two-sample test then no-ops.
+    """
+    rows: list[np.ndarray] = []
+    for task in results.get("per_task", []) or []:
+        for ep in task.get("episodes", []) or []:
+            for chunk in ep.get("action_chunks", []) or []:
+                rows.append(np.asarray(chunk, dtype=np.float64).reshape(-1))
+    if not rows:
+        return np.empty((0, 0))
+    width = min(r.shape[0] for r in rows)
+    return np.vstack([r[:width] for r in rows]) if width else np.empty((0, 0))
+
+
+def _collect_eef_and_steps(results: dict[str, Any]) -> tuple[list[np.ndarray], list[float]]:
+    """Per-episode end-effector position trajectories + completion-step counts."""
+    positions: list[np.ndarray] = []
+    steps: list[float] = []
+    for task in results.get("per_task", []) or []:
+        for ep in task.get("episodes", []) or []:
+            eef = ep.get("eef_positions") or []
+            if len(eef) > 1:
+                positions.append(np.asarray(eef, dtype=np.float64))
+            steps.append(float(ep.get("steps", 0) or 0))
+    return positions, steps
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +270,7 @@ def gather_paired_samples(
         num_episodes=num_episodes,
         task_indices=task_indices,
         seed=seed,
+        capture_trajectories=True,
     )
 
     # ARM A — original: native lerobot select_action (the reference behavior).
@@ -333,27 +376,39 @@ def run_verify(
         bypass_audit=None,
     )
 
-    # TODO(reflex-verify): distributional two-sample engine. The v0 gate scores
-    # success-rate parity (S3/P1/P5) + sentinel-passes the distribution gates.
-    # The real parity engine slots in HERE as an additional, non-bypassable
-    # check before the verdict is finalized:
-    #   - MMD (maximum mean discrepancy) two-sample test on the paired action
-    #     chunk distributions (original vs optimized), with a permutation-test
-    #     p-value threshold — detects distribution shift the mean hides.
-    #   - Energy-distance two-sample test as a second, kernel-free estimator.
-    # Both consume the per-step action chunks that the rollout primitive must
-    # first be widened to capture (see _rollout_results_to_samples TODO).
-    #
-    # TODO(reflex-verify): embodied / kinematic parity metrics, scored per
-    # paired episode and aggregated:
-    #   - jerk (3rd derivative of joint position) — smoothness regressions are
-    #     invisible to success rate but wreck real hardware.
-    #   - completion-time delta — an export that succeeds but is slower.
-    #   - motion-energy (sum of squared joint velocities) — energy-per-task
-    #     parity. These need per-step joint state from the rollout loop.
+    # Distributional + embodied parity — the v0 TODOs, now wired. Computed from
+    # the per-step trajectories the widened rollout tap captures. When the tap
+    # is off / older results lack them, these stay None and only success-rate
+    # parity applies (no silent degrade — the verdict records which ran).
+    base_chunks = _collect_action_chunks(original_results)
+    cand_chunks = _collect_action_chunks(optimized_results)
+    two_sample: TwoSampleResult | None = None
+    if base_chunks.size and cand_chunks.size and base_chunks.shape[1] == cand_chunks.shape[1]:
+        two_sample = two_sample_test(base_chunks, cand_chunks)
+
+    base_pos, base_steps = _collect_eef_and_steps(original_results)
+    cand_pos, cand_steps = _collect_eef_and_steps(optimized_results)
+    embodied: EmbodiedParity | None = None
+    if base_pos and cand_pos:
+        embodied = aggregate_embodied(
+            baseline_positions=base_pos,
+            candidate_positions=cand_pos,
+            baseline_velocities=[np.diff(p, axis=0) for p in base_pos],
+            candidate_velocities=[np.diff(p, axis=0) for p in cand_pos],
+            baseline_completion_steps=base_steps,
+            candidate_completion_steps=cand_steps,
+        )
+
+    # Non-bypassable: a shifted action distribution or an embodied regression
+    # fails the verdict even when success-rate parity passed.
+    passed = report.overall_passed
+    if two_sample is not None and two_sample.distributions_differ:
+        passed = False
+    if embodied is not None and embodied.regressed():
+        passed = False
 
     return ParityVerdict(
-        passed=report.overall_passed,
+        passed=passed,
         eval_report=report,
         optimized_ref=optimized_ref,
         original_ref=original_ref or optimized_ref,
@@ -362,6 +417,8 @@ def run_verify(
         n_episodes=len(candidate_samples),
         original_success_rate=_success_rate(baseline_samples),
         optimized_success_rate=_success_rate(candidate_samples),
+        two_sample=two_sample,
+        embodied=embodied,
     )
 
 
