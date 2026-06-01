@@ -12,7 +12,11 @@ Locks the two load-bearing properties:
 """
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from reflex.verify import (
     ParityVerdict,
@@ -266,6 +270,51 @@ def test_parity_report_renders_verdict():
         assert g.gate_id in md
 
 
+def test_parity_cert_writes_json_and_optional_signature(tmp_path):
+    from reflex.parity_cert import (
+        SCHEMA_VERSION,
+        build_parity_cert,
+        verify_parity_cert_signature,
+        write_parity_cert,
+    )
+    from reflex.parity_report import write_parity_report
+
+    same = _all_success()
+    verdict = run_verify(
+        optimized_ref="/fake/export",
+        suite="libero",
+        target="orin",
+        num_episodes=_EPS,
+        gather_fn=_make_gather_fn(
+            _rollout_results(task_success=same),
+            _rollout_results(task_success=same),
+        ),
+    )
+    parity_md = write_parity_report(tmp_path, verdict)
+    seed = Ed25519PrivateKey.generate().private_bytes_raw()
+    cert_path, sig_path = write_parity_cert(
+        tmp_path,
+        verdict,
+        parity_md_path=parity_md,
+        signing_key=base64.b64encode(seed).decode("ascii"),
+        key_id="test-key",
+    )
+    assert cert_path.name == "parity.cert.json"
+    assert sig_path is not None and sig_path.name == "parity.cert.sig"
+
+    cert = json.loads(cert_path.read_text())
+    assert cert["schema_version"] == SCHEMA_VERSION
+    assert cert["verdict"] == "PASS"
+    assert cert["passed"] is True
+    assert cert["target"] == "orin"
+    assert cert["artifacts"]["PARITY.md"]["sha256"]
+    assert cert["signature"]["key_id"] == "test-key"
+    verify_parity_cert_signature(cert)
+
+    unsigned = build_parity_cert(verdict, parity_md_path=parity_md)
+    assert "signature" not in unsigned
+
+
 # ---------------------------------------------------------------------------
 # CLI wiring (mocked run_verify — no rollout)
 # ---------------------------------------------------------------------------
@@ -287,14 +336,70 @@ def test_cli_verify_pass(monkeypatch):
     monkeypatch.setattr(verify_mod, "gather_paired_samples", gather)
 
     runner = typer_testing.CliRunner()
-    result = runner.invoke(
-        app, ["verify", "/fake/export", "--target", "orin", "--num-episodes", str(_EPS)]
-    )
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            app,
+            [
+                "verify",
+                "/fake/export",
+                "--target",
+                "orin",
+                "--num-episodes",
+                str(_EPS),
+                "--output",
+                "verify_out",
+            ],
+        )
     assert result.exit_code == 0, result.output
     assert "PASS" in result.output
 
 
-def test_cli_verify_fail(monkeypatch):
+def test_cli_verify_writes_signed_parity_cert(monkeypatch, tmp_path):
+    typer_testing = pytest.importorskip("typer.testing")
+    from reflex.cli import app
+    import reflex.verify as verify_mod
+    from reflex.parity_cert import verify_parity_cert_signature
+
+    same = _all_success()
+    monkeypatch.setattr(
+        verify_mod,
+        "gather_paired_samples",
+        _make_gather_fn(
+            _rollout_results(task_success=same),
+            _rollout_results(task_success=same),
+        ),
+    )
+    seed = Ed25519PrivateKey.generate().private_bytes_raw()
+    monkeypatch.setenv("REFLEX_TEST_SIGNING_KEY", base64.b64encode(seed).decode("ascii"))
+    out = tmp_path / "verify"
+
+    runner = typer_testing.CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "/fake/export",
+            "--target",
+            "orin",
+            "--num-episodes",
+            str(_EPS),
+            "--output",
+            str(out),
+            "--signing-key",
+            "env:REFLEX_TEST_SIGNING_KEY",
+            "--key-id",
+            "test-key",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "PARITY.md").exists()
+    cert = json.loads((out / "parity.cert.json").read_text())
+    assert cert["signature"]["key_id"] == "test-key"
+    assert (out / "parity.cert.sig").exists()
+    verify_parity_cert_signature(cert)
+
+
+def test_cli_verify_fail(monkeypatch, tmp_path):
     typer_testing = pytest.importorskip("typer.testing")
     from reflex.cli import app
     import reflex.verify as verify_mod
@@ -309,7 +414,10 @@ def test_cli_verify_fail(monkeypatch):
     monkeypatch.setattr(verify_mod, "gather_paired_samples", gather)
 
     runner = typer_testing.CliRunner()
-    result = runner.invoke(app, ["verify", "/fake/export", "--num-episodes", str(_EPS)])
+    result = runner.invoke(
+        app,
+        ["verify", "/fake/export", "--num-episodes", str(_EPS), "--output", str(tmp_path / "verify_fail")],
+    )
     assert result.exit_code == 1, result.output  # FAIL => exit 1
     assert "FAIL" in result.output
 

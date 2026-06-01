@@ -127,6 +127,9 @@ serve = [
     "opencv-python-headless>=4.8",  # JPEG-on-wire serialization for ZMQ transport
 ]
 safety = ["yourdfpy"]
+# Offline EU evidence-pack generator. No runtime deps today; kept as an extra
+# so pilots can install with `pip install reflex-vla[serve,comply]`.
+comply = []
 # Native parity verification — installs lerobot + its deps so
 # `scripts/local_full_diff.py` can cross-check our export path against the
 # reference PyTorch policy. Required for the native-path-parity regression
