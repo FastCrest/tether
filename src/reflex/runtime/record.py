@@ -125,6 +125,36 @@ def _redact_image(
     return out
 
 
+def _chain_hash(prev_hash: str, record: dict[str, Any]) -> str:
+    """``sha256(prev_hash || canonical(record without the chain fields))``.
+
+    Excludes ``prev_record_hash`` / ``record_hash`` so the hash covers only the
+    record's own content; the link to the previous record is carried by
+    ``prev_hash``. Deterministic (sorted keys, no whitespace).
+    """
+    payload = {k: v for k, v in record.items() if k not in ("prev_record_hash", "record_hash")}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(prev_hash.encode("ascii") + canonical).hexdigest()
+
+
+def verify_record_chain(records: list[dict[str, Any]]) -> tuple[bool, int | None]:
+    """Verify a recorded trace's tamper-evident chain.
+
+    Returns ``(ok, first_broken_index)``: ``ok`` is True iff every record's
+    ``prev_record_hash`` links to the prior ``record_hash`` and every
+    ``record_hash`` matches the recomputed content hash. Any insert / edit /
+    reorder breaks it at the offending index.
+    """
+    prev = "0" * 64
+    for i, rec in enumerate(records):
+        if rec.get("prev_record_hash") != prev:
+            return False, i
+        if rec.get("record_hash") != _chain_hash(prev, rec):
+            return False, i
+        prev = rec["record_hash"]
+    return True, None
+
+
 class RecordWriter:
     """JSONL recorder for /act calls. One instance per recording session."""
 
@@ -223,6 +253,7 @@ class RecordWriter:
         self._fh: io.TextIOBase | None = None
         self._header_written = False
         self._seq = 0
+        self._prev_record_hash = "0" * 64  # tamper-evident hash-chain head
         self.degraded = False  # set on first OSError; recorder stops writing
         # Curate dual-write: when a FreeContributorCollector is attached,
         # write_request emits to BOTH the JSONL trace (audit) AND the
@@ -269,6 +300,12 @@ class RecordWriter:
         self._open_if_needed()
         if self.degraded or self._fh is None:
             return
+        # Tamper-evident hash chain: each record carries the previous record's
+        # hash plus a hash of its own content (excluding the chain fields), so an
+        # auditor can detect any insertion, edit, or reorder of the trace.
+        record["prev_record_hash"] = self._prev_record_hash
+        record["record_hash"] = _chain_hash(self._prev_record_hash, record)
+        self._prev_record_hash = record["record_hash"]
         try:
             self._fh.write(json.dumps(record, separators=(",", ":")) + "\n")
             self._fh.flush()
