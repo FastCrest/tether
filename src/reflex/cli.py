@@ -5159,5 +5159,70 @@ def data_revoke() -> None:
     console.print(f"Revoked: {removed} files deleted. Data contribution disabled.")
 
 
+comply_app = typer.Typer(
+    name="comply",
+    help="Reflex Comply — assemble the EU conformity evidence pack (AI Act / Machinery Reg / CRA / GDPR).",
+    no_args_is_help=True,
+)
+app.add_typer(comply_app, name="comply")
+
+
+@comply_app.command("export")
+def comply_export(
+    export_dir: str = typer.Argument(..., help="Reflex export directory (contains VERIFICATION.md)"),
+    audit_log: Optional[str] = typer.Option(None, "--audit-log", help="Path to the JSONL audit log (.jsonl[.gz])"),
+    out: str = typer.Option("comply_bundle", "--out", help="Output directory for the conformity bundle"),
+    frameworks: str = typer.Option("ai_act,eu_mr,cra,gdpr", "--frameworks", help="Comma-separated: ai_act,eu_mr,cra,gdpr"),
+    json_out: bool = typer.Option(False, "--json", help="Print the report as JSON instead of a table"),
+) -> None:
+    """Assemble the EU conformity evidence bundle (CONFORMITY.md + conformity.json + sbom.json)."""
+    from reflex.comply import build_conformity_bundle
+
+    fw = tuple(f.strip() for f in frameworks.split(",") if f.strip())
+    try:
+        report = build_conformity_bundle(export_dir, audit_log, frameworks=fw, out_dir=out)
+    except FileNotFoundError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    if json_out:
+        console.print_json(json.dumps(report.to_dict()))
+        return
+
+    c = report.counts
+    console.print(f"\n[bold]Reflex Comply — conformity bundle[/bold] → {out}/")
+    console.print(f"  frameworks: {', '.join(report.frameworks)}")
+    table = Table(title="Requirement summary")
+    table.add_column("Status")
+    table.add_column("Count", justify="right")
+    table.add_row("[green]met[/green]", str(c.get("met", 0)))
+    table.add_row("[yellow]partial[/yellow]", str(c.get("partial", 0)))
+    table.add_row("[red]gap[/red]", str(c.get("gap", 0)))
+    table.add_row("deployer / notified-body", str(c.get("customer-responsibility", 0)))
+    console.print(table)
+    if c.get("gap", 0):
+        console.print("[yellow]Gaps to close:[/yellow]")
+        for r in report.checklist:
+            if r["status"] == "gap":
+                console.print(f"  • {r['framework']} {r['ref']} — missing: {', '.join(r['missing'])}")
+    console.print(f"\nWrote: {out}/CONFORMITY.md, {out}/conformity.json, {out}/sbom.json")
+    console.print("[dim]Reflex produces the evidence; you + a notified body sign the CE mark.[/dim]")
+
+
+@comply_app.command("sbom")
+def comply_sbom(
+    out: Optional[str] = typer.Option(None, "--out", help="Write the SBOM JSON to this file (default: stdout)"),
+) -> None:
+    """Generate a CycloneDX SBOM of the runtime (CRA Annex I)."""
+    from reflex.comply import generate_sbom, sbom_json
+
+    payload = sbom_json()
+    if out:
+        Path(out).write_text(payload)
+        console.print(f"Wrote SBOM ({len(generate_sbom()['components'])} components) → {out}")
+    else:
+        console.print_json(payload)
+
+
 if __name__ == "__main__":
     app()

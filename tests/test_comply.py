@@ -155,3 +155,29 @@ def test_report_serializable_and_renderable(tmp_path):
     json.dumps(d)  # must not raise
     assert "disclaimer" in d
     assert isinstance(render_markdown(report), str)
+
+
+# --------------------------------------------------------------------------- #
+# CLI                                                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_comply_cli_sbom_and_export(tmp_path):
+    from typer.testing import CliRunner
+
+    from reflex.cli import app
+
+    runner = CliRunner()
+    sbom_path = tmp_path / "sbom.json"
+    r = runner.invoke(app, ["comply", "sbom", "--out", str(sbom_path)])
+    assert r.exit_code == 0, r.output
+    assert json.loads(sbom_path.read_text())["bomFormat"] == "CycloneDX"
+
+    export = tmp_path / "export"
+    export.mkdir()
+    (export / "VERIFICATION.md").write_text("# cert")
+    bundle = tmp_path / "bundle"
+    r2 = runner.invoke(app, ["comply", "export", str(export), "--out", str(bundle)])
+    assert r2.exit_code == 0, r2.output
+    assert (bundle / "CONFORMITY.md").exists()
+    assert (bundle / "conformity.json").exists()
