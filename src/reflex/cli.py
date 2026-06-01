@@ -1464,7 +1464,7 @@ def verify_cmd(
             f"({verdict.success_rate_delta * 100:+.1f}pp)"
         )
         if verdict.first_failing_gate_id:
-            console.print(
+            err_console.print(
                 f"  First failing gate: [red]{verdict.first_failing_gate_id}[/red]"
             )
         verdict_render = (
