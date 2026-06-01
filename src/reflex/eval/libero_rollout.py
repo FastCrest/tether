@@ -105,6 +105,7 @@ def run_libero_rollout(
     save_video_dir: str = "",
     label: str = "rollout",
     use_native: bool = False,
+    capture_trajectories: bool = False,
 ) -> dict[str, Any]:
     """Run LIBERO rollouts through the given inference + processor pipeline.
 
@@ -293,6 +294,8 @@ def run_libero_rollout(
                 t = 0
                 done = False
                 video_frames = [] if save_video_dir else None
+                ep_action_chunks: list = []  # populated only when capture_trajectories
+                ep_eef_positions: list = []
                 if video_frames is not None:
                     video_frames.append(
                         np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
@@ -331,6 +334,8 @@ def run_libero_rollout(
                                 if chunk_np_post.ndim == 1:
                                     chunk_np_post = chunk_np_post[np.newaxis, :]
                                 chunk_np_post = chunk_np_post[:, :7]
+                                if capture_trajectories:
+                                    ep_action_chunks.append(np.asarray(chunk_np_post, dtype=np.float32))
                                 action_plan.extend(chunk_np_post[:replan_steps])
                             else:
                                 with torch.no_grad():
@@ -372,10 +377,14 @@ def run_libero_rollout(
                                 if chunk_np_post.ndim == 3:
                                     chunk_np_post = chunk_np_post[0]
                                 chunk_np_post = chunk_np_post[:, :7]
+                                if capture_trajectories:
+                                    ep_action_chunks.append(np.asarray(chunk_np_post, dtype=np.float32))
                                 action_plan.extend(chunk_np_post[:replan_steps])
 
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(np.asarray(action).tolist())
+                        if capture_trajectories and "robot0_eef_pos" in obs:
+                            ep_eef_positions.append(np.asarray(obs["robot0_eef_pos"], dtype=np.float32))
                         if video_frames is not None:
                             video_frames.append(
                                 np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
@@ -394,9 +403,11 @@ def run_libero_rollout(
                         raise
 
                 success = bool(done)
-                task_result["episodes"].append({
-                    "ep": ep, "success": success, "steps": t,
-                })
+                episode_rec = {"ep": ep, "success": success, "steps": t}
+                if capture_trajectories:
+                    episode_rec["action_chunks"] = [c.tolist() for c in ep_action_chunks]
+                    episode_rec["eef_positions"] = [p.tolist() for p in ep_eef_positions]
+                task_result["episodes"].append(episode_rec)
                 task_result["total"] += 1
                 if success:
                     task_result["success"] += 1

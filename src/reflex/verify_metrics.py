@@ -1,0 +1,274 @@
+"""Distributional + embodied parity metrics for `reflex verify`.
+
+`reflex verify` v0 scores *success-rate* parity (does the optimized export pass
+the same tasks as the original). That is table stakes: an export can match
+success rate while shifting the action distribution or moving in a way that
+wrecks real hardware. This module adds the two deeper, non-bypassable signals
+flagged in ``verify.py``:
+
+* **Distributional parity** — a two-sample test on the paired per-step action
+  chunks (original vs optimized). We ship two estimators:
+  - **MMD** (maximum mean discrepancy) with a multi-bandwidth RBF kernel and a
+    permutation-test p-value (Model Equality Testing, arXiv 2410.20247).
+  - **Energy distance** as a second, kernel-free estimator.
+  A *low* p-value means the optimized policy's action distribution differs from
+  the original beyond sampling noise — a regression success rate hides.
+
+* **Embodied / kinematic parity** — scored per paired episode and aggregated:
+  - **jerk** (RMS of the 3rd derivative of joint position): smoothness
+    regressions are invisible to success rate but destroy real actuators.
+  - **motion energy** (sum of squared joint velocities): energy-per-task parity.
+  - **completion time**: an export that succeeds but is slower.
+
+Everything here is pure NumPy (a core dep) and fully unit-testable on synthetic
+arrays — no GPU, no rollout. ``verify.py`` feeds it the per-step trajectories
+once the rollout primitive is widened to capture them.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Sequence
+
+import numpy as np
+
+ArrayLike = Sequence[Sequence[float]] | np.ndarray
+
+
+# ---------------------------------------------------------------------------
+# Distributional two-sample tests
+# ---------------------------------------------------------------------------
+
+
+def _as_2d(samples: ArrayLike) -> np.ndarray:
+    """Coerce a collection of vectors into a float ``(n, d)`` matrix."""
+    arr = np.asarray(samples, dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if arr.ndim != 2:
+        raise ValueError(f"expected 2D (n_samples, n_features), got shape {arr.shape}")
+    return arr
+
+
+def _pairwise_sq_dists(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Squared Euclidean distances between rows of ``a`` and rows of ``b``."""
+    a_sq = np.sum(a * a, axis=1)[:, None]
+    b_sq = np.sum(b * b, axis=1)[None, :]
+    sq = a_sq + b_sq - 2.0 * (a @ b.T)
+    return np.maximum(sq, 0.0)  # clamp tiny negatives from float error
+
+
+def _median_bandwidth(pooled: np.ndarray) -> float:
+    """Median-heuristic length scale: median of pairwise distances on the pool."""
+    sq = _pairwise_sq_dists(pooled, pooled)
+    iu = np.triu_indices_from(sq, k=1)
+    med_sq = float(np.median(sq[iu])) if iu[0].size else 1.0
+    return med_sq if med_sq > 1e-12 else 1.0
+
+
+def _mmd2_unbiased(X: np.ndarray, Y: np.ndarray, gammas: Sequence[float]) -> float:
+    """Unbiased MMD^2 with a multi-bandwidth RBF kernel (summed over gammas)."""
+    m, n = X.shape[0], Y.shape[0]
+    if m < 2 or n < 2:
+        return 0.0
+    kxx = np.zeros((m, m))
+    kyy = np.zeros((n, n))
+    kxy = np.zeros((m, n))
+    dxx = _pairwise_sq_dists(X, X)
+    dyy = _pairwise_sq_dists(Y, Y)
+    dxy = _pairwise_sq_dists(X, Y)
+    for g in gammas:
+        kxx += np.exp(-g * dxx)
+        kyy += np.exp(-g * dyy)
+        kxy += np.exp(-g * dxy)
+    # Unbiased: exclude the diagonal (self-similarity) from the within-sample terms.
+    np.fill_diagonal(kxx, 0.0)
+    np.fill_diagonal(kyy, 0.0)
+    term_xx = kxx.sum() / (m * (m - 1))
+    term_yy = kyy.sum() / (n * (n - 1))
+    term_xy = kxy.sum() * (2.0 / (m * n))
+    return float(term_xx + term_yy - term_xy)
+
+
+@dataclass(frozen=True)
+class TwoSampleResult:
+    mmd2: float
+    mmd_p_value: float  # P(MMD^2 >= observed | same distribution); low => differ
+    energy_distance: float
+    n_baseline: int
+    n_candidate: int
+    n_permutations: int
+
+    @property
+    def distributions_differ(self) -> bool:
+        """True when the permutation test rejects the null at p < 0.05."""
+        return self.mmd_p_value < 0.05
+
+    def to_dict(self) -> dict[str, float | int | bool]:
+        return {
+            "mmd2": self.mmd2,
+            "mmd_p_value": self.mmd_p_value,
+            "energy_distance": self.energy_distance,
+            "n_baseline": self.n_baseline,
+            "n_candidate": self.n_candidate,
+            "n_permutations": self.n_permutations,
+            "distributions_differ": self.distributions_differ,
+        }
+
+
+def energy_distance(X: ArrayLike, Y: ArrayLike) -> float:
+    """Two-sample energy distance: ``2 E|x-y| - E|x-x'| - E|y-y'|`` (>= 0)."""
+    a, b = _as_2d(X), _as_2d(Y)
+    if a.shape[0] == 0 or b.shape[0] == 0:
+        return 0.0
+    d_ab = np.sqrt(_pairwise_sq_dists(a, b)).mean()
+    d_aa = np.sqrt(_pairwise_sq_dists(a, a)).mean()
+    d_bb = np.sqrt(_pairwise_sq_dists(b, b)).mean()
+    return float(max(2.0 * d_ab - d_aa - d_bb, 0.0))
+
+
+def two_sample_test(
+    baseline: ArrayLike,
+    candidate: ArrayLike,
+    *,
+    n_permutations: int = 200,
+    seed: int = 7,
+) -> TwoSampleResult:
+    """MMD + energy-distance two-sample test with a permutation p-value.
+
+    ``baseline`` / ``candidate`` are ``(n_samples, n_features)`` action-chunk
+    matrices (e.g. flattened per-step action chunks from the original vs the
+    optimized policy). A low ``mmd_p_value`` means the action distributions
+    differ beyond sampling noise.
+    """
+    X, Y = _as_2d(baseline), _as_2d(candidate)
+    m, n = X.shape[0], Y.shape[0]
+    if m < 2 or n < 2:
+        # Not enough samples to test; report a non-significant result rather
+        # than fabricate a verdict (the success-rate gate still applies).
+        return TwoSampleResult(0.0, 1.0, energy_distance(X, Y), m, n, 0)
+
+    pooled = np.vstack([X, Y])
+    med_sq = _median_bandwidth(pooled)
+    base_gamma = 1.0 / (2.0 * med_sq)
+    gammas = [base_gamma * s for s in (0.5, 1.0, 2.0)]
+
+    observed = _mmd2_unbiased(X, Y, gammas)
+
+    rng = np.random.default_rng(seed)
+    ge = 0
+    for _ in range(n_permutations):
+        perm = rng.permutation(m + n)
+        Xp = pooled[perm[:m]]
+        Yp = pooled[perm[m:]]
+        if _mmd2_unbiased(Xp, Yp, gammas) >= observed:
+            ge += 1
+    p_value = (1.0 + ge) / (1.0 + n_permutations)
+
+    return TwoSampleResult(
+        mmd2=observed,
+        mmd_p_value=p_value,
+        energy_distance=energy_distance(X, Y),
+        n_baseline=m,
+        n_candidate=n,
+        n_permutations=n_permutations,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Embodied / kinematic metrics
+# ---------------------------------------------------------------------------
+
+
+def jerk_rms(positions: ArrayLike, *, dt: float = 1.0) -> float:
+    """RMS jerk (3rd time-derivative of joint position) over a trajectory.
+
+    ``positions`` is ``(T, n_joints)``. Returns 0 for trajectories too short to
+    take three derivatives, or for constant-velocity (linear) motion.
+    """
+    p = _as_2d(positions)
+    if p.shape[0] < 4 or dt <= 0:
+        return 0.0
+    jerk = np.diff(p, n=3, axis=0) / (dt ** 3)
+    return float(np.sqrt(np.mean(jerk * jerk)))
+
+
+def motion_energy(velocities: ArrayLike) -> float:
+    """Sum of squared joint velocities over a trajectory (``(T, n_joints)``)."""
+    v = _as_2d(velocities)
+    if v.size == 0:
+        return 0.0
+    return float(np.sum(v * v))
+
+
+@dataclass(frozen=True)
+class EmbodiedParity:
+    baseline_jerk_rms: float
+    candidate_jerk_rms: float
+    baseline_motion_energy: float
+    candidate_motion_energy: float
+    baseline_completion_steps: float
+    candidate_completion_steps: float
+
+    def regressed(self, *, jerk_tol: float = 1.5, energy_tol: float = 1.5, time_tol: float = 1.5) -> bool:
+        """True if the candidate is materially worse on any embodied axis.
+
+        ``*_tol`` are allowed ratios (candidate / baseline). Default 1.5 => a
+        50% increase in jerk, motion energy, or completion time fails.
+        """
+        def worse(cand: float, base: float, tol: float) -> bool:
+            if base <= 1e-9:
+                return cand > 1e-6  # baseline ~0, any candidate motion is a regression
+            return (cand / base) > tol
+        return (
+            worse(self.candidate_jerk_rms, self.baseline_jerk_rms, jerk_tol)
+            or worse(self.candidate_motion_energy, self.baseline_motion_energy, energy_tol)
+            or worse(self.candidate_completion_steps, self.baseline_completion_steps, time_tol)
+        )
+
+    def to_dict(self) -> dict[str, float | bool]:
+        return {
+            "baseline_jerk_rms": self.baseline_jerk_rms,
+            "candidate_jerk_rms": self.candidate_jerk_rms,
+            "baseline_motion_energy": self.baseline_motion_energy,
+            "candidate_motion_energy": self.candidate_motion_energy,
+            "baseline_completion_steps": self.baseline_completion_steps,
+            "candidate_completion_steps": self.candidate_completion_steps,
+            "embodied_regressed": self.regressed(),
+        }
+
+
+def _mean(values: Sequence[float]) -> float:
+    vals = [float(v) for v in values if v is not None]
+    return float(np.mean(vals)) if vals else 0.0
+
+
+def aggregate_embodied(
+    *,
+    baseline_positions: Sequence[ArrayLike],
+    candidate_positions: Sequence[ArrayLike],
+    baseline_velocities: Sequence[ArrayLike],
+    candidate_velocities: Sequence[ArrayLike],
+    baseline_completion_steps: Sequence[float],
+    candidate_completion_steps: Sequence[float],
+    dt: float = 1.0,
+) -> EmbodiedParity:
+    """Aggregate per-episode embodied metrics into a baseline-vs-candidate parity."""
+    return EmbodiedParity(
+        baseline_jerk_rms=_mean([jerk_rms(p, dt=dt) for p in baseline_positions]),
+        candidate_jerk_rms=_mean([jerk_rms(p, dt=dt) for p in candidate_positions]),
+        baseline_motion_energy=_mean([motion_energy(v) for v in baseline_velocities]),
+        candidate_motion_energy=_mean([motion_energy(v) for v in candidate_velocities]),
+        baseline_completion_steps=_mean(baseline_completion_steps),
+        candidate_completion_steps=_mean(candidate_completion_steps),
+    )
+
+
+__all__ = [
+    "EmbodiedParity",
+    "TwoSampleResult",
+    "aggregate_embodied",
+    "energy_distance",
+    "jerk_rms",
+    "motion_energy",
+    "two_sample_test",
+]
