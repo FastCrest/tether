@@ -6,13 +6,16 @@ success rate while shifting the action distribution or moving in a way that
 wrecks real hardware. This module adds the two deeper, non-bypassable signals
 flagged in ``verify.py``:
 
-* **Distributional parity** — a two-sample test on the paired per-step action
-  chunks (original vs optimized). We ship two estimators:
+* **Distributional parity** — a two-sample test on the paired per-step *applied*
+  actions (original vs optimized). We ship two estimators:
   - **MMD** (maximum mean discrepancy) with a multi-bandwidth RBF kernel and a
     permutation-test p-value (Model Equality Testing, arXiv 2410.20247).
   - **Energy distance** as a second, kernel-free estimator.
   A *low* p-value means the optimized policy's action distribution differs from
   the original beyond sampling noise — a regression success rate hides.
+  The permutation is **episode-aware** (shuffles whole episodes, not steps):
+  per-step actions are autocorrelated within an episode, so an i.i.d. step
+  permutation over-rejects badly (~100% false-positive on identical policies).
 
 * **Embodied / kinematic parity** — scored per paired episode and aggregated:
   - **jerk** (RMS of the 3rd derivative of joint position): smoothness
@@ -65,26 +68,38 @@ def _median_bandwidth(pooled: np.ndarray) -> float:
     return med_sq if med_sq > 1e-12 else 1.0
 
 
-def _mmd2_unbiased(X: np.ndarray, Y: np.ndarray, gammas: Sequence[float]) -> float:
-    """Unbiased MMD^2 with a multi-bandwidth RBF kernel (summed over gammas)."""
-    m, n = X.shape[0], Y.shape[0]
+def _pooled_kernel(pooled: np.ndarray, gammas: Sequence[float]) -> np.ndarray:
+    """Full pooled multi-bandwidth RBF kernel, built ONCE per test.
+
+    Diagonal entries equal ``len(gammas)`` (each RBF is 1 on the diagonal). The
+    permutation loop then computes every MMD^2 by indexing submatrices of this
+    matrix instead of recomputing exp() per permutation — same math, far faster,
+    and it makes the episode-block permutation cheap.
+    """
+    d2 = _pairwise_sq_dists(pooled, pooled)
+    K = np.zeros_like(d2)
+    for g in gammas:
+        K += np.exp(-g * d2)
+    return K
+
+
+def _mmd2_from_kernel(
+    K: np.ndarray, ix: np.ndarray, iy: np.ndarray, n_gammas: int
+) -> float:
+    """Unbiased MMD^2 between the two index sets, read off the pooled kernel.
+
+    Equivalent to building the RBF kernels for ``X = pooled[ix]`` / ``Y =
+    pooled[iy]`` and excluding the diagonal — the within-set diagonal sums to
+    ``size * n_gammas`` since each RBF is 1 on the diagonal.
+    """
+    m, n = ix.size, iy.size
     if m < 2 or n < 2:
         return 0.0
-    kxx = np.zeros((m, m))
-    kyy = np.zeros((n, n))
-    kxy = np.zeros((m, n))
-    dxx = _pairwise_sq_dists(X, X)
-    dyy = _pairwise_sq_dists(Y, Y)
-    dxy = _pairwise_sq_dists(X, Y)
-    for g in gammas:
-        kxx += np.exp(-g * dxx)
-        kyy += np.exp(-g * dyy)
-        kxy += np.exp(-g * dxy)
-    # Unbiased: exclude the diagonal (self-similarity) from the within-sample terms.
-    np.fill_diagonal(kxx, 0.0)
-    np.fill_diagonal(kyy, 0.0)
-    term_xx = kxx.sum() / (m * (m - 1))
-    term_yy = kyy.sum() / (n * (n - 1))
+    kxx = K[np.ix_(ix, ix)]
+    kyy = K[np.ix_(iy, iy)]
+    kxy = K[np.ix_(ix, iy)]
+    term_xx = (kxx.sum() - m * n_gammas) / (m * (m - 1))
+    term_yy = (kyy.sum() - n * n_gammas) / (n * (n - 1))
     term_xy = kxy.sum() * (2.0 / (m * n))
     return float(term_xx + term_yy - term_xy)
 
@@ -132,13 +147,27 @@ def two_sample_test(
     *,
     n_permutations: int = 200,
     seed: int = 7,
+    baseline_groups: ArrayLike | None = None,
+    candidate_groups: ArrayLike | None = None,
 ) -> TwoSampleResult:
     """MMD + energy-distance two-sample test with a permutation p-value.
 
-    ``baseline`` / ``candidate`` are ``(n_samples, n_features)`` action-chunk
-    matrices (e.g. flattened per-step action chunks from the original vs the
-    optimized policy). A low ``mmd_p_value`` means the action distributions
-    differ beyond sampling noise.
+    ``baseline`` / ``candidate`` are ``(n_samples, n_features)`` matrices (e.g.
+    per-step applied actions from the original vs the optimized policy). A low
+    ``mmd_p_value`` means the action distributions differ beyond sampling noise.
+
+    **Episode-block permutation (use it for trajectory data).** Pass
+    ``baseline_groups`` / ``candidate_groups`` — one group id (episode index) per
+    sample row — and the permutation shuffles whole *episodes* between the two
+    arms instead of individual steps. This is mandatory for rollout actions:
+    consecutive steps within an episode are autocorrelated, so the i.i.d.
+    step-level permutation treats correlated samples as independent and
+    over-rejects (empirically ~100% false-positive on *identical* policies; the
+    episode-block test restores ~5% with full power — see
+    ``scripts/_spike_mmd_autocorrelation.py``). The MMD statistic still uses every
+    step; only the null distribution is generated at episode granularity. Without
+    groups the test falls back to step-level permutation, valid only for genuinely
+    independent samples.
     """
     X, Y = _as_2d(baseline), _as_2d(candidate)
     m, n = X.shape[0], Y.shape[0]
@@ -151,17 +180,52 @@ def two_sample_test(
     med_sq = _median_bandwidth(pooled)
     base_gamma = 1.0 / (2.0 * med_sq)
     gammas = [base_gamma * s for s in (0.5, 1.0, 2.0)]
+    n_g = len(gammas)
+    K = _pooled_kernel(pooled, gammas)
 
-    observed = _mmd2_unbiased(X, Y, gammas)
+    ix0 = np.arange(m)
+    iy0 = np.arange(m, m + n)
+    observed = _mmd2_from_kernel(K, ix0, iy0, n_g)
 
     rng = np.random.default_rng(seed)
     ge = 0
-    for _ in range(n_permutations):
-        perm = rng.permutation(m + n)
-        Xp = pooled[perm[:m]]
-        Yp = pooled[perm[m:]]
-        if _mmd2_unbiased(Xp, Yp, gammas) >= observed:
-            ge += 1
+
+    use_blocks = baseline_groups is not None and candidate_groups is not None
+    if use_blocks:
+        bg = np.asarray(baseline_groups)
+        cg = np.asarray(candidate_groups)
+        if bg.shape[0] != m or cg.shape[0] != n:
+            raise ValueError(
+                "group ids must align 1:1 with samples "
+                f"(got {bg.shape[0]}/{cg.shape[0]} for {m}/{n} rows)"
+            )
+        # Globally-unique episode ids over the pool (offset candidate so it never
+        # collides with baseline), then permute whole episodes between arms.
+        offset = (int(bg.max()) + 1) if bg.size else 0
+        pooled_units = np.concatenate([bg, cg + offset])
+        units = np.unique(pooled_units)
+        unit_rows = [np.flatnonzero(pooled_units == u) for u in units]
+        n_base_units = int(np.unique(bg).size)
+        if units.size >= 2 and 1 <= n_base_units < units.size:
+            for _ in range(n_permutations):
+                order = rng.permutation(units.size)
+                ix = np.concatenate([unit_rows[i] for i in order[:n_base_units]])
+                iy = np.concatenate([unit_rows[i] for i in order[n_base_units:]])
+                if _mmd2_from_kernel(K, ix, iy, n_g) >= observed:
+                    ge += 1
+        else:
+            # Degenerate grouping (e.g. one episode per arm): can't block-permute,
+            # so don't fabricate significance — report non-significant.
+            return TwoSampleResult(
+                observed, 1.0, energy_distance(X, Y), m, n, 0
+            )
+    else:
+        idx = np.arange(m + n)
+        for _ in range(n_permutations):
+            perm = rng.permutation(idx)
+            if _mmd2_from_kernel(K, perm[:m], perm[m:], n_g) >= observed:
+                ge += 1
+
     p_value = (1.0 + ge) / (1.0 + n_permutations)
 
     return TwoSampleResult(

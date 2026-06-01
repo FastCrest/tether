@@ -147,15 +147,18 @@ def validate(model_id: str, n_episodes: int, task_idx: int) -> dict:
 
     o_act, o_eef = _counts(orig)
     c_act, c_eef = _counts(opt)
-    base_actions = _collect_step_actions(orig)
-    cand_actions = _collect_step_actions(opt)
+    base_actions, base_groups = _collect_step_actions(orig)
+    cand_actions, cand_groups = _collect_step_actions(opt)
     ts = None
     if (
         base_actions.size
         and cand_actions.size
         and base_actions.shape[1] == cand_actions.shape[1]
     ):
-        ts = two_sample_test(base_actions, cand_actions).to_dict()
+        ts = two_sample_test(
+            base_actions, cand_actions,
+            baseline_groups=base_groups, candidate_groups=cand_groups,
+        ).to_dict()
 
     bp, bs = _collect_eef_and_steps(orig)
     cp, cs = _collect_eef_and_steps(opt)

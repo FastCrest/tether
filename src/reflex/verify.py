@@ -182,8 +182,10 @@ def _success_rate(samples: list[EvalSample]) -> float:
     return sum(1 for s in samples if s.success) / len(samples)
 
 
-def _collect_step_actions(results: dict[str, Any]) -> np.ndarray:
-    """Stack every per-step *applied* action into ``(N, D)``.
+def _collect_step_actions(results: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Stack every per-step *applied* action into ``(N, D)`` + an ``(N,)`` array of
+    episode ids (globally unique across tasks) so the two-sample test can permute
+    whole episodes, not steps.
 
     The applied action — what the policy actually commanded each control step —
     has identical layout (7-dim) for BOTH the native and the optimized arm, so
@@ -193,18 +195,30 @@ def _collect_step_actions(results: dict[str, Any]) -> np.ndarray:
     widths differ (7 vs 350) and are not comparable — comparing those silently
     no-ops the distributional gate, which is the bug this collector fixes.
 
-    Returns ``(0, 0)`` when the rollout didn't capture trajectories (tap off or
-    older results) — the two-sample test then no-ops.
+    The episode ids matter just as much: per-step actions are autocorrelated
+    within an episode, so the two-sample test MUST permute at episode granularity
+    (see ``verify_metrics.two_sample_test``). Without them the test over-rejects.
+
+    Returns ``((0, 0), (0,))`` when the rollout didn't capture trajectories (tap
+    off or older results) — the two-sample test then no-ops.
     """
     rows: list[np.ndarray] = []
+    groups: list[int] = []
+    ep_uid = 0
     for task in results.get("per_task", []) or []:
         for ep in task.get("episodes", []) or []:
-            for act in ep.get("actions", []) or []:
+            acts = ep.get("actions", []) or []
+            for act in acts:
                 rows.append(np.asarray(act, dtype=np.float64).reshape(-1))
+                groups.append(ep_uid)
+            if acts:
+                ep_uid += 1
     if not rows:
-        return np.empty((0, 0))
+        return np.empty((0, 0)), np.empty((0,))
     width = min(r.shape[0] for r in rows)
-    return np.vstack([r[:width] for r in rows]) if width else np.empty((0, 0))
+    if not width:
+        return np.empty((0, 0)), np.empty((0,))
+    return np.vstack([r[:width] for r in rows]), np.asarray(groups)
 
 
 def _collect_eef_and_steps(results: dict[str, Any]) -> tuple[list[np.ndarray], list[float]]:
@@ -388,15 +402,22 @@ def run_verify(
     # the per-step trajectories the widened rollout tap captures. When the tap
     # is off / older results lack them, these stay None and only success-rate
     # parity applies (no silent degrade — the verdict records which ran).
-    base_actions = _collect_step_actions(original_results)
-    cand_actions = _collect_step_actions(optimized_results)
+    base_actions, base_groups = _collect_step_actions(original_results)
+    cand_actions, cand_groups = _collect_step_actions(optimized_results)
     two_sample: TwoSampleResult | None = None
     if (
         base_actions.size
         and cand_actions.size
         and base_actions.shape[1] == cand_actions.shape[1]
     ):
-        two_sample = two_sample_test(base_actions, cand_actions)
+        # Episode-aware: permute whole episodes (per-step actions are
+        # autocorrelated; step-level permutation over-rejects ~100%).
+        two_sample = two_sample_test(
+            base_actions,
+            cand_actions,
+            baseline_groups=base_groups,
+            candidate_groups=cand_groups,
+        )
 
     base_pos, base_steps = _collect_eef_and_steps(original_results)
     cand_pos, cand_steps = _collect_eef_and_steps(optimized_results)
