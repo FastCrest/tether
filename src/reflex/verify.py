@@ -182,8 +182,16 @@ def _success_rate(samples: list[EvalSample]) -> float:
     return sum(1 for s in samples if s.success) / len(samples)
 
 
-def _collect_action_chunks(results: dict[str, Any]) -> np.ndarray:
-    """Stack every captured per-step action chunk (flattened) into ``(N, D)``.
+def _collect_step_actions(results: dict[str, Any]) -> np.ndarray:
+    """Stack every per-step *applied* action into ``(N, D)``.
+
+    The applied action — what the policy actually commanded each control step —
+    has identical layout (7-dim) for BOTH the native and the optimized arm, so
+    the two-sample test compares like with like. The model-internal *predicted
+    chunk* does NOT: native ``select_action`` exposes one action per call while
+    the decomposed path returns a full multi-step chunk, so their flattened
+    widths differ (7 vs 350) and are not comparable — comparing those silently
+    no-ops the distributional gate, which is the bug this collector fixes.
 
     Returns ``(0, 0)`` when the rollout didn't capture trajectories (tap off or
     older results) — the two-sample test then no-ops.
@@ -191,8 +199,8 @@ def _collect_action_chunks(results: dict[str, Any]) -> np.ndarray:
     rows: list[np.ndarray] = []
     for task in results.get("per_task", []) or []:
         for ep in task.get("episodes", []) or []:
-            for chunk in ep.get("action_chunks", []) or []:
-                rows.append(np.asarray(chunk, dtype=np.float64).reshape(-1))
+            for act in ep.get("actions", []) or []:
+                rows.append(np.asarray(act, dtype=np.float64).reshape(-1))
     if not rows:
         return np.empty((0, 0))
     width = min(r.shape[0] for r in rows)
@@ -380,11 +388,15 @@ def run_verify(
     # the per-step trajectories the widened rollout tap captures. When the tap
     # is off / older results lack them, these stay None and only success-rate
     # parity applies (no silent degrade — the verdict records which ran).
-    base_chunks = _collect_action_chunks(original_results)
-    cand_chunks = _collect_action_chunks(optimized_results)
+    base_actions = _collect_step_actions(original_results)
+    cand_actions = _collect_step_actions(optimized_results)
     two_sample: TwoSampleResult | None = None
-    if base_chunks.size and cand_chunks.size and base_chunks.shape[1] == cand_chunks.shape[1]:
-        two_sample = two_sample_test(base_chunks, cand_chunks)
+    if (
+        base_actions.size
+        and cand_actions.size
+        and base_actions.shape[1] == cand_actions.shape[1]
+    ):
+        two_sample = two_sample_test(base_actions, cand_actions)
 
     base_pos, base_steps = _collect_eef_and_steps(original_results)
     cand_pos, cand_steps = _collect_eef_and_steps(optimized_results)
