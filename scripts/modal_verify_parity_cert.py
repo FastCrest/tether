@@ -266,6 +266,16 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
         "raw_results_volume": "reflex-verify-cert-data",
         "raw_results_path": raw_path,
     }
+    # Persist the VERDICT to the Volume — this is how we recover the result when
+    # the run is spawn()ed and the client is long gone (laptop sleep). Never fatal.
+    verdict_path = f"/data/cert_verdict_n{n_episodes}_task{task_idx}.json"
+    try:
+        with open(verdict_path, "w") as fh:
+            json.dump(out, fh, default=str)
+        cert_data_vol.commit()
+        print(f"[persist] verdict -> {verdict_path}", flush=True)
+    except Exception as exc:  # noqa: BLE001 — never fatal
+        print(f"[persist] WARNING verdict dump failed (non-fatal): {exc}", flush=True)
     print("CERT_RESULT " + json.dumps(out), flush=True)
     return out
 
@@ -273,6 +283,13 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
 @app.local_entrypoint()
 def main(n_episodes: int = 30, task_idx: int = 0,
          model_id: str = "lerobot/pi05_libero_finetuned_v044"):
-    import json
-    res = cert.remote(model_id, n_episodes, task_idx)
-    print("FINAL " + json.dumps(res, indent=2))
+    # SPAWN (not .remote): the function runs server-side INDEPENDENT of this
+    # client, so a laptop sleep / lid-close can't cancel it (the failure mode that
+    # killed 3 prior --detach runs — --detach keeps the app alive but the blocking
+    # .remote() input dies with the client). Fire-and-exit; the verdict is written
+    # to the Volume. Recover with:
+    #   modal volume get reflex-verify-cert-data cert_verdict_n<N>_task<T>.json -
+    call = cert.spawn(model_id, n_episodes, task_idx)
+    print(f"SPAWNED call_id={call.object_id}")
+    print(f"verdict will land at Volume reflex-verify-cert-data:/"
+          f"cert_verdict_n{n_episodes}_task{task_idx}.json (~70 min)")
