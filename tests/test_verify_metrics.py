@@ -64,6 +64,77 @@ def test_two_sample_test_handles_tiny_samples():
     assert r.n_permutations == 0
 
 
+# --- episode-block permutation (autocorrelated trajectory data) ------------
+# Per-step robot actions are autocorrelated within an episode. The i.i.d.
+# step-level permutation treats correlated steps as independent and over-rejects
+# (~100% false-positive on identical policies — caught on GPU 2026-06-01,
+# ap-v8SDPPrHUju26ozqqdmiSR). Passing episode ids makes the test permute whole
+# episodes, restoring calibration with full power. These lock that fix.
+
+
+def _ar1_episode(rng, *, steps, dim=4, mu=0.0, phi=0.9, eps=0.05):
+    """One autocorrelated AR(1) trajectory (smooth robot-motion analogue)."""
+    x = np.zeros((steps, dim))
+    x[0] = mu + rng.normal(0, eps, dim)
+    for t in range(1, steps):
+        x[t] = mu + phi * (x[t - 1] - mu) + rng.normal(0, eps, dim)
+    return x
+
+
+def _episodic_arm(rng, *, n_eps=4, steps=110, **kw):
+    """(pooled_rows, episode_id_per_row) for one arm."""
+    rows, groups = [], []
+    for e in range(n_eps):
+        rows.append(_ar1_episode(rng, steps=steps, **kw))
+        groups += [e] * steps
+    return np.vstack(rows), np.asarray(groups)
+
+
+def test_episode_block_permutation_calibrated_but_step_level_over_rejects():
+    trials, block_rej, step_rej = 12, 0, 0
+    for s in range(trials):
+        rng = np.random.default_rng(500 + s)
+        Xb, Xg = _episodic_arm(rng)
+        Yb, Yg = _episodic_arm(rng)  # SAME generating process => null is true
+        if two_sample_test(
+            Xb, Yb, n_permutations=120, seed=s,
+            baseline_groups=Xg, candidate_groups=Yg,
+        ).distributions_differ:
+            block_rej += 1
+        if two_sample_test(Xb, Yb, n_permutations=120, seed=s).distributions_differ:
+            step_rej += 1
+    # Episode-block stays calibrated on the null...
+    assert block_rej <= 3, f"episode-block FPR too high: {block_rej}/{trials}"
+    # ...while step-level over-rejects badly (this is why groups are mandatory).
+    assert step_rej >= 9, (
+        f"expected step-level to over-reject autocorrelated null, got {step_rej}/{trials}"
+    )
+
+
+def test_episode_block_permutation_detects_real_shift():
+    rng = np.random.default_rng(7)
+    Xb, Xg = _episodic_arm(rng, mu=0.0)
+    Yb, Yg = _episodic_arm(rng, mu=0.4)  # real mean shift >> within-arm drift
+    r = two_sample_test(
+        Xb, Yb, n_permutations=200, seed=1,
+        baseline_groups=Xg, candidate_groups=Yg,
+    )
+    assert r.distributions_differ is True  # fix keeps power, isn't blind
+
+
+def test_two_sample_degenerate_grouping_does_not_fabricate_significance():
+    # One episode per arm => no valid episode-level permutation; must NOT reject.
+    rng = np.random.default_rng(0)
+    Xb = _ar1_episode(rng, steps=120, mu=0.0)
+    Yb = _ar1_episode(rng, steps=120, mu=5.0)  # wildly different, but 1 ep each
+    r = two_sample_test(
+        Xb, Yb, n_permutations=120,
+        baseline_groups=np.zeros(120), candidate_groups=np.zeros(120),
+    )
+    assert r.distributions_differ is False
+    assert r.mmd_p_value == 1.0
+
+
 def test_energy_distance_zero_for_identical_set():
     X = [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]]
     assert energy_distance(X, X) == 0.0

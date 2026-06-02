@@ -294,7 +294,7 @@ def run_libero_rollout(
                 t = 0
                 done = False
                 video_frames = [] if save_video_dir else None
-                ep_action_chunks: list = []  # populated only when capture_trajectories
+                ep_applied_actions: list = []  # per-step executed action (capture_trajectories)
                 ep_eef_positions: list = []
                 if video_frames is not None:
                     video_frames.append(
@@ -334,8 +334,6 @@ def run_libero_rollout(
                                 if chunk_np_post.ndim == 1:
                                     chunk_np_post = chunk_np_post[np.newaxis, :]
                                 chunk_np_post = chunk_np_post[:, :7]
-                                if capture_trajectories:
-                                    ep_action_chunks.append(np.asarray(chunk_np_post, dtype=np.float32))
                                 action_plan.extend(chunk_np_post[:replan_steps])
                             else:
                                 with torch.no_grad():
@@ -377,11 +375,17 @@ def run_libero_rollout(
                                 if chunk_np_post.ndim == 3:
                                     chunk_np_post = chunk_np_post[0]
                                 chunk_np_post = chunk_np_post[:, :7]
-                                if capture_trajectories:
-                                    ep_action_chunks.append(np.asarray(chunk_np_post, dtype=np.float32))
                                 action_plan.extend(chunk_np_post[:replan_steps])
 
                         action = action_plan.popleft()
+                        if capture_trajectories:
+                            # The executed 7-dim action — identical layout for the
+                            # native and the optimized arm, so the two-sample test
+                            # compares like with like (model-internal chunk shapes
+                            # differ between arms and are NOT comparable).
+                            ep_applied_actions.append(
+                                np.asarray(action, dtype=np.float32).reshape(-1)[:7]
+                            )
                         obs, _, done, info = env.step(np.asarray(action).tolist())
                         if capture_trajectories and "robot0_eef_pos" in obs:
                             ep_eef_positions.append(np.asarray(obs["robot0_eef_pos"], dtype=np.float32))
@@ -405,7 +409,7 @@ def run_libero_rollout(
                 success = bool(done)
                 episode_rec = {"ep": ep, "success": success, "steps": t}
                 if capture_trajectories:
-                    episode_rec["action_chunks"] = [c.tolist() for c in ep_action_chunks]
+                    episode_rec["actions"] = [a.tolist() for a in ep_applied_actions]
                     episode_rec["eef_positions"] = [p.tolist() for p in ep_eef_positions]
                 task_result["episodes"].append(episode_rec)
                 task_result["total"] += 1
