@@ -135,6 +135,47 @@ def test_two_sample_degenerate_grouping_does_not_fabricate_significance():
     assert r.mmd_p_value == 1.0
 
 
+def test_block_aggregation_matches_full_kernel_mmd():
+    # The episode-block path computes the observed MMD^2 from (U x U) block sums;
+    # it must EXACTLY equal the full (N x N) kernel MMD^2 for the same split.
+    import reflex.verify_metrics as vm
+
+    rng = np.random.default_rng(3)
+    Xb, Xg = _episodic_arm(rng, n_eps=4, steps=40)
+    Yb, Yg = _episodic_arm(rng, n_eps=4, steps=40)
+    r = vm.two_sample_test(
+        Xb, Yb, n_permutations=10, baseline_groups=Xg, candidate_groups=Yg,
+    )
+    pooled = np.vstack([vm._as_2d(Xb), vm._as_2d(Yb)])
+    med = vm._median_bandwidth(pooled)
+    g = 1.0 / (2.0 * med)
+    gammas = [g * s for s in (0.5, 1.0, 2.0)]
+    K = vm._pooled_kernel(pooled, gammas)
+    ref = vm._mmd2_from_kernel(
+        K, np.arange(Xb.shape[0]), np.arange(Xb.shape[0], pooled.shape[0]), 3
+    )
+    assert abs(r.mmd2 - ref) < 1e-9, f"block {r.mmd2} != full-kernel {ref}"
+
+
+def test_block_path_never_builds_full_kernel(monkeypatch):
+    # The scaling guarantee: the groups path must NEVER materialize the full
+    # (N, N) kernel (that is the ~2.6 GB OOM risk at the N>=30 floor). Booby-trap
+    # _pooled_kernel; if the block path completes, it never touched it.
+    import reflex.verify_metrics as vm
+
+    def _boom(*_a, **_k):
+        raise AssertionError("groups path must not build the full (N,N) kernel")
+
+    monkeypatch.setattr(vm, "_pooled_kernel", _boom)
+    rng = np.random.default_rng(0)
+    Xb, Xg = _episodic_arm(rng, n_eps=10, steps=200)
+    Yb, Yg = _episodic_arm(rng, n_eps=10, steps=200)  # ~4k rows: full kernel would be big
+    r = vm.two_sample_test(
+        Xb, Yb, n_permutations=50, baseline_groups=Xg, candidate_groups=Yg,
+    )
+    assert r.n_permutations == 50  # completed via block aggregation
+
+
 def test_energy_distance_zero_for_identical_set():
     X = [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]]
     assert energy_distance(X, X) == 0.0

@@ -60,9 +60,20 @@ def _pairwise_sq_dists(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.maximum(sq, 0.0)  # clamp tiny negatives from float error
 
 
-def _median_bandwidth(pooled: np.ndarray) -> float:
-    """Median-heuristic length scale: median of pairwise distances on the pool."""
-    sq = _pairwise_sq_dists(pooled, pooled)
+def _median_bandwidth(pooled: np.ndarray, *, max_n: int = 2000, seed: int = 0) -> float:
+    """Median-heuristic length scale: median of pairwise distances on the pool.
+
+    For large pools the full (N, N) distance matrix is prohibitive (~2.6 GB at
+    18k rows), so the median is estimated on a deterministic subsample of
+    ``max_n`` rows. Standard practice for the median heuristic — the bandwidth is
+    insensitive to the exact subset — and pools of ``<= max_n`` rows use every
+    row, so the result is unchanged there (small-N tests stay bit-identical).
+    """
+    p = pooled
+    if p.shape[0] > max_n:
+        idx = np.random.default_rng(seed).choice(p.shape[0], size=max_n, replace=False)
+        p = p[idx]
+    sq = _pairwise_sq_dists(p, p)
     iu = np.triu_indices_from(sq, k=1)
     med_sq = float(np.median(sq[iu])) if iu[0].size else 1.0
     return med_sq if med_sq > 1e-12 else 1.0
@@ -102,6 +113,74 @@ def _mmd2_from_kernel(
     term_yy = (kyy.sum() - n * n_gammas) / (n * (n - 1))
     term_xy = kxy.sum() * (2.0 / (m * n))
     return float(term_xx + term_yy - term_xy)
+
+
+def _block_stats(
+    pooled: np.ndarray, gammas: Sequence[float], unit_rows: list,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Aggregate the pooled kernel + sqrt-distance sums into per-episode blocks.
+
+    Returns ``(K_block, D_block, counts)`` where ``K_block[p, q]`` sums the
+    multi-bandwidth RBF kernel over all (step in episode p, step in episode q)
+    pairs, ``D_block[p, q]`` sums Euclidean distances (for energy distance), and
+    ``counts[p]`` is episode p's step count. Built block-by-block, so peak memory
+    is the largest single ``(n_p, n_q)`` block — never the full ``(N, N)`` matrix.
+    This is what lets the gate scale to the N>=30 episode floor (~18k steps)
+    without a multi-GB kernel; permutations then read off ``K_block`` in O(U^2).
+    """
+    blocks = [pooled[r] for r in unit_rows]
+    u = len(blocks)
+    counts = np.array([b.shape[0] for b in blocks], dtype=np.int64)
+    K = np.zeros((u, u))
+    D = np.zeros((u, u))
+    for p in range(u):
+        for q in range(p, u):
+            d2 = _pairwise_sq_dists(blocks[p], blocks[q])
+            k = np.zeros_like(d2)
+            for g in gammas:
+                k += np.exp(-g * d2)
+            ks, ds = float(k.sum()), float(np.sqrt(d2).sum())
+            K[p, q] = K[q, p] = ks
+            D[p, q] = D[q, p] = ds
+    return K, D, counts
+
+
+def _mmd2_from_blocks(
+    K: np.ndarray, counts: np.ndarray, sel: np.ndarray, n_gammas: int,
+) -> float:
+    """Unbiased MMD^2 for arm A = units where ``sel`` is True (B = the rest), read
+    off the episode-block kernel sums. Exactly equals the full-kernel unbiased
+    MMD^2 for the same split (block sums just regroup the same pairwise terms)."""
+    a = np.flatnonzero(sel)
+    b = np.flatnonzero(~sel)
+    m = int(counts[a].sum())
+    n = int(counts[b].sum())
+    if m < 2 or n < 2:
+        return 0.0
+    saa = K[np.ix_(a, a)].sum()
+    sbb = K[np.ix_(b, b)].sum()
+    sab = K[np.ix_(a, b)].sum()
+    # Drop the m (resp. n) self-pairs: each step's diagonal kernel value is
+    # n_gammas (every RBF is 1 on the diagonal), matching the unbiased estimator.
+    term_xx = (saa - m * n_gammas) / (m * (m - 1))
+    term_yy = (sbb - n * n_gammas) / (n * (n - 1))
+    term_xy = sab * (2.0 / (m * n))
+    return float(term_xx + term_yy - term_xy)
+
+
+def _energy_from_blocks(D: np.ndarray, counts: np.ndarray, sel: np.ndarray) -> float:
+    """Energy distance for the A/B split from block sqrt-distance sums (matches
+    ``energy_distance``'s biased self-term convention: the i=j zeros stay in)."""
+    a = np.flatnonzero(sel)
+    b = np.flatnonzero(~sel)
+    m = int(counts[a].sum())
+    n = int(counts[b].sum())
+    if m == 0 or n == 0:
+        return 0.0
+    d_ab = D[np.ix_(a, b)].sum() / (m * n)
+    d_aa = D[np.ix_(a, a)].sum() / (m * m)
+    d_bb = D[np.ix_(b, b)].sum() / (n * n)
+    return float(max(2.0 * d_ab - d_aa - d_bb, 0.0))
 
 
 @dataclass(frozen=True)
@@ -181,14 +260,7 @@ def two_sample_test(
     base_gamma = 1.0 / (2.0 * med_sq)
     gammas = [base_gamma * s for s in (0.5, 1.0, 2.0)]
     n_g = len(gammas)
-    K = _pooled_kernel(pooled, gammas)
-
-    ix0 = np.arange(m)
-    iy0 = np.arange(m, m + n)
-    observed = _mmd2_from_kernel(K, ix0, iy0, n_g)
-
     rng = np.random.default_rng(seed)
-    ge = 0
 
     use_blocks = baseline_groups is not None and candidate_groups is not None
     if use_blocks:
@@ -204,22 +276,34 @@ def two_sample_test(
         offset = (int(bg.max()) + 1) if bg.size else 0
         pooled_units = np.concatenate([bg, cg + offset])
         units = np.unique(pooled_units)
-        unit_rows = [np.flatnonzero(pooled_units == u) for u in units]
         n_base_units = int(np.unique(bg).size)
-        if units.size >= 2 and 1 <= n_base_units < units.size:
-            for _ in range(n_permutations):
-                order = rng.permutation(units.size)
-                ix = np.concatenate([unit_rows[i] for i in order[:n_base_units]])
-                iy = np.concatenate([unit_rows[i] for i in order[n_base_units:]])
-                if _mmd2_from_kernel(K, ix, iy, n_g) >= observed:
-                    ge += 1
-        else:
-            # Degenerate grouping (e.g. one episode per arm): can't block-permute,
-            # so don't fabricate significance — report non-significant.
-            return TwoSampleResult(
-                observed, 1.0, energy_distance(X, Y), m, n, 0
-            )
+        if not (units.size >= 2 and 1 <= n_base_units < units.size):
+            # Can't form two episode arms — don't fabricate significance.
+            return TwoSampleResult(0.0, 1.0, energy_distance(X, Y), m, n, 0)
+
+        unit_rows = [np.flatnonzero(pooled_units == u) for u in units]
+        # Episode-block aggregation: build the (U, U) block sums ONCE
+        # (block-by-block, bounded memory), then every permutation is O(U^2) —
+        # no (N, N) kernel, so this scales to the N>=30 floor (~18k steps).
+        Kb, Db, counts = _block_stats(pooled, gammas, unit_rows)
+        sel0 = units < offset  # the observed split: baseline episodes
+        observed = _mmd2_from_blocks(Kb, counts, sel0, n_g)
+        energy = _energy_from_blocks(Db, counts, sel0)
+        ge = 0
+        for _ in range(n_permutations):
+            order = rng.permutation(units.size)
+            sel = np.zeros(units.size, dtype=bool)
+            sel[order[:n_base_units]] = True
+            if _mmd2_from_blocks(Kb, counts, sel, n_g) >= observed:
+                ge += 1
     else:
+        # No groups: i.i.d. step-level permutation (valid only for genuinely
+        # independent samples). Full kernel is fine here — this path is not the
+        # production trajectory path, which always supplies episode groups.
+        K = _pooled_kernel(pooled, gammas)
+        observed = _mmd2_from_kernel(K, np.arange(m), np.arange(m, m + n), n_g)
+        energy = energy_distance(X, Y)
+        ge = 0
         idx = np.arange(m + n)
         for _ in range(n_permutations):
             perm = rng.permutation(idx)
@@ -231,7 +315,7 @@ def two_sample_test(
     return TwoSampleResult(
         mmd2=observed,
         mmd_p_value=p_value,
-        energy_distance=energy_distance(X, Y),
+        energy_distance=energy,
         n_baseline=m,
         n_candidate=n,
         n_permutations=n_permutations,
