@@ -62,6 +62,41 @@ def test_run_verify_fails_on_embodied_regression():
     assert v.passed is False
 
 
+def test_run_verify_conditions_distributional_test_on_commonly_succeeded():
+    # Outcome confound: if one arm fails more episodes, those failures inject
+    # flailing actions that make the POOLED distributions differ for a reason
+    # unrelated to per-step policy fidelity. The gate must condition on episodes
+    # BOTH arms succeeded, so the distributional test sees only the policy shift.
+    rng = np.random.default_rng(0)
+
+    def arm(fail_from):
+        # eps [0, fail_from) succeed (mean 0); [fail_from, 32) fail (mean 5 flail)
+        eps = []
+        for e in range(32):
+            ok = e < fail_from
+            acts = rng.normal(0.0 if ok else 5.0, 0.1, size=(30, 7)).tolist()
+            eps.append({"ep": e, "success": ok, "steps": 100 if ok else 200, "actions": acts})
+        return {"per_task": [{"task_idx": 0, "episodes": eps}]}
+
+    orig = arm(16)  # 16 succeed, 16 flailing failures
+    opt = arm(30)   # 30 succeed, 2 flailing failures (candidate is *better*)
+    v = run_verify(optimized_ref="exp", gather_fn=_gather_returning(orig, opt), num_episodes=32)
+
+    # Conditioned on the 16 commonly-succeeded episodes (both mean 0): no shift.
+    assert v.two_sample is not None
+    assert v.two_sample_episodes == 16
+    assert v.two_sample.distributions_differ is False
+
+    # Contrast: pooling ALL actions (the old, confounded way) WOULD flag a diff,
+    # purely because orig carries more mean-5 flailing actions than opt.
+    from reflex.verify import _collect_step_actions
+    from reflex.verify_metrics import two_sample_test
+    ba, bg = _collect_step_actions(orig)
+    ca, cg = _collect_step_actions(opt)
+    unconditioned = two_sample_test(ba, ca, baseline_groups=bg, candidate_groups=cg)
+    assert unconditioned.distributions_differ is True
+
+
 def test_run_verify_without_trajectories_is_backward_compatible():
     # Older results / tap off: no actions / eef_positions => checks no-op.
     def bare(n):

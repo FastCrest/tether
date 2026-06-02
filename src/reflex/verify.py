@@ -99,7 +99,17 @@ class ParityVerdict:
         )
     )
     two_sample: TwoSampleResult | None = None  # distributional parity (None if no per-step data)
+    two_sample_episodes: int = 0  # # episodes the distributional test compared (both arms succeeded)
     embodied: EmbodiedParity | None = None  # kinematic parity (None if no per-step data)
+
+    @property
+    def candidate_not_worse(self) -> bool:
+        """Rich-verdict helper: candidate is >= baseline on success AND has no
+        embodied regression. A 'different but not worse' export is True here even
+        when ``two_sample.distributions_differ`` (the distributional flag alone
+        doesn't make the candidate worse — it surfaces a shift for review)."""
+        no_embodied_regress = self.embodied is None or not self.embodied.regressed()
+        return self.success_rate_delta >= 0.0 and no_embodied_regress
 
     @property
     def success_rate_delta(self) -> float:
@@ -125,6 +135,8 @@ class ParityVerdict:
             "first_failing_gate_id": self.first_failing_gate_id,
             "generated_at": self.generated_at,
             "two_sample": self.two_sample.to_dict() if self.two_sample else None,
+            "two_sample_episodes": self.two_sample_episodes,
+            "candidate_not_worse": self.candidate_not_worse,
             "embodied": self.embodied.to_dict() if self.embodied else None,
             "eval_report": self.eval_report.to_dict(),
         }
@@ -219,6 +231,69 @@ def _collect_step_actions(results: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
     if not width:
         return np.empty((0, 0)), np.empty((0,))
     return np.vstack([r[:width] for r in rows]), np.asarray(groups)
+
+
+def _collect_paired_succeeded_step_actions(
+    original_results: dict[str, Any], optimized_results: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    """Per-step applied actions for both arms, RESTRICTED to episodes BOTH arms
+    succeeded (matched by ``(task_idx, ep)``).
+
+    Conditioning on commonly-succeeded episodes isolates the *policy* shift
+    (e.g. bf16 vs fp32 numerics) from the *outcome* shift. If one arm fails more
+    episodes, those failures inject very different actions (a robot flailing for
+    520 steps) that make the pooled action distributions differ for a reason
+    unrelated to per-step policy fidelity — i.e. the distributional test would
+    flag a difference that is really just "this arm succeeds less", which the
+    success-rate gate already measures. Comparing actions only where both arms
+    accomplished the same task answers the question the gate actually wants:
+    *given the same successful outcome, does the optimized policy act the same?*
+
+    Returns ``(base_actions, base_groups, cand_actions, cand_groups,
+    n_episodes)``. Each arm carries its own per-episode group ids (the
+    two-sample test offsets them so the arms' episodes stay distinct units);
+    a shared id per commonly-succeeded episode keeps the bookkeeping simple.
+    Returns empties + 0 when no episode succeeded in both arms (the two-sample
+    test then no-ops and only success-rate parity applies).
+    """
+    def _index(results: dict[str, Any]) -> dict:
+        idx = {}
+        for task in results.get("per_task", []) or []:
+            ti = task.get("task_idx")
+            for ep in task.get("episodes", []) or []:
+                idx[(ti, ep.get("ep"))] = ep
+        return idx
+
+    oi, ci = _index(original_results), _index(optimized_results)
+    b_rows: list[np.ndarray] = []
+    c_rows: list[np.ndarray] = []
+    b_g: list[int] = []
+    c_g: list[int] = []
+    uid = 0
+    for key in sorted(oi.keys() & ci.keys()):
+        oe, ce = oi[key], ci[key]
+        if not (oe.get("success") and ce.get("success")):
+            continue
+        oa = oe.get("actions") or []
+        ca = ce.get("actions") or []
+        if not oa or not ca:
+            continue
+        for a in oa:
+            b_rows.append(np.asarray(a, dtype=np.float64).reshape(-1))
+            b_g.append(uid)
+        for a in ca:
+            c_rows.append(np.asarray(a, dtype=np.float64).reshape(-1))
+            c_g.append(uid)
+        uid += 1
+    empty = (np.empty((0, 0)), np.empty((0,)), np.empty((0, 0)), np.empty((0,)), 0)
+    if not b_rows or not c_rows:
+        return empty
+    width = min(min(r.shape[0] for r in b_rows), min(r.shape[0] for r in c_rows))
+    if not width:
+        return empty
+    base = np.vstack([r[:width] for r in b_rows])
+    cand = np.vstack([r[:width] for r in c_rows])
+    return base, np.asarray(b_g), cand, np.asarray(c_g), uid
 
 
 def _collect_eef_and_steps(results: dict[str, Any]) -> tuple[list[np.ndarray], list[float]]:
@@ -402,16 +477,19 @@ def run_verify(
     # the per-step trajectories the widened rollout tap captures. When the tap
     # is off / older results lack them, these stay None and only success-rate
     # parity applies (no silent degrade — the verdict records which ran).
-    base_actions, base_groups = _collect_step_actions(original_results)
-    cand_actions, cand_groups = _collect_step_actions(optimized_results)
+    base_actions, base_groups, cand_actions, cand_groups, n_cmp = (
+        _collect_paired_succeeded_step_actions(original_results, optimized_results)
+    )
     two_sample: TwoSampleResult | None = None
     if (
         base_actions.size
         and cand_actions.size
         and base_actions.shape[1] == cand_actions.shape[1]
     ):
-        # Episode-aware: permute whole episodes (per-step actions are
-        # autocorrelated; step-level permutation over-rejects ~100%).
+        # Episode-aware + outcome-conditioned: permute whole episodes (per-step
+        # actions are autocorrelated → step-level permutation over-rejects ~100%)
+        # over ONLY episodes both arms succeeded (isolates the per-step policy
+        # shift from the outcome shift — see the collector docstring).
         two_sample = two_sample_test(
             base_actions,
             cand_actions,
@@ -442,6 +520,7 @@ def run_verify(
 
     return ParityVerdict(
         passed=passed,
+        two_sample_episodes=n_cmp,
         eval_report=report,
         optimized_ref=optimized_ref,
         original_ref=original_ref or optimized_ref,

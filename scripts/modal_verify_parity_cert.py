@@ -25,6 +25,11 @@ import modal
 
 app = modal.App("reflex-verify-parity-cert")
 
+# Persist raw per-episode actions/eef/success so future verdict-logic experiments
+# (conditioning, parity_pass thresholds) run OFFLINE on this data — no GPU re-run.
+# Retrieve: modal volume get reflex-verify-cert-data <file> .
+cert_data_vol = modal.Volume.from_name("reflex-verify-cert-data", create_if_missing=True)
+
 
 def _repo_head_sha() -> str:
     pin = os.environ.get("REFLEX_PIN_SHA", "").strip()
@@ -102,7 +107,8 @@ image = (
 )
 
 
-@app.function(image=image, gpu="A100-40GB", timeout=10800, secrets=[_hf_secret()])
+@app.function(image=image, gpu="A100-40GB", timeout=10800, secrets=[_hf_secret()],
+              volumes={"/data": cert_data_vol})
 def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
     import json
     import threading
@@ -131,7 +137,7 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
 
     from reflex.verify import (
         _collect_eef_and_steps,
-        _collect_step_actions,
+        _collect_paired_succeeded_step_actions,
         gather_paired_samples,
     )
     from reflex.verify_metrics import aggregate_embodied, two_sample_test
@@ -147,6 +153,15 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
     )
     _stop.set()
 
+    # Persist the raw per-episode results (actions/eef/success) so any future
+    # verdict-logic experiment runs OFFLINE — this is the LAST GPU run we should
+    # need to tune conditioning / parity_pass thresholds.
+    raw_path = f"/data/cert_raw_n{n_episodes}_task{task_idx}.json"
+    with open(raw_path, "w") as fh:
+        json.dump({"original": orig, "optimized": opt}, fh)
+    cert_data_vol.commit()
+    print(f"[persist] raw results -> {raw_path}", flush=True)
+
     def _succ(res):
         s = sum(tk.get("success", 0) for tk in res.get("per_task", []))
         t = sum(tk.get("total", 0) for tk in res.get("per_task", []))
@@ -155,8 +170,12 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
     o_s, o_t = _succ(orig)
     c_s, c_t = _succ(opt)
 
-    base_actions, base_groups = _collect_step_actions(orig)
-    cand_actions, cand_groups = _collect_step_actions(opt)
+    # Outcome-conditioned: compare per-step actions only on episodes BOTH arms
+    # succeeded — isolates the policy shift from the outcome shift (an arm that
+    # fails more injects flailing actions that differ for a non-policy reason).
+    base_actions, base_groups, cand_actions, cand_groups, n_common = (
+        _collect_paired_succeeded_step_actions(orig, opt)
+    )
 
     # Thin each episode to <= STEP_CAP steps (uniform stride) before the test.
     # The full N=30 pooled matrix is ~18k rows => a ~2.6 GB (N,N) kernel + slow
@@ -204,15 +223,18 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
             baseline_completion_steps=bs, candidate_completion_steps=cs,
         ).to_dict()
 
-    n_base_eps = len(np.unique(base_groups)) if base_groups.size else 0
-    n_cand_eps = len(np.unique(cand_groups)) if cand_groups.size else 0
-    # Overall parity PASS = success-rate parity held AND no distributional shift
-    # AND no embodied regression (the three non-bypassable signals).
+    embodied_ok = emb is not None and not emb["embodied_regressed"]
+    cand_better_or_equal = (c_s / c_t if c_t else 0.0) >= (o_s / o_t if o_t else 0.0)
+    # Rich verdict: a "different but better" export (>= success, no embodied
+    # regression) is legible at a glance, even when the distributional test flags
+    # a shift. parity_pass stays STRICT for now (any distributional differ =>
+    # fail); the effect-size/direction-aware threshold is deferred pending a
+    # design-partner signal that defines what "parity" means commercially.
+    candidate_not_worse = cand_better_or_equal and embodied_ok
     verdict_pass = (
         ts is not None
         and not ts["distributions_differ"]
-        and emb is not None
-        and not emb["embodied_regressed"]
+        and embodied_ok
     )
 
     out = {
@@ -225,7 +247,7 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
             "native_rate": (o_s / o_t) if o_t else None,
             "optimized_rate": (c_s / c_t) if c_t else None,
         },
-        "episodes_used": {"native": n_base_eps, "optimized": n_cand_eps},
+        "two_sample_conditioned_on_episodes": int(n_common),  # both arms succeeded
         "step_cap_per_episode": STEP_CAP,
         "action_matrix_shapes": {
             "baseline": list(base_actions.shape),
@@ -233,7 +255,10 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
         },
         "two_sample": ts,
         "embodied": emb,
+        "candidate_not_worse": candidate_not_worse,
         "parity_pass": verdict_pass,
+        "raw_results_volume": "reflex-verify-cert-data",
+        "raw_results_path": raw_path,
     }
     print("CERT_RESULT " + json.dumps(out), flush=True)
     return out
