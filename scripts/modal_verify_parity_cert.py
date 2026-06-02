@@ -156,11 +156,17 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
     # Persist the raw per-episode results (actions/eef/success) so any future
     # verdict-logic experiment runs OFFLINE — this is the LAST GPU run we should
     # need to tune conditioning / parity_pass thresholds.
+    # Best-effort: a persistence failure must NEVER lose the verdict after a ~2h
+    # run. Wrap it; default=str makes json robust to any stray numpy scalar.
     raw_path = f"/data/cert_raw_n{n_episodes}_task{task_idx}.json"
-    with open(raw_path, "w") as fh:
-        json.dump({"original": orig, "optimized": opt}, fh)
-    cert_data_vol.commit()
-    print(f"[persist] raw results -> {raw_path}", flush=True)
+    try:
+        with open(raw_path, "w") as fh:
+            json.dump({"original": orig, "optimized": opt}, fh, default=str)
+        cert_data_vol.commit()
+        print(f"[persist] raw results -> {raw_path}", flush=True)
+    except Exception as exc:  # noqa: BLE001 — never fatal
+        raw_path = None
+        print(f"[persist] WARNING raw-results dump failed (non-fatal): {exc}", flush=True)
 
     def _succ(res):
         s = sum(tk.get("success", 0) for tk in res.get("per_task", []))
