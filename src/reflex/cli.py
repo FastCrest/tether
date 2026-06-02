@@ -4906,7 +4906,7 @@ app.add_typer(mcp_app, name="mcp")
 
 def _mcp_version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"reflex-mcp {__version__}")
+        typer.echo(f"reflex mcp {__version__}")
         raise typer.Exit()
 
 
