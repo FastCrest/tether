@@ -15,7 +15,7 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from reflex.runtime.inference_weights.safetensors_direct import (
+from tether.runtime.inference_weights.safetensors_direct import (
     apply_prefix_mapping,
     load_flat_dict_from_safetensors,
     load_flat_dict_from_safetensors_dir,

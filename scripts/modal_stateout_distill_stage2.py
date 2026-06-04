@@ -31,7 +31,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-stateout-distill-stage2")
+app = modal.App("tether-stateout-distill-stage2")
 
 
 def _hf_secret():
@@ -78,7 +78,7 @@ image = (
     )
     .run_commands(
         f'echo "bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -111,11 +111,11 @@ def distill(
     import torch
     import torch.nn.functional as F
     from lerobot.policies.pi05.modeling_pi05 import PI05Policy, PI05Pytorch, make_att_2d_masks
-    from reflex.distill.snapflow_pi0_model import (
+    from tether.distill.snapflow_pi0_model import (
         load_snapflow_student,
         enable_snapflow_state_out,
     )
-    from reflex.distill.pi05_state_out_processor import (
+    from tether.distill.pi05_state_out_processor import (
         make_pi05_state_out_preprocessor,
     )
     from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
@@ -176,7 +176,7 @@ def distill(
         to_output=transition_to_batch,
         overrides={"device_processor": {"device": "cuda"}},
     )
-    from reflex.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
+    from tether.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
     swap_prepare_step_in_pipeline(student_preproc, max_state_dim=teacher.config.max_state_dim)
     log.info("  preprocessors ready (teacher=state-in-lang, student=state-out)")
 

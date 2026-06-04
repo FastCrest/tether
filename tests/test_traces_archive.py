@@ -1,7 +1,7 @@
 """Customer trace archive (Phase 1.5 v1).
 
 Covers reader, filter, and aggregator behavior on synthetic JSONL traces.
-Format mirrors what RecordWriter writes (see src/reflex/runtime/record.py).
+Format mirrors what RecordWriter writes (see src/tether/runtime/record.py).
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.traces.archive import (
+from tether.traces.archive import (
     TraceFilter,
     TraceReader,
     _parse_window,
@@ -289,7 +289,7 @@ def test_summary_latency_percentiles(tmp_path: Path):
 
 
 def test_summary_as_dict():
-    from reflex.traces.archive import TraceSummary
+    from tether.traces.archive import TraceSummary
     s = TraceSummary(
         bucket="x", count=10, success_count=8, failed_count=2,
         latency_p50_ms=50.123, latency_p95_ms=100.456,

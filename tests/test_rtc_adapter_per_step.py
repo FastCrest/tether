@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.runtime.rtc_adapter import assert_rtc_compatible_with_num_steps
+from tether.runtime.rtc_adapter import assert_rtc_compatible_with_num_steps
 
 
 class TestRtcCompatibleWithNumSteps:
@@ -36,7 +36,7 @@ class TestRtcCompatibleWithNumSteps:
 
     def test_none_passes(self):
         # Unknown num_steps (e.g. monolithic exports without that field
-        # in reflex_config.json) bypasses the guard. Caller's responsibility
+        # in tether_config.json) bypasses the guard. Caller's responsibility
         # to supply None when num_steps is unknown rather than asserting
         # against a default.
         assert_rtc_compatible_with_num_steps(None) is None

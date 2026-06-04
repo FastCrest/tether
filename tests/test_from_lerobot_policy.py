@@ -84,7 +84,7 @@ def _build_stub_paligemma() -> Any:
 def test_pi0vla_from_lerobot_policy_extracts_paligemma_submodule():
     """The classmethod must reach into policy.model.paligemma_with_expert.paligemma
     and split it into vision_backbone + llm_backbone slots."""
-    from reflex.models.vlas.pi0 import Pi0VLA
+    from tether.models.vlas.pi0 import Pi0VLA
 
     # Build a stub policy whose state_dict() returns lerobot-prefixed keys.
     stub_paligemma = _build_stub_paligemma()
@@ -153,7 +153,7 @@ def _build_stub_pi05_policy_state_dict() -> dict[str, torch.Tensor]:
 
 
 def test_pi05vla_from_lerobot_policy_extracts_paligemma_submodule():
-    from reflex.models.vlas.pi05 import Pi05VLA
+    from tether.models.vlas.pi05 import Pi05VLA
 
     stub_paligemma = _build_stub_paligemma()
     state_dict = _build_stub_pi05_policy_state_dict()
@@ -184,8 +184,8 @@ def test_from_lerobot_policy_no_lerobot_dep_at_import_time():
     if "lerobot" in sys.modules:
         pytest.skip("lerobot already imported, can't test no-import contract")
 
-    importlib.import_module("reflex.models.vlas.pi0")
-    importlib.import_module("reflex.models.vlas.pi05")
+    importlib.import_module("tether.models.vlas.pi0")
+    importlib.import_module("tether.models.vlas.pi05")
 
     assert "lerobot" not in sys.modules, (
         "Importing Pi0VLA / Pi05VLA pulled in lerobot — from_lerobot_policy "

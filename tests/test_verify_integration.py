@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from reflex.verify import run_verify
+from tether.verify import run_verify
 
 
 def _make_results(n_eps, *, action_mean, eef_jitter, rng, n_actions=30, steps=100):
@@ -89,8 +89,8 @@ def test_run_verify_conditions_distributional_test_on_commonly_succeeded():
 
     # Contrast: pooling ALL actions (the old, confounded way) WOULD flag a diff,
     # purely because orig carries more mean-5 flailing actions than opt.
-    from reflex.verify import _collect_step_actions
-    from reflex.verify_metrics import two_sample_test
+    from tether.verify import _collect_step_actions
+    from tether.verify_metrics import two_sample_test
     ba, bg = _collect_step_actions(orig)
     ca, cg = _collect_step_actions(opt)
     unconditioned = two_sample_test(ba, ca, baseline_groups=bg, candidate_groups=cg)

@@ -26,7 +26,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-layer-pruning-profile")
+app = modal.App("tether-layer-pruning-profile")
 
 
 def _hf_secret():
@@ -76,7 +76,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -146,7 +146,7 @@ def profile_modal(
             # data because we're measuring intrinsic layer-output redundancy,
             # not task semantics.
             B = 1
-            from reflex.exporters.decomposed import (
+            from tether.exporters.decomposed import (
                 PI05_PALIGEMMA_LAYERS,
             )
             assert n_layers == PI05_PALIGEMMA_LAYERS, (

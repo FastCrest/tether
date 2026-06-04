@@ -7,7 +7,7 @@ Verifies:
 - inject_latency_ms <= 0 leaves /act untouched (existing behavior)
 - inject_latency_ms > 1000 clamps to 1000 (no infinite delays)
 
-Uses a stub ReflexServer so the test runs without real ONNX/torch model load.
+Uses a stub TetherServer so the test runs without real ONNX/torch model load.
 """
 from __future__ import annotations
 

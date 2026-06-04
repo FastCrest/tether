@@ -64,7 +64,7 @@ def main(proc_ref: str, num_frames: int = 50) -> int:
         to_output=to_output,
         overrides={"device_processor": {"device": "cpu"}},
     )
-    from reflex.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
+    from tether.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
     swap_prepare_step_in_pipeline(state_out_proc, max_state_dim=32)
 
     print(f"[verify] preprocessors built (baseline + state-out)")

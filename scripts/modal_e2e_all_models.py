@@ -1,8 +1,8 @@
 """E2E benchmark across all supported VLA models: SmolVLA + pi0 + pi0.5.
 
 For each model:
-1. reflex export <hf_id>
-2. reflex serve <export_dir> (background)
+1. tether export <hf_id>
+2. tether serve <export_dir> (background)
 3. POST /act 10 times
 4. Record latency percentiles
 
@@ -14,7 +14,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-e2e-all-models")
+app = modal.App("tether-e2e-all-models")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -26,10 +26,10 @@ image = (
         "typer", "rich", "pydantic>=2.0", "pyyaml",
         "fastapi", "uvicorn", "httpx",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -65,7 +65,7 @@ def benchmark_all():
         # --- Export ---
         start = time.time()
         r = subprocess.run([
-            "reflex", "export", hf_id,
+            "tether", "export", hf_id,
             "--target", "desktop",
             "--output", export_dir,
         ], capture_output=True, text=True, timeout=600)
@@ -102,7 +102,7 @@ def benchmark_all():
         print(f"  PASS export: {export_s:.1f}s, onnx={onnx_mb:.1f}MB, data={data_mb:.1f}MB, max_diff={max_diff}", flush=True)
 
         # --- Parse config ---
-        config_path = os.path.join(export_dir, "reflex_config.json")
+        config_path = os.path.join(export_dir, "tether_config.json")
         with open(config_path) as f:
             cfg = json.load(f)
         model_result["steps"]["config"] = {
@@ -117,7 +117,7 @@ def benchmark_all():
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         server_process = subprocess.Popen(
-            ["reflex", "serve", export_dir, "--port", str(port), "--host", "127.0.0.1", "--device", "cpu"],
+            ["tether", "serve", export_dir, "--port", str(port), "--host", "127.0.0.1", "--device", "cpu"],
             stdout=log_fh, stderr=subprocess.STDOUT,
             env=env,
         )

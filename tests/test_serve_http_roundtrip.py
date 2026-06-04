@@ -38,7 +38,7 @@ def _make_export_dir(tmp_path: Path, model_type: str = "smolvla") -> Path:
     export_dir = tmp_path / "export"
     export_dir.mkdir()
     (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "reflex_config.json").write_text(json.dumps({
+    (export_dir / "tether_config.json").write_text(json.dumps({
         "model_type": model_type,
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -99,7 +99,7 @@ def test_act_http_roundtrip(tmp_path, monkeypatch, model_type, input_names):
 
     export_dir = _make_export_dir(tmp_path, model_type=model_type)
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
     app = create_app(str(export_dir), device="cpu")
 
     # TestClient triggers lifespan automatically on `with` entry.
@@ -141,7 +141,7 @@ def test_guard_status_endpoint(tmp_path, monkeypatch):
 
     export_dir = _make_export_dir(tmp_path, "smolvla")
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
     app = create_app(str(export_dir), device="cpu")
     with TestClient(app) as client:
         resp = client.get("/guard/status")

@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.models import ALL_SLOTS, BaseVLA, apply_name_mapping
-from reflex.models.vision import VisionBackbone
-from reflex.models.llm import LLMBackbone
-from reflex.models.vlm import VLMBackbone
-from reflex.models.projectors import Projector
-from reflex.models.heads import VLAHead
-from reflex.models.text import TextEncoder
+from tether.models import ALL_SLOTS, BaseVLA, apply_name_mapping
+from tether.models.vision import VisionBackbone
+from tether.models.llm import LLMBackbone
+from tether.models.vlm import VLMBackbone
+from tether.models.projectors import Projector
+from tether.models.heads import VLAHead
+from tether.models.text import TextEncoder
 
 
 # ─── ABC enforcement ────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ def test_basevla_slot_in_both_required_and_optional_raises():
 
 def test_basevla_from_config_resolves_type_tagged_dicts(monkeypatch):
     """from_config takes a spec dict + builds via component registries."""
-    from reflex.registry.components import VISION_BACKBONES, VLA_HEADS
+    from tether.registry.components import VISION_BACKBONES, VLA_HEADS
 
     # Register stubs (use try/finally to clean up after the test).
     VISION_BACKBONES.register(_StubVisionBackbone)

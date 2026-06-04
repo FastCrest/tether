@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from reflex.runtime.record import RecordWriter, _chain_hash, verify_record_chain
+from tether.runtime.record import RecordWriter, _chain_hash, verify_record_chain
 
 
 def _build_chain(payloads):

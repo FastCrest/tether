@@ -21,7 +21,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-calibration-matrix")
+app = modal.App("tether-calibration-matrix")
 
 
 def _hf_secret():
@@ -54,7 +54,7 @@ _HEAD = _repo_head_sha()
 _BUILD_BUST = _build_bust()
 
 
-# Light image -- just CUDA + reflex-vla. No LIBERO, no lerobot, no full
+# Light image -- just CUDA + tether-vla. No LIBERO, no lerobot, no full
 # inference stack. Calibration substrate is pure-Python after CUDA probe.
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -69,7 +69,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -87,7 +87,7 @@ def _probe_inner(tier: str) -> dict:
     from pathlib import Path
 
     print(f"[calibration] tier={tier} probing HardwareFingerprint...")
-    from reflex.runtime.calibration import (
+    from tether.runtime.calibration import (
         CalibrationCache,
         CalibrationEntry,
         HardwareFingerprint,
@@ -103,7 +103,7 @@ def _probe_inner(tier: str) -> dict:
     print(f"[calibration]   kernel: {fp.kernel_release!r}")
     print(f"[calibration]   cpu_count: {fp.cpu_count}")
     print(f"[calibration]   ram_gb: {fp.ram_gb}")
-    print(f"[calibration]   reflex_version: {fp.reflex_version}")
+    print(f"[calibration]   tether_version: {fp.tether_version}")
 
     print("[calibration] running measure_latency_profile against a synthetic predict...")
 
@@ -130,7 +130,7 @@ def _probe_inner(tier: str) -> dict:
     assert quality.n_outliers_dropped >= 0, "n_outliers_dropped must be >= 0"
 
     # Day 7 expansion: validate CalibrationCache round-trip on Modal disk.
-    # Real API per src/reflex/runtime/calibration.py (not the names I
+    # Real API per src/tether/runtime/calibration.py (not the names I
     # guessed earlier; lesson: read the dataclass first).
     print("[calibration] validating CalibrationCache round-trip...")
     cache_path = Path("/tmp/reflex_calibration_smoke.json")
@@ -192,7 +192,7 @@ def _probe_inner(tier: str) -> dict:
         cuda_version_major=fp.cuda_version_major,
         cuda_version_minor=fp.cuda_version_minor,
         kernel_release=fp.kernel_release, cpu_count=fp.cpu_count,
-        ram_gb=fp.ram_gb, reflex_version=fp.reflex_version,
+        ram_gb=fp.ram_gb, tether_version=fp.tether_version,
     )
     assert cache_v2.is_stale(fake_fp), (
         "cache must be stale when fingerprint differs (driver bump)"

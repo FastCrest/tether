@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import zmq
 
-from reflex.runtime.transports.zmq.factory import create_zmq_server
+from tether.runtime.transports.zmq.factory import create_zmq_server
 
 
 class _MockRuntime:
@@ -113,7 +113,7 @@ def test_get_status_returns_stats():
 
 def test_cli_transport_flag_exists():
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["serve", "--help"])
@@ -123,7 +123,7 @@ def test_cli_transport_flag_exists():
 
 def test_cli_transport_invalid_rejected():
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["serve", "/tmp/nonexistent", "--transport", "ros2"])

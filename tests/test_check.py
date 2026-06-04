@@ -3,7 +3,7 @@
 import torch
 import pytest
 
-from reflex.validate_training import (
+from tether.validate_training import (
     check_key_structure,
     check_nan_inf,
     CheckResult,

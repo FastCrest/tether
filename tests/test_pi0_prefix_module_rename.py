@@ -1,7 +1,7 @@
 """Tests for lift #1 Day 9 — pi0_prefix exporter rename.
 
-Pins the rename from ``reflex.exporters.pi0_prefix_exporter`` →
-``reflex.exporters.pi0_prefix``. The module's classes and builders are
+Pins the rename from ``tether.exporters.pi0_prefix_exporter`` →
+``tether.exporters.pi0_prefix``. The module's classes and builders are
 spine-load-bearing (``Pi0ExpertStackWithPrefix`` / ``Pi05ExpertStackWithPrefix``
 are what ``Pi0VLA.from_pretrained`` and ``Pi05VLA.from_pretrained`` construct
 under the hood per Day 4h / 5b parity gates).
@@ -19,8 +19,8 @@ import pytest
 
 
 def test_pi0_prefix_module_at_new_path():
-    """Day 9 rename: imports resolve from ``reflex.exporters.pi0_prefix``."""
-    mod = importlib.import_module("reflex.exporters.pi0_prefix")
+    """Day 9 rename: imports resolve from ``tether.exporters.pi0_prefix``."""
+    mod = importlib.import_module("tether.exporters.pi0_prefix")
     assert mod is not None
     # Sanity: the load-bearing builders are exposed.
     assert hasattr(mod, "build_pi0_expert_with_prefix")
@@ -36,15 +36,15 @@ def test_pi0_prefix_old_name_removed():
     that we don't accidentally keep both around (would defeat the cleanup
     pre Day 11)."""
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("reflex.exporters.pi0_prefix_exporter")
+        importlib.import_module("tether.exporters.pi0_prefix_exporter")
 
 
 def test_spine_vlas_import_from_new_path():
     """Pi0VLA + Pi05VLA + FlowMatchingHead use the renamed module."""
     # These imports must resolve through the spine without ImportError.
-    from reflex.models.vlas.pi0 import Pi0VLA
-    from reflex.models.vlas.pi05 import Pi05VLA
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.models.vlas.pi0 import Pi0VLA
+    from tether.models.vlas.pi05 import Pi05VLA
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
 
     assert Pi0VLA is not None
     assert Pi05VLA is not None

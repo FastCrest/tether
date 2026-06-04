@@ -1,6 +1,6 @@
-# Getting started with Reflex
+# Getting started with Tether
 
-A 30-minute walkthrough of the typical first hour after `pip install reflex-vla[serve,gpu]`.
+A 30-minute walkthrough of the typical first hour after `pip install tether[serve,gpu]`.
 
 This guide assumes a Linux box with an NVIDIA GPU. CPU-only deployments work with `[serve]` instead of `[serve,gpu]` — every example below applies, just replace `--device cuda` with `--device cpu`.
 
@@ -10,17 +10,17 @@ This guide assumes a Linux box with an NVIDIA GPU. CPU-only deployments work wit
 
 ```bash
 # GPU box (requires CUDA 12 + cuDNN 9 — easiest via nvcr.io/nvidia/tensorrt container):
-pip install 'reflex-vla[serve,gpu] @ git+https://github.com/FastCrest/reflex-vla'
+pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 
 # CPU-only box:
-pip install 'reflex-vla[serve,onnx] @ git+https://github.com/FastCrest/reflex-vla'
+pip install 'tether[serve,onnx] @ git+https://github.com/FastCrest/tether'
 ```
 
 Or for development from source:
 
 ```bash
-git clone https://github.com/FastCrest/reflex-vla
-cd reflex-vla
+git clone https://github.com/FastCrest/tether
+cd tether-vla
 pip install -e '.[serve,gpu,dev]'  # or [serve,onnx,dev] for CPU
 ```
 
@@ -30,19 +30,19 @@ If `--device cuda` errors with "CUDAExecutionProvider not available," see [Troub
 
 ## 1. Pick a model and export it
 
-Reflex auto-detects model type from the HuggingFace repo. Pick one based on what you have:
+Tether auto-detects model type from the HuggingFace repo. Pick one based on what you have:
 
 ```bash
 # Orin Nano-safe first try. Export on a dev/cloud box, then copy to Jetson.
-reflex export lerobot/smolvla_base --target orin-nano --output ./smolvla
+tether export lerobot/smolvla_base --target orin-nano --output ./smolvla
 
-# pi0 / pi0.5 are datacenter targets in Reflex's registry today.
-reflex export lerobot/pi0_base --target desktop --output ./pi0
+# pi0 / pi0.5 are datacenter targets in Tether's registry today.
+tether export lerobot/pi0_base --target desktop --output ./pi0
 
-reflex export lerobot/pi05_base --target desktop --output ./pi05
+tether export lerobot/pi05_base --target desktop --output ./pi05
 
 # GR00T N1.6 needs AGX Orin/Thor/datacenter-class memory, not Orin Nano.
-reflex export nvidia/GR00T-N1.6-3B --target orin --output ./gr00t
+tether export nvidia/GR00T-N1.6-3B --target orin --output ./gr00t
 ```
 
 Each command:
@@ -52,7 +52,7 @@ Each command:
 4. Validates the ONNX numerically against the PyTorch reference (max_diff < 1e-5)
 5. If trtexec is available, builds a TensorRT engine
 
-The `--target` flag picks per-hardware tuning (FP16 on Orin, FP8 on Thor, etc.). It does not make an oversized model fit a small device. Use `reflex models list --device orin_nano` before targeting Jetson Orin Nano.
+The `--target` flag picks per-hardware tuning (FP16 on Orin, FP8 on Thor, etc.). It does not make an oversized model fit a small device. Use `tether models list --device orin_nano` before targeting Jetson Orin Nano.
 
 After export your output directory looks like:
 
@@ -69,10 +69,10 @@ After export your output directory looks like:
 ## 2. Serve it
 
 ```bash
-reflex serve ./pi0 --port 8000
+tether serve ./pi0 --port 8000
 ```
 
-Reflex now listens on `http://localhost:8000` with three endpoints:
+Tether now listens on `http://localhost:8000` with three endpoints:
 
 - `POST /act` — send `{instruction, state, image?}`, get back a 50-step action chunk
 - `GET /health` — returns `{status, model_loaded, inference_mode}`
@@ -106,22 +106,22 @@ You'll get back something like:
 
 ---
 
-## 3. Add safety limits (`reflex guard`)
+## 3. Add safety limits (`tether guard`)
 
-Most production deployments want the server to clamp actions before they reach the actuators. Reflex has a built-in guard for this.
+Most production deployments want the server to clamp actions before they reach the actuators. Tether has a built-in guard for this.
 
 ```bash
 # Generate a SafetyLimits config from your robot's URDF
-reflex guard init --urdf ./my_robot.urdf --output ./safety.json
+tether guard init --urdf ./my_robot.urdf --output ./safety.json
 
 # Or hand-write one for a 6-joint arm (defaults to ±π on each joint)
-reflex guard init --num-joints 6 --output ./safety.json
+tether guard init --num-joints 6 --output ./safety.json
 ```
 
 Then re-launch serve with the guard enabled:
 
 ```bash
-reflex serve ./pi0 --port 8000 --safety-config ./safety.json
+tether serve ./pi0 --port 8000 --safety-config ./safety.json
 ```
 
 Now every `/act` response includes a `safety_violations` count and (if any clamps fired) a `safety_detail` field. Your robot gets clamped values — never the raw model output. The guard logs every check with a timestamp and input hash, satisfying EU AI Act Article 12 for high-risk AI systems.
@@ -129,7 +129,7 @@ Now every `/act` response includes a `safety_violations` count and (if any clamp
 To test the safety check standalone:
 
 ```bash
-reflex guard check --config ./safety.json --num-joints 6
+tether guard check --config ./safety.json --num-joints 6
 ```
 
 ---
@@ -139,7 +139,7 @@ reflex guard check --config ./safety.json --num-joints 6
 If you're running more than one robot, batch them:
 
 ```bash
-reflex serve ./pi0 \
+tether serve ./pi0 \
   --port 8000 \
   --max-batch 8 \
   --batch-timeout-ms 10
@@ -161,7 +161,7 @@ Per-request latency *drops* with batching (no more queueing serially through the
 ## 5. Stack everything together
 
 ```bash
-reflex serve ./pi0 \
+tether serve ./pi0 \
   --port 8000 \
   --device cuda \
   --safety-config ./safety.json \
@@ -188,7 +188,7 @@ Each enabled wedge surfaces telemetry in the `/act` response so you can monitor 
 Before deploying a new checkpoint to a robot fleet, run:
 
 ```bash
-reflex check ./pi0 --target orin-nano
+tether check ./pi0 --target orin-nano
 ```
 
 Five quick validations (loadable, size fits target, key structure, dtype OK, no NaN/Inf). Exits non-zero on failure. Add to your CI.
@@ -201,12 +201,12 @@ Five quick validations (loadable, size fits target, key structure, dtype OK, no 
 
 ```bash
 # On your dev box:
-reflex export lerobot/smolvla_base --target orin-nano --output ./sv
+tether export lerobot/smolvla_base --target orin-nano --output ./sv
 scp -r ./sv jetson:~/sv
 
 # On the Jetson (Jetpack 6.x with TensorRT preinstalled):
-pip install 'reflex-vla[serve] @ git+https://github.com/FastCrest/reflex-vla'
-reflex serve ./sv --port 8000 --device cuda
+pip install 'tether[serve] @ git+https://github.com/FastCrest/tether'
+tether serve ./sv --port 8000 --device cuda
 ```
 
 ### Switch model without restarting the robot
@@ -215,7 +215,7 @@ Currently requires server restart — hot reload lands in v0.2.
 
 ### Test on simulation before real hardware
 
-The `/act` endpoint is HTTP, so any sim that can do an HTTP POST works. MuJoCo + a small Python wrapper is the typical setup. Reflex doesn't ship a sim integration; that's intentionally outside our scope.
+The `/act` endpoint is HTTP, so any sim that can do an HTTP POST works. MuJoCo + a small Python wrapper is the typical setup. Tether doesn't ship a sim integration; that's intentionally outside our scope.
 
 ---
 
@@ -224,7 +224,7 @@ The `/act` endpoint is HTTP, so any sim that can do an HTTP POST works. MuJoCo +
 **First thing to run when something is off:**
 
 ```bash
-reflex doctor
+tether doctor
 ```
 
 Reports your Python / torch / ORT / TRT versions, which execution providers loaded, free disk, and the most common install-time gotchas. Often pinpoints the issue in one screen.
@@ -236,8 +236,8 @@ ORT 1.20+ requires CUDA 12.x + cuDNN 9.x. The pip-installed `nvidia-cudnn-cu12` 
 ```bash
 docker run --gpus all -it --rm nvcr.io/nvidia/tensorrt:24.10-py3
 # inside the container:
-pip install 'reflex-vla[serve,gpu] @ git+https://github.com/FastCrest/reflex-vla'
-reflex serve ...
+pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+tether serve ...
 ```
 
 Or pass `--device cpu` to explicitly run on CPU, or `--no-strict-providers` to allow silent CPU fallback (not recommended for benchmarks).
@@ -260,6 +260,6 @@ Expected in v0.1. The current ONNX export covers the action-expert denoising loo
 
 If you have a Jetson Orin Nano and run this on real hardware, please open an issue with your latency numbers — that's the headline benchmark we don't have yet.
 
-If you find a model that doesn't auto-detect correctly, check `reflex models` for current support, then open an issue with the HF ID.
+If you find a model that doesn't auto-detect correctly, check `tether models` for current support, then open an issue with the HF ID.
 
-If you want to add a new VLA family, see `src/reflex/exporters/` — each model has its own builder file (~200 lines). Pattern-match against `pi0_exporter.py` for flow-matching variants.
+If you want to add a new VLA family, see `src/tether/exporters/` — each model has its own builder file (~200 lines). Pattern-match against `pi0_exporter.py` for flow-matching variants.

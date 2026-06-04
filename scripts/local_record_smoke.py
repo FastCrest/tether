@@ -5,7 +5,7 @@ that the JSONL is schema-conformant per TECHNICAL_PLAN §D.1.
 
 Run:
     PYTHONPATH=src .venv/bin/python scripts/local_record_smoke.py
-    # writes to /tmp/reflex-record-smoke/
+    # writes to /tmp/tether-record-smoke/
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from reflex.runtime.record import (  # noqa: E402
+from tether.runtime.record import (  # noqa: E402
     SCHEMA_VERSION,
     RecordWriter,
     compute_config_hash,
@@ -26,7 +26,7 @@ from reflex.runtime.record import (  # noqa: E402
 
 
 def main() -> int:
-    out_dir = Path(tempfile.mkdtemp(prefix="reflex-record-smoke-"))
+    out_dir = Path(tempfile.mkdtemp(prefix="tether-record-smoke-"))
     print(f"output dir: {out_dir}")
 
     rec = RecordWriter(
@@ -42,7 +42,7 @@ def main() -> int:
         ort_version="1.20.1",
         embodiment="franka",
         image_redaction="hash_only",
-        reflex_version="0.1.0-smoketest",
+        tether_version="0.1.0-smoketest",
     )
     print(f"file: {rec.filepath}")
 

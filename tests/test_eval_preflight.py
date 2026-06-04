@@ -1,4 +1,4 @@
-"""Tests for src/reflex/eval/preflight.py — Phase 1 eval-as-a-service Day 2."""
+"""Tests for src/tether/eval/preflight.py — Phase 1 eval-as-a-service Day 2."""
 from __future__ import annotations
 
 import subprocess
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from reflex.eval.preflight import (
+from tether.eval.preflight import (
     ALL_FAILURE_MODES,
     DEFAULT_PREFLIGHT_TIMEOUT_S,
     PreflightResult,
@@ -122,7 +122,7 @@ def _stub_subprocess_run(monkeypatch, *, returncode: int, stdout: str = "", stde
     def _run(*args, **kwargs):
         return fake
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _run)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _run)
 
 
 def test_run_returns_passed_when_subprocess_succeeds(monkeypatch):
@@ -243,7 +243,7 @@ def test_run_treats_timeout_as_osmesa_compile_hang(monkeypatch):
             cmd="python", timeout=10, output="partial", stderr="",
         )
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _run_raises)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _run_raises)
     result = PreflightSmokeTest.run(timeout_s=10)
     assert not result.passed
     assert result.failure_mode == "osmesa-compile-hang"
@@ -258,7 +258,7 @@ def test_run_handles_timeout_with_bytes_stderr(monkeypatch):
             output=b"binary output", stderr=b"binary err",
         )
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _run_raises)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _run_raises)
     result = PreflightSmokeTest.run(timeout_s=10)
     assert not result.passed
     assert result.stderr == "binary err"
@@ -270,7 +270,7 @@ def test_run_handles_timeout_with_none_outputs(monkeypatch):
     def _run_raises(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="python", timeout=10)
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _run_raises)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _run_raises)
     result = PreflightSmokeTest.run(timeout_s=10)
     assert not result.passed
     assert result.failure_mode == "osmesa-compile-hang"
@@ -288,7 +288,7 @@ def test_run_returns_subprocess_error_on_filenotfound(monkeypatch):
     def _run_raises(*args, **kwargs):
         raise FileNotFoundError("/does/not/exist not found")
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _run_raises)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _run_raises)
     result = PreflightSmokeTest.run(timeout_s=10, python_executable="/does/not/exist")
     assert not result.passed
     assert result.failure_mode == "subprocess-error"
@@ -299,7 +299,7 @@ def test_run_returns_subprocess_error_on_oserror(monkeypatch):
     def _run_raises(*args, **kwargs):
         raise OSError("permission denied")
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _run_raises)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _run_raises)
     result = PreflightSmokeTest.run(timeout_s=10)
     assert not result.passed
     assert result.failure_mode == "subprocess-error"
@@ -320,7 +320,7 @@ def test_run_uses_sys_executable_when_not_specified(monkeypatch):
         fake = MagicMock(returncode=0, stdout="PREFLIGHT_OK\n", stderr="")
         return fake
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _capture)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _capture)
     PreflightSmokeTest.run(timeout_s=10)
     assert captured["argv"][0] == sys.executable
 
@@ -333,13 +333,13 @@ def test_run_uses_provided_python_executable(monkeypatch):
         fake = MagicMock(returncode=0, stdout="PREFLIGHT_OK\n", stderr="")
         return fake
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _capture)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _capture)
     PreflightSmokeTest.run(timeout_s=10, python_executable="/custom/python3")
     assert captured["argv"][0] == "/custom/python3"
 
 
 def test_run_passes_smoke_test_script_via_dash_c(monkeypatch):
-    """Subprocess invoked as `python -c <script>` so a broken reflex install can still probe."""
+    """Subprocess invoked as `python -c <script>` so a broken tether install can still probe."""
     captured = {}
 
     def _capture(*args, **kwargs):
@@ -347,7 +347,7 @@ def test_run_passes_smoke_test_script_via_dash_c(monkeypatch):
         fake = MagicMock(returncode=0, stdout="PREFLIGHT_OK\n", stderr="")
         return fake
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _capture)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _capture)
     PreflightSmokeTest.run(timeout_s=10)
     assert captured["argv"][1] == "-c"
     # Script should reference LIBERO + the marker convention
@@ -363,7 +363,7 @@ def test_run_passes_timeout_to_subprocess(monkeypatch):
         fake = MagicMock(returncode=0, stdout="PREFLIGHT_OK\n", stderr="")
         return fake
 
-    monkeypatch.setattr("reflex.eval.preflight.subprocess.run", _capture)
+    monkeypatch.setattr("tether.eval.preflight.subprocess.run", _capture)
     PreflightSmokeTest.run(timeout_s=42.5)
     assert captured["timeout"] == 42.5
 
@@ -428,7 +428,7 @@ def test_extract_returns_unknown_for_unmapped_marker_value():
 
 def test_remediation_present_for_every_failure_mode():
     """Every non-ok mode in the bounded enum must have non-empty remediation."""
-    from reflex.eval.preflight import _REMEDIATION_BY_MODE
+    from tether.eval.preflight import _REMEDIATION_BY_MODE
 
     for mode in ALL_FAILURE_MODES:
         if mode == "ok":

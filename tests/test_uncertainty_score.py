@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.curate.quality.uncertainty import (
+from tether.curate.quality.uncertainty import (
     UNCERTAINTY_VERSION,
     UncertaintyResult,
     classify_episode_value,

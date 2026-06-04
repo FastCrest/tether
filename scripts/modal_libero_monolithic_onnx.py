@@ -33,7 +33,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-libero-monolithic-onnx")
+app = modal.App("tether-libero-monolithic-onnx")
 
 
 def _hf_secret():

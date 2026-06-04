@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/free_collector.py — Free-tier collector."""
+"""Tests for src/tether/curate/free_collector.py — Free-tier collector."""
 from __future__ import annotations
 
 import math
@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from reflex.curate import consent as curate_consent
-from reflex.curate.free_collector import FreeContributorCollector, _has_nan_or_inf
-from reflex.pro.data_collection import CollectedEvent
+from tether.curate import consent as curate_consent
+from tether.curate.free_collector import FreeContributorCollector, _has_nan_or_inf
+from tether.pro.data_collection import CollectedEvent
 
 
 def _mk_event(**overrides: Any) -> CollectedEvent:
@@ -144,7 +144,7 @@ def test_from_consent_raises_when_not_opted_in(tmp_path: Path) -> None:
 def test_record_writer_dual_writes_to_curate_queue(tmp_path: Path) -> None:
     """RecordWriter with attached collector writes to BOTH JSONL trace and
     curate queue. Failures in the collector path never break the JSONL path."""
-    from reflex.runtime.record import RecordWriter
+    from tether.runtime.record import RecordWriter
 
     queue_dir = tmp_path / "queue"
     traces_dir = tmp_path / "traces"
@@ -188,7 +188,7 @@ def test_record_writer_dual_writes_to_curate_queue(tmp_path: Path) -> None:
 
 def test_record_writer_jsonl_resilient_to_collector_failure(tmp_path: Path) -> None:
     """If the curate collector fails to start, the JSONL trace still works."""
-    from reflex.runtime.record import RecordWriter
+    from tether.runtime.record import RecordWriter
 
     class _BrokenCollector:
         is_running = False

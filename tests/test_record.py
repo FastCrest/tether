@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.runtime.record import (
+from tether.runtime.record import (
     SCHEMA_VERSION,
     RecordWriter,
     compute_config_hash,
@@ -41,7 +41,7 @@ def _make_writer(tmp_path: Path, **kwargs) -> RecordWriter:
         ort_version="1.20.1",
         embodiment="franka",
         image_redaction="hash_only",
-        reflex_version="0.0.0-test",
+        tether_version="0.0.0-test",
     )
     defaults.update(kwargs)
     return RecordWriter(record_dir=tmp_path, **defaults)
@@ -89,7 +89,7 @@ class TestHeaderFormat:
         rec.close()
         h = _read_all(rec.filepath)[0]
         for field in [
-            "kind", "schema_version", "reflex_version", "model_hash",
+            "kind", "schema_version", "tether_version", "model_hash",
             "config_hash", "export_dir", "model_type", "export_kind",
             "hardware", "providers", "session_id", "started_at",
         ]:
@@ -101,11 +101,11 @@ class TestHeaderFormat:
         rec.close()
         assert _read_all(rec.filepath)[0]["embodiment"] == "so100"
 
-    def test_header_reflex_version_propagates(self, tmp_path):
-        rec = _make_writer(tmp_path, reflex_version="9.9.9-test")
+    def test_header_tether_version_propagates(self, tmp_path):
+        rec = _make_writer(tmp_path, tether_version="9.9.9-test")
         _dummy_request(rec)
         rec.close()
-        assert _read_all(rec.filepath)[0]["reflex_version"] == "9.9.9-test"
+        assert _read_all(rec.filepath)[0]["tether_version"] == "9.9.9-test"
 
     def test_no_header_if_no_requests(self, tmp_path):
         """Empty session → no file written (lazy open)."""
@@ -381,12 +381,12 @@ class TestHashHelpers:
 
     def test_compute_config_hash_canonical(self, tmp_path):
         """Key order doesn't matter — canonicalization sorts."""
-        (tmp_path / "reflex_config.json").write_text('{"b": 2, "a": 1}')
+        (tmp_path / "tether_config.json").write_text('{"b": 2, "a": 1}')
         h1 = compute_config_hash(tmp_path)
-        (tmp_path / "reflex_config.json").write_text('{"a": 1, "b": 2}')
+        (tmp_path / "tether_config.json").write_text('{"a": 1, "b": 2}')
         h2 = compute_config_hash(tmp_path)
         assert h1 == h2
 
     def test_compute_config_hash_invalid_json(self, tmp_path):
-        (tmp_path / "reflex_config.json").write_text("not json {{{")
+        (tmp_path / "tether_config.json").write_text("not json {{{")
         assert compute_config_hash(tmp_path) == ""

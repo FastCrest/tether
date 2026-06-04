@@ -1,4 +1,4 @@
-"""End-to-end demo: reflex export → reflex serve → POST /act → actions.
+"""End-to-end demo: tether export → tether serve → POST /act → actions.
 
 This is the full user flow, running as one script on Modal A100.
 
@@ -12,7 +12,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-e2e-demo")
+app = modal.App("tether-e2e-demo")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -24,10 +24,10 @@ image = (
         "typer", "rich", "pydantic>=2.0", "pyyaml",
         "fastapi", "uvicorn", "httpx",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -45,7 +45,7 @@ def run_e2e_demo():
         print(f"{tag}: {name} — {detail}", flush=True)
 
     export_dir = "/tmp/reflex_e2e_export"
-    server_log = "/tmp/reflex_server.log"
+    server_log = "/tmp/tether_server.log"
 
     def read_server_log(tail_bytes=2000):
         """Non-blocking read of server log file."""
@@ -57,11 +57,11 @@ def run_e2e_demo():
                 return f.read().decode(errors="replace")
         return ""
 
-    # Step 1: Run reflex export
-    print("=== Step 1: reflex export lerobot/smolvla_base ===", flush=True)
+    # Step 1: Run tether export
+    print("=== Step 1: tether export lerobot/smolvla_base ===", flush=True)
     start = time.time()
     r = subprocess.run([
-        "reflex", "export", "lerobot/smolvla_base",
+        "tether", "export", "lerobot/smolvla_base",
         "--target", "desktop",
         "--output", export_dir,
     ], capture_output=True, text=True, timeout=300)
@@ -77,7 +77,7 @@ def run_e2e_demo():
     # Step 2: Verify export contents
     print("\n=== Step 2: Verify export ===", flush=True)
     onnx_path = os.path.join(export_dir, "expert_stack.onnx")
-    config_path = os.path.join(export_dir, "reflex_config.json")
+    config_path = os.path.join(export_dir, "tether_config.json")
     if os.path.exists(onnx_path) and os.path.exists(config_path):
         onnx_size = os.path.getsize(onnx_path) / 1e6
         log("verify_export", "pass", f"ONNX: {onnx_size:.1f}MB, config exists")
@@ -85,13 +85,13 @@ def run_e2e_demo():
         log("verify_export", "fail", "Missing expected files")
         return results
 
-    # Step 3: Start reflex serve — redirect output to file to avoid pipe-buffer deadlock
-    print("\n=== Step 3: Start reflex serve ===", flush=True)
+    # Step 3: Start tether serve — redirect output to file to avoid pipe-buffer deadlock
+    print("\n=== Step 3: Start tether serve ===", flush=True)
     log_fh = open(server_log, "wb")
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     server_process = subprocess.Popen(
-        ["reflex", "serve", export_dir, "--port", "8765", "--host", "127.0.0.1", "--device", "cpu"],
+        ["tether", "serve", export_dir, "--port", "8765", "--host", "127.0.0.1", "--device", "cpu"],
         stdout=log_fh, stderr=subprocess.STDOUT,
         env=env,
     )
@@ -208,7 +208,7 @@ def run_e2e_demo():
 
 @app.local_entrypoint()
 def main():
-    print("Running end-to-end reflex demo on Modal A100...")
+    print("Running end-to-end tether demo on Modal A100...")
     results = run_e2e_demo.remote()
 
     for step in results["steps"]:

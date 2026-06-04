@@ -1,6 +1,6 @@
 # Latency SLO enforcement
 
-`reflex serve --slo p99=150ms` makes Reflex measure every `/act` response, track a rolling p99, and react when it exceeds your threshold. Three modes:
+`tether serve --slo p99=150ms` makes Tether measure every `/act` response, track a rolling p99, and react when it exceeds your threshold. Three modes:
 
 | Mode | Behavior when p99 > threshold |
 |---|---|
@@ -12,13 +12,13 @@
 
 ```bash
 # 503 mode — failover-capable clients get structured 503 when SLO is at risk
-reflex serve ./my-export/ --slo p99=150ms --slo-mode 503
+tether serve ./my-export/ --slo p99=150ms --slo-mode 503
 
 # log_only — monitor SLO without changing response behavior
-reflex serve ./my-export/ --slo p99=200ms --slo-mode log_only
+tether serve ./my-export/ --slo p99=200ms --slo-mode log_only
 
 # default: --slo-mode degrade (telemetry only until P1.5 degradation knobs land)
-reflex serve ./my-export/ --slo p99=150ms
+tether serve ./my-export/ --slo p99=150ms
 ```
 
 ## Spec format
@@ -82,4 +82,4 @@ Recommended Grafana panels (not shipped by default; customer-side setup):
 - `features/01_serve/subfeatures/_ecosystem/latency-slo-enforcement/latency-slo-enforcement.md`
 - `features/01_serve/subfeatures/_ecosystem/latency-slo-enforcement/latency-slo-enforcement_plan.md`
 
-Pattern source: [InferScope](https://github.com/rylinjames/easyinference) rolling-window tracker (sibling project at `EasyInference-main/products/inferscope/`). Reflex's tracker uses the same percentile/recovery semantics with VLA-specific Prometheus labels.
+Pattern source: [InferScope](https://github.com/rylinjames/easyinference) rolling-window tracker (sibling project at `EasyInference-main/products/inferscope/`). Tether's tracker uses the same percentile/recovery semantics with VLA-specific Prometheus labels.

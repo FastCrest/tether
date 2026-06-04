@@ -41,7 +41,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-action-fast-path-smoke")
+app = modal.App("tether-action-fast-path-smoke")
 
 
 def _hf_secret():
@@ -98,7 +98,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -128,11 +128,11 @@ def smoke_modal(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     logger = logging.getLogger("fp-smoke")
 
-    # Trigger reflex's eager dlopen for ORT-CUDA EP (caught yesterday in
+    # Trigger tether's eager dlopen for ORT-CUDA EP (caught yesterday in
     # 2026-05-06 ort-streams-spike — image had CUDA-13 nvidia libs while
-    # ORT 1.20 wants CUDA-12; reflex's __init__ fixes the loadchain).
-    import reflex
-    logger.info("[smoke] reflex imported (eager-dlopen-nvidia-libs)")
+    # ORT 1.20 wants CUDA-12; tether's __init__ fixes the loadchain).
+    import tether
+    logger.info("[smoke] tether imported (eager-dlopen-nvidia-libs)")
 
     export_dir = Path(ONNX_OUT) / export_subdir
     if not export_dir.exists():
@@ -142,7 +142,7 @@ def smoke_modal(
         )
     logger.info("[smoke] export_dir: %s", export_dir)
 
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     # ---- BASELINE: ORT-CUDA EP loaded check ----
     # Disabled-fast-path run — also serves as the "did CUDA EP actually

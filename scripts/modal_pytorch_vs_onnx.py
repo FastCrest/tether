@@ -22,7 +22,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-pytorch-vs-onnx")
+app = modal.App("tether-pytorch-vs-onnx")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -34,10 +34,10 @@ image = (
         "pydantic>=2.0", "typer", "rich", "pyyaml", "einops",
     )
     .pip_install("lerobot", "num2words")
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -53,10 +53,10 @@ def diff():
     print("=" * 60)
     print("Step 1: export our ONNX pipeline")
     print("=" * 60)
-    export_dir = "/tmp/reflex_libero_export"
+    export_dir = "/tmp/tether_libero_export"
     t0 = time.time()
     r = subprocess.run(
-        ["reflex", "export", "lerobot/smolvla_libero",
+        ["tether", "export", "lerobot/smolvla_libero",
          "--target", "desktop", "--output", export_dir],
         capture_output=True, text=True, timeout=600,
     )
@@ -168,9 +168,9 @@ def diff():
     print("\n" + "=" * 60)
     print("Step 6: our ONNX pipeline (same preprocessed inputs)")
     print("=" * 60)
-    from reflex.runtime.server import ReflexServer
+    from tether.runtime.server import TetherServer
 
-    server = ReflexServer(export_dir, device="cuda", strict_providers=False)
+    server = TetherServer(export_dir, device="cuda", strict_providers=False)
     server.load()
 
     # Feed the SAME images (uint8 HWC) and task string that preprocessor started from.

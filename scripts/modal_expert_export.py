@@ -14,7 +14,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-expert-export")
+app = modal.App("tether-expert-export")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -50,7 +50,7 @@ def export_expert():
         tag = "PASS" if status == "pass" else "FAIL" if status == "fail" else "SKIP"
         print(f"{tag}: {name} — {detail}")
 
-    export_dir = Path("/tmp/reflex_expert_export")
+    export_dir = Path("/tmp/tether_expert_export")
     export_dir.mkdir(exist_ok=True)
 
     # Step 1: Load checkpoint
@@ -414,7 +414,7 @@ def main():
     print("Running expert transformer export on Modal A100...")
     results = export_expert.remote()
 
-    with open("/tmp/reflex_expert_export.json", "w") as f:
+    with open("/tmp/tether_expert_export.json", "w") as f:
         json.dump(results, f, indent=2)
 
     for step in results["steps"]:

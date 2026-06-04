@@ -1,16 +1,16 @@
-"""Smoke test for `reflex finetune --policy act --mode full` on Modal.
+"""Smoke test for `tether finetune --policy act --mode full` on Modal.
 
 Validates the new ACT-from-scratch path landed in Phase 4 of the auto_soarm
 vendoring (ADR 2026-05-06-vendor-auto-soarm.md). The new code allows
 training ACT from scratch (no LoRA, no pretrained base) via:
 
-    reflex finetune --policy act --mode full --chunk-size 31 \\
+    tether finetune --policy act --mode full --chunk-size 31 \\
         --dataset <local-or-hf-id> --output <out> \\
         --steps 30000 --batch-size 8 --learning-rate 1e-5
 
 This script fires it on Modal A10G against a public LeRobot dataset to
 confirm:
-  1. The reflex-vla install pulls all the new code (config + run + cli).
+  1. The tether-vla install pulls all the new code (config + run + cli).
   2. _build_lerobot_command produces a valid lerobot-train invocation
      with --policy.type=act, no --policy.pretrained_path, --policy.chunk_size=N.
   3. lerobot-train accepts the args and starts training.
@@ -33,7 +33,7 @@ import subprocess
 import modal
 
 
-app = modal.App("reflex-act-from-scratch-smoke")
+app = modal.App("tether-act-from-scratch-smoke")
 
 
 def _hf_secret():
@@ -85,7 +85,7 @@ image = (
         "rich",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -122,13 +122,13 @@ def act_smoke(
     logger = logging.getLogger(__name__)
 
     # Verify the new code is actually pulled in.
-    from reflex.finetune.config import FinetuneConfig
-    from reflex.finetune.run import _build_lerobot_command, run_finetune
+    from tether.finetune.config import FinetuneConfig
+    from tether.finetune.run import _build_lerobot_command, run_finetune
 
     if not hasattr(FinetuneConfig, "policy"):
         return {
             "status": "FAIL",
-            "error": "FinetuneConfig.policy field missing — wrong reflex-vla commit",
+            "error": "FinetuneConfig.policy field missing — wrong tether-vla commit",
             "head_sha": "(unknown)",
         }
 
@@ -226,7 +226,7 @@ def main(
     diagnostic_only: bool = False,
     skip_diagnostic: bool = False,
 ):
-    print(f"[reflex ACT-from-scratch Modal smoke]")
+    print(f"[tether ACT-from-scratch Modal smoke]")
     print(f"  HEAD:       {_HEAD}")
     print(f"  dataset:    {dataset}")
     print(f"  output:     /onnx_out/{output_subdir}")

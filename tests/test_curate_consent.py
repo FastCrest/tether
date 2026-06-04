@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/consent.py — opt-in receipt round-trip + revoke."""
+"""Tests for src/tether/curate/consent.py — opt-in receipt round-trip + revoke."""
 from __future__ import annotations
 
 import json
@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from reflex.curate import consent as curate_consent
-from reflex.curate.consent import (
+from tether.curate import consent as curate_consent
+from tether.curate.consent import (
     CONSENT_VERSION,
     TERMS_VERSION,
     ConsentCorrupted,

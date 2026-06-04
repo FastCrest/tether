@@ -1,18 +1,18 @@
 # Policy versioning (2-policy A/B serve mode)
 
-`reflex serve --policy-a ./v1/ --policy-b ./v2/ --split 80 --no-rtc` loads two policies side-by-side and routes /act traffic deterministically per-episode. 80% of episodes go to A, 20% to B. Sticky-per-episode (router uses SHA-256 hash of `episode_id`), so cache locality + RTC carry-over (when applicable) is preserved within an episode.
+`tether serve --policy-a ./v1/ --policy-b ./v2/ --split 80 --no-rtc` loads two policies side-by-side and routes /act traffic deterministically per-episode. 80% of episodes go to A, 20% to B. Sticky-per-episode (router uses SHA-256 hash of `episode_id`), so cache locality + RTC carry-over (when applicable) is preserved within an episode.
 
 Per ADR `2026-04-25-policy-versioning-architecture`. Phase 1 ships the substrate (router + crash tracker + record-replay schema + Prometheus labels). Full 2-instance load wires in a follow-up; this doc shows what's available today + what lands when.
 
 ## Quick start
 
 ```bash
-# 1. Verify both policies pass `reflex doctor` first
-reflex doctor ./v1/
-reflex doctor ./v2/
+# 1. Verify both policies pass `tether doctor` first
+tether doctor ./v1/
+tether doctor ./v2/
 
 # 2. Start 2-policy serve (80/20 split, RTC off)
-reflex serve ./v1/ \
+tether serve ./v1/ \
     --policy-a ./v1/ \
     --policy-b ./v2/ \
     --split 80 \
@@ -23,8 +23,8 @@ curl -X POST http://localhost:8000/act \
     -H "Content-Type: application/json" \
     -d '{"episode_id": "ep_xyz", "image": "...", "instruction": "pick up the cup"}'
 # Response headers:
-#   X-Reflex-Policy-Slot: a
-#   X-Reflex-Model-Version: pi0-libero-v1@<hash>
+#   X-Tether-Policy-Slot: a
+#   X-Tether-Model-Version: pi0-libero-v1@<hash>
 ```
 
 ## Why this exists
@@ -139,7 +139,7 @@ rate(reflex_cache_hit_total{policy_slot="a"}[5m])
 
 ## Memory check (refuse-to-load)
 
-2-policy mode requires roughly 2× model_size_bytes of GPU VRAM. Before loading the second policy, `reflex serve` checks:
+2-policy mode requires roughly 2× model_size_bytes of GPU VRAM. Before loading the second policy, `tether serve` checks:
 ```
 2 × model_size_bytes > 0.7 × total_gpu_bytes
 ```
@@ -160,10 +160,10 @@ to single-policy mode.[/red]
 
 ## Shipped 2026-04-25
 
-- ✅ `setup_two_policy_serving` helper composes the substrate (`src/reflex/runtime/two_policy_setup.py`)
+- ✅ `setup_two_policy_serving` helper composes the substrate (`src/tether/runtime/two_policy_setup.py`)
 - ✅ `create_app` lifespan loads 2 ReflexServers + builds dispatcher when `policy_b_export_dir` is set
 - ✅ `/act` handler dispatches via `TwoPolicyDispatcher.predict()` when `server.two_policy_state` is set
-- ✅ `X-Reflex-Policy-Slot` + `X-Reflex-Model-Version` + `X-Reflex-Routing-Key` + `X-Reflex-Routing-Degraded` response headers
+- ✅ `X-Tether-Policy-Slot` + `X-Tether-Model-Version` + `X-Tether-Routing-Key` + `X-Tether-Routing-Degraded` response headers
 - ✅ Per-request `routing` block in record-replay JSONL trace
 - ✅ Per-slot `policy_slot` label on Prometheus `reflex_act_latency_seconds`
 - ✅ **Per-slot `PolicyRuntime` queue + cost-budget scheduler** (chunk-budget-batching benefit in 2-policy mode)

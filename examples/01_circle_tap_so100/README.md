@@ -1,8 +1,8 @@
 # SO-ARM 100 + tablet circle-tap (end-to-end)
 
-A complete recipe for the canonical Reflex bench game: SO-ARM 100 taps a green
+A complete recipe for the canonical Tether bench game: SO-ARM 100 taps a green
 circle on an Android tablet. Walks you through calibration, data collection,
-ACT training (from scratch), deployment via `reflex serve`, and live eval.
+ACT training (from scratch), deployment via `tether serve`, and live eval.
 
 Substrate vendored from [auto_soarm](https://github.com/0o8o0-blip/auto_soarm)
 by 0o8o0 (MIT) per ADR `reflex_context/01_decisions/2026-05-06-vendor-auto-soarm.md`.
@@ -17,8 +17,8 @@ by 0o8o0 (MIT) per ADR `reflex_context/01_decisions/2026-05-06-vendor-auto-soarm
 ## Software
 
 ```bash
-# Install Reflex with the so100 + bench-game extras
-pip install 'reflex-vla[so100]'           # adds scservo_sdk for the Pi-side driver
+# Install Tether with the so100 + bench-game extras
+pip install 'tether[so100]'           # adds scservo_sdk for the Pi-side driver
 pip install lerobot==0.5.1                # for the from-scratch ACT training step
 ```
 
@@ -27,19 +27,19 @@ pip install lerobot==0.5.1                # for the from-scratch ACT training st
 Check the rig is ready:
 
 ```bash
-reflex calibrate so100 preflight
+tether calibrate so100 preflight
 ```
 
 If you don't have a camera attached yet:
 
 ```bash
-reflex calibrate so100 preflight --skip-camera
+tether calibrate so100 preflight --skip-camera
 ```
 
 Then run the full calibration sequence (corners + surface + tap model):
 
 ```bash
-reflex calibrate so100 all
+tether calibrate so100 all
 ```
 
 This will:
@@ -49,36 +49,36 @@ This will:
 4. Probe the tablet surface for tap depth.
 5. Fit the calibrated tap model.
 
-Outputs land at `~/.reflex/calibration/so100/<id>/{corners,surface,model}.json`.
+Outputs land at `~/.tether/calibration/so100/<id>/{corners,surface,model}.json`.
 
 ## Step 2 — collect demonstrations
 
 ```bash
-reflex bench-game circle_lr collect --episodes 30
+tether bench-game circle_lr collect --episodes 30
 ```
 
 Records 30 clean demonstrations of the arm tapping circles. Output is a
-LeRobot v3 dataset at `~/.reflex/bench/circle_lr/data/collections/<run>/`.
+LeRobot v3 dataset at `~/.tether/bench/circle_lr/data/collections/<run>/`.
 
-If you've opted into the contribution program (`reflex contribute --opt-in`),
+If you've opted into the contribution program (`tether contribute --opt-in`),
 each episode also flows into the Curate queue at
-`~/.reflex/contribute/queue/`. Quality-scored, deduped, auto-tagged + uploaded
-to the Reflex corpus on the next uploader pass.
+`~/.tether/contribute/queue/`. Quality-scored, deduped, auto-tagged + uploaded
+to the Tether corpus on the next uploader pass.
 
 ## Step 3 — train ACT from scratch
 
 ```bash
-reflex finetune \
+tether finetune \
     --policy act \
     --mode full \
     --chunk-size 31 \
-    --dataset ~/.reflex/bench/circle_lr/data/collections/<run> \
-    --output ~/.reflex/bench/circle_lr/artifacts/circle_lr_001 \
+    --dataset ~/.tether/bench/circle_lr/data/collections/<run> \
+    --output ~/.tether/bench/circle_lr/artifacts/circle_lr_001 \
     --steps 30000 \
     --batch-size 8 \
     --learning-rate 1e-5 \
     --seed 1 \
-    --skip-export    # skip auto-export; we'll deploy via reflex serve next
+    --skip-export    # skip auto-export; we'll deploy via tether serve next
 ```
 
 Recipe matches the auto_soarm baseline. ~30 minutes on an RTX 3090; longer on
@@ -92,14 +92,14 @@ The trained checkpoint lands at
 On the GPU machine, serve the trained policy:
 
 ```bash
-reflex serve <output>/training/checkpoints/030000/pretrained_model \
+tether serve <output>/training/checkpoints/030000/pretrained_model \
     --port 8000
 ```
 
 On the Pi (with the arm + tablet), run eval against the served policy:
 
 ```bash
-reflex bench-game circle_lr eval \
+tether bench-game circle_lr eval \
     --ckpt <output>/training/checkpoints/030000/pretrained_model \
     --episodes 8 \
     --remote-host <gpu-host> --remote-port 8000
@@ -113,7 +113,7 @@ Eval prints per-episode hit/miss + a summary at the end.
 - **Slow inference?** Pull the [serve,gpu] extra on the GPU machine for the
   ORT-TRT EP path (5.55× speedup vs ORT-CUDA on SmolVLA-class workloads;
   ACT is smaller but the path matters once you scale chunk sizes).
-- **Failure modes?** `reflex contribute --status` shows your contribution stats
+- **Failure modes?** `tether contribute --status` shows your contribution stats
   + failure-mode distribution. The Failure Corpus picks up the patterns
   automatically.
 

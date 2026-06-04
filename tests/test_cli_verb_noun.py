@@ -23,7 +23,7 @@ def runner():
 
 @pytest.fixture
 def cli_app():
-    from reflex.cli import app
+    from tether.cli import app
     return app
 
 

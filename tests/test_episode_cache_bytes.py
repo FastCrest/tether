@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.runtime.episode_cache import (
+from tether.runtime.episode_cache import (
     EpisodeCache,
     _compute_entry_bytes,
 )
@@ -85,8 +85,8 @@ class TestPrometheusEmission:
     """Gauge value tracks bytes_resident when labels are wired in."""
 
     def _read_gauge(self, embodiment: str, model_id: str, policy_slot: str = "prod") -> float:
-        from reflex.observability.prometheus import reflex_episode_cache_bytes_total
-        return reflex_episode_cache_bytes_total.labels(
+        from tether.observability.prometheus import tether_episode_cache_bytes_total
+        return tether_episode_cache_bytes_total.labels(
             embodiment=embodiment, model_id=model_id, policy_slot=policy_slot,
         )._value.get()
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.exporters.fp16_convert import (
+from tether.exporters.fp16_convert import (
     FP16_OP_BLOCKLIST,
     _build_dtype_map,
     _DT_FLOAT,
@@ -227,7 +227,7 @@ class TestImportGuard:
     def test_conversion_raises_clearly_without_deps(self, monkeypatch):
         """If onnx or onnxconverter_common isn't installed, the caller
         should see a clean ImportError, not an AttributeError mid-run."""
-        from reflex.exporters import fp16_convert
+        from tether.exporters import fp16_convert
 
         # Simulate missing onnxconverter-common by making the import fail.
         import builtins

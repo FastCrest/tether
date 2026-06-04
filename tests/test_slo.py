@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/slo.py — the rolling-window SLO tracker.
+"""Tests for src/tether/runtime/slo.py — the rolling-window SLO tracker.
 
 Covers:
 - `parse_slo_spec` parsing contract (valid + invalid cases)
@@ -12,7 +12,7 @@ import threading
 
 import pytest
 
-from reflex.runtime.slo import (
+from tether.runtime.slo import (
     VALID_SLO_MODES,
     SloSpec,
     SLOTracker,

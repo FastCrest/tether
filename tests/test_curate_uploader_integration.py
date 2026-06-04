@@ -1,9 +1,9 @@
 """Live-worker integration test for the contribution uploader.
 
-Skipped by default. Set REFLEX_LIVE_INTEGRATION_TESTS=1 to run.
+Skipped by default. Set TETHER_LIVE_INTEGRATION_TESTS=1 to run.
 
 What it verifies (against the deployed worker at
-https://reflex-contributions.fastcrest.workers.dev):
+https://tether-contributions.fastcrest.workers.dev):
 
   1. /healthz returns 200
   2. Sign + PUT + complete round-trip with a unique synthetic contributor_id
@@ -12,11 +12,11 @@ https://reflex-contributions.fastcrest.workers.dev):
   5. Smoke contributor cleaned up afterward (DELETE not exposed; relies on
      test-side uniqueness via uuid in the contributor_id so re-runs don't collide)
 
-CI integration: set REFLEX_LIVE_INTEGRATION_TESTS=1 in a nightly job; smoke
+CI integration: set TETHER_LIVE_INTEGRATION_TESTS=1 in a nightly job; smoke
 test takes ~3-5s. Don't run on every commit (network flakiness + load).
 
 Manual run:
-    REFLEX_LIVE_INTEGRATION_TESTS=1 pytest tests/test_curate_uploader_integration.py -v
+    TETHER_LIVE_INTEGRATION_TESTS=1 pytest tests/test_curate_uploader_integration.py -v
 """
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ import uuid
 import pytest
 
 REQUIRES_LIVE_WORKER = pytest.mark.skipif(
-    os.environ.get("REFLEX_LIVE_INTEGRATION_TESTS", "").lower() not in ("1", "true", "yes"),
-    reason="Set REFLEX_LIVE_INTEGRATION_TESTS=1 to enable live-worker tests",
+    os.environ.get("TETHER_LIVE_INTEGRATION_TESTS", "").lower() not in ("1", "true", "yes"),
+    reason="Set TETHER_LIVE_INTEGRATION_TESTS=1 to enable live-worker tests",
 )
 
 
@@ -41,7 +41,7 @@ def smoke_contributor_id() -> str:
 @REQUIRES_LIVE_WORKER
 def test_healthz() -> None:
     import httpx
-    from reflex.curate.uploader import _worker_url
+    from tether.curate.uploader import _worker_url
 
     r = httpx.get(f"{_worker_url()}/healthz", timeout=10.0)
     assert r.status_code == 200
@@ -52,7 +52,7 @@ def test_healthz() -> None:
 def test_full_round_trip(smoke_contributor_id: str) -> None:
     """sign → put → complete → stats → revoke → sign-rejected."""
     import httpx
-    from reflex.curate.uploader import (
+    from tether.curate.uploader import (
         _complete_upload,
         _put_bytes,
         _request_signed_url,
@@ -134,7 +134,7 @@ def test_full_round_trip(smoke_contributor_id: str) -> None:
 def test_complete_without_put_returns_412(smoke_contributor_id: str) -> None:
     """The worker should refuse to mark a session 'completed' when bytes
     never landed in R2."""
-    from reflex.curate.uploader import (
+    from tether.curate.uploader import (
         _request_signed_url,
         _complete_upload,
         WorkerError,
@@ -159,7 +159,7 @@ def test_complete_without_put_returns_412(smoke_contributor_id: str) -> None:
 def test_revoke_cascade_status_endpoint(smoke_contributor_id: str) -> None:
     """Verify the 5-stage cascade status endpoint returns expected shape."""
     import httpx
-    from reflex.curate.uploader import _worker_url
+    from tether.curate.uploader import _worker_url
 
     # Initiate revoke (no prior upload — just testing the cascade shape)
     revoke = httpx.post(
@@ -195,7 +195,7 @@ def test_revoke_cascade_status_endpoint(smoke_contributor_id: str) -> None:
 @REQUIRES_LIVE_WORKER
 def test_revoke_cascade_status_404_unknown_request() -> None:
     import httpx
-    from reflex.curate.uploader import _worker_url
+    from tether.curate.uploader import _worker_url
 
     r = httpx.get(
         f"{_worker_url()}/v1/revoke/cascade-status/rev_does_not_exist",

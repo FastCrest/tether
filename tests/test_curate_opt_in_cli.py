@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/opt_in_cli.py — `reflex contribute` CLI."""
+"""Tests for src/tether/curate/opt_in_cli.py — `tether contribute` CLI."""
 from __future__ import annotations
 
 import json
@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from reflex.curate import consent as curate_consent
-from reflex.curate.opt_in_cli import contribute_app
+from tether.curate import consent as curate_consent
+from tether.curate.opt_in_cli import contribute_app
 
 
 @pytest.fixture
@@ -18,9 +18,9 @@ def runner() -> CliRunner:
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Isolate $HOME so each test gets its own ~/.reflex/."""
+    """Isolate $HOME so each test gets its own ~/.tether/."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("REFLEX_NO_UPGRADE_CHECK", "1")
+    monkeypatch.setenv("TETHER_NO_UPGRADE_CHECK", "1")
     return tmp_path
 
 
@@ -34,7 +34,7 @@ def test_opt_in_creates_receipt(runner: CliRunner, home: Path) -> None:
     result = runner.invoke(contribute_app, ["--opt-in"])
     assert result.exit_code == 0, result.output
     assert "Opted in" in result.output
-    receipt = home / ".reflex" / "consent.json"
+    receipt = home / ".tether" / "consent.json"
     assert receipt.exists()
     data = json.loads(receipt.read_text())
     assert data["tier"] == "free"
@@ -58,7 +58,7 @@ def test_status_shows_after_opt_in(runner: CliRunner, home: Path) -> None:
 
 def test_opt_out_removes_receipt(runner: CliRunner, home: Path) -> None:
     runner.invoke(contribute_app, ["--opt-in"])
-    receipt = home / ".reflex" / "consent.json"
+    receipt = home / ".tether" / "consent.json"
     assert receipt.exists()
     result = runner.invoke(contribute_app, ["--opt-out"])
     assert result.exit_code == 0
@@ -74,7 +74,7 @@ def test_opt_out_idempotent(runner: CliRunner, home: Path) -> None:
 
 def test_revoke_with_yes_flag(runner: CliRunner, home: Path) -> None:
     runner.invoke(contribute_app, ["--opt-in"])
-    receipt = home / ".reflex" / "consent.json"
+    receipt = home / ".tether" / "consent.json"
     assert receipt.exists()
     result = runner.invoke(contribute_app, ["--revoke", "--yes"])
     assert result.exit_code == 0

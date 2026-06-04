@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/data_collection.py — Phase 1 self-distilling-serve Day 1.
+"""Tests for src/tether/pro/data_collection.py — Phase 1 self-distilling-serve Day 1.
 
 Per a2u-distilling-serve execution plan B.5 Day 1 acceptance criteria:
 - CollectedEvent schema-v1 invariants (validation + serialization)
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.pro.data_collection import (
+from tether.pro.data_collection import (
     DEFAULT_RETENTION_DAYS,
     PARQUET_SCHEMA_VERSION,
     CollectedEvent,
@@ -149,8 +149,8 @@ def test_collector_rejects_zero_flush_every_seconds(tmp_path):
 
 
 def test_collector_data_dir_resolves_user_home():
-    """`~/.reflex/...` should expand to the actual home dir."""
-    c = ProDataCollector(data_dir="~/.reflex/test-pro-data")
+    """`~/.tether/...` should expand to the actual home dir."""
+    c = ProDataCollector(data_dir="~/.tether/test-pro-data")
     assert "~" not in str(c.data_dir)
 
 

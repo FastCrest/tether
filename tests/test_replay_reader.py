@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from reflex.replay.readers import (
+from tether.replay.readers import (
     ReplayReaderV1,
     ReplaySchemaUnknownError,
     load_reader,
 )
-from reflex.runtime.record import RecordWriter
+from tether.runtime.record import RecordWriter
 
 
 def _make_trace(tmp_path: Path, n_records: int = 3, *, gzip_output: bool = True,
@@ -36,7 +36,7 @@ def _make_trace(tmp_path: Path, n_records: int = 3, *, gzip_output: bool = True,
         ort_version="1.20.1",
         embodiment="franka",
         image_redaction="full",
-        reflex_version="0.0.0-test",
+        tether_version="0.0.0-test",
         gzip_output=gzip_output,
     )
     for i in range(n_records):

@@ -1,6 +1,6 @@
-"""Record a tweet-grade reflex VLA demo gif on Modal A10G.
+"""Record a tweet-grade tether VLA demo gif on Modal A10G.
 
-Captures real reflex CLI output via subprocess, builds an asciinema cast
+Captures real tether CLI output via subprocess, builds an asciinema cast
 with typed-character animation + captured output, renders to gif via agg.
 Output is HIGHER quality than QuickTime+ffmpeg (vector-rendered text).
 
@@ -9,12 +9,12 @@ Usage:
     modal run /tmp/modal_record_tweet_gif.py
 
 Cost: ~$0.30-0.60 on A10G in ~5-10 min (mostly image build first run).
-Output: ~/Downloads/reflex-tweet.gif
+Output: ~/Downloads/tether-tweet.gif
 
 Approach justified per CLAUDE.md no-band-aid: real CLI output captured
 live in container, not faked. Typing animation is synthesized but every
-character of output is verbatim from `reflex --version`, `reflex doctor`,
-`reflex --help` running in the container with TRT EP active.
+character of output is verbatim from `tether --version`, `tether doctor`,
+`tether --help` running in the container with TRT EP active.
 """
 import modal
 
@@ -26,7 +26,7 @@ image = (
     .apt_install("git", "wget", "curl", "fontconfig", "fonts-jetbrains-mono")
     .pip_install("uv")
     .run_commands(
-        "uv pip install --system 'reflex-vla[serve,gpu]==0.8.0'",
+        "uv pip install --system 'tether-vla[serve,gpu]==0.8.0'",
         "uv pip install --system 'tensorrt>=10.0,<11'",
         # agg = official asciinema gif renderer (Rust binary)
         "wget -qO /usr/local/bin/agg https://github.com/asciinema/agg/releases/download/v1.5.0/agg-x86_64-unknown-linux-gnu",
@@ -36,13 +36,13 @@ image = (
         "PYTHONFAULTHANDLER": "1",
         "LD_LIBRARY_PATH": "/usr/local/lib/python3.12/site-packages/tensorrt_libs:/usr/local/lib/python3.12/site-packages/tensorrt:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib",
         "TERM": "xterm-256color",
-        # force color output from reflex CLI
+        # force color output from tether CLI
         "FORCE_COLOR": "1",
         "CLICOLOR_FORCE": "1",
     })
 )
 
-app = modal.App("reflex-tweet-gif")
+app = modal.App("tether-tweet-gif")
 
 
 @app.function(image=image, gpu="A10G", timeout=900)
@@ -63,9 +63,9 @@ def record() -> bytes:
         return (r.stdout + r.stderr).rstrip("\n")
 
     print("=== capturing real CLI output ===")
-    out_version = run("reflex --version")
-    out_doctor = run("reflex doctor")
-    out_help = run("reflex --help")
+    out_version = run("tether --version")
+    out_doctor = run("tether doctor")
+    out_help = run("tether --help")
     print(f"version: {out_version!r}")
     print(f"doctor first line: {out_doctor.splitlines()[0] if out_doctor else 'EMPTY'!r}")
     print(f"doctor lines: {len(out_doctor.splitlines())}")
@@ -79,7 +79,7 @@ def record() -> bytes:
         "height": height,
         "timestamp": int(time.time()),
         "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"},
-        "title": "Reflex VLA — pip install + edge deploy",
+        "title": "Tether VLA — pip install + edge deploy",
     }
 
     frames = []
@@ -102,13 +102,13 @@ def record() -> bytes:
         t[0] += post_pause
 
     # demo sequence
-    type_command("reflex --version")
+    type_command("tether --version")
     show_output(out_version, post_pause=1.0)
 
-    type_command("reflex doctor")
+    type_command("tether doctor")
     show_output(out_doctor, post_pause=2.5)
 
-    type_command("reflex --help")
+    type_command("tether --help")
     show_output(out_help, post_pause=2.0)
 
     emit(PROMPT)
@@ -122,7 +122,7 @@ def record() -> bytes:
         for frame in frames:
             f.write(json.dumps(frame) + "\n")
 
-    gif_path = pathlib.Path("/tmp/reflex-tweet.gif")
+    gif_path = pathlib.Path("/tmp/tether-tweet.gif")
     print("=== rendering gif via agg ===")
     subprocess.run(
         [
@@ -146,8 +146,8 @@ def record() -> bytes:
 @app.local_entrypoint()
 def main():
     import pathlib
-    print("=== recording reflex tweet gif on Modal A10G ===")
+    print("=== recording tether tweet gif on Modal A10G ===")
     gif_bytes = record.remote()
-    out = pathlib.Path.home() / "Downloads" / "reflex-tweet.gif"
+    out = pathlib.Path.home() / "Downloads" / "tether-tweet.gif"
     out.write_bytes(gif_bytes)
     print(f"\n✓ saved {len(gif_bytes)/1024:.1f} KB → {out}")

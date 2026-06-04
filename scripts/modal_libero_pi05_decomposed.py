@@ -33,7 +33,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-libero-pi05-decomposed")
+app = modal.App("tether-libero-pi05-decomposed")
 
 
 def _hf_secret():
@@ -135,7 +135,7 @@ image = (
     .run_commands("python /root/patch_libero.py")
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -197,7 +197,7 @@ def run_decomposed_libero(
     ``modal_libero_lerobot_native.run_ported_libero`` but swaps the
     forward path for ``Pi05DecomposedInference``.
 
-    Rollout body extracted on 2026-05-20 to ``src/reflex/eval/libero_rollout.py``
+    Rollout body extracted on 2026-05-20 to ``src/tether/eval/libero_rollout.py``
     so multiple Modal scripts can share the proven loop (lift #4 of
     fluxvla-lift-program). Behavior is bit-identical to the pre-refactor
     inline version.
@@ -214,7 +214,7 @@ def run_decomposed_libero(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     # Load policy + processors via the shared helper (extracted 2026-05-20).
-    from reflex.eval.libero_rollout import load_pi05_policy_and_processors
+    from tether.eval.libero_rollout import load_pi05_policy_and_processors
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=student_checkpoint,
         decomposed_dir=decomposed_dir,
@@ -227,7 +227,7 @@ def run_decomposed_libero(
     )
 
     # ─── Load decomposed ONNX inference ──────────────────────────────
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
     # Map CLI cache_mode to class params:
     #   none    → enable_cache=False
     #   phash   → enable_cache=True, cache_level='prefix' (VLM-skip on hit)
@@ -262,7 +262,7 @@ def run_decomposed_libero(
           f"phash_threshold={phash_hamming}")
 
     # ─── Run rollout via shared helper (extracted 2026-05-20) ────────
-    from reflex.eval.libero_rollout import run_libero_rollout
+    from tether.eval.libero_rollout import run_libero_rollout
     results = run_libero_rollout(
         inference=inference,
         policy=policy,
@@ -306,7 +306,7 @@ def main(
                            policy.config only — inference actually runs
                            through the decomposed ONNX).
     --decomposed-dir       Dir with vlm_prefix.onnx + expert_denoise.onnx
-                           + reflex_config.json.
+                           + tether_config.json.
     --cache                'none' | 'phash' (VLM-skip cache) | 'action'
                            (full-forward skip + cache_ignore_lang for pi0.5)
     --num-episodes         Episodes per task.

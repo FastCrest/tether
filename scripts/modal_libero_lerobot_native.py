@@ -33,14 +33,14 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-libero-lerobot-native")
+app = modal.App("tether-libero-lerobot-native")
 
 
 def _hf_secret():
     """HF token secret. Needed for gated upstream dependencies (e.g.
     pi0.5 pulls google/paligemma-3b-pt-224 at tokenizer init).
 
-    Dispatch (same pattern as modal_reflex_distill.py):
+    Dispatch (same pattern as modal_tether_distill.py):
       1. Local HF_TOKEN env var → wrap in ephemeral Secret.
       2. Pre-registered Modal secret 'huggingface' → use as-is.
       3. Empty dict fallback → works for fully-public models only.
@@ -112,11 +112,11 @@ image = (
     )
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
-    # Pull reflex-vla so `reflex.distill.snapflow_pi0_model` is importable
+    # Pull tether-vla so `tether.distill.snapflow_pi0_model` is importable
     # when --snapflow-student is used. Uses the github-token secret to
     # clone the private repo. Cheap — this only pulls the Python package.
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -221,7 +221,7 @@ def run_ported_libero(
         )
 
     if use_1nfe:
-        from reflex.distill.snapflow_pi0_model import load_snapflow_student
+        from tether.distill.snapflow_pi0_model import load_snapflow_student
         print(f"[ported] Loading SnapFlow student from {snapflow_student} (1-NFE inference)")
         policy = load_snapflow_student(snapflow_student)
         detected_type = "snapflow_student_onnx" if use_onnx else "snapflow_student"
@@ -272,7 +272,7 @@ def run_ported_libero(
         overrides={"device_processor": {"device": "cuda"}},
     )
     if is_state_out:
-        from reflex.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
+        from tether.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
         max_state_dim = getattr(policy.config, "max_state_dim", 32)
         swap_prepare_step_in_pipeline(preprocessor, max_state_dim=max_state_dim)
         print(f"[ported] Swapped preprocessor for state-out (max_state_dim={max_state_dim})")
@@ -657,7 +657,7 @@ def main(
     --preprocessor-ref HFID   Fallback HF id for preprocessor pipeline when
                               the student checkpoint dir is missing the
                               policy_preprocessor.json (defaults to the
-                              student dir itself — reflex saves processors
+                              student dir itself — tether saves processors
                               alongside safetensors).
     """
     if tasks == "all":

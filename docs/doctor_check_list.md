@@ -1,4 +1,4 @@
-# reflex doctor — frozen check list
+# tether doctor — frozen check list
 
 10 falsifiable checks. Each maps to a known LeRobot GitHub issue or systemic VLA deploy failure mode. Every check has a 1-pass + 1-fail unit test in `tests/test_doctor_diagnostics.py` per the falsifiability gate.
 
@@ -17,7 +17,7 @@
 
 ## CheckResult contract
 
-Every check returns a `CheckResult` (see `src/reflex/diagnostics/__init__.py`):
+Every check returns a `CheckResult` (see `src/tether/diagnostics/__init__.py`):
 
 | Field | Type | Notes |
 |---|---|---|
@@ -41,9 +41,9 @@ Every check returns a `CheckResult` (see `src/reflex/diagnostics/__init__.py`):
 
 ## Adding check #11
 
-1. Create `src/reflex/diagnostics/check_<name>.py` with a `_run(model_path, embodiment_name, **kwargs) -> CheckResult` function.
+1. Create `src/tether/diagnostics/check_<name>.py` with a `_run(model_path, embodiment_name, **kwargs) -> CheckResult` function.
 2. At the bottom: `register(Check(check_id=..., name=..., severity=..., github_issue=..., run_fn=_run))`.
-3. Import the new module in `_ensure_registry_loaded()` in `src/reflex/diagnostics/__init__.py`.
+3. Import the new module in `_ensure_registry_loaded()` in `src/tether/diagnostics/__init__.py`.
 4. Add at least 1 pass test + 1 fail test to `tests/test_doctor_diagnostics.py`.
 5. Update this doc with the new row.
 
@@ -51,4 +51,4 @@ The registry is auto-loaded; no other wiring needed.
 
 ## Output format
 
-`reflex doctor --model <dir> --format json` emits an envelope validated by `docs/doctor_output_schema.json` (JSON Schema draft-07). Stable schema_version=1; additive fields don't bump version, breaking changes do.
+`tether doctor --model <dir> --format json` emits an envelope validated by `docs/doctor_output_schema.json` (JSON Schema draft-07). Stable schema_version=1; additive fields don't bump version, breaking changes do.

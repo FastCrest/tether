@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/failure_classifier/ — rule-based v1.
+"""Tests for src/tether/curate/failure_classifier/ — rule-based v1.
 
 Covers each detector + composite + primary selection + JSONL row helper.
 Verifies graceful degradation when ActionGuard data is absent (per
@@ -11,7 +11,7 @@ import math
 import numpy as np
 import pytest
 
-from reflex.curate.failure_classifier import (
+from tether.curate.failure_classifier import (
     CLASSIFIER_VERSION,
     ClassificationResult,
     FailureMode,

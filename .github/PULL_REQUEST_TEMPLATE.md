@@ -11,7 +11,7 @@
 ## How Has This Been Tested?
 <!-- Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce. -->
 - [ ] `pytest tests/` passes locally
-- [ ] `reflex doctor` sanity check
+- [ ] `tether doctor` sanity check
 - [ ] Other (please specify):
 
 ## Checklist

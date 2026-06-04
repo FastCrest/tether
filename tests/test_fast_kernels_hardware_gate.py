@@ -6,7 +6,7 @@ Modal A100 (sm 8.0) — the gate's PASS-on-A100 assumption is validated there.
 """
 from __future__ import annotations
 
-from reflex.kernels._hardware_gate import (
+from tether.kernels._hardware_gate import (
     is_fast_kernels_hardware_compatible,
     supported_compute_capabilities,
 )

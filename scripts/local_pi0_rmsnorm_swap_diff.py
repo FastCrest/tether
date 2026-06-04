@@ -9,7 +9,7 @@ Critical: pi0 uses GemmaRMSNorm (PaliGemma backbone) with (1+weight)
 parameterization. A naive Llama-style swap produces wrong output. This
 script uses `swap_rmsnorm_variants` which dispatches correctly.
 
-Fast local iteration. Does NOT need Modal. Requires `pip install 'reflex-vla[native]'`.
+Fast local iteration. Does NOT need Modal. Requires `pip install 'tether[native]'`.
 """
 import sys
 import types
@@ -58,7 +58,7 @@ def build_dummy_inputs(policy, device):
 
 def main():
     from lerobot.policies.pi0.modeling_pi0 import PI0Policy
-    from reflex.decompose import swap_rmsnorm_variants
+    from tether.decompose import swap_rmsnorm_variants
 
     model_id = "lerobot/pi0_base"
     device = "cpu"  # CPU is fine for a numerical parity check; slow but deterministic

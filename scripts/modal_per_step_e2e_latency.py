@@ -41,7 +41,7 @@ from pathlib import Path
 
 import modal
 
-app = modal.App("reflex-per-step-e2e-latency")
+app = modal.App("tether-per-step-e2e-latency")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -87,16 +87,16 @@ image = (
     )
     .add_local_dir(
         os.path.join(REPO_ROOT, "src"),
-        remote_path="/root/reflex-vla/src",
+        remote_path="/root/tether-vla/src",
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
-    .add_local_file(os.path.join(REPO_ROOT, "pyproject.toml"), remote_path="/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file(os.path.join(REPO_ROOT, "README.md"), remote_path="/root/reflex-vla/README.md", copy=True)
-    .add_local_file(os.path.join(REPO_ROOT, "LICENSE"), remote_path="/root/reflex-vla/LICENSE", copy=True)
+    .add_local_file(os.path.join(REPO_ROOT, "pyproject.toml"), remote_path="/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file(os.path.join(REPO_ROOT, "README.md"), remote_path="/root/tether-vla/README.md", copy=True)
+    .add_local_file(os.path.join(REPO_ROOT, "LICENSE"), remote_path="/root/tether-vla/LICENSE", copy=True)
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        'pip install -e "/root/reflex-vla[monolithic]"',
+        'pip install -e "/root/tether-vla[monolithic]"',
     )
     .env({
         "HF_HOME": HF_CACHE,
@@ -123,7 +123,7 @@ def bench_one(export_dir: str, label: str) -> dict:
     import time
     import numpy as np
 
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger(__name__)

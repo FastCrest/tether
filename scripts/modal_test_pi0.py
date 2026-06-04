@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-pi0-test")
+app = modal.App("tether-pi0-test")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -20,10 +20,10 @@ image = (
         "onnxscript", "numpy", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -47,7 +47,7 @@ def run_pi0_export():
     print("=== Step 1: Load pi0 checkpoint & detect ===", flush=True)
     start = time.time()
     try:
-        from reflex.checkpoint import load_checkpoint, detect_model_type
+        from tether.checkpoint import load_checkpoint, detect_model_type
         state_dict, _ = load_checkpoint("lerobot/pi0_base")
         model_type = detect_model_type(state_dict)
         total_params = sum(v.numel() for v in state_dict.values())
@@ -71,7 +71,7 @@ def run_pi0_export():
     print("\n=== Step 2: Build pi0 expert stack ===", flush=True)
     start = time.time()
     try:
-        from reflex.exporters.pi0 import build_pi0_expert_stack
+        from tether.exporters.pi0 import build_pi0_expert_stack
         expert_stack, meta = build_pi0_expert_stack(state_dict, head_dim=128)
         elapsed = time.time() - start
         log("build_expert", "pass",
@@ -84,12 +84,12 @@ def run_pi0_export():
         log("build_expert", "fail", f"{str(e)[:200]} {traceback.format_exc()[:500]}")
         return results
 
-    # Step 3: Run reflex export CLI
-    print("\n=== Step 3: reflex export lerobot/pi0_base ===", flush=True)
+    # Step 3: Run tether export CLI
+    print("\n=== Step 3: tether export lerobot/pi0_base ===", flush=True)
     del state_dict  # free memory
     start = time.time()
     r = subprocess.run([
-        "reflex", "export", "lerobot/pi0_base",
+        "tether", "export", "lerobot/pi0_base",
         "--target", "desktop",
         "--output", export_dir,
     ], capture_output=True, text=True, timeout=600)
@@ -106,7 +106,7 @@ def run_pi0_export():
     # Step 4: Verify ONNX validation passed
     print("\n=== Step 4: Verify ONNX ===", flush=True)
     import json
-    config_path = os.path.join(export_dir, "reflex_config.json")
+    config_path = os.path.join(export_dir, "tether_config.json")
     if os.path.exists(config_path):
         with open(config_path) as f:
             config = json.load(f)
@@ -116,7 +116,7 @@ def run_pi0_export():
             f"action_dim={expert.get('action_dim')}, "
             f"num_layers={expert.get('num_layers')}")
     else:
-        log("verify", "fail", "No reflex_config.json")
+        log("verify", "fail", "No tether_config.json")
 
     # Summary
     print("\n=== SUMMARY ===", flush=True)

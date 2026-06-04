@@ -13,7 +13,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-fp16-snapflow-student")
+app = modal.App("tether-fp16-snapflow-student")
 
 
 def _hf_secret():
@@ -48,7 +48,7 @@ _BUST = _build_bust()
 onnx_output = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=True)
 ONNX_OUT = "/onnx_out"
 
-# Lighter image — just ONNX tooling + reflex-vla for convert_fp32_to_fp16.
+# Lighter image — just ONNX tooling + tether-vla for convert_fp32_to_fp16.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
@@ -60,7 +60,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -92,8 +92,8 @@ def fp16_modal(fp32_dir: str, fp16_dir: str, seed: int = 7):
     fp16_path = Path(fp16_dir) / "model.onnx"
     fp16_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ---- Step 1: convert FP32 → FP16 via reflex.exporters.fp16_convert ----
-    from reflex.exporters.fp16_convert import convert_fp32_to_fp16
+    # ---- Step 1: convert FP32 → FP16 via tether.exporters.fp16_convert ----
+    from tether.exporters.fp16_convert import convert_fp32_to_fp16
     log.info("converting %s → %s", fp32_path, fp16_path)
     summary = convert_fp32_to_fp16(
         fp32_onnx_path=fp32_path,
@@ -163,7 +163,7 @@ def fp16_modal(fp32_dir: str, fp16_dir: str, seed: int = 7):
         actions_fp16_f32 = actions_fp16
 
     # ---- Step 5: parity ----
-    from reflex.exporters.fp16_convert import parity_gate
+    from tether.exporters.fp16_convert import parity_gate
     assert actions_fp32.shape == actions_fp16_f32.shape
     diff = actions_fp32.astype(np.float64) - actions_fp16_f32.astype(np.float64)
     max_abs = float(np.abs(diff).max())

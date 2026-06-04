@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import types
 
-from reflex.runtime.tokenizers import load_export_tokenizer
+from tether.runtime.tokenizers import load_export_tokenizer
 
 
 class _FakeTokenizer:

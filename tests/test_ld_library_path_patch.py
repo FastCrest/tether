@@ -1,12 +1,12 @@
-"""Unit tests for reflex's LD_LIBRARY_PATH auto-patcher.
+"""Unit tests for tether's LD_LIBRARY_PATH auto-patcher.
 
 Per ADR 2026-04-29-ort-trt-ep-first-class-support.md: at module load,
-reflex prepends pip-installed nvidia/tensorrt lib dirs to LD_LIBRARY_PATH
+tether prepends pip-installed nvidia/tensorrt lib dirs to LD_LIBRARY_PATH
 so ORT-TRT EP can find libnvinfer.so.10 + CUDA libs. Tests verify:
 - Linux + paths exist → paths get prepended
 - Linux + no paths exist → no-op (no env var modification)
 - Linux + paths already in LD_LIBRARY_PATH → idempotent (don't double-add)
-- Linux + REFLEX_NO_LD_LIBRARY_PATH_PATCH=1 → opt-out respected
+- Linux + TETHER_NO_LD_LIBRARY_PATH_PATCH=1 → opt-out respected
 - macOS / Windows → no-op regardless of paths
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 # Re-import the patch helper directly (NOT the side-effect at module load).
 # This lets us test in isolation with mocked filesystem + env state.
-from reflex import _patch_ld_library_path
+from tether import _patch_ld_library_path
 
 
 def _run_with(env=None, exists_paths=None, platform="linux"):
@@ -90,11 +90,11 @@ def test_linux_idempotent_no_double_add():
 
 
 def test_opt_out_via_env_var():
-    """REFLEX_NO_LD_LIBRARY_PATH_PATCH=1 disables the patch entirely."""
+    """TETHER_NO_LD_LIBRARY_PATH_PATCH=1 disables the patch entirely."""
     py_lib = f"python{sys.version_info.major}.{sys.version_info.minor}"
     trt_path = f"{sys.prefix}/lib/{py_lib}/site-packages/tensorrt_libs"
     result = _run_with(
-        env={"REFLEX_NO_LD_LIBRARY_PATH_PATCH": "1"},
+        env={"TETHER_NO_LD_LIBRARY_PATH_PATCH": "1"},
         exists_paths=[trt_path],
         platform="linux",
     )

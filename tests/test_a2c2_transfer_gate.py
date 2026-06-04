@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from reflex.correction.transfer_gate import (
+from tether.correction.transfer_gate import (
     GateDecision,
     GateThresholds,
     compute_gate_report,

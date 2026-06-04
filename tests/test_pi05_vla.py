@@ -19,12 +19,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.base_vla import BaseVLA
-from reflex.models.heads import VLAHead
-from reflex.models.llm import LLMBackbone
-from reflex.models.vision import VisionBackbone
-from reflex.models.vlas.pi05 import Pi05VLA
-from reflex.registry.components import VLAS
+from tether.models.base_vla import BaseVLA
+from tether.models.heads import VLAHead
+from tether.models.llm import LLMBackbone
+from tether.models.vision import VisionBackbone
+from tether.models.vlas.pi05 import Pi05VLA
+from tether.registry.components import VLAS
 
 
 # ─── Registration + slot declarations ───────────────────────────────────

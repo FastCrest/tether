@@ -3,7 +3,7 @@
 OpenVLA stays a shim with the optimum-cli + bin-to-continuous postprocess
 flow. Spine never composes it. This test file pins S-4:
 
-- The exporter module lives at ``reflex.exporters.openvla`` (renamed from
+- The exporter module lives at ``tether.exporters.openvla`` (renamed from
   ``openvla_exporter`` in Day 8)
 - The exporter raises ``NotImplementedError`` with a hint pointing at
   the optimum-cli + decode_actions path
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.registry.components import VLAS
-from reflex.registry.data import REGISTRY
-from reflex.registry.models import ModelEntry
+from tether.registry.components import VLAS
+from tether.registry.data import REGISTRY
+from tether.registry.models import ModelEntry
 
 
 # ─── S-4: OpenVLA is not on the spine ──────────────────────────────────
@@ -69,15 +69,15 @@ def test_vla_type_marker_must_start_with_underscore():
 def test_openvla_module_at_new_path():
     """Day 8 renamed openvla_exporter.py → openvla.py. Verify the new
     import path resolves; the cli.py dispatch was updated to match."""
-    from reflex.exporters import openvla as openvla_module
+    from tether.exporters import openvla as openvla_module
     assert hasattr(openvla_module, "export_openvla")
 
 
 def test_export_openvla_raises_with_hint():
     """The shim's export_openvla raises NotImplementedError pointing
     at the optimum-cli + decode_actions path."""
-    from reflex.config import ExportConfig
-    from reflex.exporters.openvla import export_openvla
+    from tether.config import ExportConfig
+    from tether.exporters.openvla import export_openvla
 
     cfg = ExportConfig(
         model_id="openvla/openvla-7b",

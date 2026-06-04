@@ -1,4 +1,4 @@
-"""Phase I.1 verification: reflex serve now fails loudly on silent CPU fallback.
+"""Phase I.1 verification: tether serve now fails loudly on silent CPU fallback.
 
 Three scenarios tested:
   1. `onnxruntime-gpu` installed + CUDA 12 libs present + --device cuda → starts
@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-strict-providers-verify")
+app = modal.App("tether-strict-providers-verify")
 
 # GPU-capable image with correctly pinned CUDA 12 / cuDNN 9 stack
 image_gpu = (
@@ -28,10 +28,10 @@ image_gpu = (
         "typer", "rich", "pydantic>=2.0", "pyyaml",
         "fastapi", "uvicorn", "httpx",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 # CPU-only image — installs `onnxruntime` (NOT the -gpu variant). Used to
@@ -50,15 +50,15 @@ image_cpu = (
         "typer", "rich", "pydantic>=2.0", "pyyaml",
         "fastapi", "uvicorn", "httpx",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 
 def _make_fake_export(export_dir: str):
-    """Write a minimal reflex_config.json + empty ONNX to let serve try to start."""
+    """Write a minimal tether_config.json + empty ONNX to let serve try to start."""
     import json
     import os
 
@@ -87,7 +87,7 @@ def _make_fake_export(export_dir: str):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
     model.ir_version = 10
     onnx.save(model, f"{export_dir}/expert_stack.onnx")
-    with open(f"{export_dir}/reflex_config.json", "w") as f:
+    with open(f"{export_dir}/tether_config.json", "w") as f:
         json.dump({
             "model_type": "smolvla",
             "action_chunk_size": 50,
@@ -119,12 +119,12 @@ def _wait_for_health(port: int, timeout_s: int = 60) -> tuple[bool, str]:
 
 
 def _run_serve_with_health_check(port: int, extra_args: list[str], timeout_s: int = 60):
-    """Launch reflex serve, wait for /health, terminate cleanly. Returns dict."""
+    """Launch tether serve, wait for /health, terminate cleanly. Returns dict."""
     import subprocess
     import time
 
     proc = subprocess.Popen(
-        ["reflex", "serve", "/tmp/fake_export", "--port", str(port),
+        ["tether", "serve", "/tmp/fake_export", "--port", str(port),
          "--host", "127.0.0.1", *extra_args],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
@@ -202,7 +202,7 @@ def scenario_cpu_only_silent_fallback_blocked():
 
     # Default device=cuda should now exit with code 1 before even starting
     proc = subprocess.run(
-        ["reflex", "serve", "/tmp/fake_export", "--port", "9003",
+        ["tether", "serve", "/tmp/fake_export", "--port", "9003",
          "--host", "127.0.0.1"],  # default --device cuda
         capture_output=True, text=True, timeout=20,
     )
@@ -231,7 +231,7 @@ def scenario_cpu_only_with_no_strict_flag():
 
 @app.local_entrypoint()
 def main():
-    print("Phase I.1 verification — reflex serve strict provider mode\n")
+    print("Phase I.1 verification — tether serve strict provider mode\n")
     print("=" * 70)
 
     print("\n[1/4] GPU box + onnxruntime-gpu + --device cuda (should START)")

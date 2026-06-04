@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.bench import (
+from tether.bench import (
     BenchEnvironment,
     BenchReport,
     LatencyStats,
@@ -194,7 +194,7 @@ class TestBenchReport:
     def test_to_markdown_contains_methodology_section(self, tmp_path):
         r = BenchReport(stats=self._stats(), environment=self._env(tmp_path))
         md = r.to_markdown()
-        assert "# Reflex Bench Report" in md
+        assert "# Tether Bench Report" in md
         assert "Per-chunk latency" in md
         assert "Reproducibility envelope" in md
         assert "What this measures" in md
@@ -241,7 +241,7 @@ class TestBenchReport:
         out = tmp_path / "deep" / "nested" / "bench.md"
         r.write_markdown(out)
         assert out.exists()
-        assert "Reflex Bench Report" in out.read_text()
+        assert "Tether Bench Report" in out.read_text()
 
     def test_write_json_roundtrips(self, tmp_path):
         r = BenchReport(stats=self._stats(), environment=self._env(tmp_path))

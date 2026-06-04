@@ -1,4 +1,4 @@
-"""GPU parity CERT for `reflex verify`: native pi05 vs Triton export.
+"""GPU parity CERT for `tether verify`: native pi05 vs Triton export.
 
 The N=4 smoke (modal_verify_deepening_smoke.py) validated the gate MECHANICS and
 caught two bugs. This is the statistically meaningful verdict: does the Triton/bf16
@@ -7,8 +7,8 @@ the *fixed* episode-block MMD gate (PR #201) + embodied parity?
 
 N=30 episodes/arm × 1 task = the gate's design floor (>=30). Runs the ORIGINAL
 (native) and OPTIMIZED (Triton export of the same weights) arms via
-`reflex.verify.gather_paired_samples`, then the calibrated episode-block two-sample
-test + embodied parity. Installs reflex-vla from git @ local HEAD (must be pushed;
+`tether.verify.gather_paired_samples`, then the calibrated episode-block two-sample
+test + embodied parity. Installs tether-vla from git @ local HEAD (must be pushed;
 should be main with the #201 fix).
 
 This is a ~2-hour single-container run (native arm ~1 hr). It therefore sets a long
@@ -23,16 +23,16 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-verify-parity-cert")
+app = modal.App("tether-verify-parity-cert")
 
 # Persist raw per-episode actions/eef/success so future verdict-logic experiments
 # (conditioning, parity_pass thresholds) run OFFLINE on this data — no GPU re-run.
-# Retrieve: modal volume get reflex-verify-cert-data <file> .
-cert_data_vol = modal.Volume.from_name("reflex-verify-cert-data", create_if_missing=True)
+# Retrieve: modal volume get tether-verify-cert-data <file> .
+cert_data_vol = modal.Volume.from_name("tether-verify-cert-data", create_if_missing=True)
 
 
 def _repo_head_sha() -> str:
-    pin = os.environ.get("REFLEX_PIN_SHA", "").strip()
+    pin = os.environ.get("TETHER_PIN_SHA", "").strip()
     if pin:
         return pin
     try:
@@ -91,7 +91,7 @@ image = (
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -135,12 +135,12 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
 
     threading.Thread(target=_hb, daemon=True).start()
 
-    from reflex.verify import (
+    from tether.verify import (
         _collect_eef_and_steps,
         _collect_paired_succeeded_step_actions,
         gather_paired_samples,
     )
-    from reflex.verify_metrics import aggregate_embodied, two_sample_test
+    from tether.verify_metrics import aggregate_embodied, two_sample_test
 
     orig, opt = gather_paired_samples(
         optimized_ref=model_id,
@@ -263,7 +263,7 @@ def cert(model_id: str, n_episodes: int, task_idx: int) -> dict:
         "embodied": emb,
         "candidate_not_worse": candidate_not_worse,
         "parity_pass": verdict_pass,
-        "raw_results_volume": "reflex-verify-cert-data",
+        "raw_results_volume": "tether-verify-cert-data",
         "raw_results_path": raw_path,
     }
     # Persist the VERDICT to the Volume — this is how we recover the result when
@@ -288,8 +288,8 @@ def main(n_episodes: int = 30, task_idx: int = 0,
     # killed 3 prior --detach runs — --detach keeps the app alive but the blocking
     # .remote() input dies with the client). Fire-and-exit; the verdict is written
     # to the Volume. Recover with:
-    #   modal volume get reflex-verify-cert-data cert_verdict_n<N>_task<T>.json -
+    #   modal volume get tether-verify-cert-data cert_verdict_n<N>_task<T>.json -
     call = cert.spawn(model_id, n_episodes, task_idx)
     print(f"SPAWNED call_id={call.object_id}")
-    print(f"verdict will land at Volume reflex-verify-cert-data:/"
+    print(f"verdict will land at Volume tether-verify-cert-data:/"
           f"cert_verdict_n{n_episodes}_task{task_idx}.json (~70 min)")

@@ -1,4 +1,4 @@
-"""Tests for free-tier telemetry in src/reflex/pro/telemetry.py."""
+"""Tests for free-tier telemetry in src/tether/pro/telemetry.py."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from reflex.pro.telemetry import (
+from tether.pro.telemetry import (
     HEARTBEAT_SCHEMA_VERSION,
     FreeHeartbeatPayload,
     build_free_payload,
@@ -25,7 +25,7 @@ from reflex.pro.telemetry import (
 def test_free_payload_fields():
     """Free-tier payload has all required fields with correct defaults."""
     payload = build_free_payload(
-        reflex_version="0.8.0",
+        tether_version="0.8.0",
         model_name="pi0.5",
         hardware_detail="A100",
     )
@@ -35,7 +35,7 @@ def test_free_payload_fields():
     assert len(payload.org_hash) == 16
     assert payload.model_name == "pi0.5"
     assert payload.hardware_detail == "A100"
-    assert payload.reflex_version == "0.8.0"
+    assert payload.tether_version == "0.8.0"
     assert payload.error_count_24h == 0
     assert payload.episode_count_24h == 0
 
@@ -45,7 +45,7 @@ def test_free_payload_fields():
 def test_free_payload_serialization():
     """Free payload serializes to dict and back cleanly."""
     payload = build_free_payload(
-        reflex_version="0.8.0",
+        tether_version="0.8.0",
         latency_p50=0.05,
         latency_p95=0.12,
         latency_p99=0.25,
@@ -70,12 +70,12 @@ def test_free_payload_serialization():
     assert restored["license_id"] == "free"
 
 
-# ── Test 3: REFLEX_NO_TELEMETRY disables free telemetry ───────────────
+# ── Test 3: TETHER_NO_TELEMETRY disables free telemetry ───────────────
 
 def test_reflex_no_telemetry_disables_free(tmp_path):
-    """REFLEX_NO_TELEMETRY=1 prevents free telemetry from firing."""
-    with patch.dict(os.environ, {"REFLEX_NO_TELEMETRY": "1"}):
-        result = emit_free(reflex_version="0.8.0")
+    """TETHER_NO_TELEMETRY=1 prevents free telemetry from firing."""
+    with patch.dict(os.environ, {"TETHER_NO_TELEMETRY": "1"}):
+        result = emit_free(tether_version="0.8.0")
         assert result is False
 
 
@@ -89,7 +89,7 @@ def test_onboarding_opt_out_disables(tmp_path):
         "completed_at": "2026-05-04T12:00:00Z",
     }))
 
-    with patch("reflex.pro.telemetry.Path") as mock_path_cls:
+    with patch("tether.pro.telemetry.Path") as mock_path_cls:
         # Make the expanduser resolve to our tmp file
         mock_path_instance = MagicMock()
         mock_path_instance.expanduser.return_value = onboarding_path
@@ -98,10 +98,10 @@ def test_onboarding_opt_out_disables(tmp_path):
 
         # Directly test the helper
         result = _is_telemetry_enabled_by_onboarding()
-        # The function uses its own Path("~/.reflex/onboarding.json"),
+        # The function uses its own Path("~/.tether/onboarding.json"),
         # so we test via env var instead
-    with patch.dict(os.environ, {"REFLEX_NO_TELEMETRY": "1"}):
-        assert emit_free(reflex_version="0.8.0") is False
+    with patch.dict(os.environ, {"TETHER_NO_TELEMETRY": "1"}):
+        assert emit_free(tether_version="0.8.0") is False
 
 
 # ── Test 5: org_hash is deterministic and 16 chars ────────────────────
@@ -123,11 +123,11 @@ def test_cache_prevents_repeated_emission(tmp_path):
     cache_file = tmp_path / ".free_telemetry_cache"
     cache_file.write_text(json.dumps({"checked_at": time.time()}))
 
-    with patch("reflex.pro.telemetry._free_cache_path", return_value=cache_file):
+    with patch("tether.pro.telemetry._free_cache_path", return_value=cache_file):
         with patch.dict(os.environ, {}, clear=False):
-            # Remove REFLEX_NO_TELEMETRY if set
+            # Remove TETHER_NO_TELEMETRY if set
             env = dict(os.environ)
-            env.pop("REFLEX_NO_TELEMETRY", None)
+            env.pop("TETHER_NO_TELEMETRY", None)
             with patch.dict(os.environ, env, clear=True):
-                result = emit_free(reflex_version="0.8.0")
+                result = emit_free(tether_version="0.8.0")
                 assert result is False  # cache is fresh

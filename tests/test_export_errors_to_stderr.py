@@ -1,6 +1,6 @@
-"""Tests for the 2026-05-22 `reflex export` stderr-routing fix.
+"""Tests for the 2026-05-22 `tether export` stderr-routing fix.
 
-Discovered during Day 7 Modal validation: `reflex export gr00t` failed
+Discovered during Day 7 Modal validation: `tether export gr00t` failed
 with empty stderr because all CLI error paths used `console.print` (rich,
 defaults to stdout). Subprocess wrappers logging only `r.stderr` saw the
 non-zero exit but no message. Cause: `_require_monolithic_deps()` in
@@ -10,11 +10,11 @@ aren't installed, and the export() command's catch block printed via
 
 Fix: `err_console = Console(stderr=True)` added to `cli.py`; error paths
 in the `export()` command route through it. Subprocess wrappers calling
-`reflex export` now see error detail in `r.stderr`.
+`tether export` now see error detail in `r.stderr`.
 
 This test pins:
-1. `err_console` is defined in `reflex.cli` and writes to stderr.
-2. `reflex export` with `--monolithic` on a system missing `[monolithic]`
+1. `err_console` is defined in `tether.cli` and writes to stderr.
+2. `tether export` with `--monolithic` on a system missing `[monolithic]`
    deps emits the failure message to stderr (not stdout).
 3. The matching diagnostic improvement in modal_test_gr00t.py logs BOTH
    stderr + stdout on subprocess failure.
@@ -28,20 +28,20 @@ import pytest
 
 def test_err_console_defined_and_writes_to_stderr():
     """`err_console` exists in cli.py and is a rich.Console with stderr=True."""
-    from reflex.cli import err_console
+    from tether.cli import err_console
     # The Console object exposes its target file; check it's stderr.
     # rich.Console stores the file as `file` attribute when constructed.
     assert err_console.file is sys.stderr
 
 
 def test_cli_export_routes_errors_to_stderr_via_err_console():
-    """Sanity: `reflex.cli.export` uses err_console for its error branches.
+    """Sanity: `tether.cli.export` uses err_console for its error branches.
 
     Inspects the source code so we don't need to fire a real export
     that requires GPU + 6GB of GR00T weights.
     """
     import inspect
-    import reflex.cli as cli_module
+    import tether.cli as cli_module
 
     src = inspect.getsource(cli_module)
 
@@ -70,7 +70,7 @@ def test_no_stdout_error_paints_remain_in_cli():
     import re
     from pathlib import Path
 
-    cli_path = Path(__file__).parent.parent / "src" / "reflex" / "cli.py"
+    cli_path = Path(__file__).parent.parent / "src" / "tether" / "cli.py"
     src = cli_path.read_text()
 
     # Match `console.print(...)` (NOT `err_console.print(...)`) calls

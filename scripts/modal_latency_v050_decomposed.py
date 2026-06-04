@@ -26,7 +26,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-latency-v050-decomposed")
+app = modal.App("tether-latency-v050-decomposed")
 
 
 def _hf_secret():
@@ -78,7 +78,7 @@ image = (
     )
     .run_commands(
         f'echo "bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -122,11 +122,11 @@ def bench_per_stage(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("bench_per_stage")
 
-    # ---- Load reflex_config + locate both ONNX files ----
+    # ---- Load tether_config + locate both ONNX files ----
     export_dir = Path(decomposed_dir)
-    cfg_path = export_dir / "reflex_config.json"
+    cfg_path = export_dir / "tether_config.json"
     if not cfg_path.exists():
-        raise FileNotFoundError(f"reflex_config.json missing in {export_dir}")
+        raise FileNotFoundError(f"tether_config.json missing in {export_dir}")
     cfg = json.loads(cfg_path.read_text())
     if cfg.get("export_kind") != "decomposed":
         raise ValueError(f"export_kind={cfg.get('export_kind')!r}; need 'decomposed'")

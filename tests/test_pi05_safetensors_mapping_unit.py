@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import torch
 
-from reflex.models.vlas._pi05_safetensors_mapping import (
+from tether.models.vlas._pi05_safetensors_mapping import (
     expand_tied_pi05,
     pi05_safetensors_to_flat,
 )

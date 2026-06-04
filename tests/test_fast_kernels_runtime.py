@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from reflex.runtime.fast_inference.runtime import FastKernelsPolicyRuntime
+from tether.runtime.fast_inference.runtime import FastKernelsPolicyRuntime
 
 
 class _MockVLA:
@@ -35,7 +35,7 @@ def test_fallback_on_no_cuda():
     fallback_rt = MagicMock()
     fallback_factory = MagicMock(return_value=fallback_rt)
 
-    with patch("reflex.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
+    with patch("tether.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
                return_value=(False, "no CUDA")):
         rt = FastKernelsPolicyRuntime(_MockVLA(), fallback_factory=fallback_factory)
 
@@ -50,7 +50,7 @@ def test_fallback_on_shape_mismatch():
     vla.vision_backbone.model.vision_model.config.hidden_size = 768  # wrong
 
     fallback_rt = MagicMock()
-    with patch("reflex.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
+    with patch("tether.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
                return_value=(True, "")):
         rt = FastKernelsPolicyRuntime(vla, fallback_factory=MagicMock(return_value=fallback_rt))
 
@@ -60,9 +60,9 @@ def test_fallback_on_shape_mismatch():
 def test_fallback_on_triton_import():
     """Triton not installed → falls back."""
     fallback_rt = MagicMock()
-    with patch("reflex.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
+    with patch("tether.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
                return_value=(True, "")), \
-         patch("reflex.kernels._shape_whitelist.validate_shape_signature",
+         patch("tether.kernels._shape_whitelist.validate_shape_signature",
                return_value=(True, "")), \
          patch.dict("sys.modules", {"triton": None}):
         import builtins
@@ -83,7 +83,7 @@ def test_fallback_on_triton_import():
 
 def test_no_fallback_factory_raises():
     """No fallback factory + no CUDA → predict_action raises."""
-    with patch("reflex.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
+    with patch("tether.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
                return_value=(False, "test")):
         rt = FastKernelsPolicyRuntime(_MockVLA(), fallback_factory=None)
 
@@ -95,7 +95,7 @@ def test_no_fallback_factory_raises():
 
 
 def test_is_active_false_on_fallback():
-    with patch("reflex.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
+    with patch("tether.kernels._hardware_gate.is_fast_kernels_hardware_compatible",
                return_value=(False, "test")):
         rt = FastKernelsPolicyRuntime(_MockVLA(), fallback_factory=MagicMock())
     assert not rt.is_active
@@ -107,7 +107,7 @@ def test_is_active_false_on_fallback():
 def test_cli_fast_kernels_flag_exists():
     """The --fast-kernels flag is recognized by the CLI."""
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["serve", "--help"])
@@ -122,7 +122,7 @@ def test_cli_fast_kernels_rejects_with_policy_b():
     not our custom message. We just verify the combination is rejected (exit != 0).
     """
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, [

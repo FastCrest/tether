@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import modal
 
-app = modal.App("reflex-cuda-graphs-spike")
+app = modal.App("tether-cuda-graphs-spike")
 
 onnx_output = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=False)
 ONNX_OUT = "/onnx_out"

@@ -15,5 +15,5 @@ RUN pip install --no-cache-dir ".[serve,gpu]"
 EXPOSE 8000
 VOLUME ["/exports"]
 
-ENTRYPOINT ["reflex"]
+ENTRYPOINT ["tether"]
 CMD ["serve", "/exports", "--host", "0.0.0.0", "--port", "8000"]

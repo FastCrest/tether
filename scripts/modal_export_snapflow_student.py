@@ -1,4 +1,4 @@
-"""Modal: export a reflex-saved SnapFlow student checkpoint to monolithic ONNX.
+"""Modal: export a tether-saved SnapFlow student checkpoint to monolithic ONNX.
 
 Pulls a distill-run output from the ``pi0-onnx-outputs`` volume (the same
 volume the distill writes into), runs ``export_snapflow_student_monolithic``,
@@ -13,7 +13,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-snapflow-export")
+app = modal.App("tether-snapflow-export")
 
 
 def _hf_secret():
@@ -70,7 +70,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -94,7 +94,7 @@ def export_modal(checkpoint: str, output_subdir: str):
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    from reflex.exporters.monolithic import export_snapflow_student_monolithic
+    from tether.exporters.monolithic import export_snapflow_student_monolithic
 
     ckpt_path = Path(checkpoint)
     if not ckpt_path.exists():

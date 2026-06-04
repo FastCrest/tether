@@ -1,4 +1,4 @@
-"""Tests for src/reflex/kernels/a2c2_correction.py — Phase B.5 Day 1 invariants.
+"""Tests for src/tether/kernels/a2c2_correction.py — Phase B.5 Day 1 invariants.
 
 Per a2c2-correction execution plan acceptance criteria:
 - size: ≤ 150 KB total weights (paper says ~100 KB; 50% margin)
@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from reflex.kernels.a2c2_correction import (
+from tether.kernels.a2c2_correction import (
     A2C2Config,
     A2C2Head,
     positional_encoding,
@@ -300,7 +300,7 @@ def test_forward_output_bounded_to_saturation_scale():
     """Phase 1 fix: head output must lie in [-3, 3] (OUTPUT_SATURATION_SCALE).
     Catches the magnitude-7 catastrophe the 2026-04-26 N=50 LIBERO run hit
     if a future change accidentally bypasses the tanh saturation."""
-    from reflex.kernels.a2c2_correction import OUTPUT_SATURATION_SCALE
+    from tether.kernels.a2c2_correction import OUTPUT_SATURATION_SCALE
 
     rng = np.random.default_rng(0)
     head = A2C2Head.random_init(seed=42)

@@ -1,12 +1,12 @@
-"""Verify `reflex bench` works for all 4 supported VLAs with auto-TRT FP16.
+"""Verify `tether bench` works for all 4 supported VLAs with auto-TRT FP16.
 
 The smolvla install-path test confirmed auto-TRT works for that model. This
 script extends to pi0, pi0.5, gr00t — bigger models with longer engine builds
 that are more likely to surface edge cases.
 
 For each model:
-  reflex export <hf_id> --target desktop
-  reflex bench <export_dir> --iterations 50 --warmup 10
+  tether export <hf_id> --target desktop
+  tether bench <export_dir> --iterations 50 --warmup 10
 Capture inference_mode and per-chunk latency from the bench output.
 
 Usage:
@@ -18,7 +18,7 @@ Usage:
 import modal
 from pathlib import Path
 
-app = modal.App("reflex-bench-all-verify")
+app = modal.App("tether-bench-all-verify")
 
 image = (
     modal.Image.from_registry(
@@ -31,7 +31,7 @@ image = (
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 local_image = image.add_local_dir(
     _REPO_ROOT,
-    "/workspace/reflex-vla",
+    "/workspace/tether-vla",
     copy=True,
     ignore=[
         ".git",
@@ -134,7 +134,7 @@ def _run_all_impl(
     gpu_label: str = "A10G",
     models_csv: str = "",
     export_timeout: int = 1800,
-    artifact_dir: str = "/tmp/reflex_bench_artifacts",
+    artifact_dir: str = "/tmp/tether_bench_artifacts",
     source: str = "git",
 ):
     import os
@@ -143,7 +143,7 @@ def _run_all_impl(
     import time
     from pathlib import Path
 
-    # Install reflex. "git" validates the public install path; "local" validates
+    # Install tether. "git" validates the public install path; "local" validates
     # the exact dirty worktree mounted into the Modal image.
     source_norm = source.lower()
     # This script runs on NVIDIA's TensorRT NGC image, so libnvinfer is already
@@ -152,12 +152,12 @@ def _run_all_impl(
     extras = "serve,gpu-min,monolithic"
     install_cmd = [
         "pip", "install",
-        f"reflex-vla[{extras}] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla",
+        f"tether-vla[{extras}] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla",
     ]
     if source_norm == "local":
-        install_cmd = ["pip", "install", "-e", f"/workspace/reflex-vla[{extras}]"]
+        install_cmd = ["pip", "install", "-e", f"/workspace/tether-vla[{extras}]"]
     print(
-        f"=== Installing reflex-vla[{extras}] from {source_norm} ===",
+        f"=== Installing tether-vla[{extras}] from {source_norm} ===",
         flush=True,
     )
     r = _run_streamed(
@@ -193,7 +193,7 @@ def _run_all_impl(
         # Export
         t0 = time.time()
         r = _run_streamed(
-            ["reflex", "export", hf_id, "--target", "desktop", "--output", export_dir],
+            ["tether", "export", hf_id, "--target", "desktop", "--output", export_dir],
             timeout=export_timeout,
         )
         export_s = time.time() - t0
@@ -214,7 +214,7 @@ def _run_all_impl(
         report_json = str(Path(artifact_dir) / f"{tag}_{gpu_label.lower()}_bench.json")
         report_md = str(Path(artifact_dir) / f"{tag}_{gpu_label.lower()}_bench.md")
         r = _run_streamed(
-            ["reflex", "bench", export_dir, "--iterations", "50", "--warmup", "10",
+            ["tether", "bench", export_dir, "--iterations", "50", "--warmup", "10",
              "--device", "cuda", "--report-json", report_json, "--report", report_md],
             timeout=900,
         )
@@ -289,7 +289,7 @@ def _run_all_impl(
         _run_streamed(["rm", "-rf", export_dir], timeout=60)
 
     print(f"\n{'='*80}", flush=True)
-    print(f"VERDICT — `reflex bench` on {gpu_label}", flush=True)
+    print(f"VERDICT — `tether bench` on {gpu_label}", flush=True)
     print(f"{'='*80}", flush=True)
     print(f"{'Model':<10} {'mean_ms':>10} {'p95_ms':>10} {'provider':>16} {'mode':>20} {'export_s':>10}", flush=True)
     for tag, r in results.items():
@@ -310,7 +310,7 @@ def _run_all_impl(
 
 
 @app.function(image=image, gpu="A10G", timeout=7200)
-def run_all_a10g(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/reflex_bench_artifacts"):
+def run_all_a10g(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/tether_bench_artifacts"):
     return _run_all_impl(
         gpu_label="A10G",
         models_csv=models_csv,
@@ -321,7 +321,7 @@ def run_all_a10g(models_csv: str = "", export_timeout: int = 1800, artifact_dir:
 
 
 @app.function(image=image, gpu="L40S", timeout=7200)
-def run_all_l40s(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/reflex_bench_artifacts"):
+def run_all_l40s(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/tether_bench_artifacts"):
     return _run_all_impl(
         gpu_label="L40S",
         models_csv=models_csv,
@@ -332,7 +332,7 @@ def run_all_l40s(models_csv: str = "", export_timeout: int = 1800, artifact_dir:
 
 
 @app.function(image=local_image, gpu="A10G", timeout=7200)
-def run_all_a10g_local(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/reflex_bench_artifacts"):
+def run_all_a10g_local(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/tether_bench_artifacts"):
     return _run_all_impl(
         gpu_label="A10G",
         models_csv=models_csv,
@@ -343,7 +343,7 @@ def run_all_a10g_local(models_csv: str = "", export_timeout: int = 1800, artifac
 
 
 @app.function(image=local_image, gpu="L40S", timeout=7200)
-def run_all_l40s_local(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/reflex_bench_artifacts"):
+def run_all_l40s_local(models_csv: str = "", export_timeout: int = 1800, artifact_dir: str = "/tmp/tether_bench_artifacts"):
     return _run_all_impl(
         gpu_label="L40S",
         models_csv=models_csv,
@@ -358,7 +358,7 @@ def main(
     gpu: str = "A10G",
     models: str = "",
     export_timeout: int = 1800,
-    artifact_dir: str = "/tmp/reflex_bench_artifacts",
+    artifact_dir: str = "/tmp/tether_bench_artifacts",
     source: str = "git",
     spawn_only: bool = False,
 ):
@@ -366,7 +366,7 @@ def main(
 
     gpu_norm = gpu.upper()
     source_norm = source.lower()
-    print(f"Verifying `reflex bench` works on {gpu_norm} (auto-TRT, source={source_norm})\n")
+    print(f"Verifying `tether bench` works on {gpu_norm} (auto-TRT, source={source_norm})\n")
     if gpu_norm == "A10G" and source_norm == "git":
         fn = run_all_a10g
     elif gpu_norm == "L40S" and source_norm == "git":
@@ -398,7 +398,7 @@ def main(
         }
         print("\n=== SPAWNED ===")
         print(json.dumps(payload, indent=2, default=str))
-        print("\nUse `modal app logs reflex-bench-all-verify -f` to stream remote logs.")
+        print("\nUse `modal app logs tether-bench-all-verify -f` to stream remote logs.")
         print("Use `modal.FunctionCall.from_id(<id>).get()` to fetch the result later.")
         return
 

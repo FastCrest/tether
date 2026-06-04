@@ -1,7 +1,7 @@
 """Lift #5 L3 side-by-side — native lerobot vs Triton on the SAME proven loop.
 
 Quality-parity gate for the `--fast-kernels` Triton path. Runs BOTH arms through
-`reflex.eval.libero_rollout.run_libero_rollout` — the exact primitive the proven
+`tether.eval.libero_rollout.run_libero_rollout` — the exact primitive the proven
 native eval (`modal_libero_lerobot_native.py`, 80%+ on libero_10 task 0 at N=20)
 uses — so the ONLY thing that differs between arms is the inference backend:
 
@@ -37,7 +37,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-fast-kernels-l3-side-by-side")
+app = modal.App("tether-fast-kernels-l3-side-by-side")
 
 # Durable result store. orchestrate() writes the gate's verdict here SERVER-SIDE,
 # so the outcome survives ANY local-client state — clamshell sleep, network blip,
@@ -46,15 +46,15 @@ app = modal.App("reflex-fast-kernels-l3-side-by-side")
 # fix for the 2026-05-29 double death, where the gather ran client-side and a
 # slept laptop lost the result mid-flight. See "Real fix" §2 in
 # 03_experiments/2026-05-29-l3-gate-detached-refire.md.
-RESULTS_VOL = modal.Volume.from_name("reflex-l3-gate-results", create_if_missing=True)
+RESULTS_VOL = modal.Volume.from_name("tether-l3-gate-results", create_if_missing=True)
 RESULTS_DIR = "/results"
 
 
 def _repo_head_sha() -> str:
-    # REFLEX_PIN_SHA lets the monthly launchd runner pin origin/main explicitly,
+    # TETHER_PIN_SHA lets the monthly launchd runner pin origin/main explicitly,
     # so the gate always tests SHIPPED code regardless of the working-tree branch
     # (and without clobbering it). Unset → local HEAD, today's dev behavior.
-    pin = os.environ.get("REFLEX_PIN_SHA", "").strip()
+    pin = os.environ.get("TETHER_PIN_SHA", "").strip()
     if pin:
         return pin
     try:
@@ -114,7 +114,7 @@ image = (
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -182,7 +182,7 @@ def _run_one_arm(
     print(f"[arm:{arm}] CUDA: {torch.cuda.get_device_name(0)}", flush=True)
     t0 = time.time()
 
-    from reflex.eval.libero_rollout import run_libero_rollout
+    from tether.eval.libero_rollout import run_libero_rollout
 
     # ── Load policy (fp32 cuda — native baseline quality + shared preprocessing)
     from lerobot.policies.pi05.modeling_pi05 import PI05Policy
@@ -230,7 +230,7 @@ def _run_one_arm(
         )
     elif arm == "triton":
         print(f"\n[arm:{arm}] Triton fast-kernels (Pi05FastKernelsInference)", flush=True)
-        from reflex.runtime.fast_inference.libero_adapter import TritonLIBEROAdapter
+        from tether.runtime.fast_inference.libero_adapter import TritonLIBEROAdapter
         adapter = TritonLIBEROAdapter.from_policy(policy, capture=True)
         res = run_libero_rollout(
             inference=adapter, use_native=False, label="TRITON", **common,
@@ -574,7 +574,7 @@ def main(
     Default = the monthly gate: N=100/task × tasks {0,1,2} × {native,triton} = 6
     cells. By default the gather runs SERVER-SIDE (--server-gather): the entrypoint
     spawns an `orchestrate` function that fans out the cells, gathers them INSIDE
-    Modal, computes the verdict, and persists it to the `reflex-l3-gate-results`
+    Modal, computes the verdict, and persists it to the `tether-l3-gate-results`
     Volume. The client then only polls that Volume — so a slept/disconnected laptop
     can no longer lose a multi-hour run (the 2026-05-29 double-death fix).
 
@@ -669,7 +669,7 @@ def main(
 
         print(
             f"[gate] SERVER-GATHER: spawning orchestrate(run_tag={run_tag}) — "
-            f"gather runs inside Modal, verdict persists to Volume reflex-l3-gate-results.",
+            f"gather runs inside Modal, verdict persists to Volume tether-l3-gate-results.",
             flush=True,
         )
         orchestrate.spawn(
@@ -684,7 +684,7 @@ def main(
         print(
             f"[gate] recover later if needed: "
             f"modal run {SCRIPT_REL} --poll {run_tag}  |  "
-            f"modal volume get reflex-l3-gate-results {run_tag}.json <out>",
+            f"modal volume get tether-l3-gate-results {run_tag}.json <out>",
             flush=True,
         )
 

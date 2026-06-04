@@ -37,8 +37,8 @@ echo "[verify-embodiment-structure] checking Python imports..."
 PYTHON="${PYTHON:-python3}"
 PYTHONPATH="${PYTHONPATH:-src}" "$PYTHON" - <<'PY'
 import sys
-from reflex.embodiments import EmbodimentConfig, list_presets
-from reflex.embodiments.validate import validate_embodiment_config
+from tether.embodiments import EmbodimentConfig, list_presets
+from tether.embodiments.validate import validate_embodiment_config
 
 presets = list_presets()
 expected = ["franka", "so100", "ur5"]

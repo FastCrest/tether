@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/eval_gate.py — Phase 1 self-distilling-serve Day 5-6.
+"""Tests for src/tether/pro/eval_gate.py — Phase 1 self-distilling-serve Day 5-6.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture decision #3:
 9-gate methodology, 3 SAFETY non-overridable + 6 PERFORMANCE with
@@ -11,7 +11,7 @@ import math
 
 import pytest
 
-from reflex.pro.eval_gate import (
+from tether.pro.eval_gate import (
     ALL_GATE_IDS,
     GATE_IDS_PERFORMANCE,
     GATE_IDS_SAFETY,

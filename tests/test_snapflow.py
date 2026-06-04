@@ -19,8 +19,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from reflex.distill import get_method
-from reflex.distill.snapflow import (
+from tether.distill import get_method
+from tether.distill.snapflow import (
     DEFAULT_CONSISTENCY_ALPHA,
     SnapFlowLosses,
     ZeroInitTargetTimeEmbedding,

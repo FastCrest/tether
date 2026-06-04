@@ -1,4 +1,4 @@
-"""Tests for src/reflex/verify.py — the `reflex verify` action-parity gate (v0).
+"""Tests for src/tether/verify.py — the `tether verify` action-parity gate (v0).
 
 NO GPU / NO Modal / NO network. The model-loading + simulation seam
 (`gather_paired_samples`) is mocked: tests inject a synthetic ``gather_fn`` that
@@ -18,13 +18,13 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from reflex.verify import (
+from tether.verify import (
     ParityVerdict,
     SUPPORTED_SUITES,
     _rollout_results_to_samples,
     run_verify,
 )
-from reflex.pro.eval_gate import EvalReport, InsufficientEpisodes
+from tether.pro.eval_gate import EvalReport, InsufficientEpisodes
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ def test_supported_suites_is_libero():
 
 
 def test_parity_report_renders_verdict():
-    from reflex.parity_report import render_parity_report
+    from tether.parity_report import render_parity_report
 
     same = _all_success()
     gather = _make_gather_fn(
@@ -261,23 +261,23 @@ def test_parity_report_renders_verdict():
         num_episodes=_EPS, gather_fn=gather,
     )
     md = render_parity_report(verdict)
-    assert "# Reflex Action-Parity Verification" in md
+    assert "# Tether Action-Parity Verification" in md
     assert "**Verdict: PASS**" in md
     assert "Gate detail" in md
-    assert "TODO(reflex-verify)" in md  # the v0-scope disclosure
+    assert "TODO(tether-verify)" in md  # the v0-scope disclosure
     # Every gate id should appear in the detail table.
     for g in verdict.eval_report.all_gates:
         assert g.gate_id in md
 
 
 def test_parity_cert_writes_json_and_optional_signature(tmp_path):
-    from reflex.parity_cert import (
+    from tether.parity_cert import (
         SCHEMA_VERSION,
         build_parity_cert,
         verify_parity_cert_signature,
         write_parity_cert,
     )
-    from reflex.parity_report import write_parity_report
+    from tether.parity_report import write_parity_report
 
     same = _all_success()
     verdict = run_verify(
@@ -322,8 +322,8 @@ def test_parity_cert_writes_json_and_optional_signature(tmp_path):
 
 def test_cli_verify_pass(monkeypatch):
     typer_testing = pytest.importorskip("typer.testing")
-    from reflex.cli import app
-    import reflex.verify as verify_mod
+    from tether.cli import app
+    import tether.verify as verify_mod
 
     same = _all_success()
     gather = _make_gather_fn(
@@ -356,9 +356,9 @@ def test_cli_verify_pass(monkeypatch):
 
 def test_cli_verify_writes_signed_parity_cert(monkeypatch, tmp_path):
     typer_testing = pytest.importorskip("typer.testing")
-    from reflex.cli import app
-    import reflex.verify as verify_mod
-    from reflex.parity_cert import verify_parity_cert_signature
+    from tether.cli import app
+    import tether.verify as verify_mod
+    from tether.parity_cert import verify_parity_cert_signature
 
     same = _all_success()
     monkeypatch.setattr(
@@ -370,7 +370,7 @@ def test_cli_verify_writes_signed_parity_cert(monkeypatch, tmp_path):
         ),
     )
     seed = Ed25519PrivateKey.generate().private_bytes_raw()
-    monkeypatch.setenv("REFLEX_TEST_SIGNING_KEY", base64.b64encode(seed).decode("ascii"))
+    monkeypatch.setenv("TETHER_TEST_SIGNING_KEY", base64.b64encode(seed).decode("ascii"))
     out = tmp_path / "verify"
 
     runner = typer_testing.CliRunner()
@@ -386,7 +386,7 @@ def test_cli_verify_writes_signed_parity_cert(monkeypatch, tmp_path):
             "--output",
             str(out),
             "--signing-key",
-            "env:REFLEX_TEST_SIGNING_KEY",
+            "env:TETHER_TEST_SIGNING_KEY",
             "--key-id",
             "test-key",
         ],
@@ -401,8 +401,8 @@ def test_cli_verify_writes_signed_parity_cert(monkeypatch, tmp_path):
 
 def test_cli_verify_fail(monkeypatch, tmp_path):
     typer_testing = pytest.importorskip("typer.testing")
-    from reflex.cli import app
-    import reflex.verify as verify_mod
+    from tether.cli import app
+    import tether.verify as verify_mod
 
     original = _all_success()
     optimized = dict(_all_success())
@@ -424,7 +424,7 @@ def test_cli_verify_fail(monkeypatch, tmp_path):
 
 def test_cli_verify_unsupported_suite(monkeypatch):
     typer_testing = pytest.importorskip("typer.testing")
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = typer_testing.CliRunner()
     result = runner.invoke(app, ["verify", "/fake/export", "--eval", "simpler"])

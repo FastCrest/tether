@@ -1,11 +1,11 @@
-"""Tests for src/reflex/bench/compare.py — the 6-gate A/B ship-rule helper."""
+"""Tests for src/tether/bench/compare.py — the 6-gate A/B ship-rule helper."""
 from __future__ import annotations
 
 import pytest
 
-from reflex.bench.compare import compare_reports, render_compare_markdown
-from reflex.bench.methodology import LatencyStats
-from reflex.bench.report import BenchEnvironment, BenchReport
+from tether.bench.compare import compare_reports, render_compare_markdown
+from tether.bench.methodology import LatencyStats
+from tether.bench.report import BenchEnvironment, BenchReport
 
 
 def _stats(
@@ -43,7 +43,7 @@ def _stats(
 def _env() -> BenchEnvironment:
     return BenchEnvironment(
         timestamp_utc="2026-04-24T00:00:00Z",
-        reflex_version="0.1.0",
+        tether_version="0.1.0",
         git_sha="abcd1234",
         git_dirty=False,
         python_version="3.12",

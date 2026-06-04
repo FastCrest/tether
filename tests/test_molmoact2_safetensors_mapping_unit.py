@@ -1,7 +1,7 @@
 """Unit tests for MolmoAct2 safetensors→flat-dict mapping."""
 from __future__ import annotations
 
-from reflex.models.vlas._molmoact2_safetensors_mapping import (
+from tether.models.vlas._molmoact2_safetensors_mapping import (
     molmoact2_safetensors_to_flat,
 )
 

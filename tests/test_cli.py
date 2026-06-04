@@ -2,8 +2,8 @@
 
 from typer.testing import CliRunner
 
-from reflex import __version__
-from reflex.cli import app
+from tether import __version__
+from tether.cli import app
 
 runner = CliRunner()
 
@@ -65,7 +65,7 @@ def test_export_mode_plumbed_to_pi05_decomposed(monkeypatch):
             "expert_denoise_mb": 2.0,
         }
 
-    import reflex.exporters.decomposed as decomposed
+    import tether.exporters.decomposed as decomposed
 
     monkeypatch.setattr(decomposed, "export_pi05_decomposed", fake_export_pi05_decomposed)
 
@@ -89,7 +89,7 @@ def test_export_mode_plumbed_to_pi05_decomposed(monkeypatch):
 
 
 def test_pi05_parallel_insufficient_vram_is_usage_error(monkeypatch):
-    import reflex.exporters._export_mode as export_mode
+    import tether.exporters._export_mode as export_mode
 
     monkeypatch.setattr(export_mode, "probe_free_vram", lambda: None)
 

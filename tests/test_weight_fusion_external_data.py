@@ -9,7 +9,7 @@ def test_save_onnx_externalizes_attribute_tensors(tmp_path, monkeypatch):
     onnx = pytest.importorskip("onnx")
     from onnx import helper
 
-    from reflex.exporters import weight_fusion
+    from tether.exporters import weight_fusion
 
     captured = {}
 
@@ -36,7 +36,7 @@ def test_inline_attribute_tensors_are_normalized_to_raw_data():
     onnx = pytest.importorskip("onnx")
     from onnx import TensorProto, helper
 
-    from reflex.exporters import weight_fusion
+    from tether.exporters import weight_fusion
 
     tensor = helper.make_tensor(
         "constant_weights",

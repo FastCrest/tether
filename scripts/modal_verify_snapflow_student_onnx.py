@@ -16,7 +16,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-verify-snapflow-onnx")
+app = modal.App("tether-verify-snapflow-onnx")
 
 
 def _hf_secret():
@@ -75,7 +75,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -117,7 +117,7 @@ def verify_modal(checkpoint: str, onnx_dir: str, seed: int = 7):
         raise FileNotFoundError(f"ONNX missing: {onnx_path}")
 
     log.info("loading PyTorch student via load_snapflow_student ...")
-    from reflex.distill.snapflow_pi0_model import load_snapflow_student
+    from tether.distill.snapflow_pi0_model import load_snapflow_student
     policy = load_snapflow_student(ckpt_path)
     policy.eval().to("cpu").to(torch.float32)
 

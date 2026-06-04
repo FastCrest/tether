@@ -10,7 +10,7 @@ Usage:
         --subdir finetune_smolvla_pusht_v10 \\
         --checkpoint-step 000200
 
-Reads from the same `pi0-onnx-outputs` volume where `reflex finetune`
+Reads from the same `pi0-onnx-outputs` volume where `tether finetune`
 writes. Uses shared seeded inputs matching the SmolVLA monolithic
 wrapper signature. Returns cos + max_abs + verdict.
 """
@@ -18,7 +18,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-finetune-parity")
+app = modal.App("tether-finetune-parity")
 
 
 def _hf_secret():
@@ -66,7 +66,7 @@ image = (
     )
     .run_commands(
         # GITHUB_TOKEN from modal secret `github-token` (repo now private).
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -113,7 +113,7 @@ def parity_modal(
 
     # reuse the monolithic export's patch stack so PyTorch and ONNX are
     # on identical code paths (eager attention, no DynamicCache quirks).
-    from reflex.exporters.monolithic import apply_export_patches
+    from tether.exporters.monolithic import apply_export_patches
     apply_export_patches()
 
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy

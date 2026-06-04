@@ -1,4 +1,4 @@
-"""Tests for src/reflex/eval/report.py — Phase 1 eval-as-a-service Day 4.
+"""Tests for src/tether/eval/report.py — Phase 1 eval-as-a-service Day 4.
 
 Schema v1 LOCKED per ADR 2026-04-25-eval-as-a-service-architecture
 decision #3. Customers grep on these fields in CI; renaming = breakage.
@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from reflex.eval.cost_model import CostEstimate, estimate_cost
-from reflex.eval.libero import (
+from tether.eval.cost_model import CostEstimate, estimate_cost
+from tether.eval.libero import (
     EpisodeResult,
     EvalReport,
     LiberoSuiteConfig,
     TaskResult,
 )
-from reflex.eval.report import (
+from tether.eval.report import (
     EVAL_ENVELOPE_SCHEMA_VERSION,
     EvalEnvelope,
     EvalEnvironment,
@@ -63,7 +63,7 @@ def _make_report(*, n_tasks: int = 2, n_eps: int = 3) -> EvalReport:
 def _make_env() -> EvalEnvironment:
     return EvalEnvironment(
         timestamp_utc="2026-04-25T00:00:00.000000Z",
-        reflex_version="0.1.0+dev",
+        tether_version="0.1.0+dev",
         git_sha="abc123",
         git_dirty=False,
         python_version="3.13.11",
@@ -102,7 +102,7 @@ def test_schema_version_is_1():
 def test_env_to_dict_round_trips():
     env = _make_env()
     d = env.to_dict()
-    assert d["reflex_version"] == "0.1.0+dev"
+    assert d["tether_version"] == "0.1.0+dev"
     assert d["git_sha"] == "abc123"
     assert d["onnx_files"][0]["name"] == "model.onnx"
 
@@ -121,7 +121,7 @@ def test_env_is_frozen():
 def test_envelope_rejects_wrong_schema_version():
     with pytest.raises(ValueError, match="schema_version"):
         EvalEnvelope(
-            schema_version=99, reflex_version="x", suite="libero", runtime="modal",
+            schema_version=99, tether_version="x", suite="libero", runtime="modal",
             seed=0, started_at="now", finished_at="now", wall_clock_s=0.0,
             tasks=(), num_episodes_per_task=0, aggregate={}, results=(),
             episodes=(), cost={}, modal=None, env={}, video_paths=(), notes=(),
@@ -132,7 +132,7 @@ def test_envelope_rejects_negative_episodes():
     with pytest.raises(ValueError, match="num_episodes_per_task"):
         EvalEnvelope(
             schema_version=EVAL_ENVELOPE_SCHEMA_VERSION,
-            reflex_version="x", suite="libero", runtime="modal",
+            tether_version="x", suite="libero", runtime="modal",
             seed=0, started_at="now", finished_at="now", wall_clock_s=0.0,
             tasks=(), num_episodes_per_task=-1, aggregate={}, results=(),
             episodes=(), cost={}, modal=None, env={}, video_paths=(), notes=(),
@@ -143,7 +143,7 @@ def test_envelope_rejects_negative_wall_clock():
     with pytest.raises(ValueError, match="wall_clock_s"):
         EvalEnvelope(
             schema_version=EVAL_ENVELOPE_SCHEMA_VERSION,
-            reflex_version="x", suite="libero", runtime="modal",
+            tether_version="x", suite="libero", runtime="modal",
             seed=0, started_at="now", finished_at="now", wall_clock_s=-1.0,
             tasks=(), num_episodes_per_task=0, aggregate={}, results=(),
             episodes=(), cost={}, modal=None, env={}, video_paths=(), notes=(),
@@ -165,7 +165,7 @@ def test_build_envelope_carries_all_required_fields():
     )
     d = env.to_dict()
     required = {
-        "schema_version", "reflex_version", "suite", "runtime", "seed",
+        "schema_version", "tether_version", "suite", "runtime", "seed",
         "started_at", "finished_at", "wall_clock_s", "tasks",
         "num_episodes_per_task", "aggregate", "results", "episodes",
         "cost", "modal", "env", "video_paths", "notes",

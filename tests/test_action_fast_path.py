@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.runtime.action_fast_path import (
+from tether.runtime.action_fast_path import (
     DEFAULT_MAX_SKIPS,
     DEFAULT_THRESHOLD,
     ActionFastPath,

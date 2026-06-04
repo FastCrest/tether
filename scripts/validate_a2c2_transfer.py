@@ -1,7 +1,7 @@
 """Fire the B.4 A2C2 transfer-validation gate.
 
 Reads a trained A2C2 checkpoint (.npz) + an in-distribution held-out JSONL split
-+ N out-of-distribution JSONL traces (e.g., recorded with `reflex serve
++ N out-of-distribution JSONL traces (e.g., recorded with `tether serve
 --inject-latency-ms 100`). Computes per-trace MSE + the success-delta gate.
 Emits a Markdown + JSON report and exits 0 on PROCEED, 1 on PAUSE, 2 on ABORT.
 
@@ -37,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 
-from reflex.correction import (
+from tether.correction import (
     A2C2Head,
     GateThresholds,
     compute_gate_report,

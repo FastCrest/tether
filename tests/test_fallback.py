@@ -1,11 +1,11 @@
-"""Tests for src/reflex/runtime/fallback.py — fallback chain primitive."""
+"""Tests for src/tether/runtime/fallback.py — fallback chain primitive."""
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from reflex.runtime.fallback import (
+from tether.runtime.fallback import (
     AllTiersFailed,
     FallbackChain,
     FallbackTier,

@@ -1,29 +1,29 @@
 # Self-distilling serve (Pro tier)
 
-`reflex serve --pro --collect-data` turns Reflex into a continuous-learning loop. Customer points at production traffic; every N hours Reflex distills a customer-specific 1-NFE student from the customer's own (state, action, reward_proxy) tuples; gates via a 9-gate methodology; hot-reloads the new student. Weekly customer report.
+`tether serve --pro --collect-data` turns Tether into a continuous-learning loop. Customer points at production traffic; every N hours Tether distills a customer-specific 1-NFE student from the customer's own (state, action, reward_proxy) tuples; gates via a 9-gate methodology; hot-reloads the new student. Weekly customer report.
 
-Per ADR `2026-04-25-self-distilling-serve-architecture`. Pro tier ($99/mo). No VLA peer ships this — strategic moat that only Reflex can build because we own both the serve runtime and the distill pipeline.
+Per ADR `2026-04-25-self-distilling-serve-architecture`. Pro tier ($99/mo). No VLA peer ships this — strategic moat that only Tether can build because we own both the serve runtime and the distill pipeline.
 
 ## Quick start
 
 ```bash
 # 1. Issue a Pro license bound to this hardware (Phase 1: dev license; Phase 1.5
 #    moves to a real license server)
-python -c "from reflex.pro import issue_dev_license, HardwareFingerprintLite; \
+python -c "from tether.pro import issue_dev_license, HardwareFingerprintLite; \
     issue_dev_license(customer_id='acme', \
         hardware=HardwareFingerprintLite(gpu_uuid='...', gpu_name='A10G', cpu_count=8))"
 
-# 2. Set your HF token (we use YOUR token, never Reflex's)
+# 2. Set your HF token (we use YOUR token, never Tether's)
 export HF_TOKEN=hf_your_personal_token
 
 # 3. Serve with Pro + data collection
-reflex serve ./my-export/ --embodiment franka \
+tether serve ./my-export/ --embodiment franka \
     --pro --collect-data \
     --distill-schedule nightly \
-    --hf-repo reflex-students/acme-prod
+    --hf-repo tether-students/acme-prod
 
 # 4. Inspect last week's auto-distill activity
-reflex report last-week
+tether report last-week
 ```
 
 ## What gets shipped automatically
@@ -32,7 +32,7 @@ The 4-stage loop runs continuously while the server is up:
 
 | Stage | Trigger | What happens | Where data lives |
 |---|---|---|---|
-| **Collect** | Every `/act` | One row appended to `~/.reflex/pro-data/YYYY-MM-DD.jsonl` (state, action_chunk, reward_proxy, optional image, optional instruction). PII handled per `--pro-collect-faces` / `--pro-collect-instructions`. | Customer disk only |
+| **Collect** | Every `/act` | One row appended to `~/.tether/pro-data/YYYY-MM-DD.jsonl` (state, action_chunk, reward_proxy, optional image, optional instruction). PII handled per `--pro-collect-faces` / `--pro-collect-instructions`. | Customer disk only |
 | **Distill** | Per `--distill-schedule` (nightly / cron / N samples / quality-drop) | SnapFlow + teacher-supervised dual-loss against base + customer mix (default 50/50). Runs on `--distill-runtime modal` (default A100) or local. | Customer's HF repo |
 | **Eval** | Post-distill | 9-gate methodology against LIBERO + customer's last 100 episodes. SAFETY gates non-overridable; PERFORMANCE gates `--pro-force` overridable with audit. | Customer's HF repo |
 | **Swap** | When eval gate passes | Atomic warm-swap to the new student via the policy-versioning secondary slot. ≤60s SLA. | Live serve |
@@ -97,13 +97,13 @@ Rollback target is the secondary slot in the policy-versioning router (the previ
 
 ```bash
 # Phase 1: dev license bound to current hardware
-python -m reflex.pro.license issue_dev --customer-id acme --tier pro --days 30
+python -m tether.pro.license issue_dev --customer-id acme --tier pro --days 30
 
 # Phase 1.5: real license from the dashboard
 # (URL TBD — see Romir's open-items list in the ADR)
 ```
 
-License lives at `~/.reflex/pro.license`. Bound to GPU UUID + GPU name + CPU count. Driver / kernel patches don't invalidate the license; major-version GPU swap or new host does.
+License lives at `~/.tether/pro.license`. Bound to GPU UUID + GPU name + CPU count. Driver / kernel patches don't invalidate the license; major-version GPU swap or new host does.
 
 24h heartbeat: every successful validation refreshes the local timestamp. After 24h without restart, the license is considered stale and refuses to load. (Phase 1.5 wires a remote heartbeat endpoint for tamper detection; Phase 1 is purely local.)
 
@@ -111,38 +111,38 @@ License absence at startup = exit 1. **Never silent fallback to non-Pro mode.**
 
 ## Data residency & privacy
 
-- All data stays on customer disk by default (`~/.reflex/pro-data/`)
-- Reflex never ingests parquet; the distill pipeline reads it locally OR uploads to YOUR HF Hub repo (customer's token, not Reflex's)
+- All data stays on customer disk by default (`~/.tether/pro-data/`)
+- Tether never ingests parquet; the distill pipeline reads it locally OR uploads to YOUR HF Hub repo (customer's token, not Tether's)
 - 90-day rolling retention (configurable)
 - PII handling defaults:
   - **face_blur_mode = blur** (MediaPipe; Phase 1.5 wiring) — opt-in `raw` requires explicit consent re-prompt
   - **instruction_mode = hashed** (SHA-256) — opt-in `raw` requires re-prompt
   - **state_mode = raw** — required for distribution-shift detection; opt-in `hashed` emits a fail-loud warning that drift detection is disabled
 
-GDPR/CCPA: `reflex pro consent --revoke` wipes the receipt + the data directory. Idempotent.
+GDPR/CCPA: `tether pro consent --revoke` wipes the receipt + the data directory. Idempotent.
 
 ## CLI reference
 
 ```text
-reflex serve --pro                                # gate Pro features on a valid license
+tether serve --pro                                # gate Pro features on a valid license
             --collect-data                        # explicit opt-in (NEVER default-on)
-            --pro-license <path>                  # default ~/.reflex/pro.license
-            --data-dir <path>                     # default ~/.reflex/pro-data/
+            --pro-license <path>                  # default ~/.tether/pro.license
+            --data-dir <path>                     # default ~/.tether/pro-data/
             --distill-schedule <spec>             # nightly | cron:M H * * * | samples:N | quality-drop | manual
             --distill-runtime <local|modal|hf>    # default modal (~$8-12/wk/customer)
             --eval-suite <libero|customer|both>   # default both
             --rollback-sensitivity <agg|normal|tolerant>  # default normal
             --rollback-sla <seconds>              # max wall-clock; default 120
-            --hf-repo <org>/<name>                # default reflex-students/{customer}-{workspace}
+            --hf-repo <org>/<name>                # default tether-students/{customer}-{workspace}
             --pro-force                           # bypass PERFORMANCE gates (NOT safety)
             --pro-force-audit "<operator-id> + <reason>"   # required when --pro-force is set
 
-reflex rollback --to <slot>                       # manual rollback CLI
-reflex report last-week                           # CLI weekly report (default channel)
+tether rollback --to <slot>                       # manual rollback CLI
+tether report last-week                           # CLI weekly report (default channel)
                 --format text|json                # human-readable or scriptable
                 --report-channel cli|email:to|slack:webhook   # email + slack are Phase 1.5 stubs
 
-reflex pro consent --revoke                       # GDPR/CCPA wipe
+tether pro consent --revoke                       # GDPR/CCPA wipe
 ```
 
 ## Pricing
@@ -154,7 +154,7 @@ $99/mo includes:
 
 Net gross margin: **37-57%** at typical $10-15/wk/customer Modal burn.
 
-The `reflex report last-week` CLI shows a budget bar for distill runs / eval runs / Modal $ — operators see when they're approaching the cap.
+The `tether report last-week` CLI shows a budget bar for distill runs / eval runs / Modal $ — operators see when they're approaching the cap.
 
 ## What's NOT in Phase 1
 
@@ -173,7 +173,7 @@ Per `01_decisions/2026-04-25-self-distilling-serve-architecture.md`:
 - HF Hub default; on-prem documented but not auto-configured Phase 1
 - CLI-only weekly report default; email/Slack opt-in
 - SAFETY gates are NEVER overridable, even with `--pro-force`
-- Customer's HF token, never Reflex's (regulated-industry compliance + no shared-credential liability)
+- Customer's HF token, never Tether's (regulated-industry compliance + no shared-credential liability)
 - HF-down-mid-swap = FAIL-LOUD abort, NEVER silent fallback
 
 Test surface: 1571/1571 passing across substrate (parquet + consent + license + scheduler + dual-loss + dataloader mix + 9-gate eval + post-swap monitor + rollback + HF Hub + weekly report + drift detection). Modal cross-validation gated on user authorization.

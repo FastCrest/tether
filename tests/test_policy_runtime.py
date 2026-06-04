@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/policy_runtime.py — per-policy queue + worker.
+"""Tests for src/tether/runtime/policy_runtime.py — per-policy queue + worker.
 
 Covers: construction invariants, lifecycle (start/stop idempotence + drain),
 submit happy path + queue-full backpressure, worker batches multiple
@@ -13,12 +13,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from reflex.runtime.batching import (
+from tether.runtime.batching import (
     CostBudgetScheduler,
     CostMode,
     GpuMsCostModel,
 )
-from reflex.runtime.policy_runtime import (
+from tether.runtime.policy_runtime import (
     PolicyRuntime,
     QueueFull,
 )

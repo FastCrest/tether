@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/hf_hub.py — Phase 1 self-distilling-serve Day 8.
+"""Tests for src/tether/pro/hf_hub.py — Phase 1 self-distilling-serve Day 8.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture decision #6:
 per-customer private repo, customer's own HF token, fail-loud on
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.pro.hf_hub import (
+from tether.pro.hf_hub import (
     DEFAULT_PRO_ORG,
     HfHubAuthFailure,
     HfHubClient,
@@ -25,8 +25,8 @@ from reflex.pro.hf_hub import (
 
 
 def test_repo_spec_full_name_format():
-    repo = HfRepoSpec(org="reflex-students", name="acme-prod-1")
-    assert repo.full_name == "reflex-students/acme-prod-1"
+    repo = HfRepoSpec(org="tether-students", name="acme-prod-1")
+    assert repo.full_name == "tether-students/acme-prod-1"
 
 
 def test_repo_spec_rejects_empty_parts():
@@ -38,14 +38,14 @@ def test_repo_spec_rejects_empty_parts():
 
 def test_repo_spec_rejects_slash_in_parts():
     with pytest.raises(ValueError):
-        HfRepoSpec(org="reflex/students", name="acme")
+        HfRepoSpec(org="tether/students", name="acme")
     with pytest.raises(ValueError):
-        HfRepoSpec(org="reflex-students", name="acme/prod")
+        HfRepoSpec(org="tether-students", name="acme/prod")
 
 
 def test_repo_spec_rejects_space_in_parts():
     with pytest.raises(ValueError):
-        HfRepoSpec(org="reflex students", name="acme")
+        HfRepoSpec(org="tether students", name="acme")
 
 
 def test_repo_spec_for_customer_default_org():

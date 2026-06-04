@@ -9,7 +9,7 @@ Usage (local synthetic data — for plumbing verification, no Modal cost):
         --epochs 3 \\
         --batch-size 32
 
-Usage (real LIBERO traces from `reflex serve --record <dir>`):
+Usage (real LIBERO traces from `tether serve --record <dir>`):
     python scripts/train_a2c2.py \\
         --data 'data/libero_traces/*.jsonl' \\
         --out outputs/a2c2_lerobot_trained.npz \\
@@ -47,7 +47,7 @@ from pathlib import Path
 
 import numpy as np
 
-from reflex.correction import A2C2Config, train_a2c2_head
+from tether.correction import A2C2Config, train_a2c2_head
 
 logger = logging.getLogger("a2c2.train")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")

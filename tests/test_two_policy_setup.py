@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/two_policy_setup.py — composes the policy-
+"""Tests for src/tether/runtime/two_policy_setup.py — composes the policy-
 versioning substrate for the FastAPI serve runtime.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from reflex.runtime.two_policy_setup import (
+from tether.runtime.two_policy_setup import (
     TwoPolicyServingState,
     _estimate_export_size_bytes,
     _probe_total_gpu_bytes,
@@ -26,7 +26,7 @@ from reflex.runtime.two_policy_setup import (
 
 @dataclass
 class _StubServer:
-    """Minimal ReflexServer stand-in for tests."""
+    """Minimal TetherServer stand-in for tests."""
     model_id: str
     _model_hash: str
     _action_guard: Any = None
@@ -126,11 +126,11 @@ def test_setup_rejects_when_2x_memory_exceeds_safety(fake_export_a, fake_export_
     """Stub model_size large + total_gpu small -> ValueError."""
     # Force the probes to return values that fail the safety check
     monkeypatch.setattr(
-        "reflex.runtime.two_policy_setup._estimate_export_size_bytes",
+        "tether.runtime.two_policy_setup._estimate_export_size_bytes",
         lambda p: 8 * 10**9,  # 8GB per model
     )
     monkeypatch.setattr(
-        "reflex.runtime.two_policy_setup._probe_total_gpu_bytes",
+        "tether.runtime.two_policy_setup._probe_total_gpu_bytes",
         lambda: 16 * 10**9,  # 16GB total
     )
     # 2 * 8GB = 16GB > 0.7 * 16GB = 11.2GB -> fail
@@ -156,11 +156,11 @@ def test_setup_proceeds_when_probes_return_zero(fake_export_a, fake_export_b, mo
     """When probes can't determine sizes (CPU-only host), proceed
     with a warning instead of blocking."""
     monkeypatch.setattr(
-        "reflex.runtime.two_policy_setup._estimate_export_size_bytes",
+        "tether.runtime.two_policy_setup._estimate_export_size_bytes",
         lambda p: 0,
     )
     monkeypatch.setattr(
-        "reflex.runtime.two_policy_setup._probe_total_gpu_bytes",
+        "tether.runtime.two_policy_setup._probe_total_gpu_bytes",
         lambda: 0,
     )
     state = asyncio.run(setup_two_policy_serving(

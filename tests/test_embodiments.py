@@ -15,8 +15,8 @@ import copy
 
 import pytest
 
-from reflex.embodiments import EmbodimentConfig, get_schema_path, list_presets
-from reflex.embodiments.validate import (
+from tether.embodiments import EmbodimentConfig, get_schema_path, list_presets
+from tether.embodiments.validate import (
     validate_against_schema,
     validate_cross_field,
     validate_embodiment_config,
@@ -246,7 +246,7 @@ class TestCrossValidation:
         """First fractional load logs a warning; second load of same config
         is silenced (one-time-per-(source, embodiment) dedup)."""
         import logging
-        from reflex.embodiments import _RTC_HORIZON_MIGRATION_WARNED
+        from tether.embodiments import _RTC_HORIZON_MIGRATION_WARNED
         # Reset the dedup set for the test
         _RTC_HORIZON_MIGRATION_WARNED.clear()
 
@@ -362,7 +362,7 @@ class TestGripperOptional:
     def test_safety_limits_builds_for_quadcopter(self):
         """Regression: SafetyLimits.from_embodiment_config must work for a
         gripper-less embodiment — broadcasts max_ee_velocity across all dims."""
-        from reflex.safety.guard import SafetyLimits
+        from tether.safety.guard import SafetyLimits
         cfg = EmbodimentConfig.load_preset("quadcopter")
         limits = SafetyLimits.from_embodiment_config(cfg)
         assert len(limits.velocity_max) == cfg.action_dim
@@ -372,7 +372,7 @@ class TestGripperOptional:
 
     def test_safety_limits_arm_gripper_axis_uses_gripper_cap(self):
         """Regression for arms: the gripper axis still gets max_gripper_velocity."""
-        from reflex.safety.guard import SafetyLimits
+        from tether.safety.guard import SafetyLimits
         cfg = EmbodimentConfig.load_preset("franka")
         limits = SafetyLimits.from_embodiment_config(cfg)
         max_ee = cfg.constraints["max_ee_velocity"]

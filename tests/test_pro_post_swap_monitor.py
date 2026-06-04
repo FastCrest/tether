@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/post_swap_monitor.py — Phase 1 Day 7.
+"""Tests for src/tether/pro/post_swap_monitor.py — Phase 1 Day 7.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture decision #4: 24h
 or 500-episode rolling-window watcher with 3 trip signals (T1 safety-
@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from reflex.pro.post_swap_monitor import (
+from tether.pro.post_swap_monitor import (
     DEFAULT_T1_CLAMP_RATE_RELATIVE,
     DEFAULT_T2_COS_MIN,
     DEFAULT_T3_VIOLATION_COUNT_5MIN,

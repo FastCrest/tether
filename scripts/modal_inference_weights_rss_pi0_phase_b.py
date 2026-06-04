@@ -26,7 +26,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-inference-weights-rss-pi0-phase-b")
+app = modal.App("tether-inference-weights-rss-pi0-phase-b")
 
 
 def _repo_head_sha() -> str:
@@ -54,7 +54,7 @@ image = (
         "lerobot==0.5.1",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_BRANCH}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_BRANCH}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -101,7 +101,7 @@ def run_rss_phase_b_pi0(model_id: str = "lerobot/pi0_base") -> dict:
     rss_after_policy = _rss_mb()
     print(f"[rss]   [{time.time()-t_a_start:.1f}s] policy loaded, RSS={rss_after_policy:.1f} MB", flush=True)
 
-    from reflex.models.vlas.pi0 import Pi0VLA
+    from tether.models.vlas.pi0 import Pi0VLA
     vla_a = Pi0VLA.from_lerobot_policy(policy)
     rss_after_vla = _rss_mb()
     print(f"[rss]   [{time.time()-t_a_start:.1f}s] Pi0VLA built, RSS={rss_after_vla:.1f} MB", flush=True)

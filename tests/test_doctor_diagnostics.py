@@ -1,4 +1,4 @@
-"""Tests for `reflex doctor` deploy diagnostics (B.4 / D.1 Day 1).
+"""Tests for `tether doctor` deploy diagnostics (B.4 / D.1 Day 1).
 
 Each check has a falsifiability gate (per the plan): at least 1 pass case
 + 1 fail case. CheckResult.__post_init__ enforces "fail must have remediation"
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.diagnostics import (
+from tether.diagnostics import (
     Check,
     CheckResult,
     exit_code,
@@ -403,7 +403,7 @@ class TestSmoke:
     }
 
     def test_runs_all_registered_checks(self, tmp_path):
-        from reflex.diagnostics import _REGISTRY, _ensure_registry_loaded
+        from tether.diagnostics import _REGISTRY, _ensure_registry_loaded
         _ensure_registry_loaded()
         registered_ids = {check.check_id for check in _REGISTRY}
 
@@ -422,7 +422,7 @@ class TestSmoke:
 
     @pytest.mark.parametrize("emb", ["franka", "so100", "ur5"])
     def test_runs_against_each_preset(self, emb, tmp_path):
-        from reflex.diagnostics import _REGISTRY, _ensure_registry_loaded
+        from tether.diagnostics import _REGISTRY, _ensure_registry_loaded
         _ensure_registry_loaded()
 
         (tmp_path / "model.onnx").write_bytes(b"\x00")

@@ -1,8 +1,8 @@
-"""Trajectory replay smoke test for Reflex VLA on Modal.
+"""Trajectory replay smoke test for Tether VLA on Modal.
 
 Downloads episodes from a LeRobot dataset using LeRobot's native loader
 (handles video-encoded images), feeds each observation frame through a
-reflex serve endpoint, and compares predicted actions to expert ground truth.
+tether serve endpoint, and compares predicted actions to expert ground truth.
 
 Usage:
     modal run scripts/modal_trajectory_replay.py
@@ -14,7 +14,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-trajectory-replay")
+app = modal.App("tether-trajectory-replay")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -38,10 +38,10 @@ image = (
         "pyyaml",
         "datasets",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 L2_THRESHOLD = 2.0
@@ -75,10 +75,10 @@ def run_trajectory_replay():
 
     # ── Step 1: Export SmolVLA ─────────────────────────────────────
     print("\n=== Step 1: Export SmolVLA ===")
-    export_dir = "/tmp/reflex_traj_export"
+    export_dir = "/tmp/tether_traj_export"
     t0 = time.time()
     r = subprocess.run(
-        ["reflex", "export", "lerobot/smolvla_base",
+        ["tether", "export", "lerobot/smolvla_base",
          "--target", "desktop", "--output", export_dir, "--verbose"],
         capture_output=True, text=True, timeout=600,
     )
@@ -93,11 +93,11 @@ def run_trajectory_replay():
     files = list(Path(export_dir).iterdir())
     log("export_files", "pass", f"{len(files)} files: {[f.name for f in files]}")
 
-    # ── Step 2: Start reflex serve ─────────────────────────────────
-    print("\n=== Step 2: Start reflex serve ===")
+    # ── Step 2: Start tether serve ─────────────────────────────────
+    print("\n=== Step 2: Start tether serve ===")
     serve_port = 8321
     serve_proc = subprocess.Popen(
-        ["reflex", "serve", export_dir, "--port", str(serve_port),
+        ["tether", "serve", export_dir, "--port", str(serve_port),
          "--device", "cpu", "--no-strict-providers"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )

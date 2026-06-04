@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/upload.py — episode upload client."""
+"""Tests for src/tether/pro/upload.py — episode upload client."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from reflex.pro.upload import (
+from tether.pro.upload import (
     DEFAULT_DATA_ENDPOINT,
     UploadClient,
     UploadManifest,

@@ -1,12 +1,12 @@
-"""Tests for lift #1 Day 10 — Spec dict CLI + reflex models list integration.
+"""Tests for lift #1 Day 10 — Spec dict CLI + tether models list integration.
 
 Validates the vla_type resolution + display + dispatch wiring per the plan:
 
 - ``ModelEntry.resolved_vla_type`` returns spine class name for known families,
   shim marker for non-spine entries.
-- ``reflex models list`` JSON output includes ``vla_type`` field.
-- ``reflex models info`` JSON output includes ``vla_type`` field.
-- ``reflex export <model_id>`` for smolvla / groot families routes through
+- ``tether models list`` JSON output includes ``vla_type`` field.
+- ``tether models info`` JSON output includes ``vla_type`` field.
+- ``tether export <model_id>`` for smolvla / groot families routes through
   the Day 6 / Day 7 spine-based exporters (``exporters/smolvla.py`` and
   ``exporters/gr00t.py``), not the legacy direct-build paths.
 """
@@ -16,9 +16,9 @@ import json
 
 import pytest
 
-from reflex.registry import by_id
-from reflex.registry.data import REGISTRY
-from reflex.registry.models import ModelEntry
+from tether.registry import by_id
+from tether.registry.data import REGISTRY
+from tether.registry.models import ModelEntry
 
 
 # ─── ModelEntry.resolved_vla_type ───────────────────────────────────────
@@ -105,21 +105,21 @@ def test_openvla_7b_resolves_to_shim():
 
 
 def test_cli_imports_spine_smolvla_exporter():
-    """`reflex export` for smolvla family uses src/reflex/exporters/smolvla.py
+    """`tether export` for smolvla family uses src/tether/exporters/smolvla.py
     (the Day 6 spine-based exporter, sole source after Day 11 sunset)."""
-    import reflex.cli as cli_module
+    import tether.cli as cli_module
     import inspect
     src = inspect.getsource(cli_module)
-    assert "from reflex.exporters.smolvla import export_smolvla" in src
+    assert "from tether.exporters.smolvla import export_smolvla" in src
 
 
 def test_cli_imports_spine_gr00t_exporter():
-    """`reflex export` for groot family uses src/reflex/exporters/gr00t.py
+    """`tether export` for groot family uses src/tether/exporters/gr00t.py
     (the Day 7 spine-based exporter, sole source after Day 11 sunset)."""
-    import reflex.cli as cli_module
+    import tether.cli as cli_module
     import inspect
     src = inspect.getsource(cli_module)
-    assert "from reflex.exporters.gr00t import export_gr00t" in src
+    assert "from tether.exporters.gr00t import export_gr00t" in src
 
 
 def test_legacy_exporter_modules_deleted():
@@ -127,9 +127,9 @@ def test_legacy_exporter_modules_deleted():
     modules are GONE. Imports must use the renamed/refactored spine paths."""
     import importlib
     for legacy in (
-        "reflex.exporters.pi0_exporter",
-        "reflex.exporters.smolvla_exporter",
-        "reflex.exporters.gr00t_exporter",
+        "tether.exporters.pi0_exporter",
+        "tether.exporters.smolvla_exporter",
+        "tether.exporters.gr00t_exporter",
     ):
         try:
             importlib.import_module(legacy)

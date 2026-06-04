@@ -7,7 +7,7 @@ Lift #1 Day 6 per ``features/03_export/basevla-spine_plan.md``. Validates:
 - construction via direct kwargs + from_config (stubbed components)
 - forward routes to llm_backbone
 - predict_action raises NotImplementedError (runtime path is currently
-  ``reflex.runtime.smolvla_native``; spine predict_action is a follow-up)
+  ``tether.runtime.smolvla_native``; spine predict_action is a follow-up)
 - end-to-end SPINE → ExpertStack: SmolVLA.from_pretrained synthetic
   state_dict produces a bit-identical ExpertStack vs direct
   ``smolvla_exporter.build_expert_stack`` call (the parity gate from
@@ -22,13 +22,13 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.base_vla import BaseVLA
-from reflex.models.heads import VLAHead
-from reflex.models.llm import LLMBackbone
-from reflex.models.projectors import Projector
-from reflex.models.vision import VisionBackbone
-from reflex.models.vlas.smolvla import SmolVLA
-from reflex.registry.components import VLAS
+from tether.models.base_vla import BaseVLA
+from tether.models.heads import VLAHead
+from tether.models.llm import LLMBackbone
+from tether.models.projectors import Projector
+from tether.models.vision import VisionBackbone
+from tether.models.vlas.smolvla import SmolVLA
+from tether.registry.components import VLAS
 
 
 # ─── Registration + slot declarations ───────────────────────────────────
@@ -140,7 +140,7 @@ def test_forward_routes_to_llm_backbone():
 
 
 def test_predict_action_raises_not_implemented():
-    """SmolVLA's runtime path is currently ``reflex.runtime.smolvla_native``.
+    """SmolVLA's runtime path is currently ``tether.runtime.smolvla_native``.
     A spine predict_action() is a follow-up; the Day 6 acceptance is the
     monolithic ONNX export path, not runtime inference."""
     vla = SmolVLA(
@@ -168,7 +168,7 @@ def test_smolvla_spine_builds_same_expert_as_legacy(tmp_path: Any):
     sd = _build_synthetic_smolvla_state_dict()
 
     # Legacy path: build expert directly.
-    from reflex.exporters.smolvla import build_expert_stack
+    from tether.exporters.smolvla import build_expert_stack
     legacy_stack, legacy_meta = build_expert_stack(sd, head_dim=64)
 
     # Spine path: build via SmolVLA composition. Stub out the VLM load to
@@ -208,9 +208,9 @@ def test_smolvla_spine_builds_same_expert_as_legacy(tmp_path: Any):
 
 def _build_smolvla_expert_via_spine(state_dict: dict[str, torch.Tensor]) -> Any:
     """Build SmolVLA's expert via the spine composition (no VLM load)."""
-    from reflex.exporters.smolvla import build_expert_stack
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.exporters.smolvla import build_expert_stack
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.models.projectors.linear_projector import LinearProjector
 
     # SmolVLA composition without the VLM — stub vision/llm with minimal
     # objects so REQUIRED_SLOTS bind. Then bind the real expert_stack.

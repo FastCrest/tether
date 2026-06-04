@@ -1,4 +1,4 @@
-"""Tests for the model_type fallback in src/reflex/exporters/monolithic.py.
+"""Tests for the model_type fallback in src/tether/exporters/monolithic.py.
 
 Caught by 2026-04-25 self-distilling-serve distill smoke (reflex_context
 experiment). When export_monolithic is called with a local checkpoint
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.exporters.monolithic import (
+from tether.exporters.monolithic import (
     _model_type_from_local_config,
     export_monolithic,
 )
@@ -148,7 +148,7 @@ def test_export_monolithic_fallback_to_config_for_unknown_path(tmp_path, monkeyp
         return {"status": "ok", "onnx_path": str(Path(output_dir) / "model.onnx")}
 
     monkeypatch.setattr(
-        "reflex.exporters.monolithic.export_pi05_monolithic", _fake_export_pi05,
+        "tether.exporters.monolithic.export_pi05_monolithic", _fake_export_pi05,
     )
 
     output = tmp_path / "out"
@@ -179,7 +179,7 @@ def test_export_monolithic_substring_match_takes_precedence(tmp_path, monkeypatc
         return {"status": "ok"}
 
     monkeypatch.setattr(
-        "reflex.exporters.monolithic.export_smolvla_monolithic", _fake_export_smolvla,
+        "tether.exporters.monolithic.export_smolvla_monolithic", _fake_export_smolvla,
     )
 
     # HF id substring match -> dispatches without touching the filesystem

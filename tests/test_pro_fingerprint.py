@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/fingerprint.py.
+"""Tests for src/tether/pro/fingerprint.py.
 
 Covers: compute round-trip, customer-tag separation, tamper detection,
 algo version handling, free-tier guard.
@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from reflex.pro.fingerprint import (
+from tether.pro.fingerprint import (
     ALGO,
     Fingerprint,
     compute_fingerprint,

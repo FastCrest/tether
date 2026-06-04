@@ -1,11 +1,11 @@
-"""Tests for ReflexClient + ReflexAsyncClient (Phase 0.5 customer-sdk).
+"""Tests for TetherClient + TetherAsyncClient (Phase 0.5 customer-sdk).
 
 Uses httpx.MockTransport so tests run in-process without spinning up a real
 server. Verifies the SDK consumes every server-side contract we shipped today:
 - /health 6-state machine (initializing/loading/warming/ready/warmup_failed/degraded)
 - /act 503 + Retry-After: 60 from circuit-broken servers
 - B.6 ActionGuard guard_violations + guard_clamped pass-through
-- X-Reflex-Key bearer auth
+- X-Tether-Key bearer auth
 - episode_id auto-generation + propagation via context manager
 - Image encoding from numpy / PIL / file path / raw bytes / base64 str
 - Retry semantics: 401 / 422 don't retry; 503-warming retries with backoff;
@@ -21,31 +21,31 @@ from pathlib import Path
 import httpx
 import pytest
 
-from reflex.client import (
-    ReflexClient,
-    ReflexAsyncClient,
-    ReflexClientError,
-    ReflexAuthError,
-    ReflexValidationError,
-    ReflexServerDegradedError,
-    ReflexServerNotReadyError,
+from tether.client import (
+    TetherClient,
+    TetherAsyncClient,
+    TetherClientError,
+    TetherAuthError,
+    TetherValidationError,
+    TetherServerDegradedError,
+    TetherServerNotReadyError,
     encode_image,
 )
 
 
 # ---------- helpers ----------
 
-def _client_with_handler(handler, **client_kwargs) -> ReflexClient:
-    """Construct a ReflexClient that uses an httpx.MockTransport for requests."""
+def _client_with_handler(handler, **client_kwargs) -> TetherClient:
+    """Construct a TetherClient that uses an httpx.MockTransport for requests."""
     transport = httpx.MockTransport(handler)
-    client = ReflexClient("http://test.invalid", **client_kwargs)
+    client = TetherClient("http://test.invalid", **client_kwargs)
     client._http = httpx.Client(headers=client._http.headers, transport=transport, timeout=client.timeout_s)
     return client
 
 
-def _async_client_with_handler(handler, **client_kwargs) -> ReflexAsyncClient:
+def _async_client_with_handler(handler, **client_kwargs) -> TetherAsyncClient:
     transport = httpx.MockTransport(handler)
-    client = ReflexAsyncClient("http://test.invalid", **client_kwargs)
+    client = TetherAsyncClient("http://test.invalid", **client_kwargs)
     client._http = httpx.AsyncClient(headers=client._http.headers, transport=transport, timeout=client.timeout_s)
     return client
 
@@ -60,7 +60,7 @@ def _act_response(actions=None, latency_ms=10.0, **extra):
     return httpx.Response(200, json=body)
 
 
-# ---------- ReflexClient.act / health / config ----------
+# ---------- TetherClient.act / health / config ----------
 
 class TestActHappyPath:
     def test_act_returns_response_dict(self):
@@ -116,33 +116,33 @@ class TestAuth:
         captured = {}
 
         def handler(request):
-            captured["x_reflex_key"] = request.headers.get("X-Reflex-Key")
+            captured["x_tether_key"] = request.headers.get("X-Tether-Key")
             return _act_response()
 
         with _client_with_handler(handler, api_key="secret-key-abc") as c:
             c.act(instruction="x")
-        assert captured["x_reflex_key"] == "secret-key-abc"
+        assert captured["x_tether_key"] == "secret-key-abc"
 
     def test_no_api_key_omits_header(self):
         captured = {}
 
         def handler(request):
-            captured["x_reflex_key"] = request.headers.get("X-Reflex-Key")
+            captured["x_tether_key"] = request.headers.get("X-Tether-Key")
             return _act_response()
 
         with _client_with_handler(handler) as c:
             c.act(instruction="x")
-        assert captured["x_reflex_key"] is None
+        assert captured["x_tether_key"] is None
 
     def test_401_raises_auth_error_no_retry(self):
         call_count = {"n": 0}
 
         def handler(request):
             call_count["n"] += 1
-            return httpx.Response(401, json={"detail": "missing or invalid X-Reflex-Key header"})
+            return httpx.Response(401, json={"detail": "missing or invalid X-Tether-Key header"})
 
         with _client_with_handler(handler, max_retries=5) as c:
-            with pytest.raises(ReflexAuthError):
+            with pytest.raises(TetherAuthError):
                 c.act(instruction="x")
         assert call_count["n"] == 1, "401 should NOT retry"
 
@@ -156,7 +156,7 @@ class TestValidationError:
             return httpx.Response(422, json={"detail": [{"msg": "bad request"}]})
 
         with _client_with_handler(handler, max_retries=5) as c:
-            with pytest.raises(ReflexValidationError):
+            with pytest.raises(TetherValidationError):
                 c.act(instruction="x")
         assert call_count["n"] == 1, "422 should NOT retry"
 
@@ -204,7 +204,7 @@ class TestRetryOn503Warming:
             return httpx.Response(503, json={"state": "warming"})
 
         with _client_with_handler(handler, max_retries=3, initial_backoff_s=0.001) as c:
-            with pytest.raises(ReflexServerNotReadyError) as exc_info:
+            with pytest.raises(TetherServerNotReadyError) as exc_info:
                 c.act(instruction="x")
         assert call_count["n"] == 4, "max_retries=3 → 1 initial + 3 retries = 4 total"
         assert exc_info.value.state == "warming"
@@ -214,7 +214,7 @@ class TestRetryOn503Warming:
             return httpx.Response(503, json={"state": "warmup_failed"})
 
         with _client_with_handler(handler, max_retries=1, initial_backoff_s=0.001) as c:
-            with pytest.raises(ReflexServerNotReadyError) as exc_info:
+            with pytest.raises(TetherServerNotReadyError) as exc_info:
                 c.act(instruction="x")
         assert exc_info.value.state == "warmup_failed"
 
@@ -237,7 +237,7 @@ class TestRetryOn503Degraded:
             )
 
         with _client_with_handler(handler, max_retries=5) as c:
-            with pytest.raises(ReflexServerDegradedError) as exc_info:
+            with pytest.raises(TetherServerDegradedError) as exc_info:
                 c.act(instruction="x")
         assert call_count["n"] == 1, "degraded should NOT retry by default (operator decision)"
         assert exc_info.value.retry_after_s == 60.0
@@ -300,7 +300,7 @@ class TestEpisode:
         with _client_with_handler(handler) as c:
             with c.episode() as ep:
                 ep.act(instruction="x")
-            with pytest.raises(ReflexClientError, match="closed"):
+            with pytest.raises(TetherClientError, match="closed"):
                 ep.act(instruction="x")
 
 
@@ -374,7 +374,7 @@ class TestImageEncoding:
         assert base64.b64decode(out)[:3] == b"\xff\xd8\xff"
 
     def test_encode_unsupported_type_raises(self):
-        with pytest.raises(ReflexClientError, match="unsupported"):
+        with pytest.raises(TetherClientError, match="unsupported"):
             encode_image(12345)
 
 
@@ -387,7 +387,7 @@ class TestNetworkErrors:
             raise httpx.ConnectError("connection refused")
 
         with _client_with_handler(handler, max_retries=2, initial_backoff_s=0.001) as c:
-            with pytest.raises(ReflexClientError, match="network"):
+            with pytest.raises(TetherClientError, match="network"):
                 c.act(instruction="x")
         # 1 initial + 2 retries = 3 total attempts
         assert call_count["n"] == 3

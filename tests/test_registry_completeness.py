@@ -1,14 +1,14 @@
 """Registry-completeness contract — every primary exporter has at least
-one ModelEntry in `reflex.registry.data.REGISTRY`.
+one ModelEntry in `tether.registry.data.REGISTRY`.
 
 The bug this catches: customer reports 2026-05-10 found GR00T + OpenVLA
-exporters had shipped without registry entries → `reflex models list`,
-`reflex chat`, and `reflex doctor` all said "not supported" even though
+exporters had shipped without registry entries → `tether models list`,
+`tether chat`, and `tether doctor` all said "not supported" even though
 the underlying export pipelines worked. README claimed support; CLI
 discovery surface didn't know.
 
-Without this test, every future exporter shipped to `src/reflex/exporters/`
-silently regresses the discovery surface. Anyone running `reflex models
+Without this test, every future exporter shipped to `src/tether/exporters/`
+silently regresses the discovery surface. Anyone running `tether models
 list` won't see the new model.
 
 Internal-only exporters (helpers consumed by other exporters, not
@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
-from reflex.registry.data import REGISTRY
+from tether.registry.data import REGISTRY
 
-EXPORTERS_DIR = Path(__file__).parent.parent / "src" / "reflex" / "exporters"
+EXPORTERS_DIR = Path(__file__).parent.parent / "src" / "tether" / "exporters"
 
 # Exporters that are NOT directly customer-facing — they're shared helpers
 # consumed by the primary exporters. Each must have a docstring explaining
@@ -36,7 +36,7 @@ EXPORTERS_INTERNAL = {
     "monolithic.py",          # path-spec for all monolithic exports
     "onnx_export.py",         # generic torch.onnx.export wrapper
     "pi0_prefix.py",          # SigLIP/Gemma split; renamed from pi0_prefix_exporter.py at lift #1 Day 9
-    # vlm_components.py moved to src/reflex/runtime/vlm_components.py
+    # vlm_components.py moved to src/tether/runtime/vlm_components.py
     # on 2026-05-20 (basevla-spine lift #1 Day 1 janitor) — it's an
     # inference-time helper, not an export-time helper, so it belongs in
     # runtime/. No replacement entry here because the audit is
@@ -69,7 +69,7 @@ EXPECTED_FAMILIES = {
 
 
 def _list_exporter_files() -> list[str]:
-    """Names (basename only) of all .py files in src/reflex/exporters/."""
+    """Names (basename only) of all .py files in src/tether/exporters/."""
     return [
         p.name for p in EXPORTERS_DIR.iterdir()
         if p.suffix == ".py"
@@ -88,16 +88,16 @@ def test_every_primary_exporter_has_registry_entry():
                 f"{exporter_file} → no registry entry with family={expected_family!r}"
             )
     assert not missing, (
-        "Primary exporter(s) missing registry entry — `reflex models list` / "
-        "`reflex chat` / `reflex doctor` will say 'not supported' for these "
+        "Primary exporter(s) missing registry entry — `tether models list` / "
+        "`tether chat` / `tether doctor` will say 'not supported' for these "
         "even though the export pipeline works:\n  "
         + "\n  ".join(missing)
-        + "\nFix: add a ModelEntry to src/reflex/registry/data.py"
+        + "\nFix: add a ModelEntry to src/tether/registry/data.py"
     )
 
 
 def test_exporter_directory_audit_covers_all_files():
-    """Every file in src/reflex/exporters/ must be either:
+    """Every file in src/tether/exporters/ must be either:
       (a) classified as internal (EXPORTERS_INTERNAL), OR
       (b) classified as primary with expected family (EXPECTED_FAMILIES)
     Catches the case where someone adds a NEW exporter file but
@@ -151,7 +151,7 @@ def test_registry_entries_have_required_fields():
 
 def test_gr00t_n16_in_registry():
     """Specific assertion for the 2026-05-10 customer report — GR00T
-    N1.6 must surface in `reflex models list`."""
+    N1.6 must surface in `tether models list`."""
     matching = [e for e in REGISTRY if e.family == "groot"]
     assert matching, (
         "GR00T family missing from registry — customer 2026-05-10 reported "
@@ -169,7 +169,7 @@ def test_openvla_in_registry():
     matching = [e for e in REGISTRY if e.family == "openvla"]
     assert matching, (
         "OpenVLA family missing from registry. README claims support via "
-        "optimum-cli + reflex.postprocess.openvla.decode_actions."
+        "optimum-cli + tether.postprocess.openvla.decode_actions."
     )
     assert any("openvla-7b" in e.hf_repo.lower() for e in matching), (
         "OpenVLA family present but openvla-7b not in registry."

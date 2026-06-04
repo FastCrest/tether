@@ -17,9 +17,9 @@ import pytest
 def test_healthz_response():
     """GET /healthz returns ok status."""
     # Simulate worker health check response
-    response = {"status": "ok", "service": "reflex-data-worker"}
+    response = {"status": "ok", "service": "tether-data-worker"}
     assert response["status"] == "ok"
-    assert response["service"] == "reflex-data-worker"
+    assert response["service"] == "tether-data-worker"
 
 
 # ── Test 2: Upload requires anonymization header ─────────────────────
@@ -81,12 +81,12 @@ def test_r2_key_format():
     date = "2026-05-04"
     episode_id = "ep001"
 
-    r2_key = f"reflex-raw-episodes/{contributor_hash}/{date}/{episode_id}.parquet"
-    assert r2_key == "reflex-raw-episodes/a1b2c3d4e5f6a7b8/2026-05-04/ep001.parquet"
+    r2_key = f"tether-raw-episodes/{contributor_hash}/{date}/{episode_id}.parquet"
+    assert r2_key == "tether-raw-episodes/a1b2c3d4e5f6a7b8/2026-05-04/ep001.parquet"
 
     # Key components
     parts = r2_key.split("/")
-    assert parts[0] == "reflex-raw-episodes"
+    assert parts[0] == "tether-raw-episodes"
     assert parts[1] == contributor_hash
     assert parts[2] == date
     assert parts[3] == f"{episode_id}.parquet"

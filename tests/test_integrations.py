@@ -1,9 +1,9 @@
-"""Tests for the integration framework (reflex connect)."""
+"""Tests for the integration framework (tether connect)."""
 from __future__ import annotations
 
 import pytest
 
-from reflex.integrations.registry import (
+from tether.integrations.registry import (
     Integration,
     get_integration,
     list_integrations,
@@ -44,12 +44,12 @@ class TestRegistry:
 
 class TestConnector:
     def test_connect_unknown_raises(self):
-        from reflex.integrations.connector import connect
+        from tether.integrations.connector import connect
         with pytest.raises(ValueError, match="Unknown integration"):
             connect("nonexistent_xyz")
 
     def test_disconnect_not_running(self):
-        from reflex.integrations.connector import disconnect
+        from tether.integrations.connector import disconnect
         result = disconnect("rtsm")
         assert result["status"] == "not_running"
 
@@ -62,7 +62,7 @@ class TestCli:
 
     @pytest.fixture
     def cli_app(self):
-        from reflex.cli import app
+        from tether.cli import app
         return app
 
     def test_connect_list(self, runner, cli_app):

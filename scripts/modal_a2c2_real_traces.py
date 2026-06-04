@@ -6,7 +6,7 @@ target_residual = zeros (magnitude proxy) which produces a head whose output
 is identically zero (zero-init * zero-target -> zero-gradient -> zero forever).
 
 This script does:
-1. Boot LIBERO + reflex serve (decomposed-export)
+1. Boot LIBERO + tether serve (decomposed-export)
 2. For each step t in each episode: POST /act -> get full chunk[t] (50 actions);
    record (state_t, image_hash_t, chunk_t, latency_t) to a per-step JSONL on
    the gate volume; env.step with chunk[t][0][:7] (FRESH-policy-every-step
@@ -35,7 +35,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-a2c2-real-traces")
+app = modal.App("tether-a2c2-real-traces")
 
 
 def _hf_secret():
@@ -67,7 +67,7 @@ _HEAD = _repo_head_sha()
 _BUILD_BUST = _build_bust()
 
 
-# Volumes mirror modal_libero_via_reflex_serve
+# Volumes mirror modal_libero_via_tether_serve
 HF_CACHE_PATH = "/hf_cache"
 ONNX_OUTPUT_PATH = "/onnx_out"
 GATE_OUTPUT_PATH = "/gate_out"
@@ -76,7 +76,7 @@ onnx_output = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=True)
 gate_output = modal.Volume.from_name("a2c2-gate-output", create_if_missing=True)
 
 
-# Mirror modal_libero_via_reflex_serve.py exactly so we share the cached image.
+# Mirror modal_libero_via_tether_serve.py exactly so we share the cached image.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
@@ -111,7 +111,7 @@ image = (
     .run_commands(
         "mkdir -p /tmp/libero_data",
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "reflex-vla[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -148,7 +148,7 @@ def collect_and_train(
     serve_health_timeout_s: int = 480,
     serve_port: int = 8000,
     # Phase 2 fixes per 2026-04-29-a2c2-correction_research_revisit:
-    collect_inject_latency_ms: float = 0.0,  # pass --inject-latency-ms to reflex serve at collect time
+    collect_inject_latency_ms: float = 0.0,  # pass --inject-latency-ms to tether serve at collect time
     l2_penalty_override: float = -1.0,  # if > 0, override L2_MAGNITUDE_PENALTY constant
     use_actual_latency: bool = False,  # use record's measured latency_ms instead of synthesized i*median_step_ms
     # Phase 3: per-head saturation scale (default 3.0 = Phase 1 behavior;
@@ -183,10 +183,10 @@ def collect_and_train(
     metrics_path = out_root / "real_train_metrics.json"
     print(f"[real_traces] output: {out_root}")
 
-    # ---- 1. Spawn reflex serve ----
+    # ---- 1. Spawn tether serve ----
     export_dir = f"{ONNX_OUTPUT_PATH}/{export_subdir}"
     serve_cmd = [
-        "reflex", "serve", export_dir,
+        "tether", "serve", export_dir,
         "--port", str(serve_port),
         "--device", "cuda",
         "--no-strict-providers",
@@ -336,7 +336,7 @@ def collect_and_train(
         print(f"[real_traces] collection done: {records_written} (state, chunk) records -> {traces_path}")
 
     finally:
-        print("[real_traces] shutting down reflex serve...")
+        print("[real_traces] shutting down tether serve...")
         serve_proc.terminate()
         try:
             serve_proc.wait(20)
@@ -427,8 +427,8 @@ def collect_and_train(
           f"(if ~0, head will learn nothing meaningful; if >0, real signal)")
 
     # ---- 4. Train numpy A2C2 head ----
-    from reflex.correction import A2C2Config, train_a2c2_head, evaluate_mse
-    from reflex.correction import a2c2_training as _a2c2_training_module
+    from tether.correction import A2C2Config, train_a2c2_head, evaluate_mse
+    from tether.correction import a2c2_training as _a2c2_training_module
 
     # Phase 2: relax L2 magnitude penalty if requested. Phase 1 default
     # 0.01 was conservative — head learned magnitude ~0.1/step (chunk 0.755).
@@ -526,7 +526,7 @@ def main(
 ):
     """Collect real LIBERO traces + train A2C2 head on (stale, fresh) gap.
 
-    Output: /gate_out/<label>/a2c2_head_real.npz (loadable by reflex serve --a2c2-checkpoint)
+    Output: /gate_out/<label>/a2c2_head_real.npz (loadable by tether serve --a2c2-checkpoint)
 
     Phase 2 invocation:
         modal run scripts/modal_a2c2_real_traces.py \\
@@ -570,6 +570,6 @@ def main(
     print(f"  mean_target_l2:       {r.get('mean_target_l2'):.6f}")
     print(f"  final_val_mse:        {r.get('final_val_mse'):.6f}")
     print()
-    print(f"Next: modal run scripts/modal_libero_via_reflex_serve.py \\")
+    print(f"Next: modal run scripts/modal_libero_via_tether_serve.py \\")
     print(f"        --tasks all --num-episodes 5 \\")
     print(f"        --a2c2-checkpoint {r.get('head_path')}")

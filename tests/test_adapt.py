@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from reflex.models.adapt import EmbodimentAdapter, EmbodimentConfig, ActionMapping
+from tether.models.adapt import EmbodimentAdapter, EmbodimentConfig, ActionMapping
 
 
 class TestEmbodimentConfig:

@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 def main():
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
-    from reflex.models.heads.expert_stack import ExpertGQALayer, _DecomposedRoPE
+    from tether.models.heads.expert_stack import ExpertGQALayer, _DecomposedRoPE
 
     policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_libero")
     policy.eval().to(dtype=torch.float32).to("cpu")

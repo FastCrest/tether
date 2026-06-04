@@ -11,17 +11,17 @@ from pathlib import Path
 import pytest
 import torch
 
-from reflex.models._inference_weights_cache import cache_path, load_or_build
+from tether.models._inference_weights_cache import cache_path, load_or_build
 
 
 @pytest.fixture
 def tmp_cache_dir(tmp_path, monkeypatch):
     """Point the cache root at a fresh tmp dir for each test."""
     monkeypatch.setattr(
-        "reflex.models._inference_weights_cache.Path.home",
+        "tether.models._inference_weights_cache.Path.home",
         classmethod(lambda cls: tmp_path),  # type: ignore[arg-type]
     )
-    return tmp_path / ".cache" / "reflex" / "inference_weights"
+    return tmp_path / ".cache" / "tether" / "inference_weights"
 
 
 def _builder() -> dict[str, torch.Tensor]:
@@ -40,7 +40,7 @@ def test_cold_build_then_warm_read_is_byte_identical(tmp_cache_dir):
         checkpoint_sha="abc123",
         vla_type="TestVLA",
         builder=_builder,
-        reflex_version="0.10.0",
+        tether_version="0.10.0",
         torch_version="2.5.0",
     )
 
@@ -53,7 +53,7 @@ def test_cold_build_then_warm_read_is_byte_identical(tmp_cache_dir):
         checkpoint_sha="abc123",
         vla_type="TestVLA",
         builder=_bad_builder,
-        reflex_version="0.10.0",
+        tether_version="0.10.0",
         torch_version="2.5.0",
     )
 
@@ -79,7 +79,7 @@ def test_cache_invalidates_on_checkpoint_sha_change(tmp_cache_dir):
         checkpoint_sha="sha_v1",
         vla_type="TestVLA",
         builder=_counting_builder,
-        reflex_version="0.10.0",
+        tether_version="0.10.0",
         torch_version="2.5.0",
     )
     load_or_build(
@@ -87,18 +87,18 @@ def test_cache_invalidates_on_checkpoint_sha_change(tmp_cache_dir):
         checkpoint_sha="sha_v2",  # CHANGED
         vla_type="TestVLA",
         builder=_counting_builder,
-        reflex_version="0.10.0",
+        tether_version="0.10.0",
         torch_version="2.5.0",
     )
 
     assert builder_calls["n"] == 2, "builder should have been called twice (cache miss on different sha)"
 
 
-# ─── Cache invalidates on reflex_version change ──────────────────────
+# ─── Cache invalidates on tether_version change ──────────────────────
 
 
-def test_cache_invalidates_on_reflex_version_change(tmp_cache_dir):
-    """Reflex refactor that changes spine slot layout would silently
+def test_cache_invalidates_on_tether_version_change(tmp_cache_dir):
+    """Tether refactor that changes spine slot layout would silently
     shape-mismatch a cached dict. Version bump must invalidate."""
     builder_calls = {"n": 0}
 
@@ -111,7 +111,7 @@ def test_cache_invalidates_on_reflex_version_change(tmp_cache_dir):
         checkpoint_sha="abc123",
         vla_type="TestVLA",
         builder=_counting_builder,
-        reflex_version="0.10.0",
+        tether_version="0.10.0",
         torch_version="2.5.0",
     )
     load_or_build(
@@ -119,7 +119,7 @@ def test_cache_invalidates_on_reflex_version_change(tmp_cache_dir):
         checkpoint_sha="abc123",
         vla_type="TestVLA",
         builder=_counting_builder,
-        reflex_version="0.11.0",  # CHANGED
+        tether_version="0.11.0",  # CHANGED
         torch_version="2.5.0",
     )
 
@@ -130,18 +130,18 @@ def test_cache_invalidates_on_reflex_version_change(tmp_cache_dir):
 
 
 def test_cache_path_is_hash_pt_file_under_inference_weights_dir(tmp_cache_dir):
-    """`cache_path(...)` returns ``~/.cache/reflex/inference_weights/<hash>.pt``.
+    """`cache_path(...)` returns ``~/.cache/tether/inference_weights/<hash>.pt``.
     The directory is created on demand."""
     p = cache_path(
         model_id="test/model",
         checkpoint_sha="abc123",
         vla_type="TestVLA",
-        reflex_version="0.10.0",
+        tether_version="0.10.0",
         torch_version="2.5.0",
     )
     assert p.suffix == ".pt"
     assert p.parent.name == "inference_weights"
-    assert p.parent.parent.name == "reflex"
+    assert p.parent.parent.name == "tether"
     assert p.parent.parent.parent.name == ".cache"
     # Hash should be a 16-hex-char filename (per the implementation).
     stem = p.stem

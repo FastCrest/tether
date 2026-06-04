@@ -34,24 +34,24 @@ from pathlib import Path
 
 import pytest
 
-from reflex.pro.distill_scheduler import (
+from tether.pro.distill_scheduler import (
     DistillScheduler,
     SchedulerConfig,
     SchedulerState,
 )
-from reflex.pro.drift_detection import DriftDetector
-from reflex.pro.eval_gate import (
+from tether.pro.drift_detection import DriftDetector
+from tether.pro.eval_gate import (
     EvalGate,
     EvalSample,
     GateThresholds,
     InsufficientEpisodes,
 )
-from reflex.pro.hf_hub import (
+from tether.pro.hf_hub import (
     HfHubClient,
     HfRepoSpec,
 )
-from reflex.pro.post_swap_monitor import MonitorConfig, PostSwapMonitor
-from reflex.pro.rollback import RollbackHandler
+from tether.pro.post_swap_monitor import MonitorConfig, PostSwapMonitor
+from tether.pro.rollback import RollbackHandler
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ def test_pro_force_bypasses_perf_gate_with_audit():
         candidate_samples=candidate, baseline_samples=baseline,
         candidate_memory_bytes=200_000_000, baseline_memory_bytes=100_000_000,
         pro_force=True,
-        bypass_audit="op@reflex 2026-04-25 acked memory regression",
+        bypass_audit="op@tether 2026-04-25 acked memory regression",
     )
     assert report.overall_passed
     assert report.pro_force_bypass
@@ -457,7 +457,7 @@ def test_hf_push_succeeds_with_clean_caller(tmp_path):
         return _CI()
 
     client = HfHubClient(
-        repo=HfRepoSpec(org="reflex-students", name="acme-prod"),
+        repo=HfRepoSpec(org="tether-students", name="acme-prod"),
         token="hf_test_token",
     )
     outcome = client.push(
@@ -535,7 +535,7 @@ def test_full_loop_green_path_clean_swap(tmp_path):
         return _CI()
 
     client = HfHubClient(
-        repo=HfRepoSpec(org="reflex-students", name="acme"),
+        repo=HfRepoSpec(org="tether-students", name="acme"),
         token="t",
     )
     push_outcome = client.push(
@@ -588,7 +588,7 @@ def test_full_loop_red_path_monitor_trips_then_rollback():
         candidate_samples=candidate, baseline_samples=baseline,
         candidate_memory_bytes=200_000_000, baseline_memory_bytes=100_000_000,
         pro_force=True,
-        bypass_audit="op@reflex acked memory regression for traffic test",
+        bypass_audit="op@tether acked memory regression for traffic test",
     )
     assert eval_report.overall_passed
     assert eval_report.pro_force_bypass
@@ -635,7 +635,7 @@ def test_full_loop_safety_gate_blocks_swap_no_force_possible():
         candidate_samples=candidate, baseline_samples=baseline,
         candidate_memory_bytes=100_000_000, baseline_memory_bytes=100_000_000,
         pro_force=True,
-        bypass_audit="op@reflex tried to force-clear S1 safety gate",
+        bypass_audit="op@tether tried to force-clear S1 safety gate",
     )
     # Safety gate ALWAYS wins
     assert not eval_report.overall_passed

@@ -15,7 +15,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-fast-kernels-headline-bench")
+app = modal.App("tether-fast-kernels-headline-bench")
 
 
 def _repo_head_sha() -> str:
@@ -63,7 +63,7 @@ image = (
         "lerobot==0.5.1", "num2words",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({"CUDA_HOME": "/usr/local/cuda"})
@@ -164,7 +164,7 @@ def run_headline_bench(
     policy_b = PI05Policy.from_pretrained(model_id)
     policy_b = policy_b.to(dtype=torch.float32).cpu()
 
-    from reflex.models.vlas.pi05 import Pi05VLA
+    from tether.models.vlas.pi05 import Pi05VLA
     vla = Pi05VLA.from_lerobot_policy(policy_b)
     del policy_b
     gc.collect()
@@ -172,7 +172,7 @@ def run_headline_bench(
     vla.llm_backbone.to("cuda")
     vla.vla_head.to("cuda")
 
-    from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
+    from tether.runtime.fast_inference.pi05 import Pi05FastKernelsInference
     triton_rt = Pi05FastKernelsInference(vla, capture=True, num_views=num_views)
     triton_rt.prepare_triton_inference()
     print(f"[bench] [{time.time()-t0:.1f}s] Triton runtime ready", flush=True)

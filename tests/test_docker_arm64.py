@@ -25,11 +25,11 @@ class TestDockerfileArm64:
     def test_has_entrypoint(self):
         content = (REPO_ROOT / "Dockerfile.arm64").read_text()
         assert "ENTRYPOINT" in content
-        assert "reflex" in content.lower()
+        assert "tether" in content.lower()
 
     def test_installs_reflex(self):
         content = (REPO_ROOT / "Dockerfile.arm64").read_text()
-        # The pip install line should pull reflex-vla with [serve] extras.
+        # The pip install line should pull tether-vla with [serve] extras.
         assert "pip install" in content
         assert "serve" in content
 
@@ -46,7 +46,7 @@ class TestDockerfileArm64:
         # in the install command.
         install_line = [
             line for line in content.splitlines()
-            if "pip install" in line and "reflex" in line.lower()
+            if "pip install" in line and "tether" in line.lower()
         ]
         joined = " ".join(install_line)
         assert "[gpu]" not in joined

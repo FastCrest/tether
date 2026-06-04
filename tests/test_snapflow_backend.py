@@ -26,16 +26,16 @@ requires_lerobot = pytest.mark.skipif(
     reason="requires [native]/[monolithic]/[rtc] extras (lerobot)",
 )
 
-from reflex.distill.teacher_loader import (
+from tether.distill.teacher_loader import (
     V03_TEACHER_ALLOWLIST,
     LoadedTeacher,
     _resolve_teacher_path,
     load_teacher,
     resolve_policy_type,
 )
-from reflex.finetune.backends import TrainerContext
-from reflex.finetune.backends.base import CheckpointResult
-from reflex.finetune.backends.snapflow_backend import (
+from tether.finetune.backends import TrainerContext
+from tether.finetune.backends.base import CheckpointResult
+from tether.finetune.backends.snapflow_backend import (
     DEFAULT_CONSISTENCY_ALPHA,
     SnapFlowBackend,
     _build_preprocessor,
@@ -44,9 +44,9 @@ from reflex.finetune.backends.snapflow_backend import (
     _save_student_checkpoint,
     _write_provenance,
 )
-from reflex.finetune.config import FinetuneConfig
-from reflex.finetune.hooks import HookRegistry
-from reflex.finetune.hooks.libero_drop_gate import (
+from tether.finetune.config import FinetuneConfig
+from tether.finetune.hooks import HookRegistry
+from tether.finetune.hooks.libero_drop_gate import (
     DEFAULT_GATE_THRESHOLD_PP,
     _LiberoUnavailable,
     attach_to,
@@ -106,7 +106,7 @@ class TestLoadTeacher:
         ]
 
         with patch(
-            "reflex.distill.teacher_loader._load_policy_for_type",
+            "tether.distill.teacher_loader._load_policy_for_type",
             return_value=fake_policy,
         ):
             loaded = load_teacher(tmp_path, device="cpu", dtype="fp32")
@@ -376,7 +376,7 @@ class TestSaveCheckpoint:
     def test_writes_pretrained_model_dir(self, tmp_path):
         """config.json must stay canonical (no `_reflex_*` pollution).
         Caught by 2026-04-25 distill smoke v3 + v5: PI05Config strict-
-        decode rejects unknown fields. Reflex distill metadata lives in
+        decode rejects unknown fields. Tether distill metadata lives in
         distill_provenance.json (separate test below)."""
         fake = MagicMock()
         def save(path):
@@ -393,9 +393,9 @@ class TestSaveCheckpoint:
         cfg = json.loads((ckpt / "config.json").read_text())
         # Canonical type field preserved
         assert cfg["type"] == "pi0"
-        # No reflex-distill pollution -- they would break PI05Config strict-decode
-        assert "_reflex_distill_method" not in cfg
-        assert "_reflex_distill_teacher_type" not in cfg
+        # No tether-distill pollution -- they would break PI05Config strict-decode
+        assert "_tether_distill_method" not in cfg
+        assert "_tether_distill_teacher_type" not in cfg
 
 
 class TestWriteProvenance:
@@ -454,16 +454,16 @@ class TestSnapFlowBackendFit:
         # enable_snapflow has a real isinstance check that rejects MagicMock —
         # patch it to no-op since this test doesn't exercise that path.
         with patch(
-            "reflex.distill.teacher_loader.load_teacher",
+            "tether.distill.teacher_loader.load_teacher",
             return_value=fake_loaded,
         ), patch(
-            "reflex.distill.snapflow_pi0_model.enable_snapflow",
+            "tether.distill.snapflow_pi0_model.enable_snapflow",
             return_value=None,
         ), patch(
-            "reflex.finetune.backends.snapflow_backend._build_velocity_adapters",
+            "tether.finetune.backends.snapflow_backend._build_velocity_adapters",
             return_value=(lambda *a, **kw: None, lambda *a, **kw: None),
         ), patch(
-            "reflex.finetune.backends.snapflow_backend._build_dataloader",
+            "tether.finetune.backends.snapflow_backend._build_dataloader",
             side_effect=ImportError("lerobot.datasets not available"),
         ):
             result = SnapFlowBackend().fit(ctx)
@@ -506,7 +506,7 @@ class TestLiberoDropGate:
     def test_libero_unavailable_silently_passes(self, tmp_path):
         ctx = _make_distill_ctx(tmp_path)
         with patch(
-            "reflex.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
+            "tether.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
             side_effect=_LiberoUnavailable("no libero"),
         ):
             libero_drop_gate(ctx, final_checkpoint_path=tmp_path, report=MagicMock())
@@ -516,7 +516,7 @@ class TestLiberoDropGate:
         ctx = _make_distill_ctx(tmp_path, threshold_pp=5.0)
         report = MagicMock()
         with patch(
-            "reflex.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
+            "tether.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
             return_value=(0.90, 0.87),  # 3 pp drop — within threshold
         ):
             libero_drop_gate(ctx, final_checkpoint_path=tmp_path, report=report)
@@ -527,7 +527,7 @@ class TestLiberoDropGate:
         ctx = _make_distill_ctx(tmp_path, threshold_pp=5.0)
         report = MagicMock()
         with patch(
-            "reflex.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
+            "tether.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
             return_value=(0.92, 0.80),  # 12 pp drop — over threshold
         ):
             libero_drop_gate(ctx, final_checkpoint_path=tmp_path, report=report)
@@ -539,7 +539,7 @@ class TestLiberoDropGate:
         """Unexpected errors abort — it's safer than silently shipping."""
         ctx = _make_distill_ctx(tmp_path)
         with patch(
-            "reflex.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
+            "tether.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
             side_effect=RuntimeError("sim crashed"),
         ):
             libero_drop_gate(ctx, final_checkpoint_path=tmp_path, report=MagicMock())
@@ -560,7 +560,7 @@ class TestAttachTo:
         report = MagicMock()
         # With threshold=2.0 and 3pp drop, we expect veto
         with patch(
-            "reflex.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
+            "tether.finetune.hooks.libero_drop_gate._run_teacher_student_rollouts",
             return_value=(0.90, 0.87),
         ):
             reg.run("on_postprocess", ctx, final_checkpoint_path=tmp_path, report=report)

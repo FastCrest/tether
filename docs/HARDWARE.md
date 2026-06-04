@@ -1,6 +1,6 @@
 # Hardware Requirements Guide
 
-> VRAM, compute, and platform requirements for inference, fine-tuning, and edge deployment across all Reflex-supported verticals.
+> VRAM, compute, and platform requirements for inference, fine-tuning, and edge deployment across all Tether-supported verticals.
 
 ---
 
@@ -89,9 +89,9 @@
 
 | Operation | Bandwidth | Notes |
 |---|---|---|
-| `reflex models pull` | 50+ Mbps recommended | SmolVLA ~500 MB, Pi0.5 ~4 GB |
-| `reflex serve` (local) | N/A | All inference is local |
-| `reflex serve` (cloud fallback) | 10+ Mbps | For `--cloud-fallback` mode |
+| `tether models pull` | 50+ Mbps recommended | SmolVLA ~500 MB, Pi0.5 ~4 GB |
+| `tether serve` (local) | N/A | All inference is local |
+| `tether serve` (cloud fallback) | 10+ Mbps | For `--cloud-fallback` mode |
 | ROS2 image topics | LAN only | ~30 MB/s for 640×480 RGB at 30 fps |
 
 ---
@@ -154,8 +154,8 @@
 ## Quick Compatibility Check
 
 ```bash
-# Run reflex doctor to verify your setup
-reflex doctor
+# Run tether doctor to verify your setup
+tether doctor
 
 # Check GPU info
 nvidia-smi
@@ -167,5 +167,5 @@ python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, GPU: {torch
 ## Further Reading
 
 - [Troubleshooting](./TROUBLESHOOTING.md) — CUDA and GPU error fixes
-- [CLI Command Reference](./cli_reference.md) — all `reflex` flags
+- [CLI Command Reference](./cli_reference.md) — all `tether` flags
 - [Adding a Robot](./adding_a_robot.md) — embodiment setup guide

@@ -1,4 +1,4 @@
-"""Tests for fleet-telemetry wiring: --robot-id → reflex_robot_info gauge.
+"""Tests for fleet-telemetry wiring: --robot-id → tether_robot_info gauge.
 
 The fleet-telemetry feature publishes a single info-style gauge per process so
 Grafana can join hot metrics against robot_id via `instance`. No extra label
@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.observability import REGISTRY, set_robot_info
-from reflex.observability.prometheus import reflex_robot_info
+from tether.observability import REGISTRY, set_robot_info
+from tether.observability.prometheus import tether_robot_info
 
 
 def _read_info_samples():
-    """Collect all label-sets present on reflex_robot_info from the REGISTRY."""
+    """Collect all label-sets present on tether_robot_info from the REGISTRY."""
     samples = []
     for metric in REGISTRY.collect():
-        if metric.name != "reflex_robot_info":
+        if metric.name != "tether_robot_info":
             continue
         for sample in metric.samples:
             samples.append(sample)
@@ -30,7 +30,7 @@ def test_robot_info_publishes_gauge_value_one():
         s for s in samples
         if s.labels.get("robot_id") == "test-robot-A"
     ]
-    assert matching, "expected a reflex_robot_info sample for test-robot-A"
+    assert matching, "expected a tether_robot_info sample for test-robot-A"
     assert matching[0].value == 1.0
     assert matching[0].labels["embodiment"] == "franka"
     assert matching[0].labels["model_id"] == "pi0-libero"
@@ -64,4 +64,4 @@ def test_distinct_robot_ids_produce_distinct_series():
 
 def test_robot_info_metric_is_registered_with_correct_label_keys():
     """Guards against accidental label-key edits that would break Grafana joins."""
-    assert set(reflex_robot_info._labelnames) == {"robot_id", "embodiment", "model_id"}
+    assert set(tether_robot_info._labelnames) == {"robot_id", "embodiment", "model_id"}

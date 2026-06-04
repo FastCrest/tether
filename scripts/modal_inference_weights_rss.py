@@ -28,7 +28,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-inference-weights-rss")
+app = modal.App("tether-inference-weights-rss")
 
 
 def _hf_secret():
@@ -62,7 +62,7 @@ image = (
         "lerobot==0.5.1",  # for PI05Policy in from_lerobot_policy
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -116,7 +116,7 @@ def run_rss_benchmark(model_id: str = "lerobot/pi05_libero_finetuned_v044"):
     rss_after_policy = _rss_mb()
     print(f"[rss]   policy loaded in {time.time()-t0:.1f}s, RSS={rss_after_policy:.1f} MB")
 
-    from reflex.models.vlas.pi05 import Pi05VLA
+    from tether.models.vlas.pi05 import Pi05VLA
     t0 = time.time()
     vla = Pi05VLA.from_lerobot_policy(policy)
     rss_after_module = _rss_mb()

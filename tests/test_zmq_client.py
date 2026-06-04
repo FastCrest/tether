@@ -11,8 +11,8 @@ import time
 import numpy as np
 import pytest
 
-from reflex.runtime.transports.zmq.client import ProfileData, ZmqRuntimeClient
-from reflex.runtime.transports.zmq.factory import create_zmq_server
+from tether.runtime.transports.zmq.client import ProfileData, ZmqRuntimeClient
+from tether.runtime.transports.zmq.factory import create_zmq_server
 
 
 class _MockRuntime:
