@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -4784,6 +4784,387 @@ def connect_status(
 
 
 app.add_typer(connect_app, name="connect")
+
+
+# ─── tether agent {start,status,run-once} ───────────────────────────────────
+
+agent_app = typer.Typer(
+    help="Enroll and run the FastCrest Cloud edge agent.",
+    no_args_is_help=True,
+)
+
+
+def _agent_imports() -> tuple[Any, Any, Any]:
+    try:
+        from tether.agent import client as agent_client
+        from tether.agent import config as agent_config
+        from tether.agent import daemon as agent_daemon
+    except ImportError as exc:
+        err_console.print(
+            "[red]Tether Agent modules are not available yet.[/red] "
+            "Install the agent extra or include src/tether/agent."
+        )
+        raise typer.Exit(1) from exc
+    return agent_config, agent_client, agent_daemon
+
+
+def _agent_get(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _agent_default_config_path(agent_config: Any) -> Path:
+    for name in ("default_config_path", "get_default_config_path"):
+        fn = getattr(agent_config, name, None)
+        if callable(fn):
+            return Path(fn())
+    return Path.home() / ".tether" / "agent.json"
+
+
+def _agent_load_config(agent_config: Any, config_path: Optional[Path]) -> Any:
+    load_fn = getattr(agent_config, "load_config", None) or getattr(
+        agent_config, "load_agent_config", None
+    )
+    if not callable(load_fn):
+        err_console.print("[red]Agent config module is missing load_config().[/red]")
+        raise typer.Exit(1)
+    try:
+        if config_path is not None:
+            cfg = load_fn(config_path)
+        else:
+            cfg = load_fn()
+        if cfg is None:
+            raise FileNotFoundError(config_path or _agent_default_config_path(agent_config))
+        return cfg
+    except FileNotFoundError as exc:
+        path = config_path or _agent_default_config_path(agent_config)
+        err_console.print(f"[red]No agent config found at {path}.[/red]")
+        raise typer.Exit(1) from exc
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]Failed to load agent config:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _agent_save_config(agent_config: Any, cfg: Any, config_path: Optional[Path]) -> None:
+    save_fn = getattr(agent_config, "save_config", None) or getattr(
+        agent_config, "save_agent_config", None
+    )
+    if not callable(save_fn):
+        err_console.print("[red]Agent config module is missing save_config().[/red]")
+        raise typer.Exit(1)
+    try:
+        if config_path is not None:
+            save_fn(cfg, config_path)
+        else:
+            save_fn(cfg)
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]Failed to save agent config:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _agent_client(agent_client: Any, cfg: Any = None, cloud_url: Optional[str] = None) -> Any:
+    cls = getattr(agent_client, "AgentClient", None)
+    if cls is None:
+        err_console.print("[red]Agent client module is missing AgentClient.[/red]")
+        raise typer.Exit(1)
+
+    token = _agent_get(cfg, "device_token") if cfg is not None else None
+    resolved_cloud = cloud_url or _agent_get(cfg, "cloud_url")
+    attempts = []
+    if cfg is not None:
+        attempts.append(lambda: cls(config=cfg))
+    attempts.extend(
+        (
+            lambda: cls(cloud_url=resolved_cloud, device_token=token),
+            lambda: cls(resolved_cloud, token),
+            lambda: cls(resolved_cloud),
+        )
+    )
+    last_exc: Exception | None = None
+    for attempt in attempts:
+        try:
+            return attempt()
+        except (AttributeError, TypeError) as exc:
+            last_exc = exc
+    err_console.print(f"[red]Failed to initialize AgentClient:[/red] {last_exc}")
+    raise typer.Exit(1)
+
+
+def _agent_enroll(client: Any, enroll_token: str) -> Any:
+    enroll_fn = getattr(client, "enroll", None)
+    if not callable(enroll_fn):
+        err_console.print("[red]AgentClient is missing enroll().[/red]")
+        raise typer.Exit(1)
+    request = None
+    try:
+        from tether.agent.models import EnrollRequest
+
+        request = EnrollRequest(enroll_token=enroll_token)
+    except Exception:  # noqa: BLE001
+        request = None
+    attempts = []
+    if request is not None:
+        attempts.append(lambda: enroll_fn(request))
+    attempts.extend(
+        (
+            lambda: enroll_fn(enroll_token=enroll_token),
+            lambda: enroll_fn(enroll_token),
+        )
+    )
+    last_exc: Exception | None = None
+    for attempt in attempts:
+        try:
+            response = attempt()
+            if hasattr(response, "to_config"):
+                return response.to_config(client.cloud_url)
+            return response
+        except TypeError as exc:
+            last_exc = exc
+        except Exception as exc:  # noqa: BLE001
+            err_console.print(f"[red]Enrollment failed:[/red] {exc}")
+            raise typer.Exit(1) from exc
+    err_console.print(f"[red]Enrollment failed:[/red] {last_exc}")
+    raise typer.Exit(1)
+
+
+def _agent_config_from_enrollment(agent_config: Any, enrollment: Any, cloud_url: str) -> Any:
+    if isinstance(enrollment, dict):
+        enrollment.setdefault("cloud_url", cloud_url)
+        return enrollment
+    if _agent_get(enrollment, "cloud_url") is not None:
+        return enrollment
+    cls = getattr(agent_config, "AgentConfig", None)
+    if cls is not None:
+        try:
+            return cls(
+                device_id=_agent_get(enrollment, "device_id"),
+                device_token=_agent_get(enrollment, "device_token"),
+                cloud_url=cloud_url,
+                workspace_id=_agent_get(enrollment, "workspace_id"),
+                heartbeat_interval_seconds=_agent_get(
+                    enrollment,
+                    "heartbeat_interval_seconds",
+                    30,
+                ),
+            )
+        except TypeError:
+            pass
+    if hasattr(enrollment, "to_dict"):
+        data = enrollment.to_dict()
+        data["cloud_url"] = cloud_url
+        return data
+    return enrollment
+
+
+def _agent_run_once(agent_daemon: Any, cfg: Any, client: Any = None) -> Any:
+    for name in ("run_once", "run_agent_once", "run_cycle"):
+        fn = getattr(agent_daemon, name, None)
+        if callable(fn):
+            attempts = []
+            if client is not None:
+                attempts.extend(
+                    (
+                        lambda: fn(config=cfg, client=client),
+                        lambda: fn(cfg, client),
+                    )
+                )
+            attempts.extend((lambda: fn(cfg), lambda: fn(config=cfg)))
+            last_exc: TypeError | None = None
+            for attempt in attempts:
+                try:
+                    return attempt()
+                except TypeError as exc:
+                    last_exc = exc
+            err_console.print(f"[red]Agent run-once failed:[/red] {last_exc}")
+            raise typer.Exit(1)
+    err_console.print("[red]Agent daemon module is missing run_once().[/red]")
+    raise typer.Exit(1)
+
+
+def _agent_run_loop(agent_daemon: Any, cfg: Any, client: Any = None) -> None:
+    for name in ("run_forever", "run_loop", "run_daemon", "start_daemon"):
+        fn = getattr(agent_daemon, name, None)
+        if callable(fn):
+            attempts = []
+            if client is not None:
+                attempts.extend(
+                    (
+                        lambda: fn(config=cfg, client=client),
+                        lambda: fn(cfg, client),
+                    )
+                )
+            attempts.extend((lambda: fn(cfg), lambda: fn(config=cfg)))
+            last_exc: TypeError | None = None
+            for attempt in attempts:
+                try:
+                    attempt()
+                    return
+                except TypeError as exc:
+                    last_exc = exc
+            err_console.print(f"[red]Agent loop failed:[/red] {last_exc}")
+            raise typer.Exit(1)
+    err_console.print("[red]Agent daemon module is missing run_loop().[/red]")
+    raise typer.Exit(1)
+
+
+def _agent_status_payload(cfg: Any) -> dict[str, Any]:
+    last_command = _agent_get(cfg, "last_command") or {}
+    last_command_result = _agent_get(
+        cfg,
+        "last_command_result",
+        _agent_get(last_command, "result"),
+    )
+    if hasattr(last_command_result, "to_dict"):
+        last_command_result = last_command_result.to_dict()
+    return {
+        "device_id": _agent_get(cfg, "device_id"),
+        "cloud_url": _agent_get(cfg, "cloud_url"),
+        "workspace_id": _agent_get(cfg, "workspace_id"),
+        "heartbeat_interval_seconds": _agent_get(
+            cfg,
+            "heartbeat_interval_seconds",
+            _agent_get(cfg, "heartbeat_interval"),
+        ),
+        "last_heartbeat_at": _agent_get(
+            cfg,
+            "last_heartbeat_at",
+            _agent_get(cfg, "last_heartbeat"),
+        ),
+        "last_command_id": _agent_get(
+            cfg,
+            "last_command_id",
+            _agent_get(last_command, "id"),
+        ),
+        "last_command_result": _agent_get(
+            {"result": last_command_result},
+            "result",
+        ),
+    }
+
+
+@agent_app.command("start")
+def agent_start(
+    cloud: Optional[str] = typer.Option(
+        None,
+        "--cloud",
+        help="FastCrest Cloud URL.",
+    ),
+    enroll_token: Optional[str] = typer.Option(
+        None,
+        "--enroll-token",
+        help="One-time enrollment token from FastCrest Cloud.",
+    ),
+    config_path: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        help="Path to agent config.",
+    ),
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Run one deterministic agent cycle and exit.",
+    ),
+) -> None:
+    """Enroll this machine if needed, then run the agent."""
+    agent_config, agent_client, agent_daemon = _agent_imports()
+    cfg = None
+    try:
+        cfg = _agent_load_config(agent_config, config_path)
+    except typer.Exit:
+        if not enroll_token:
+            err_console.print(
+                "[red]Missing agent config and no --enroll-token was provided.[/red]"
+            )
+            raise typer.Exit(1)
+
+    if enroll_token:
+        if not cloud:
+            cloud = _agent_get(cfg, "cloud_url") if cfg is not None else None
+        if not cloud:
+            err_console.print("[red]--cloud is required when enrolling.[/red]")
+            raise typer.Exit(2)
+        client = _agent_client(agent_client, cloud_url=cloud)
+        cfg = _agent_config_from_enrollment(
+            agent_config,
+            _agent_enroll(client, enroll_token),
+            cloud,
+        )
+        _agent_save_config(agent_config, cfg, config_path)
+        console.print(f"Enrolled device {_agent_get(cfg, 'device_id') or '(unknown)'}.")
+
+    if cfg is None:
+        err_console.print("[red]Missing agent config.[/red]")
+        raise typer.Exit(1)
+
+    if once:
+        client = _agent_client(agent_client, cfg=cfg)
+        _agent_run_once(agent_daemon, cfg, client)
+        console.print("Agent cycle complete.")
+    else:
+        console.print("Starting Tether Agent.")
+        client = _agent_client(agent_client, cfg=cfg)
+        _agent_run_loop(agent_daemon, cfg, client)
+
+
+@agent_app.command("status")
+def agent_status(
+    config_path: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        help="Path to agent config.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+) -> None:
+    """Show local Tether Agent identity and latest activity."""
+    agent_config, _agent_client_module, _agent_daemon_module = _agent_imports()
+    cfg = _agent_load_config(agent_config, config_path)
+    payload = _agent_status_payload(cfg)
+    if as_json:
+        console.print(json.dumps(payload, sort_keys=True))
+        return
+
+    table = Table(title="Tether Agent")
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    labels = {
+        "device_id": "Device ID",
+        "cloud_url": "Cloud URL",
+        "workspace_id": "Workspace ID",
+        "heartbeat_interval_seconds": "Heartbeat Interval",
+        "last_heartbeat_at": "Last Heartbeat",
+        "last_command_id": "Last Command ID",
+        "last_command_result": "Last Command Result",
+    }
+    for key, label in labels.items():
+        value = payload.get(key)
+        if key == "heartbeat_interval_seconds" and value is not None:
+            value = f"{value}s"
+        table.add_row(label, str(value) if value not in (None, "") else "-")
+    console.print(table)
+
+
+@agent_app.command("run-once")
+def agent_run_once(
+    config_path: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        help="Path to agent config.",
+    ),
+) -> None:
+    """Load config and run one agent cycle."""
+    agent_config, agent_client, agent_daemon = _agent_imports()
+    cfg = _agent_load_config(agent_config, config_path)
+    client = _agent_client(agent_client, cfg=cfg)
+    _agent_run_once(agent_daemon, cfg, client)
+    console.print("Agent cycle complete.")
+
+
+app.add_typer(agent_app, name="agent")
 
 
 # ─── tether traces {query, summary} ─────────────────────────────────────────
