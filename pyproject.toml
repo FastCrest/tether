@@ -191,6 +191,29 @@ tracing = [
     "opentelemetry-sdk>=1.30",
     "opentelemetry-exporter-otlp-proto-grpc>=1.30",
 ]
+# LeRobot interop — installs `lerobot>=0.5` so the SO-ARM100 adapter
+# (`reflex.embodiments.so_arm100`) can talk to the Feetech bus + import
+# LeRobot calibration JSONs. Use this on the host wired to the arm:
+#
+#   pip install 'reflex-vla[lerobot]'
+#   reflex serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
+#
+# lerobot 0.5.x requires Python >=3.12 (we skip on 3.10/3.11 to avoid pip's
+# ResolutionImpossible; users on JetPack 6 Python 3.10 can still construct an
+# adapter + run the conversion math, they just can't open a serial bus until
+# they upgrade to Python 3.12 or install scservo_sdk directly via the [so100]
+# extra).
+lerobot = [
+    "lerobot>=0.5.1; python_version >= '3.12'",
+]
+# SO-100 hardware extra — installs the scservo_sdk Python package on the
+# Raspberry Pi / host wired to the arm. Separate from [lerobot] because the
+# legacy auto_soarm path (used by the bench wizard) only needs the SDK, not
+# the full LeRobot stack. The two extras compose: `pip install
+# 'reflex-vla[so100,lerobot]'` gives you both code paths.
+so100 = [
+    "scservo-sdk>=0.0.4",
+]
 # Real-Time Chunking adapter (B.3). Pulls in lerobot's RTC module so
 # `tether serve --rtc` can wrap inference with the canonical RTCProcessor.
 # Lerobot is heavy (torch + vision + datasets); only install when serving
@@ -309,4 +332,5 @@ testpaths = ["tests"]
 asyncio_mode = "strict"
 markers = [
     "asyncio: mark a coroutine test for pytest-asyncio (strict mode)",
+    "hardware: requires a physical robot wired in; skipped unless RUN_HARDWARE_TESTS=1",
 ]
