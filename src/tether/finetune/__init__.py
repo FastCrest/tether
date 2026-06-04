@@ -16,10 +16,12 @@ Architecture: https://github.com/FastCrest/reflex-vault/blob/main/reflex_vla/01_
 from __future__ import annotations
 
 from tether.finetune.config import FinetuneConfig, FinetuneResult
+from tether.finetune.improve_worker import run_improve_worker
 from tether.finetune.run import run_finetune
 
 __all__ = [
     "FinetuneConfig",
     "FinetuneResult",
+    "run_improve_worker",
     "run_finetune",
 ]
