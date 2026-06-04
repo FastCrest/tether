@@ -40,6 +40,8 @@ class EnrollResponse:
     device_token: str
     workspace_id: str
     heartbeat_interval_seconds: int = 30
+    fleet_device_id: str | None = None
+    fleet_device_token: str | None = None
 
     def to_dict(self) -> JsonDict:
         return asdict(self)
@@ -51,6 +53,8 @@ class EnrollResponse:
             device_token=str(data["device_token"]),
             workspace_id=str(data["workspace_id"]),
             heartbeat_interval_seconds=int(data.get("heartbeat_interval_seconds", 30)),
+            fleet_device_id=data.get("fleet_device_id"),
+            fleet_device_token=data.get("fleet_device_token"),
         )
 
 
@@ -182,4 +186,43 @@ class CommandAck:
             finished_at=data.get("finished_at"),
             output=_dict(data.get("output")),
             error=data.get("error"),
+        )
+
+
+@dataclass(slots=True)
+class FailureEventPayload:
+    event_type: str
+    severity: str = "warning"
+    started_at: float | None = None
+    ended_at: float | None = None
+    artifact_id: str | None = None
+    assignment_id: str | None = None
+    rollout_id: str | None = None
+    rollout_stage_id: str | None = None
+    rollout_device_step_id: str | None = None
+    operator_note: str | None = None
+    do_not_train: bool = True
+    metadata: JsonDict = field(default_factory=dict)
+    diagnostic: JsonDict = field(default_factory=dict)
+
+    def to_dict(self) -> JsonDict:
+        data = asdict(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "FailureEventPayload":
+        return cls(
+            event_type=str(data["event_type"]),
+            severity=str(data.get("severity", "warning")),
+            started_at=data.get("started_at"),
+            ended_at=data.get("ended_at"),
+            artifact_id=data.get("artifact_id"),
+            assignment_id=data.get("assignment_id"),
+            rollout_id=data.get("rollout_id"),
+            rollout_stage_id=data.get("rollout_stage_id"),
+            rollout_device_step_id=data.get("rollout_device_step_id"),
+            operator_note=data.get("operator_note"),
+            do_not_train=bool(data.get("do_not_train", True)),
+            metadata=_dict(data.get("metadata")),
+            diagnostic=_dict(data.get("diagnostic")),
         )

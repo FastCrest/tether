@@ -19,6 +19,8 @@ class AgentConfig:
     cloud_url: str | None = None
     workspace_id: str | None = None
     device_token: str | None = None
+    fleet_device_id: str | None = None
+    fleet_device_token: str | None = None
     heartbeat_interval_seconds: int = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
     last_heartbeat_at: str | None = None
     last_command_id: str | None = None
@@ -46,6 +48,8 @@ class AgentConfig:
             cloud_url=data.get("cloud_url"),
             workspace_id=data.get("workspace_id"),
             device_token=data.get("device_token"),
+            fleet_device_id=data.get("fleet_device_id"),
+            fleet_device_token=data.get("fleet_device_token"),
             heartbeat_interval_seconds=int(
                 data.get("heartbeat_interval_seconds", DEFAULT_HEARTBEAT_INTERVAL_SECONDS)
             ),

@@ -13,6 +13,7 @@ from tether.agent.models import (
     CommandAck,
     EnrollRequest,
     EnrollResponse,
+    FailureEventPayload,
     HeartbeatPayload,
     JsonDict,
 )
@@ -30,11 +31,13 @@ class AgentClient:
         cloud_url: str,
         *,
         device_token: str | None = None,
+        fleet_device_token: str | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         session: Any | None = None,
     ) -> None:
         self.cloud_url = cloud_url.rstrip("/")
         self.device_token = device_token
+        self.fleet_device_token = fleet_device_token
         self.timeout_seconds = timeout_seconds
         self._session = session if session is not None else self._make_httpx_session(timeout_seconds)
 
@@ -72,6 +75,28 @@ class AgentClient:
             auth=True,
         )
 
+    def create_failure(
+        self,
+        device_id: str,
+        payload: FailureEventPayload | Mapping[str, Any],
+        *,
+        device_token: str | None = None,
+    ) -> JsonDict:
+        failure_token = device_token or self.fleet_device_token
+        if not failure_token:
+            raise AgentClientError("fleet device token is required for failure uploads")
+        if hasattr(payload, "to_dict"):
+            body = payload.to_dict()
+        else:
+            body = dict(payload)
+        return self._request(
+            "POST",
+            f"/fleet/devices/{urllib.parse.quote(device_id, safe='')}/failures",
+            json_body=body,
+            auth=True,
+            auth_token=failure_token,
+        )
+
     def _request(
         self,
         method: str,
@@ -80,13 +105,15 @@ class AgentClient:
         json_body: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
         auth: bool,
+        auth_token: str | None = None,
     ) -> Any:
         url = self._url(path, params)
         headers = {"Content-Type": "application/json"}
         if auth:
-            if not self.device_token:
+            token = auth_token or self.device_token
+            if not token:
                 raise AgentClientError("device token is required for authenticated agent calls")
-            headers["Authorization"] = f"Bearer {self.device_token}"
+            headers["Authorization"] = f"Bearer {token}"
 
         if self._session is not None:
             response = self._session.request(
@@ -149,6 +176,12 @@ def make_default_client(
     cloud_url: str,
     *,
     device_token: str | None = None,
+    fleet_device_token: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> AgentClient:
-    return AgentClient(cloud_url, device_token=device_token, timeout_seconds=timeout_seconds)
+    return AgentClient(
+        cloud_url,
+        device_token=device_token,
+        fleet_device_token=fleet_device_token,
+        timeout_seconds=timeout_seconds,
+    )

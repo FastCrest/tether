@@ -14,6 +14,8 @@ def test_config_round_trip_with_override_path(tmp_path):
         cloud_url="https://cloud.example.test",
         workspace_id="ws_123",
         device_token="tok_secret",
+        fleet_device_id="dev_fleet_123",
+        fleet_device_token="dvc_test_secret",
         heartbeat_interval_seconds=45,
         last_heartbeat_at="2026-06-04T12:00:00Z",
         last_command_id="cmd_1",

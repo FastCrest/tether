@@ -38,6 +38,10 @@ def run_once(
                 result = dict(result)
                 result["command_id"] = command_id
         _ack_command(client, config, command, result)
+        failure_upload = _upload_failure_event(client, config, command, result)
+        if failure_upload is not None:
+            result = dict(result)
+            result["failure_upload"] = failure_upload
         results.append(result)
 
     return {
@@ -155,6 +159,45 @@ def _client_poll_commands(client: Any, config: Any) -> Any:
     return _call_flexible(client.poll_commands)
 
 
+def _upload_failure_event(
+    client: Any,
+    config: Any,
+    command: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        from tether.agent.failures import build_failure_from_command_result
+    except ImportError:
+        return None
+
+    payload = build_failure_from_command_result(command, result, config=config)
+    if payload is None:
+        return None
+
+    device_id = _config_fleet_device_id(config)
+    token = _config_fleet_device_token(config)
+    client_token = getattr(client, "fleet_device_token", None)
+    if device_id is None:
+        return {"status": "skipped", "reason": "missing_fleet_device_id"}
+    if token is None and client_token is None:
+        return {"status": "skipped", "reason": "missing_fleet_device_token"}
+
+    create_failure = getattr(client, "create_failure", None)
+    if not callable(create_failure):
+        return {"status": "skipped", "reason": "client_missing_create_failure"}
+
+    try:
+        response = create_failure(str(device_id), payload, device_token=token)
+    except TypeError:
+        try:
+            response = create_failure(str(device_id), payload)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "failed", "reason": "failure_upload_failed", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "reason": "failure_upload_failed", "error": str(exc)}
+    return {"status": "uploaded", "response": response}
+
+
 def _heartbeat_model(payload: Mapping[str, Any]) -> Any:
     try:
         from tether.agent.models import HeartbeatPayload
@@ -176,6 +219,29 @@ def _command_ack(command_id: Any, result: Mapping[str, Any]) -> Any:
 def _config_device_id(config: Any) -> str | None:
     value = getattr(config, "device_id", None)
     return str(value) if value is not None else None
+
+
+def _config_fleet_device_id(config: Any) -> str | None:
+    value = getattr(config, "fleet_device_id", None)
+    if value is not None:
+        return str(value)
+    if _looks_like_fleet_device_token(getattr(config, "device_token", None)):
+        return _config_device_id(config)
+    return None
+
+
+def _config_fleet_device_token(config: Any) -> str | None:
+    value = getattr(config, "fleet_device_token", None)
+    if value is not None:
+        return str(value)
+    device_token = getattr(config, "device_token", None)
+    if _looks_like_fleet_device_token(device_token):
+        return str(device_token)
+    return None
+
+
+def _looks_like_fleet_device_token(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(("dvc_live_", "dvc_test_"))
 
 
 def _call_flexible(method: Callable[..., Any], payload: Any | None = None) -> Any:

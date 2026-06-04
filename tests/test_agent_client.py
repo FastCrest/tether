@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tether.agent.client import AgentClient, AgentClientError
-from tether.agent.models import CommandAck, EnrollRequest, HeartbeatPayload
+from tether.agent.models import CommandAck, EnrollRequest, FailureEventPayload, HeartbeatPayload
 
 
 class FakeResponse:
@@ -116,11 +116,49 @@ def test_ack_command_posts_ack_payload():
     assert request["json"]["succeeded"] is True
 
 
+def test_create_failure_posts_to_fleet_failure_endpoint_with_fleet_token():
+    session = FakeSession([FakeResponse(payload={"failure": {"id": "fail_1"}})])
+    client = AgentClient(
+        "https://cloud.example.test",
+        device_token="fca_dev_control",
+        fleet_device_token="dvc_test_failure",
+        session=session,
+    )
+
+    client.create_failure(
+        "dev/fleet",
+        FailureEventPayload(
+            event_type="diagnostic_failure",
+            diagnostic={"schema_version": 1, "producer": "tether-agent"},
+        ),
+    )
+
+    request = session.requests[0]
+    assert request["method"] == "POST"
+    assert request["url"] == "https://cloud.example.test/fleet/devices/dev%2Ffleet/failures"
+    assert request["headers"]["Authorization"] == "Bearer dvc_test_failure"
+    assert request["json"]["event_type"] == "diagnostic_failure"
+    assert request["json"]["do_not_train"] is True
+    assert "workspace_id" not in request["json"]
+    assert "device_id" not in request["json"]
+
+
 def test_authenticated_calls_require_device_token():
     client = AgentClient("https://cloud.example.test", session=FakeSession([]))
 
     with pytest.raises(AgentClientError, match="device token"):
         client.poll_commands("dev_1")
+
+
+def test_failure_upload_requires_fleet_device_token():
+    client = AgentClient(
+        "https://cloud.example.test",
+        device_token="fca_dev_control",
+        session=FakeSession([]),
+    )
+
+    with pytest.raises(AgentClientError, match="fleet device token"):
+        client.create_failure("dev_1", {"event_type": "diagnostic_failure"})
 
 
 def test_http_errors_raise_client_error():

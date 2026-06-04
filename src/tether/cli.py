@@ -4870,12 +4870,14 @@ def _agent_client(agent_client: Any, cfg: Any = None, cloud_url: Optional[str] =
         raise typer.Exit(1)
 
     token = _agent_get(cfg, "device_token") if cfg is not None else None
+    fleet_token = _agent_get(cfg, "fleet_device_token") if cfg is not None else None
     resolved_cloud = cloud_url or _agent_get(cfg, "cloud_url")
     attempts = []
     if cfg is not None:
         attempts.append(lambda: cls(config=cfg))
     attempts.extend(
         (
+            lambda: cls(cloud_url=resolved_cloud, device_token=token, fleet_device_token=fleet_token),
             lambda: cls(cloud_url=resolved_cloud, device_token=token),
             lambda: cls(resolved_cloud, token),
             lambda: cls(resolved_cloud),
@@ -4940,6 +4942,8 @@ def _agent_config_from_enrollment(agent_config: Any, enrollment: Any, cloud_url:
             return cls(
                 device_id=_agent_get(enrollment, "device_id"),
                 device_token=_agent_get(enrollment, "device_token"),
+                fleet_device_id=_agent_get(enrollment, "fleet_device_id"),
+                fleet_device_token=_agent_get(enrollment, "fleet_device_token"),
                 cloud_url=cloud_url,
                 workspace_id=_agent_get(enrollment, "workspace_id"),
                 heartbeat_interval_seconds=_agent_get(
@@ -5021,6 +5025,7 @@ def _agent_status_payload(cfg: Any) -> dict[str, Any]:
         "device_id": _agent_get(cfg, "device_id"),
         "cloud_url": _agent_get(cfg, "cloud_url"),
         "workspace_id": _agent_get(cfg, "workspace_id"),
+        "fleet_device_id": _agent_get(cfg, "fleet_device_id"),
         "heartbeat_interval_seconds": _agent_get(
             cfg,
             "heartbeat_interval_seconds",
@@ -5135,6 +5140,7 @@ def agent_status(
         "device_id": "Device ID",
         "cloud_url": "Cloud URL",
         "workspace_id": "Workspace ID",
+        "fleet_device_id": "Fleet Device ID",
         "heartbeat_interval_seconds": "Heartbeat Interval",
         "last_heartbeat_at": "Last Heartbeat",
         "last_command_id": "Last Command ID",

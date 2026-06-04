@@ -61,6 +61,8 @@ def fake_agent_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             return {
                 "device_id": "dev_123",
                 "device_token": "tok_123",
+                "fleet_device_id": "dev_fleet_123",
+                "fleet_device_token": "dvc_test_123",
                 "cloud_url": self.cloud_url,
                 "workspace_id": "ws_123",
                 "heartbeat_interval_seconds": 30,
@@ -107,6 +109,7 @@ def test_agent_status_json(
         "device_id": "dev_123",
         "cloud_url": "https://cloud.example.test",
         "workspace_id": "ws_123",
+        "fleet_device_id": "dev_fleet_123",
         "heartbeat_interval_seconds": 30,
         "last_heartbeat_at": "2026-06-04T12:00:00Z",
         "last_command_id": "cmd_123",
@@ -121,6 +124,7 @@ def test_agent_status_json(
         "device_id": "dev_123",
         "cloud_url": "https://cloud.example.test",
         "workspace_id": "ws_123",
+        "fleet_device_id": "dev_fleet_123",
         "heartbeat_interval_seconds": 30,
         "last_heartbeat_at": "2026-06-04T12:00:00Z",
         "last_command_id": "cmd_123",
@@ -157,6 +161,8 @@ def test_agent_start_once_enrollment_path(
             {
                 "device_id": "dev_123",
                 "device_token": "tok_123",
+                "fleet_device_id": "dev_fleet_123",
+                "fleet_device_token": "dvc_test_123",
                 "cloud_url": "https://cloud.example.test",
                 "workspace_id": "ws_123",
                 "heartbeat_interval_seconds": 30,
