@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from tether.agent.models import CommandResult, JsonDict
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30
+DEFAULT_LOCAL_SERVE_TIMEOUT_SECONDS = 3.0
 
 
 @dataclass(slots=True)
@@ -18,9 +19,12 @@ class AgentConfig:
     device_id: str | None = None
     cloud_url: str | None = None
     workspace_id: str | None = None
-    device_token: str | None = None
+    device_token: str | None = field(default=None, repr=False)
     fleet_device_id: str | None = None
-    fleet_device_token: str | None = None
+    fleet_device_token: str | None = field(default=None, repr=False)
+    local_serve_url: str | None = None
+    local_serve_api_key: str | None = field(default=None, repr=False)
+    local_serve_timeout_seconds: float = DEFAULT_LOCAL_SERVE_TIMEOUT_SECONDS
     heartbeat_interval_seconds: int = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
     last_heartbeat_at: str | None = None
     last_command_id: str | None = None
@@ -50,6 +54,11 @@ class AgentConfig:
             device_token=data.get("device_token"),
             fleet_device_id=data.get("fleet_device_id"),
             fleet_device_token=data.get("fleet_device_token"),
+            local_serve_url=data.get("local_serve_url", data.get("serve_url")),
+            local_serve_api_key=data.get("local_serve_api_key", data.get("serve_api_key")),
+            local_serve_timeout_seconds=float(
+                data.get("local_serve_timeout_seconds", DEFAULT_LOCAL_SERVE_TIMEOUT_SECONDS)
+            ),
             heartbeat_interval_seconds=int(
                 data.get("heartbeat_interval_seconds", DEFAULT_HEARTBEAT_INTERVAL_SECONDS)
             ),

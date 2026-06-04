@@ -5,15 +5,14 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+from tether.agent.resources import DEFAULT_SERVE_URL, collect_serve_status
 
 DEFAULT_DOCTOR_TIMEOUT_SECONDS = 60.0
-DEFAULT_SERVE_URL = "http://127.0.0.1:8000"
 MAX_OUTPUT_BYTES = 16 * 1024
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
-HttpGetJson = Callable[[str, float], tuple[int, Any]]
+HttpGetJson = Callable[..., tuple[int, Any]]
 
 
 def execute_command(
@@ -165,15 +164,11 @@ def run_serve_status_command(
 ) -> dict[str, Any]:
     base_url = _serve_url(command, config)
     timeout = float(_command_options(command).get("timeout_seconds", 3.0))
-    get_json = http_get_json or _http_get_json
-
-    health = _probe_json(get_json, f"{base_url}/health", timeout)
-    config_probe = _probe_json(get_json, f"{base_url}/config", timeout)
-    reachable = health["ok"] or config_probe["ok"]
-    ready = bool(
-        health["ok"]
-        and isinstance(health.get("body"), Mapping)
-        and health["body"].get("status") == "ok"
+    output = collect_serve_status(
+        base_url,
+        api_key=_serve_api_key(command, config),
+        timeout_seconds=timeout,
+        http_get_json=http_get_json,
     )
 
     return _result(
@@ -182,13 +177,7 @@ def run_serve_status_command(
         succeeded=True,
         started_at=started_at,
         finished_at=_timestamp(now),
-        output={
-            "url": base_url,
-            "reachable": reachable,
-            "ready": ready,
-            "health": health,
-            "config": config_probe,
-        },
+        output=output,
     )
 
 
@@ -205,46 +194,6 @@ def bound_result(result: Mapping[str, Any], *, max_bytes: int = MAX_OUTPUT_BYTES
 
 def _subprocess_runner(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, **kwargs)
-
-
-def _http_get_json(url: str, timeout: float) -> tuple[int, Any]:
-    request = Request(url, headers={"Accept": "application/json"})
-    with urlopen(request, timeout=timeout) as response:
-        body = response.read(MAX_OUTPUT_BYTES + 1)
-        text = body.decode("utf-8", errors="replace")
-        return int(response.status), json.loads(text)
-
-
-def _probe_json(get_json: HttpGetJson, url: str, timeout: float) -> dict[str, Any]:
-    try:
-        status_code, body = get_json(url, timeout)
-    except HTTPError as exc:
-        raw = exc.read(MAX_OUTPUT_BYTES + 1).decode("utf-8", errors="replace")
-        try:
-            body = json.loads(raw)
-        except json.JSONDecodeError:
-            body = raw
-        return {
-            "ok": False,
-            "status_code": exc.code,
-            "body": _truncate_jsonish(body, max_bytes=MAX_OUTPUT_BYTES),
-            "error": {"reason": "http_error"},
-        }
-    except (URLError, TimeoutError, OSError) as exc:
-        return {
-            "ok": False,
-            "status_code": None,
-            "body": None,
-            "error": {"reason": "unreachable", "message": str(exc)},
-        }
-    except json.JSONDecodeError as exc:
-        return {
-            "ok": False,
-            "status_code": None,
-            "body": None,
-            "error": {"reason": "malformed_json", "message": str(exc)},
-        }
-    return {"ok": 200 <= int(status_code) < 300, "status_code": status_code, "body": body}
 
 
 def _normalize_doctor_summary(payload: Mapping[str, Any]) -> dict[str, int]:
@@ -312,6 +261,14 @@ def _serve_url(command: Mapping[str, Any], config: Any | None) -> str:
     if not value and config is not None:
         value = getattr(config, "serve_url", None) or getattr(config, "local_serve_url", None)
     return str(value or DEFAULT_SERVE_URL).rstrip("/")
+
+
+def _serve_api_key(command: Mapping[str, Any], config: Any | None) -> str | None:
+    options = _command_options(command)
+    value = options.get("local_serve_api_key") or options.get("serve_api_key")
+    if not value and config is not None:
+        value = getattr(config, "local_serve_api_key", None) or getattr(config, "serve_api_key", None)
+    return str(value) if value else None
 
 
 def _command_options(command: Mapping[str, Any]) -> dict[str, Any]:

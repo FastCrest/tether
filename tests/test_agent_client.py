@@ -143,6 +143,34 @@ def test_create_failure_posts_to_fleet_failure_endpoint_with_fleet_token():
     assert "device_id" not in request["json"]
 
 
+def test_fleet_heartbeat_posts_to_fleet_endpoint_with_fleet_device_token():
+    session = FakeSession([FakeResponse(payload={"ok": True})])
+    client = AgentClient(
+        "https://cloud.example.test",
+        device_token="fca_dev_control",
+        fleet_device_token="dvc_test_heartbeat",
+        session=session,
+    )
+
+    client.fleet_heartbeat(
+        "dev/fleet",
+        {
+            "latency_p99_ms": 42.0,
+            "mem_used_mb": 1024.0,
+            "artifact_version": "art_1",
+            "extra": {"route_readiness": {"serve_ready": True}},
+        },
+    )
+
+    request = session.requests[0]
+    assert request["method"] == "POST"
+    assert request["url"] == "https://cloud.example.test/fleet/devices/dev%2Ffleet/heartbeat"
+    assert request["headers"]["Authorization"] == "Bearer dvc_test_heartbeat"
+    assert request["json"]["latency_p99_ms"] == 42.0
+    assert request["json"]["artifact_version"] == "art_1"
+    assert request["json"]["extra"]["route_readiness"]["serve_ready"] is True
+
+
 def test_authenticated_calls_require_device_token():
     client = AgentClient("https://cloud.example.test", session=FakeSession([]))
 
@@ -159,6 +187,17 @@ def test_failure_upload_requires_fleet_device_token():
 
     with pytest.raises(AgentClientError, match="fleet device token"):
         client.create_failure("dev_1", {"event_type": "diagnostic_failure"})
+
+
+def test_fleet_heartbeat_requires_fleet_device_token():
+    client = AgentClient(
+        "https://cloud.example.test",
+        device_token="fca_dev_control",
+        session=FakeSession([]),
+    )
+
+    with pytest.raises(AgentClientError, match="fleet device token"):
+        client.fleet_heartbeat("dev_1", {"extra": {"route_readiness": {}}})
 
 
 def test_http_errors_raise_client_error():

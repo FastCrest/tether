@@ -22,8 +22,10 @@ def run_once(
     now: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
     timestamp = _timestamp(now)
-    heartbeat_payload = _heartbeat_payload(config, timestamp)
+    route_readiness = _collect_route_readiness(config, timestamp)
+    heartbeat_payload = _heartbeat_payload(config, timestamp, route_readiness=route_readiness)
     heartbeat_response = _client_heartbeat(client, config, heartbeat_payload)
+    fleet_heartbeat = _client_fleet_readiness_heartbeat(client, config, route_readiness, timestamp)
 
     raw_commands = _client_poll_commands(client, config)
     commands = _normalize_commands(raw_commands)
@@ -46,6 +48,7 @@ def run_once(
 
     return {
         "heartbeat": heartbeat_response,
+        "fleet_heartbeat": fleet_heartbeat,
         "commands_polled": len(commands),
         "commands_executed": len(results),
         "results": results,
@@ -85,7 +88,12 @@ def run_forever(
             signal.signal(signal.SIGINT, old_handler)
 
 
-def _heartbeat_payload(config: Any, observed_at: float) -> dict[str, Any]:
+def _heartbeat_payload(
+    config: Any,
+    observed_at: float,
+    *,
+    route_readiness: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = {
         "device_id": getattr(config, "device_id", None),
         "observed_at": observed_at,
@@ -97,7 +105,32 @@ def _heartbeat_payload(config: Any, observed_at: float) -> dict[str, Any]:
         value = getattr(config, attr, None)
         if value is not None:
             payload[attr] = value
+    if isinstance(route_readiness, Mapping):
+        serve_status = route_readiness.get("serve_status")
+        if isinstance(serve_status, Mapping):
+            payload["serve_status"] = dict(serve_status)
+    doctor_summary = _doctor_summary_from_config(config)
+    if doctor_summary is not None:
+        payload["doctor_summary"] = doctor_summary
     return payload
+
+
+def _collect_route_readiness(config: Any, observed_at: float) -> dict[str, Any]:
+    try:
+        from tether.agent.resources import collect_route_readiness
+    except ImportError:
+        return {}
+    try:
+        return collect_route_readiness(config, observed_at=observed_at)
+    except Exception:  # noqa: BLE001
+        return {
+            "schema_version": 1,
+            "producer": "tether-agent",
+            "observed_at": observed_at,
+            "serve_reachable": False,
+            "serve_ready": False,
+            "errors": [{"probe": "readiness", "reason": "collector_failed"}],
+        }
 
 
 def _collect_hardware_profile() -> Any | None:
@@ -198,6 +231,53 @@ def _upload_failure_event(
     return {"status": "uploaded", "response": response}
 
 
+def _client_fleet_readiness_heartbeat(
+    client: Any,
+    config: Any,
+    route_readiness: Mapping[str, Any],
+    observed_at: float,
+) -> dict[str, Any]:
+    device_id = _config_fleet_device_id(config)
+    token = _config_fleet_device_token(config)
+    client_token = getattr(client, "fleet_device_token", None)
+    if device_id is None:
+        return {"status": "skipped", "reason": "missing_fleet_device_id"}
+    if token is None and client_token is None:
+        return {"status": "skipped", "reason": "missing_fleet_device_token"}
+
+    fleet_heartbeat = getattr(client, "fleet_heartbeat", None)
+    if not callable(fleet_heartbeat):
+        return {"status": "skipped", "reason": "client_missing_fleet_heartbeat"}
+
+    payload = _fleet_readiness_payload(config, route_readiness, observed_at)
+    try:
+        response = fleet_heartbeat(str(device_id), payload, device_token=token)
+    except TypeError:
+        try:
+            response = fleet_heartbeat(str(device_id), payload)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "failed", "reason": "fleet_heartbeat_failed", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "reason": "fleet_heartbeat_failed", "error": str(exc)}
+    return {"status": "posted", "response": response, "payload": payload}
+
+
+def _fleet_readiness_payload(
+    config: Any,
+    route_readiness: Mapping[str, Any],
+    observed_at: float,
+) -> dict[str, Any]:
+    try:
+        from tether.agent.resources import fleet_readiness_heartbeat_payload
+    except ImportError:
+        return {"extra": {"route_readiness": dict(route_readiness)}}
+    return fleet_readiness_heartbeat_payload(
+        config,
+        route_readiness=route_readiness,
+        observed_at=observed_at,
+    )
+
+
 def _heartbeat_model(payload: Mapping[str, Any]) -> Any:
     try:
         from tether.agent.models import HeartbeatPayload
@@ -214,6 +294,24 @@ def _command_ack(command_id: Any, result: Mapping[str, Any]) -> Any:
     payload = dict(result)
     payload["command_id"] = str(command_id)
     return CommandAck.from_dict(payload)
+
+
+def _doctor_summary_from_config(config: Any) -> dict[str, int] | None:
+    result = getattr(config, "last_command_result", None)
+    if result is None:
+        return None
+    output = getattr(result, "output", None)
+    if output is None and isinstance(result, Mapping):
+        output = result.get("output")
+    if not isinstance(output, Mapping):
+        return None
+    summary = output.get("summary")
+    if not isinstance(summary, Mapping):
+        doctor = output.get("doctor")
+        summary = doctor.get("summary") if isinstance(doctor, Mapping) else None
+    if not isinstance(summary, Mapping):
+        return None
+    return {key: int(summary.get(key, 0) or 0) for key in ("pass", "fail", "warn", "skip")}
 
 
 def _config_device_id(config: Any) -> str | None:

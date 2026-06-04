@@ -14,6 +14,7 @@ from tether.agent.models import (
     EnrollRequest,
     EnrollResponse,
     FailureEventPayload,
+    FleetHeartbeatPayload,
     HeartbeatPayload,
     JsonDict,
 )
@@ -95,6 +96,28 @@ class AgentClient:
             json_body=body,
             auth=True,
             auth_token=failure_token,
+        )
+
+    def fleet_heartbeat(
+        self,
+        device_id: str,
+        payload: FleetHeartbeatPayload | Mapping[str, Any],
+        *,
+        device_token: str | None = None,
+    ) -> JsonDict:
+        heartbeat_token = device_token or self.fleet_device_token
+        if not heartbeat_token:
+            raise AgentClientError("fleet device token is required for fleet heartbeats")
+        if hasattr(payload, "to_dict"):
+            body = payload.to_dict()
+        else:
+            body = dict(payload)
+        return self._request(
+            "POST",
+            f"/fleet/devices/{urllib.parse.quote(device_id, safe='')}/heartbeat",
+            json_body=body,
+            auth=True,
+            auth_token=heartbeat_token,
         )
 
     def _request(

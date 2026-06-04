@@ -159,3 +159,36 @@ def test_serve_status_ready_fake_server():
     assert result["output"]["ready"] is True
     assert result["output"]["health"]["body"]["state"] == "ready"
     assert result["output"]["config"]["body"]["robot_id"] == "robot_1"
+
+
+def test_serve_status_uses_local_api_key_and_sanitizes_response():
+    calls = []
+
+    def get_json(url, timeout, headers=None):
+        calls.append((url, dict(headers or {})))
+        if url.endswith("/health"):
+            return 200, {"status": "ok", "state": "ready", "export_dir": "/tmp/secret/model"}
+        assert headers["Authorization"] == "Bearer serve_secret"
+        return 200, {
+            "robot_id": "robot_1",
+            "api_key": "serve_secret",
+            "signed_url": "https://example.test/blob?token=secret",
+        }
+
+    result = execute_command(
+        {
+            "id": "cmd_1",
+            "type": "serve_status",
+            "serve_url": "http://127.0.0.1:9999",
+            "local_serve_api_key": "serve_secret",
+        },
+        http_get_json=get_json,
+        now=lambda: 10.0,
+    )
+    rendered = json.dumps(result, sort_keys=True)
+
+    assert result["output"]["ready"] is True
+    assert calls[1][1]["Authorization"] == "Bearer serve_secret"
+    assert "serve_secret" not in rendered
+    assert "signed_url" not in rendered
+    assert "/tmp/secret/model" not in rendered

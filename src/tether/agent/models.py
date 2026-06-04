@@ -12,6 +12,12 @@ def _dict(value: Mapping[str, Any] | None) -> JsonDict:
     return dict(value or {})
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    return float(value)
+
+
 @dataclass(slots=True)
 class EnrollRequest:
     enroll_token: str
@@ -83,6 +89,8 @@ class HeartbeatPayload:
     agent_version: str | None = None
     tether_version: str | None = None
     hardware_profile: JsonDict = field(default_factory=dict)
+    serve_status: JsonDict = field(default_factory=dict)
+    doctor_summary: JsonDict = field(default_factory=dict)
     last_command_id: str | None = None
     last_command_result: CommandResult | JsonDict | None = None
     last_heartbeat_at: str | None = None
@@ -110,9 +118,42 @@ class HeartbeatPayload:
             agent_version=data.get("agent_version"),
             tether_version=data.get("tether_version"),
             hardware_profile=_dict(data.get("hardware_profile")),
+            serve_status=_dict(data.get("serve_status")),
+            doctor_summary=_dict(data.get("doctor_summary")),
             last_command_id=data.get("last_command_id"),
             last_command_result=parsed_result,
             last_heartbeat_at=data.get("last_heartbeat_at"),
+        )
+
+
+@dataclass(slots=True)
+class FleetHeartbeatPayload:
+    latency_p50_ms: float | None = None
+    latency_p95_ms: float | None = None
+    latency_p99_ms: float | None = None
+    mem_used_mb: float | None = None
+    gpu_util_pct: float | None = None
+    action_chunks_completed: int = 0
+    failure_count: int = 0
+    artifact_version: str | None = None
+    extra: JsonDict = field(default_factory=dict)
+
+    def to_dict(self) -> JsonDict:
+        data = asdict(self)
+        return {key: value for key, value in data.items() if value is not None}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "FleetHeartbeatPayload":
+        return cls(
+            latency_p50_ms=_optional_float(data.get("latency_p50_ms")),
+            latency_p95_ms=_optional_float(data.get("latency_p95_ms")),
+            latency_p99_ms=_optional_float(data.get("latency_p99_ms")),
+            mem_used_mb=_optional_float(data.get("mem_used_mb")),
+            gpu_util_pct=_optional_float(data.get("gpu_util_pct")),
+            action_chunks_completed=int(data.get("action_chunks_completed", 0) or 0),
+            failure_count=int(data.get("failure_count", 0) or 0),
+            artifact_version=data.get("artifact_version"),
+            extra=_dict(data.get("extra")),
         )
 
 
