@@ -1,13 +1,13 @@
 """Customer first-run dogfood test.
 
 Pretends to be a first-time user who has only read the README.md of
-reflex-vla. Uses NVIDIA's TRT container (as the README recommends for
+tether-vla. Uses NVIDIA's TRT container (as the README recommends for
 GPU) and follows the quickstart verbatim:
 
-  1. Install (pip install 'reflex-vla[serve,gpu] @ git+...')
-  2. Explore CLI (reflex --help, reflex models, reflex targets, reflex doctor)
-  3. Export (reflex export lerobot/smolvla_base --target desktop --output ./smol)
-  4. Serve (reflex serve ./smol --port 8000 &)
+  1. Install (pip install 'tether[serve,gpu] @ git+...')
+  2. Explore CLI (tether --help, tether models, tether targets, tether doctor)
+  3. Export (tether export lerobot/smolvla_base --target desktop --output ./smol)
+  4. Serve (tether serve ./smol --port 8000 &)
   5. POST /act with the README's exact curl body
 
 Records every stdout/stderr. Does NOT troubleshoot on the fly — the point
@@ -20,7 +20,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-customer-dogfood")
+app = modal.App("tether-customer-dogfood")
 
 
 def _repo_head_sha() -> str:
@@ -57,11 +57,11 @@ image = (
     # from the public git URL. If this fails, that's a real customer failure.
     .run_commands(
         # Customers don't get a pre-cloned repo; they install from the public URL.
-        # README (post-fix) says: pip install 'reflex-vla[serve,gpu,monolithic] @ git+...'
+        # README (post-fix) says: pip install 'tether[serve,gpu,monolithic] @ git+...'
         # SHA-pinning the install URL is what forces Modal to rebuild the image
         # when we commit — without this, the cached image from the previous dogfood
         # run is reused and the new fixes aren't actually tested.
-        f'pip install "reflex-vla[serve,gpu,monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[serve,gpu,monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
     )
 )
 
@@ -143,34 +143,34 @@ def customer_first_run():
     log_step("0. environment baseline")
     log_result(_run("python --version"))
     log_result(_run("pip --version"))
-    log_result(_run("which reflex"))
-    log_result(_run("reflex --version", timeout=30))
+    log_result(_run("which tether"))
+    log_result(_run("tether --version", timeout=30))
 
     # ─── Step 1: naive CLI exploration (what a new user types) ───
     log_step("1. first CLI exploration — customer tries --help",
-             "customer will type `reflex --help` first")
-    log_result(_run("reflex --help", timeout=60))
+             "customer will type `tether --help` first")
+    log_result(_run("tether --help", timeout=60))
 
-    # `reflex doctor` is called out in the README. Customer tries it.
-    log_step("1b. reflex doctor — README says run first if issues",
-             "README: 'Something not working? Run `reflex doctor` first'")
-    log_result(_run("reflex doctor", timeout=60))
+    # `tether doctor` is called out in the README. Customer tries it.
+    log_step("1b. tether doctor — README says run first if issues",
+             "README: 'Something not working? Run `tether doctor` first'")
+    log_result(_run("tether doctor", timeout=60))
 
-    # `reflex models` — README says "lists current support at any time"
-    log_step("1c. reflex models")
-    log_result(_run("reflex models", timeout=30))
+    # `tether models` — README says "lists current support at any time"
+    log_step("1c. tether models")
+    log_result(_run("tether models", timeout=30))
 
-    # `reflex targets` — README says "lists current profiles"
-    log_step("1d. reflex targets")
-    log_result(_run("reflex targets", timeout=30))
+    # `tether targets` — README says "lists current profiles"
+    log_step("1d. tether targets")
+    log_result(_run("tether targets", timeout=30))
 
     # ─── Step 2: export (verbatim from README quickstart) ───
-    log_step("2. reflex export lerobot/smolvla_base --target desktop --output ./smol",
+    log_step("2. tether export lerobot/smolvla_base --target desktop --output ./smol",
              "exact command from README quickstart, step 2")
     # smolvla is smallest (1.6GB) → fastest customer experience
     export_dir = "/tmp/smol"
     log_result(_run(
-        f"reflex export lerobot/smolvla_base --target desktop --output {export_dir}",
+        f"tether export lerobot/smolvla_base --target desktop --output {export_dir}",
         timeout=1800,
     ))
 
@@ -184,7 +184,7 @@ def customer_first_run():
     log_result(_run(f"head -30 {export_dir}/VERIFICATION.md 2>/dev/null || echo 'no file'"))
 
     # ─── Step 3: serve — start in background, give it time to warm up ───
-    log_step("3. reflex serve (from README: reflex serve ./smol --port 8000)",
+    log_step("3. tether serve (from README: tether serve ./smol --port 8000)",
              "customer starts the HTTP server")
     # Start in background; we'll read from log file afterwards for the transcript
     server_log_path = "/tmp/serve.log"
@@ -192,12 +192,12 @@ def customer_first_run():
     server_env["PYTHONUNBUFFERED"] = "1"
     log_fh = open(server_log_path, "wb")
     server_proc = subprocess.Popen(
-        ["reflex", "serve", export_dir, "--port", "8000", "--host", "127.0.0.1"],
+        ["tether", "serve", export_dir, "--port", "8000", "--host", "127.0.0.1"],
         stdout=log_fh, stderr=subprocess.STDOUT,
         env=server_env,
     )
 
-    # README claims "first reflex serve takes ~30-90s to warm up" — give it 120s
+    # README claims "first tether serve takes ~30-90s to warm up" — give it 120s
     print("    [note] waiting up to 120s for server to be ready (per README warmup estimate)", flush=True)
     ready = False
     ready_after = None

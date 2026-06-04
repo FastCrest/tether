@@ -18,7 +18,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-zmq-vs-http-ab")
+app = modal.App("tether-zmq-vs-http-ab")
 
 
 def _repo_head_sha() -> str:
@@ -47,7 +47,7 @@ image = (
         "httpx>=0.24.0",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -133,7 +133,7 @@ def run_ab_benchmark(n_trials: int = 200, n_warmup: int = 10) -> dict:
     # ── ARM B: ZMQ + msgpack (no JPEG) ───────────────────────────────
     print(f"\n[ab] ARM B: ZMQ + msgpack (no JPEG)", flush=True)
 
-    from reflex.runtime.transports.zmq.serializers import (
+    from tether.runtime.transports.zmq.serializers import (
         encode_observation,
         decode_observation,
     )

@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-gr00t-test")
+app = modal.App("tether-gr00t-test")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -20,10 +20,10 @@ image = (
         "onnxscript", "numpy", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -40,13 +40,13 @@ def run_gr00t_export():
         tag = "PASS" if status == "pass" else "FAIL"
         print(f"{tag}: {name} — {detail}", flush=True)
 
-    export_dir = "/tmp/reflex_gr00t_export"
+    export_dir = "/tmp/tether_gr00t_export"
 
     # Step 1: Load + detect
     print("=== Step 1: Load GR00T checkpoint & detect ===", flush=True)
     start = time.time()
     try:
-        from reflex.checkpoint import load_checkpoint, detect_model_type
+        from tether.checkpoint import load_checkpoint, detect_model_type
         state_dict, _ = load_checkpoint("nvidia/GR00T-N1.6-3B")
         model_type = detect_model_type(state_dict)
         total_params = sum(v.numel() for v in state_dict.values())
@@ -67,7 +67,7 @@ def run_gr00t_export():
     print("\n=== Step 2: Build GR00T DiT expert stack ===", flush=True)
     start = time.time()
     try:
-        from reflex.exporters.gr00t import build_gr00t_expert_stack
+        from tether.exporters.gr00t import build_gr00t_expert_stack
         expert_stack, meta = build_gr00t_expert_stack(state_dict, embodiment_id=0)
         elapsed = time.time() - start
         log("build_expert", "pass",
@@ -100,13 +100,13 @@ def run_gr00t_export():
         log("forward", "fail", f"{str(e)[:300]}\n{traceback.format_exc()[:500]}")
         return results
 
-    # Step 4: Full reflex export (ONNX + validation)
-    print("\n=== Step 4: reflex export nvidia/GR00T-N1.6-3B ===", flush=True)
+    # Step 4: Full tether export (ONNX + validation)
+    print("\n=== Step 4: tether export nvidia/GR00T-N1.6-3B ===", flush=True)
     del state_dict
     del expert_stack
     start = time.time()
     r = subprocess.run([
-        "reflex", "export", "nvidia/GR00T-N1.6-3B",
+        "tether", "export", "nvidia/GR00T-N1.6-3B",
         "--target", "desktop",
         "--output", export_dir,
     ], capture_output=True, text=True, timeout=900)

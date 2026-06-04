@@ -19,9 +19,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.vision import VisionBackbone
-from reflex.models.vision.siglip_backbone import SigLIPBackbone
-from reflex.registry.components import VISION_BACKBONES
+from tether.models.vision import VisionBackbone
+from tether.models.vision.siglip_backbone import SigLIPBackbone
+from tether.registry.components import VISION_BACKBONES
 
 
 # ─── Registration ───────────────────────────────────────────────────────

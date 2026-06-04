@@ -18,7 +18,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-fast-kernels-day7-cuda-graph")
+app = modal.App("tether-fast-kernels-day7-cuda-graph")
 
 
 def _repo_head_sha() -> str:
@@ -53,7 +53,7 @@ image = (
         "ninja",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -80,7 +80,7 @@ def run_day7_cuda_graph(model_id: str = "lerobot/pi05_libero_finetuned_v044") ->
     policy = PI05Policy.from_pretrained(model_id)
     policy = policy.to(dtype=torch.float32).to("cpu")
 
-    from reflex.models.vlas.pi05 import Pi05VLA
+    from tether.models.vlas.pi05 import Pi05VLA
     vla = Pi05VLA.from_lerobot_policy(policy)
     del policy
     vla.vision_backbone.to("cuda")
@@ -90,7 +90,7 @@ def run_day7_cuda_graph(model_id: str = "lerobot/pi05_libero_finetuned_v044") ->
 
     # ── Build EAGER runtime (capture=False) ──────────────────────────
     t0 = time.time()
-    from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
+    from tether.runtime.fast_inference.pi05 import Pi05FastKernelsInference
     eager_rt = Pi05FastKernelsInference(vla, capture=False)
     eager_rt.prepare_triton_inference()
     print(f"[d7] [{time.time()-t0:.1f}s] Eager runtime ready", flush=True)

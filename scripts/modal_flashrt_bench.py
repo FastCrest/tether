@@ -195,8 +195,8 @@ def bench(
 
     # 4. Summary + comparison context
     print(f"\n[4/4] context")
-    print(f"  Reflex Triton+Graph (A100, pi0.5): 51.0 ms (2.5x over PyTorch)")
-    print(f"  Reflex cuda-graphs A/B (A100):     207.74 ms / chunk (1.30x)")
+    print(f"  Tether Triton+Graph (A100, pi0.5): 51.0 ms (2.5x over PyTorch)")
+    print(f"  Tether cuda-graphs A/B (A100):     207.74 ms / chunk (1.30x)")
     print(f"  FlashRT published (4090):           community-tested SM89")
     print(f"  FlashRT published (5090):           17.58 ms Pi0.5 2-view")
     print(f"  FlashRT published (Thor):           44 ms / 39.78 ms NVFP4")

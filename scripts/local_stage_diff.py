@@ -3,8 +3,8 @@
 Usage:
     python scripts/local_stage_diff.py [--export-dir PATH]
 
-Expects /tmp/reflex_libero_export/ to already have our ONNX files. If not,
-run `reflex export lerobot/smolvla_libero --target desktop --output /tmp/reflex_libero_export/` first.
+Expects /tmp/tether_libero_export/ to already have our ONNX files. If not,
+run `tether export lerobot/smolvla_libero --target desktop --output /tmp/tether_libero_export/` first.
 """
 import argparse
 import sys
@@ -103,10 +103,10 @@ def main(export_dir: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--export-dir", default="/tmp/reflex_libero_export")
+    parser.add_argument("--export-dir", default="/tmp/tether_libero_export")
     args = parser.parse_args()
     if not Path(args.export_dir).exists():
-        print(f"ERROR: {args.export_dir} doesn't exist. Run `reflex export "
+        print(f"ERROR: {args.export_dir} doesn't exist. Run `tether export "
               f"lerobot/smolvla_libero --target desktop --output {args.export_dir}` first.")
         sys.exit(1)
     main(args.export_dir)

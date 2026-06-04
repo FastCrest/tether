@@ -1,4 +1,4 @@
-"""Path B benchmark: can Reflex actually beat torch.compile on GPU?
+"""Path B benchmark: can Tether actually beat torch.compile on GPU?
 
 Tests four execution paths for each of 4 VLAs:
 1. PyTorch eager (baseline)
@@ -14,7 +14,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-bench-path-b")
+app = modal.App("tether-bench-path-b")
 
 # FIXED image: pin torch to a version using CUDA 12 (matches ORT 1.20),
 # install matching cuDNN and cuBLAS.
@@ -33,10 +33,10 @@ image = (
         "numpy<2.0", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 
@@ -58,28 +58,28 @@ def bench():
         {
             "tag": "smolvla",
             "hf_id": "lerobot/smolvla_base",
-            "builder_mod": "reflex.exporters.smolvla_exporter",
+            "builder_mod": "tether.exporters.smolvla_exporter",
             "builder_fn": "build_expert_stack",
             "builder_kwargs": {"head_dim": 64},
         },
         {
             "tag": "pi0",
             "hf_id": "lerobot/pi0_base",
-            "builder_mod": "reflex.exporters.pi0",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi0_expert_stack",
             "builder_kwargs": {"head_dim": 128},
         },
         {
             "tag": "pi05",
             "hf_id": "lerobot/pi05_base",
-            "builder_mod": "reflex.exporters.pi0",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi05_expert_stack",
             "builder_kwargs": {"head_dim": 128},
         },
         {
             "tag": "gr00t",
             "hf_id": "nvidia/GR00T-N1.6-3B",
-            "builder_mod": "reflex.exporters.gr00t",
+            "builder_mod": "tether.exporters.gr00t",
             "builder_fn": "build_gr00t_full_stack",
             "builder_kwargs": {"embodiment_id": 0},
         },
@@ -115,7 +115,7 @@ def bench():
         torch.cuda.empty_cache()
 
         # --- load + build ---
-        from reflex.checkpoint import load_checkpoint
+        from tether.checkpoint import load_checkpoint
         import importlib
         state_dict, _ = load_checkpoint(m["hf_id"])
         builder_module = importlib.import_module(m["builder_mod"])
@@ -224,12 +224,12 @@ def bench():
             print(f"    FAILED: {e}", flush=True)
 
         # ============================================================
-        # (d) CUDA graph capture of full 10-step loop (Reflex turbo)
+        # (d) CUDA graph capture of full 10-step loop (Tether turbo)
         # ============================================================
-        print("  [Reflex turbo CUDA graph — full-loop capture]", flush=True)
+        print("  [Tether turbo CUDA graph — full-loop capture]", flush=True)
         cuda_graph_stats = None
         try:
-            from reflex.kernels.turbo import TurboOptimizer, TurboConfig
+            from tether.kernels.turbo import TurboOptimizer, TurboConfig
             turbo = TurboOptimizer(TurboConfig(strategy="cuda_graph"))
             # First capture sets up the graph and returns initial timing
             initial = turbo.denoise_cuda_graph(stack, noisy, pos_ids, num_steps=num_steps)
@@ -256,7 +256,7 @@ def bench():
             "compile_single_step": compile_single_stats,
             "compile_full_loop_10_steps": compile_loop_stats,
             "ort_gpu_single_step": ort_stats,
-            "reflex_turbo_cuda_graph_10_steps": cuda_graph_stats,
+            "tether_turbo_cuda_graph_10_steps": cuda_graph_stats,
         }
 
         # Free memory between models
@@ -269,12 +269,12 @@ def bench():
     print("SUMMARY: per-CHUNK latency (ms) on A100 — 10 denoising steps, lower is better", flush=True)
     print(f"{'='*100}", flush=True)
     print(f"{'Model':<10} {'Params':>10} "
-          f"{'Compile×10':>14} {'ORT×10':>14} {'Reflex CUDA-graph':>20}", flush=True)
+          f"{'Compile×10':>14} {'ORT×10':>14} {'Tether CUDA-graph':>20}", flush=True)
     for tag, r in results.items():
         loop = r["compile_full_loop_10_steps"].get("mean_ms", "—")
         ort_single = r["ort_gpu_single_step"].get("mean_ms", "—") if isinstance(r["ort_gpu_single_step"], dict) and "mean_ms" in r["ort_gpu_single_step"] else "—"
         ort_loop = round(float(ort_single) * 10, 1) if isinstance(ort_single, (int, float)) else "—"
-        cuda_g = r["reflex_turbo_cuda_graph_10_steps"].get("mean_ms", "—") if isinstance(r["reflex_turbo_cuda_graph_10_steps"], dict) and "mean_ms" in r["reflex_turbo_cuda_graph_10_steps"] else "—"
+        cuda_g = r["tether_turbo_cuda_graph_10_steps"].get("mean_ms", "—") if isinstance(r["tether_turbo_cuda_graph_10_steps"], dict) and "mean_ms" in r["tether_turbo_cuda_graph_10_steps"] else "—"
         params_s = f"{r['full_stack_params_m']}M"
         print(f"{tag:<10} {params_s:>10} {str(loop):>14} {str(ort_loop):>14} {str(cuda_g):>20}", flush=True)
 

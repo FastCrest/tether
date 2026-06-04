@@ -1,6 +1,6 @@
 """Modal: Run FluxVLA's own eval harness on their pi0.5 LIBERO-10 checkpoint.
 
-Instead of converting to lerobot format and running through reflex's export
+Instead of converting to lerobot format and running through tether's export
 pipeline (as modal_fluxvla_checkpoint_eval.py does), this script runs FluxVLA's
 native code directly:
 
@@ -11,7 +11,7 @@ native code directly:
    FluxVLA's libero_eval_runner.py lines 229-338.
 
 This validates FluxVLA's published 97.85% LIBERO-10 average using THEIR code
-and THEIR checkpoint, as a ground-truth baseline for comparison with reflex's
+and THEIR checkpoint, as a ground-truth baseline for comparison with tether's
 pipeline.
 
 Usage:
@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 import modal
 
-app = modal.App("reflex-fluxvla-native-eval")
+app = modal.App("tether-fluxvla-native-eval")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Pinned FluxVLA HF reference.

@@ -14,7 +14,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-e2e")
+app = modal.App("tether-e2e")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")

@@ -1,4 +1,4 @@
-"""Tests for the reflex ros2 bridge.
+"""Tests for the tether ros2 bridge.
 
 rclpy isn't pip-installable, so these tests mock the minimal ROS2 surface
 (rclpy, rclpy.node, sensor_msgs.msg, std_msgs.msg) to verify the bridge
@@ -15,14 +15,14 @@ import pytest
 
 
 class TestServeRos2Flag:
-    """`reflex serve --ros2` short-circuits the HTTP path and hands off
+    """`tether serve --ros2` short-circuits the HTTP path and hands off
     to the ROS2 bridge. Verifies the CLI wiring invokes run_ros2_bridge
     and doesn't spin up uvicorn / create_app.
     """
 
     def test_ros2_flag_routes_to_bridge(self, monkeypatch, tmp_path):
         (tmp_path / "model.onnx").write_bytes(b"\x00")
-        (tmp_path / "reflex_config.json").write_text(
+        (tmp_path / "tether_config.json").write_text(
             '{"model_type": "smolvla", "target": "desktop"}'
         )
 
@@ -32,18 +32,18 @@ class TestServeRos2Flag:
             calls["bridge"] += 1
             assert str(args[0]) == str(tmp_path)
 
-        import reflex.runtime.ros2_bridge as bridge_mod
+        import tether.runtime.ros2_bridge as bridge_mod
         monkeypatch.setattr(bridge_mod, "run_ros2_bridge", fake_run_bridge)
 
         def boom_create_app(*args, **kwargs):
             calls["app_created"] += 1
             raise AssertionError("create_app should NOT run in --ros2 mode")
 
-        import reflex.runtime.server as server_mod
+        import tether.runtime.server as server_mod
         monkeypatch.setattr(server_mod, "create_app", boom_create_app)
 
         from typer.testing import CliRunner
-        from reflex.cli import app as cli_app
+        from tether.cli import app as cli_app
 
         runner = CliRunner()
         result = runner.invoke(cli_app, ["serve", str(tmp_path), "--ros2"])
@@ -130,7 +130,7 @@ def test_import_without_rclpy_raises_helpfully():
     for k in ("rclpy", "rclpy.node", "sensor_msgs", "sensor_msgs.msg", "std_msgs", "std_msgs.msg"):
         sys.modules.pop(k, None)
 
-    from reflex.runtime.ros2_bridge import _require_rclpy
+    from tether.runtime.ros2_bridge import _require_rclpy
     with pytest.raises(ImportError) as ei:
         _require_rclpy()
     assert "ROS2" in str(ei.value)
@@ -139,7 +139,7 @@ def test_import_without_rclpy_raises_helpfully():
 
 def test_node_construction(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     server = MagicMock()
     node = create_ros2_bridge_node(
@@ -159,7 +159,7 @@ def test_node_construction(monkeypatch):
 
 def test_image_callback_rgb8(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     node = create_ros2_bridge_node(MagicMock())
 
@@ -175,7 +175,7 @@ def test_image_callback_rgb8(monkeypatch):
 
 def test_image_callback_bgr8_reverses(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     node = create_ros2_bridge_node(MagicMock())
 
@@ -196,7 +196,7 @@ def test_image_callback_bgr8_reverses(monkeypatch):
 
 def test_state_callback(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     node = create_ros2_bridge_node(MagicMock())
     msg = MagicMock()
@@ -207,7 +207,7 @@ def test_state_callback(monkeypatch):
 
 def test_tick_invokes_server_and_publishes(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     server = MagicMock()
     server.predict.return_value = {
@@ -234,7 +234,7 @@ def test_tick_invokes_server_and_publishes(monkeypatch):
 
 def test_tick_skips_when_no_image(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     server = MagicMock()
     node = create_ros2_bridge_node(server)
@@ -246,7 +246,7 @@ def test_tick_skips_when_no_image(monkeypatch):
 
 def test_tick_handles_server_error_gracefully(monkeypatch):
     _install_fake_rclpy(monkeypatch)
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     server = MagicMock()
     server.predict.return_value = {"error": "guard_tripped"}
@@ -270,13 +270,13 @@ from types import SimpleNamespace  # noqa: E402
 
 class TestJointStateExtractor:
     def test_extracts_position_field(self):
-        from reflex.runtime.ros2_bridge import _extract_joint_state
+        from tether.runtime.ros2_bridge import _extract_joint_state
         msg = SimpleNamespace(position=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
         state = _extract_joint_state(msg)
         assert state == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
 
     def test_normalises_to_floats(self):
-        from reflex.runtime.ros2_bridge import _extract_joint_state
+        from tether.runtime.ros2_bridge import _extract_joint_state
         msg = SimpleNamespace(position=(1, 2, 3))
         state = _extract_joint_state(msg)
         assert state == [1.0, 2.0, 3.0]
@@ -286,14 +286,14 @@ class TestJointStateExtractor:
 class TestImuExtractor:
     def test_extracts_quaternion_xyzw(self):
         """ROS REP-103 convention — quaternion stored as (x, y, z, w)."""
-        from reflex.runtime.ros2_bridge import _extract_imu
+        from tether.runtime.ros2_bridge import _extract_imu
         msg = SimpleNamespace(
             orientation=SimpleNamespace(x=0.1, y=0.2, z=0.3, w=0.9),
         )
         assert _extract_imu(msg) == [0.1, 0.2, 0.3, 0.9]
 
     def test_output_is_four_dof_partial_state(self):
-        from reflex.runtime.ros2_bridge import _extract_imu
+        from tether.runtime.ros2_bridge import _extract_imu
         msg = SimpleNamespace(
             orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
         )
@@ -314,7 +314,7 @@ class TestOdometryExtractor:
         )
 
     def test_extracts_pos_orient_vel_in_order(self):
-        from reflex.runtime.ros2_bridge import _extract_odom
+        from tether.runtime.ros2_bridge import _extract_odom
         msg = self._mock_odom(
             p=(1.0, 2.0, 3.0),
             o=(0.0, 0.0, 0.0, 1.0),
@@ -323,7 +323,7 @@ class TestOdometryExtractor:
         assert _extract_odom(msg) == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, 0.1, 0.2, 0.3]
 
     def test_output_is_ten_dof(self):
-        from reflex.runtime.ros2_bridge import _extract_odom
+        from tether.runtime.ros2_bridge import _extract_odom
         msg = self._mock_odom(p=(0, 0, 0), o=(0, 0, 0, 1), v=(0, 0, 0))
         assert len(_extract_odom(msg)) == 10
 
@@ -331,8 +331,8 @@ class TestOdometryExtractor:
         """Cross-layer pin: if the quadcopter preset state_dim ever drifts
         from the odom extractor length, this breaks at CI time at the right
         layer to catch which side moved."""
-        from reflex.embodiments import EmbodimentConfig
-        from reflex.runtime.ros2_bridge import _extract_odom
+        from tether.embodiments import EmbodimentConfig
+        from tether.runtime.ros2_bridge import _extract_odom
         cfg = EmbodimentConfig.load_preset("quadcopter")
         msg = self._mock_odom(p=(0, 0, 0), o=(0, 0, 0, 1), v=(0, 0, 0))
         assert len(_extract_odom(msg)) == cfg.state_dim
@@ -340,11 +340,11 @@ class TestOdometryExtractor:
 
 class TestRegistryAndResolution:
     def test_all_documented_types_registered(self):
-        from reflex.runtime.ros2_bridge import _STATE_EXTRACTORS
+        from tether.runtime.ros2_bridge import _STATE_EXTRACTORS
         assert set(_STATE_EXTRACTORS) == {"joint_state", "imu", "odom"}
 
     def test_resolve_unknown_type_raises(self):
-        from reflex.runtime.ros2_bridge import _resolve_state_msg_class
+        from tether.runtime.ros2_bridge import _resolve_state_msg_class
         with pytest.raises(ValueError, match="unknown state_msg_type"):
             _resolve_state_msg_class("not_a_real_msg_type")
 
@@ -358,7 +358,7 @@ class TestRegistryAndResolution:
 class TestStateMsgTypeDispatch:
     def test_default_is_joint_state(self, monkeypatch):
         _install_fake_rclpy(monkeypatch)
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
         node = create_ros2_bridge_node(MagicMock())
         msg = SimpleNamespace(position=[0.1, 0.2, 0.3])
         node._state_cb(msg)
@@ -366,7 +366,7 @@ class TestStateMsgTypeDispatch:
 
     def test_imu_dispatch(self, monkeypatch):
         _install_fake_rclpy(monkeypatch)
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
         node = create_ros2_bridge_node(
             MagicMock(), state_msg_type="imu", state_topic="/mavros/imu/data",
         )
@@ -378,7 +378,7 @@ class TestStateMsgTypeDispatch:
 
     def test_odom_dispatch(self, monkeypatch):
         _install_fake_rclpy(monkeypatch)
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
         node = create_ros2_bridge_node(
             MagicMock(),
             state_msg_type="odom",
@@ -396,14 +396,14 @@ class TestStateMsgTypeDispatch:
 
     def test_unknown_msg_type_raises(self, monkeypatch):
         _install_fake_rclpy(monkeypatch)
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
         with pytest.raises(ValueError, match="unknown state_msg_type"):
             create_ros2_bridge_node(MagicMock(), state_msg_type="lidar")
 
     def test_extractor_failure_logged_not_raised(self, monkeypatch):
         """A malformed message must not crash the node — log and skip."""
         _install_fake_rclpy(monkeypatch)
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
         node = create_ros2_bridge_node(MagicMock(), state_msg_type="imu")
         # IMU extractor expects msg.orientation — feed a JointState-shaped msg
         bad_msg = SimpleNamespace(position=[0.1, 0.2])
@@ -416,8 +416,8 @@ class TestStateMsgTypeDispatch:
         the extractor returns 4 (imu), surface a warning. Fires once per
         node — the same mismatch every tick would spam the log."""
         _install_fake_rclpy(monkeypatch)
-        from reflex.embodiments import EmbodimentConfig
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.embodiments import EmbodimentConfig
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
         server = MagicMock()
         server.embodiment_config = EmbodimentConfig.load_preset("quadcopter")
@@ -449,8 +449,8 @@ class TestStateMsgTypeDispatch:
         """When extractor output length matches embodiment state_dim, no
         warning fires."""
         _install_fake_rclpy(monkeypatch)
-        from reflex.embodiments import EmbodimentConfig
-        from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+        from tether.embodiments import EmbodimentConfig
+        from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
         server = MagicMock()
         server.embodiment_config = EmbodimentConfig.load_preset("quadcopter")

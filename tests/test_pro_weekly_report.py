@@ -1,11 +1,11 @@
-"""Tests for src/reflex/pro/weekly_report.py — Phase 1 self-distilling-serve Day 9."""
+"""Tests for src/tether/pro/weekly_report.py — Phase 1 self-distilling-serve Day 9."""
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from reflex.pro.weekly_report import (
+from tether.pro.weekly_report import (
     RollbackEntry,
     TaskDelta,
     WeeklyReport,

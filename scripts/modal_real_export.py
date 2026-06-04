@@ -10,7 +10,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-real-export")
+app = modal.App("tether-real-export")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -46,7 +46,7 @@ def export_smolvla_components():
         tag = "PASS" if status == "pass" else "FAIL" if status == "fail" else "SKIP"
         print(f"{tag}: {name} — {detail}")
 
-    export_dir = Path("/tmp/reflex_smolvla_export")
+    export_dir = Path("/tmp/tether_smolvla_export")
     export_dir.mkdir(exist_ok=True)
 
     # Step 1: Download and load

@@ -12,7 +12,7 @@ import msgpack
 import pytest
 import zmq
 
-from reflex.runtime.transports.zmq.policy_server import (
+from tether.runtime.transports.zmq.policy_server import (
     SCHEMA_VERSION,
     PolicyServer,
     WireSchemaMismatchError,

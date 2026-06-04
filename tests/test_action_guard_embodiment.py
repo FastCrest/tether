@@ -15,8 +15,8 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from reflex.embodiments import EmbodimentConfig
-from reflex.safety.guard import ActionGuard, SafetyLimits
+from tether.embodiments import EmbodimentConfig
+from tether.safety.guard import ActionGuard, SafetyLimits
 
 
 # ---------------------------------------------------------------------------

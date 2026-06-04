@@ -1,4 +1,4 @@
-"""GPU smoke for the `reflex verify` deepening (tap + MMD + embodied).
+"""GPU smoke for the `tether verify` deepening (tap + MMD + embodied).
 
 Validates on a REAL LIBERO rollout that:
 1. the default-off `capture_trajectories` tap captures per-step applied actions +
@@ -10,17 +10,17 @@ Validates on a REAL LIBERO rollout that:
    trajectories.
 
 It runs the ORIGINAL (native pi05) and OPTIMIZED (Triton export of the same
-weights) arms via `reflex.verify.gather_paired_samples` — so the EXPECTED result
+weights) arms via `tether.verify.gather_paired_samples` — so the EXPECTED result
 is parity (distributions_differ False), since the export preserves the policy.
 
 Small N (1 task, a few episodes): this is a plumbing/tap validation, NOT a
-statistically-powered cert (that needs >= 30 episodes through `reflex verify`).
+statistically-powered cert (that needs >= 30 episodes through `tether verify`).
 
 Reuses the PROVEN LIBERO+CUDA image from
-`scripts/modal_fast_kernels_l3_side_by_side.py` verbatim, installing reflex-vla
+`scripts/modal_fast_kernels_l3_side_by_side.py` verbatim, installing tether-vla
 from git @ local HEAD (which must be pushed). Run:
 
-    ( sleep 2400 && modal app stop reflex-verify-deepening-smoke ) &   # watchdog
+    ( sleep 2400 && modal app stop tether-verify-deepening-smoke ) &   # watchdog
     modal run scripts/modal_verify_deepening_smoke.py --n-episodes 4
 """
 import os
@@ -28,11 +28,11 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-verify-deepening-smoke")
+app = modal.App("tether-verify-deepening-smoke")
 
 
 def _repo_head_sha() -> str:
-    pin = os.environ.get("REFLEX_PIN_SHA", "").strip()
+    pin = os.environ.get("TETHER_PIN_SHA", "").strip()
     if pin:
         return pin
     try:
@@ -91,7 +91,7 @@ image = (
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -121,12 +121,12 @@ def validate(model_id: str, n_episodes: int, task_idx: int) -> dict:
         return _orig_load(*a, **k)
     torch.load = _patched_load
 
-    from reflex.verify import (
+    from tether.verify import (
         _collect_eef_and_steps,
         _collect_step_actions,
         gather_paired_samples,
     )
-    from reflex.verify_metrics import aggregate_embodied, two_sample_test
+    from tether.verify_metrics import aggregate_embodied, two_sample_test
 
     orig, opt = gather_paired_samples(
         optimized_ref=model_id,

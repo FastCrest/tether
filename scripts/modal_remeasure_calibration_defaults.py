@@ -55,7 +55,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-calibration-defaults-bundle")
+app = modal.App("tether-calibration-defaults-bundle")
 
 
 def _hf_secret():
@@ -100,7 +100,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -117,7 +117,7 @@ def _measure_inner(tier: str) -> dict:
     from datetime import datetime, timezone
     import numpy as np
 
-    from reflex.runtime.calibration import (
+    from tether.runtime.calibration import (
         CalibrationEntry, HardwareFingerprint, MeasurementContext,
         measure_latency_profile,
     )

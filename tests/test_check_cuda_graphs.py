@@ -1,4 +1,4 @@
-"""Tests for `reflex doctor` cuda-graphs check (`check_cuda_graphs.py`).
+"""Tests for `tether doctor` cuda-graphs check (`check_cuda_graphs.py`).
 
 Covers the skip / pass / warn / fail branches of the check without
 requiring a real GPU — all ORT session construction + capture is mocked.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from reflex.diagnostics.check_cuda_graphs import _run as check_run
+from tether.diagnostics.check_cuda_graphs import _run as check_run
 
 
 def _decomposed_config() -> dict:
@@ -32,18 +32,18 @@ def _monolithic_config() -> dict:
 
 
 def _write_export(tmp_path: Path, config: dict) -> Path:
-    """Write a minimal fake export (just reflex_config.json) and return its path."""
-    (tmp_path / "reflex_config.json").write_text(json.dumps(config))
+    """Write a minimal fake export (just tether_config.json) and return its path."""
+    (tmp_path / "tether_config.json").write_text(json.dumps(config))
     # Create empty onnx files for path existence
     (tmp_path / "vlm_prefix.onnx").write_bytes(b"\x00")
     (tmp_path / "expert_denoise.onnx").write_bytes(b"\x00")
     return tmp_path
 
 
-def test_skip_when_no_reflex_config(tmp_path):
+def test_skip_when_no_tether_config(tmp_path):
     result = check_run(model_path=str(tmp_path), embodiment_name="franka", rtc=False)
     assert result.status == "skip"
-    assert "reflex_config.json" in result.expected
+    assert "tether_config.json" in result.expected
 
 
 def test_skip_when_export_is_monolithic(tmp_path):
@@ -57,7 +57,7 @@ def test_skip_when_onnxruntime_not_importable(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
     # Simulate missing onnxruntime by intercepting the import inside the check
-    import reflex.diagnostics.check_cuda_graphs as mod
+    import tether.diagnostics.check_cuda_graphs as mod
 
     # Monkey-patch ort import at the check module level by stashing a raising
     # import into sys.modules
@@ -105,7 +105,7 @@ def test_pass_when_both_sessions_capture(tmp_path):
 
     # Mock try_capture_or_fall_back to return CudaGraphWrapper (captured=True) for both
     with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
-        with patch("reflex.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
+        with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             mock_wrapper = MagicMock()
             mock_wrapper.captured = True
             mock_try.return_value = mock_wrapper
@@ -119,7 +119,7 @@ def test_warn_when_only_expert_captures(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
     with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
-        with patch("reflex.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
+        with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             # First call (vlm_prefix): eager fallback (captured=False)
             # Second call (expert_denoise): captured=True
             prefix_wrapper = MagicMock()
@@ -139,7 +139,7 @@ def test_fail_when_neither_captures(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
     with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
-        with patch("reflex.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
+        with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             prefix_wrapper = MagicMock()
             prefix_wrapper.captured = False
             expert_wrapper = MagicMock()

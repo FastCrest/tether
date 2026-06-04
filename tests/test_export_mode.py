@@ -1,4 +1,4 @@
-"""Unit tests for src/reflex/exporters/_export_mode.py.
+"""Unit tests for src/tether/exporters/_export_mode.py.
 
 Mock-based — verifies auto-detection logic without needing real GPU.
 """
@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-import reflex.exporters.decomposed as decomposed
-from reflex.exporters._export_mode import (
+import tether.exporters.decomposed as decomposed
+from tether.exporters._export_mode import (
     ExportMode,
     ExportModeDecision,
     InsufficientVRAMError,
@@ -39,7 +39,7 @@ def test_sequential_explicit_returns_sequential():
 
 def test_sequential_explicit_works_on_cpu():
     """Sequential should work even with no GPU."""
-    with patch("reflex.exporters._export_mode.probe_free_vram", return_value=None):
+    with patch("tether.exporters._export_mode.probe_free_vram", return_value=None):
         decision = select_mode(ExportMode.SEQUENTIAL, SMOLVLA_VRAM)
     assert decision.mode == ExportMode.SEQUENTIAL
 
@@ -49,7 +49,7 @@ def test_sequential_explicit_works_on_cpu():
 
 def test_parallel_explicit_fits_returns_parallel():
     """24 GB free, model needs ~14 GB combined → parallel."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=24 * 1024 ** 3):
         decision = select_mode(ExportMode.PARALLEL, SMOLVLA_VRAM)
     assert decision.mode == ExportMode.PARALLEL
@@ -57,7 +57,7 @@ def test_parallel_explicit_fits_returns_parallel():
 
 def test_parallel_explicit_doesnt_fit_raises():
     """8 GB free (Orin Nano-ish), model needs ~14 GB combined → raise loudly."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=8 * 1024 ** 3):
         with pytest.raises(InsufficientVRAMError, match="parallel needs"):
             select_mode(ExportMode.PARALLEL, SMOLVLA_VRAM)
@@ -65,7 +65,7 @@ def test_parallel_explicit_doesnt_fit_raises():
 
 def test_parallel_explicit_no_gpu_raises():
     """No GPU at all → raise loudly, don't silently fall back."""
-    with patch("reflex.exporters._export_mode.probe_free_vram", return_value=None):
+    with patch("tether.exporters._export_mode.probe_free_vram", return_value=None):
         with pytest.raises(InsufficientVRAMError, match="No GPU detected"):
             select_mode(ExportMode.PARALLEL, SMOLVLA_VRAM)
 
@@ -74,7 +74,7 @@ def test_parallel_explicit_no_gpu_raises():
 
 
 def test_auto_no_gpu_picks_sequential():
-    with patch("reflex.exporters._export_mode.probe_free_vram", return_value=None):
+    with patch("tether.exporters._export_mode.probe_free_vram", return_value=None):
         decision = select_mode(ExportMode.AUTO, SMOLVLA_VRAM)
     assert decision.mode == ExportMode.SEQUENTIAL
     assert "no gpu" in decision.reason.lower()
@@ -82,7 +82,7 @@ def test_auto_no_gpu_picks_sequential():
 
 def test_auto_low_vram_picks_sequential():
     """Orin Nano 8 GB shared → sequential."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=8 * 1024 ** 3):
         decision = select_mode(ExportMode.AUTO, SMOLVLA_VRAM)
     assert decision.mode == ExportMode.SEQUENTIAL
@@ -91,7 +91,7 @@ def test_auto_low_vram_picks_sequential():
 
 def test_auto_high_vram_picks_parallel():
     """RTX 5090 32 GB → parallel."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=32 * 1024 ** 3):
         decision = select_mode(ExportMode.AUTO, SMOLVLA_VRAM)
     assert decision.mode == ExportMode.PARALLEL
@@ -99,7 +99,7 @@ def test_auto_high_vram_picks_parallel():
 
 def test_auto_a10g_24gb_picks_parallel():
     """A10G 24 GB → parallel for SmolVLA (needs ~14 GB combined)."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=24 * 1024 ** 3):
         decision = select_mode(ExportMode.AUTO, SMOLVLA_VRAM)
     assert decision.mode == ExportMode.PARALLEL
@@ -107,7 +107,7 @@ def test_auto_a10g_24gb_picks_parallel():
 
 def test_auto_t4_16gb_borderline():
     """T4 16 GB free is borderline for SmolVLA (~14 GB needed). Should go parallel."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=16 * 1024 ** 3):
         decision = select_mode(ExportMode.AUTO, SMOLVLA_VRAM)
     # 16 > 14.6 (2 * 6.4 + 1.0), so parallel
@@ -123,7 +123,7 @@ PI05_VRAM = estimate_model_vram_from_onnx(PI05_ONNX_SIZE)
 
 def test_auto_t4_picks_sequential_for_pi05():
     """T4 16 GB can't fit 2x pi05 (~104 GB needed) → sequential."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=16 * 1024 ** 3):
         decision = select_mode(ExportMode.AUTO, PI05_VRAM)
     assert decision.mode == ExportMode.SEQUENTIAL
@@ -131,7 +131,7 @@ def test_auto_t4_picks_sequential_for_pi05():
 
 def test_auto_a100_80gb_picks_sequential_for_pi05():
     """Even A100 80 GB can't fit 2x pi05 (104 GB needed) → sequential."""
-    with patch("reflex.exporters._export_mode.probe_free_vram",
+    with patch("tether.exporters._export_mode.probe_free_vram",
                return_value=80 * 1024 ** 3):
         decision = select_mode(ExportMode.AUTO, PI05_VRAM)
     assert decision.mode == ExportMode.SEQUENTIAL
@@ -237,7 +237,7 @@ def test_pi05_decomposed_sequential_reuses_single_policy(monkeypatch, tmp_path):
         export_mode_reason="forced sequential",
     )
 
-    cfg = json.loads((tmp_path / "reflex_config.json").read_text())
+    cfg = json.loads((tmp_path / "tether_config.json").read_text())
     assert load_calls == [("lerobot/pi05_libero_finetuned_v044", 10, None, "default")]
     assert pass_order == ["prefix", "expert"]
     assert result["export_mode"] == "sequential"
@@ -319,7 +319,7 @@ def test_write_decomposed_result_records_export_mode(tmp_path):
         export_mode_reason="test reason",
     )
 
-    cfg = json.loads((tmp_path / "reflex_config.json").read_text())
+    cfg = json.loads((tmp_path / "tether_config.json").read_text())
     assert result["export_mode"] == "parallel"
     assert cfg["export_mode"] == "parallel"
     assert cfg["export_mode_reason"] == "test reason"

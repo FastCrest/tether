@@ -1,6 +1,6 @@
 # CUDA graphs
 
-`reflex serve --cuda-graphs` captures the two ONNX Runtime sessions on the decomposed path (`vlm_prefix` + `expert_denoise`) into CUDA graphs at startup and replays them thereafter. Replay is ~3-4× faster than eager execution because the GPU skips kernel-launch overhead for every call.
+`tether serve --cuda-graphs` captures the two ONNX Runtime sessions on the decomposed path (`vlm_prefix` + `expert_denoise`) into CUDA graphs at startup and replays them thereafter. Replay is ~3-4× faster than eager execution because the GPU skips kernel-launch overhead for every call.
 
 Tier-aware out of the box:
 
@@ -16,7 +16,7 @@ Measured on Modal 2026-04-25 against an SnapFlow pi0.5 decomposed export (franka
 ## Quick start
 
 ```bash
-reflex serve ./my-export/ --cuda-graphs
+tether serve ./my-export/ --cuda-graphs
 ```
 
 That's the whole knob. Run, hit `/act`, observe latency drop. The first /act per session is slower than eager (graph capture cost, ~50-400 ms depending on session); every subsequent /act hits the fast-path replay.
@@ -52,10 +52,10 @@ Distinguishing `capture_failed_at_init` from `eager_fallback` matters: the init-
 Expected for `session=vlm_prefix`. A10G's CUDA-graph memory overhead (~128 MB reserved per captured graph) exceeds the BFCArena pre-allocated pool for the vlm_prefix model. The session runs eager instead; `expert_denoise` still captures and gives you ~95% of the total speedup. No customer-facing action.
 
 **I see `eager_fallback_total` climbing during traffic**
-Replay-time failure — rarer. Likely causes: (a) CUDA context contention with another process on the same GPU, (b) input shape changed (should be impossible on a static-shape Reflex export — file a bug), (c) GPU memory pressure from a concurrent workload. Check `reflex_cuda_graph_eager_fallback_total{reason=replay_failed}` for the class of failure.
+Replay-time failure — rarer. Likely causes: (a) CUDA context contention with another process on the same GPU, (b) input shape changed (should be impossible on a static-shape Tether export — file a bug), (c) GPU memory pressure from a concurrent workload. Check `reflex_cuda_graph_eager_fallback_total{reason=replay_failed}` for the class of failure.
 
 **No speedup after enabling `--cuda-graphs`**
-Your serve backend isn't the decomposed dispatch path. Today's production `reflex serve` uses the legacy `ReflexServer` backend that doesn't consume `cuda_graphs_enabled`. The flag applies to `Pi05DecomposedInference` dispatch (used in Modal scripts today; production wire-up pending the decomposed-dispatch fix tracked by `chunk-budget-batching`). In that case, the startup log reads `"--cuda-graphs was set but this backend (ReflexServer legacy decomposed path) does not consume the flag."` Watch for that line.
+Your serve backend isn't the decomposed dispatch path. Today's production `tether serve` uses the legacy `ReflexServer` backend that doesn't consume `cuda_graphs_enabled`. The flag applies to `Pi05DecomposedInference` dispatch (used in Modal scripts today; production wire-up pending the decomposed-dispatch fix tracked by `chunk-budget-batching`). In that case, the startup log reads `"--cuda-graphs was set but this backend (ReflexServer legacy decomposed path) does not consume the flag."` Watch for that line.
 
 **Latency spike on the first request after startup**
 That's the capture cost. Expected — ~100-400 ms extra on the first /act. If you can't tolerate first-request spikes (robot demo, live customer), keep `--prewarm` enabled (default) so capture runs during startup, not on the first user request.
@@ -64,7 +64,7 @@ That's the capture cost. Expected — ~100-400 ms extra on the first /act. If yo
 
 - You're not on the decomposed dispatch path (see above — no-op).
 - You're on a hardware tier we haven't validated (Orin Nano, Thor, Hopper/Blackwell custom silicon). Baseline without `--cuda-graphs` first, then enable + compare p99.
-- You depend on torch.cuda.graph semantics — Reflex uses ORT-native capture (per ADR `2026-04-24-cuda-graphs-architecture`). Phase 2 may add a torch-native path if a customer blocks on it.
+- You depend on torch.cuda.graph semantics — Tether uses ORT-native capture (per ADR `2026-04-24-cuda-graphs-architecture`). Phase 2 may add a torch-native path if a customer blocks on it.
 
 ## What's locked (ADR)
 

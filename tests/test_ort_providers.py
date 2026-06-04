@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.runtime.ort_providers import (
+from tether.runtime.ort_providers import (
     build_ort_provider_plan,
     onnx_external_data_bytes,
     provider_name,
@@ -12,7 +12,7 @@ from reflex.runtime.ort_providers import (
 
 
 def test_cuda_prefers_trt_with_engine_and_timing_cache(tmp_path, monkeypatch):
-    monkeypatch.setattr("reflex.runtime.ort_providers.gpu_is_blackwell", lambda: False)
+    monkeypatch.setattr("tether.runtime.ort_providers.gpu_is_blackwell", lambda: False)
     plan = build_ort_provider_plan(
         tmp_path,
         device="cuda",
@@ -37,7 +37,7 @@ def test_cuda_prefers_trt_with_engine_and_timing_cache(tmp_path, monkeypatch):
 
 
 def test_cuda_disables_trt_when_batching_static_export(tmp_path, monkeypatch):
-    monkeypatch.setattr("reflex.runtime.ort_providers.gpu_is_blackwell", lambda: False)
+    monkeypatch.setattr("tether.runtime.ort_providers.gpu_is_blackwell", lambda: False)
     plan = build_ort_provider_plan(
         tmp_path,
         device="cuda",
@@ -72,8 +72,8 @@ def test_explicit_providers_are_not_rewritten(tmp_path):
 
 
 def test_env_can_disable_trt(tmp_path, monkeypatch):
-    monkeypatch.setenv("REFLEX_TRT_EP", "0")
-    monkeypatch.setattr("reflex.runtime.ort_providers.gpu_is_blackwell", lambda: False)
+    monkeypatch.setenv("TETHER_TRT_EP", "0")
+    monkeypatch.setattr("tether.runtime.ort_providers.gpu_is_blackwell", lambda: False)
     plan = build_ort_provider_plan(
         tmp_path,
         device="cuda",
@@ -114,7 +114,7 @@ def test_scatternd_reduction_graph_disables_trt(tmp_path, monkeypatch):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 16)])
     onnx.save(model, onnx_path)
 
-    monkeypatch.setattr("reflex.runtime.ort_providers.gpu_is_blackwell", lambda: False)
+    monkeypatch.setattr("tether.runtime.ort_providers.gpu_is_blackwell", lambda: False)
     plan = build_ort_provider_plan(
         tmp_path,
         device="cuda",
@@ -133,17 +133,17 @@ def test_scatternd_reduction_graph_disables_trt(tmp_path, monkeypatch):
 
 def test_session_options_default_to_error_logs(monkeypatch):
     pytest.importorskip("onnxruntime")
-    from reflex.runtime.ort_providers import make_ort_session_options
+    from tether.runtime.ort_providers import make_ort_session_options
 
-    monkeypatch.delenv("REFLEX_ORT_LOG_SEVERITY", raising=False)
+    monkeypatch.delenv("TETHER_ORT_LOG_SEVERITY", raising=False)
     opts = make_ort_session_options()
 
     assert opts.log_severity_level == 3
 
 
 def test_large_external_data_disables_trt(tmp_path, monkeypatch):
-    monkeypatch.setenv("REFLEX_LARGE_EXTERNAL_DATA_BYTES", "10")
-    monkeypatch.setattr("reflex.runtime.ort_providers.gpu_is_blackwell", lambda: False)
+    monkeypatch.setenv("TETHER_LARGE_EXTERNAL_DATA_BYTES", "10")
+    monkeypatch.setattr("tether.runtime.ort_providers.gpu_is_blackwell", lambda: False)
     onnx_path = tmp_path / "model.onnx"
     onnx_path.write_bytes(b"onnx")
     (tmp_path / "model.onnx.data").write_bytes(b"x" * 11)
@@ -167,10 +167,10 @@ def test_large_external_data_disables_trt(tmp_path, monkeypatch):
 
 def test_large_external_data_disables_graph_optimizations(tmp_path, monkeypatch):
     ort = pytest.importorskip("onnxruntime")
-    from reflex.runtime.ort_providers import make_ort_session_options
+    from tether.runtime.ort_providers import make_ort_session_options
 
-    monkeypatch.setenv("REFLEX_LARGE_EXTERNAL_DATA_BYTES", "10")
-    monkeypatch.delenv("REFLEX_ORT_GRAPH_OPT_LEVEL", raising=False)
+    monkeypatch.setenv("TETHER_LARGE_EXTERNAL_DATA_BYTES", "10")
+    monkeypatch.delenv("TETHER_ORT_GRAPH_OPT_LEVEL", raising=False)
     onnx_path = tmp_path / "model.onnx"
     onnx_path.write_bytes(b"onnx")
     (tmp_path / "model.onnx.data").write_bytes(b"x" * 11)

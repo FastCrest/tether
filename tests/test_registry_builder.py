@@ -1,4 +1,4 @@
-"""Tests for src/reflex/registry/builder.py — Registry + build_from_cfg.
+"""Tests for src/tether/registry/builder.py — Registry + build_from_cfg.
 
 Foundation for the BaseVLA spine refactor (lift #1 per
 `features/03_export/basevla-spine.md`). The Registry pattern is a 150-LOC
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.registry.builder import (
+from tether.registry.builder import (
     Registry,
     RegistryError,
     build_from_cfg,
@@ -184,7 +184,7 @@ def test_get_unknown_name_lists_available():
 
 
 def test_names_is_sorted():
-    """`.names()` returns sorted list — used by `reflex models list` UX."""
+    """`.names()` returns sorted list — used by `tether models list` UX."""
     reg = Registry("test_names")
 
     @reg.register
@@ -376,7 +376,7 @@ def test_build_nested_with_default_args_does_not_leak_to_inner():
 
 def test_component_registries_are_distinct_objects():
     """Each module-level registry is a separate Registry instance."""
-    from reflex.registry import (
+    from tether.registry import (
         VISION_BACKBONES,
         LLM_BACKBONES,
         VLM_BACKBONES,
@@ -398,7 +398,7 @@ def test_component_registries_are_distinct_objects():
 
 def test_component_registries_named_correctly():
     """Each registry's name matches its module-level identifier (lowercased)."""
-    from reflex.registry import (
+    from tether.registry import (
         VISION_BACKBONES, LLM_BACKBONES, VLM_BACKBONES,
         PROJECTORS, VLA_HEADS, TEXT_ENCODERS, VLAS,
     )

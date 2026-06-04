@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.runtime.buffer import (
+from tether.runtime.buffer import (
     ActionChunkBuffer,
     BufferStats,
     compute_replan_window,

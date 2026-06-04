@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import pytest
 
-from reflex.validate import validate_outputs, ValidationResult
+from tether.validate import validate_outputs, ValidationResult
 
 
 class TestValidateOutputs:

@@ -1,6 +1,6 @@
 """Unit tests for BID (Bidirectional Decoding) chunk selection.
 
-Per src/reflex/correction/bid.py + the 2026-04-29 a2c2-correction
+Per src/tether/correction/bid.py + the 2026-04-29 a2c2-correction
 research-revisit Lens 4 contender survey.
 """
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.correction.bid import (
+from tether.correction.bid import (
     BIDConfig,
     predict_chunk_bid,
     score_backward_coherence,

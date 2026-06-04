@@ -1,18 +1,18 @@
-"""Tests for reflex.finetune.preflight — the v0.5 validator."""
+"""Tests for tether.finetune.preflight — the v0.5 validator."""
 from __future__ import annotations
 
 from unittest.mock import patch
 
 import pytest
 
-from reflex.finetune.config import FinetuneConfig
-from reflex.finetune.preflight import PreflightCheck, PreflightReport, run_preflight
-from reflex.finetune.preflight.dataset_size import (
+from tether.finetune.config import FinetuneConfig
+from tether.finetune.preflight import PreflightCheck, PreflightReport, run_preflight
+from tether.finetune.preflight.dataset_size import (
     EPISODE_FLOORS,
     _infer_policy_type,
     check_dataset_size,
 )
-from reflex.finetune.preflight.schema import (
+from tether.finetune.preflight.schema import (
     _extract_base_action_dim,
     _extract_dataset_action_dim,
     check_schema,
@@ -92,10 +92,10 @@ class TestSchemaCheck:
             output="/tmp/x",
         )
         with patch(
-            "reflex.finetune.preflight.schema._fetch_dataset_features",
+            "tether.finetune.preflight.schema._fetch_dataset_features",
             return_value=cfg_dataset_features,
         ), patch(
-            "reflex.finetune.preflight.schema._fetch_base_config",
+            "tether.finetune.preflight.schema._fetch_base_config",
             return_value=cfg_base_config,
         ):
             return check_schema(cfg)
@@ -155,7 +155,7 @@ class TestDatasetSizeCheck:
             output="/tmp/x",
         )
         with patch(
-            "reflex.finetune.preflight.dataset_size._fetch_dataset_info",
+            "tether.finetune.preflight.dataset_size._fetch_dataset_info",
             return_value={"total_episodes": 100},
         ):
             result = check_dataset_size(cfg)
@@ -170,7 +170,7 @@ class TestDatasetSizeCheck:
             output="/tmp/x",
         )
         with patch(
-            "reflex.finetune.preflight.dataset_size._fetch_dataset_info",
+            "tether.finetune.preflight.dataset_size._fetch_dataset_info",
             return_value={"total_episodes": 500},
         ):
             result = check_dataset_size(cfg)
@@ -194,10 +194,10 @@ class TestRunPreflight:
             output=tmp_path,
         )
         with patch(
-            "reflex.finetune.preflight.runner.check_schema",
+            "tether.finetune.preflight.runner.check_schema",
             return_value=PreflightCheck("schema", "ok", "fine"),
         ), patch(
-            "reflex.finetune.preflight.runner.check_dataset_size",
+            "tether.finetune.preflight.runner.check_dataset_size",
             return_value=PreflightCheck("dataset_size", "ok", "fine"),
         ):
             report = run_preflight(cfg)
@@ -211,10 +211,10 @@ class TestRunPreflight:
             output=tmp_path,
         )
         with patch(
-            "reflex.finetune.preflight.runner.check_schema",
+            "tether.finetune.preflight.runner.check_schema",
             return_value=PreflightCheck("schema", "fail", "dim mismatch"),
         ), patch(
-            "reflex.finetune.preflight.runner.check_dataset_size",
+            "tether.finetune.preflight.runner.check_dataset_size",
             return_value=PreflightCheck("dataset_size", "ok", "fine"),
         ):
             report = run_preflight(cfg)
@@ -233,10 +233,10 @@ class TestRunPreflight:
         # the runner's logger format string).
         _boom.__name__ = "check_schema"
         with patch(
-            "reflex.finetune.preflight.runner.check_schema",
+            "tether.finetune.preflight.runner.check_schema",
             new=_boom,
         ), patch(
-            "reflex.finetune.preflight.runner.check_dataset_size",
+            "tether.finetune.preflight.runner.check_dataset_size",
             return_value=PreflightCheck("dataset_size", "ok", "fine"),
         ):
             report = run_preflight(cfg)
@@ -249,20 +249,20 @@ class TestIntegrationWithRunFinetune:
     def test_preflight_failure_aborts_run(self, tmp_path):
         """A blocking preflight failure should abort run_finetune before
         the subprocess launches."""
-        from reflex.finetune.run import run_finetune
+        from tether.finetune.run import run_finetune
         cfg = FinetuneConfig(
             base="lerobot/smolvla_base",
             dataset="lerobot/libero",
             output=tmp_path,
         )
         # run_preflight is imported at call time inside run_finetune, so
-        # patch at its source module, not at reflex.finetune.run.
+        # patch at its source module, not at tether.finetune.run.
         with patch(
-            "reflex.finetune.preflight.run_preflight",
+            "tether.finetune.preflight.run_preflight",
             return_value=PreflightReport(
                 checks=[PreflightCheck("schema", "fail", "dim mismatch")],
             ),
-        ), patch("reflex.finetune.run._run_lerobot_training") as mock_train:
+        ), patch("tether.finetune.run._run_lerobot_training") as mock_train:
             result = run_finetune(cfg)
         assert result.status == "aborted"
         mock_train.assert_not_called()
@@ -270,15 +270,15 @@ class TestIntegrationWithRunFinetune:
 
     def test_skip_preflight_bypasses(self, tmp_path):
         """--skip-preflight should route around the validator entirely."""
-        from reflex.finetune.run import run_finetune
+        from tether.finetune.run import run_finetune
         cfg = FinetuneConfig(
             base="lerobot/smolvla_base",
             dataset="lerobot/libero",
             output=tmp_path,
             skip_preflight=True,
         )
-        with patch("reflex.finetune.preflight.run_preflight") as mock_pf, \
-             patch("reflex.finetune.run._run_lerobot_training", return_value=42):
+        with patch("tether.finetune.preflight.run_preflight") as mock_pf, \
+             patch("tether.finetune.run._run_lerobot_training", return_value=42):
             result = run_finetune(cfg)
         mock_pf.assert_not_called()
         # Training failed (code 42) because we mocked it — but preflight
@@ -286,7 +286,7 @@ class TestIntegrationWithRunFinetune:
         assert result.status == "training_failed"
 
     def test_dry_run_skips_training(self, tmp_path):
-        from reflex.finetune.run import run_finetune
+        from tether.finetune.run import run_finetune
         cfg = FinetuneConfig(
             base="lerobot/smolvla_base",
             dataset="lerobot/libero",
@@ -294,11 +294,11 @@ class TestIntegrationWithRunFinetune:
             dry_run=True,
         )
         with patch(
-            "reflex.finetune.preflight.run_preflight",
+            "tether.finetune.preflight.run_preflight",
             return_value=PreflightReport(
                 checks=[PreflightCheck("schema", "ok", "fine")],
             ),
-        ), patch("reflex.finetune.run._run_lerobot_training") as mock_train:
+        ), patch("tether.finetune.run._run_lerobot_training") as mock_train:
             result = run_finetune(cfg)
         mock_train.assert_not_called()
         assert result.status == "ok"

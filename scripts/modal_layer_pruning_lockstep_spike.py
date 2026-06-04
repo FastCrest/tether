@@ -31,7 +31,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-layer-pruning-lockstep-spike")
+app = modal.App("tether-layer-pruning-lockstep-spike")
 
 
 def _hf_secret():
@@ -86,7 +86,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -175,13 +175,13 @@ def lockstep_spike_modal(
     # to flatten the DynamicCache. If we don't patch this, the wrapper
     # iterates 18 even though our patched language_model only has 17
     # layers of cache; the extra access returns phantom entries.
-    import reflex.exporters.decomposed as _dd
+    import tether.exporters.decomposed as _dd
     _dd.PI05_PALIGEMMA_LAYERS = n_kept
     logger.info(
-        "[spike] patched reflex.exporters.decomposed.PI05_PALIGEMMA_LAYERS "
+        "[spike] patched tether.exporters.decomposed.PI05_PALIGEMMA_LAYERS "
         "= %d", n_kept,
     )
-    from reflex.exporters.decomposed import (
+    from tether.exporters.decomposed import (
         Pi05PrefixWrapper,
         _PI05_BATCH_SIZE,
         _PI05_IMAGE_SIZE,
@@ -210,7 +210,7 @@ def lockstep_spike_modal(
 
     # past_kv names for the KEPT layers (in iteration order, which after
     # patching is 0..n_kept-1; the original layer index is encoded in the
-    # name for traceability + to mirror the existing reflex contract)
+    # name for traceability + to mirror the existing tether contract)
     past_kv_names_kept = []
     for li in kept_indices:
         past_kv_names_kept.append(f"past_k_{li}")
@@ -236,7 +236,7 @@ def lockstep_spike_modal(
     prefix_path = out_dir / "vlm_prefix.onnx"
     logger.info("[spike] exporting pruned prefix → %s", prefix_path)
     from onnx_diagnostic.torch_export_patches import torch_export_patches
-    from reflex.exporters.monolithic import _fix_onnx_where_dtype_mismatches
+    from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
 
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):

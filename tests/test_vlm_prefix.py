@@ -19,23 +19,23 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.exporters.vlm_prefix_exporter import (
+from tether.exporters.vlm_prefix_exporter import (
     DEFAULT_IMAGE_SIZE,
     DEFAULT_PREFIX_SEQ_LEN,
     DEFAULT_VLM_KV_DIM,
     VisionEncoderForONNX,
     export_vlm_prefix,
 )
-from reflex.runtime.vlm_components import (
+from tether.runtime.vlm_components import (
     HIDDEN_SIZE,
     MAX_STATE_DIM,
     StateEncoder,
     assemble_prefix,
     pad_state,
 )
-from reflex.models.heads.expert_stack import ExpertGQALayer, ExpertStack
-from reflex.runtime.vlm_orchestrator import VLMPrefixOrchestrator
-from reflex.runtime.server import ReflexServer
+from tether.models.heads.expert_stack import ExpertGQALayer, ExpertStack
+from tether.runtime.vlm_orchestrator import VLMPrefixOrchestrator
+from tether.runtime.server import TetherServer
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ def v02_export_dir(tmp_path):
             "num_layers": 16,
         },
     }
-    (tmp_path / "reflex_config.json").write_text(json.dumps(config))
+    (tmp_path / "tether_config.json").write_text(json.dumps(config))
     # Create placeholder ONNX files (real loading is mocked)
     (tmp_path / "expert_stack.onnx").write_bytes(b"fake-onnx")
     (tmp_path / "vision_encoder.onnx").write_bytes(b"fake-onnx")
@@ -125,7 +125,7 @@ def v01_export_dir(tmp_path):
             "num_layers": 16,
         },
     }
-    (tmp_path / "reflex_config.json").write_text(json.dumps(config))
+    (tmp_path / "tether_config.json").write_text(json.dumps(config))
     (tmp_path / "expert_stack.onnx").write_bytes(b"fake-onnx")
     return tmp_path
 
@@ -227,7 +227,7 @@ class TestServerVLMConditioning:
             (1, 10, 32),
         )
 
-        server = ReflexServer(v02_export_dir, device="cpu")
+        server = TetherServer(v02_export_dir, device="cpu")
         # Manually wire the server instead of calling load() which does real ort import
         server.action_dim = 32
         server.chunk_size = 10
@@ -261,7 +261,7 @@ class TestServerVLMConditioning:
             (1, 10, 32),
         )
 
-        server = ReflexServer(v02_export_dir, device="cpu")
+        server = TetherServer(v02_export_dir, device="cpu")
         server.action_dim = 32
         server.chunk_size = 10
         server.expert_hidden = 720
@@ -291,7 +291,7 @@ class TestServerBackwardCompat:
             (1, 10, 32),
         )
 
-        server = ReflexServer(v01_export_dir, device="cpu")
+        server = TetherServer(v01_export_dir, device="cpu")
         # Wire manually
         server.action_dim = 32
         server.chunk_size = 10
@@ -316,7 +316,7 @@ class TestServerBackwardCompat:
             (1, 10, 32),
         )
 
-        server = ReflexServer(v01_export_dir, device="cpu")
+        server = TetherServer(v01_export_dir, device="cpu")
         server.action_dim = 32
         server.chunk_size = 10
         server.expert_hidden = 720
@@ -352,7 +352,7 @@ class TestConfigV02Schema:
                 "action_dim": 32,
             },
         }
-        config_path = tmp_path / "reflex_config.json"
+        config_path = tmp_path / "tether_config.json"
         config_path.write_text(json.dumps(config))
 
         loaded = json.loads(config_path.read_text())
@@ -372,7 +372,7 @@ class TestConfigV02Schema:
             "model_id": "lerobot/smolvla_base",
             "expert": {"action_dim": 32},
         }
-        config_path = tmp_path / "reflex_config.json"
+        config_path = tmp_path / "tether_config.json"
         config_path.write_text(json.dumps(config))
 
         loaded = json.loads(config_path.read_text())
@@ -401,7 +401,7 @@ class TestVLMPrefixExporterUpdatesConfig:
             "model_id": "lerobot/smolvla_base",
             "expert": {"action_dim": 32},
         }
-        config_path = tmp_path / "reflex_config.json"
+        config_path = tmp_path / "tether_config.json"
         config_path.write_text(json.dumps(initial_config))
 
         # Simulate what export_vlm_prefix writes to config.
@@ -591,7 +591,7 @@ class TestOrchestratorGracefulDegradation:
             "vlm_kv_dim": 960,
             "vlm_image_size": [512, 512],
         }
-        (tmp_path / "reflex_config.json").write_text(json.dumps(config))
+        (tmp_path / "tether_config.json").write_text(json.dumps(config))
         # Only create vision_encoder.onnx -- no decoder_prefill
         (tmp_path / "vision_encoder.onnx").write_bytes(b"fake-onnx")
 
@@ -608,7 +608,7 @@ class TestOrchestratorGracefulDegradation:
         with patch.dict("sys.modules", {}):
             import onnxruntime
             with patch.object(onnxruntime, "InferenceSession", side_effect=mock_session_init):
-                from reflex.runtime.vlm_orchestrator import VLMPrefixOrchestrator
+                from tether.runtime.vlm_orchestrator import VLMPrefixOrchestrator
                 orch = VLMPrefixOrchestrator(tmp_path, config)
 
                 assert orch.is_loaded
@@ -620,10 +620,10 @@ class TestOrchestratorGracefulDegradation:
             "model_id": "lerobot/smolvla_base",
             "vlm_kv_dim": 960,
         }
-        (tmp_path / "reflex_config.json").write_text(json.dumps(config))
+        (tmp_path / "tether_config.json").write_text(json.dumps(config))
         # No ONNX files created
 
-        from reflex.runtime.vlm_orchestrator import VLMPrefixOrchestrator
+        from tether.runtime.vlm_orchestrator import VLMPrefixOrchestrator
         orch = VLMPrefixOrchestrator(tmp_path, config)
 
         assert not orch.is_loaded
@@ -641,7 +641,7 @@ class TestOrchestratorFullPipeline:
             "vlm_kv_dim": 960,
             "vlm_image_size": [512, 512],
         }
-        (tmp_path / "reflex_config.json").write_text(json.dumps(config))
+        (tmp_path / "tether_config.json").write_text(json.dumps(config))
         (tmp_path / "vision_encoder.onnx").write_bytes(b"fake-onnx")
         (tmp_path / "text_embedder.onnx").write_bytes(b"fake-onnx")
         (tmp_path / "decoder_prefill.onnx").write_bytes(b"fake-onnx")
@@ -719,12 +719,12 @@ class TestOrchestratorFullPipeline:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(
-    os.environ.get("REFLEX_INTEGRATION") != "1",
-    reason="Set REFLEX_INTEGRATION=1 to run integration tests",
+    os.environ.get("TETHER_INTEGRATION") != "1",
+    reason="Set TETHER_INTEGRATION=1 to run integration tests",
 )
 class TestDifferentInstructions:
     def test_different_instructions_different_prefix(self):
         """Run two different instructions through the real pipeline, verify prefix_kv differs."""
         # This test requires real model weights and would only run in CI
-        # with REFLEX_INTEGRATION=1
+        # with TETHER_INTEGRATION=1
         pytest.skip("Integration test requires real model checkpoint")

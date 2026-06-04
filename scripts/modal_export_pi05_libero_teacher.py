@@ -3,7 +3,7 @@
 The existing modal_pi05_monolithic_export.py hardcodes output_dir to
 `/onnx_out/monolithic/` which would overwrite. This script writes to
 `/onnx_out/pi05_libero_finetuned_v044/onnx_num_steps_10/` and uses the
-library function `reflex.exporters.monolithic.export_pi05_monolithic`.
+library function `tether.exporters.monolithic.export_pi05_monolithic`.
 
 Usage:
     modal run scripts/modal_export_pi05_libero_teacher.py
@@ -12,7 +12,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-export-pi05-libero-teacher")
+app = modal.App("tether-export-pi05-libero-teacher")
 
 
 def _hf_secret():
@@ -69,7 +69,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -96,7 +96,7 @@ def export_modal(
     from pathlib import Path
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    from reflex.exporters.monolithic import export_pi05_monolithic
+    from tether.exporters.monolithic import export_pi05_monolithic
 
     out = Path(ONNX_OUT) / output_subdir
     out.mkdir(parents=True, exist_ok=True)

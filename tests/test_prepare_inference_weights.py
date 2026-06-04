@@ -15,13 +15,13 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.base_vla import BaseVLA
-from reflex.models.heads import VLAHead
-from reflex.models.heads.flow_matching_head import FlowMatchingHead
-from reflex.models.llm import LLMBackbone
-from reflex.models.projectors.linear_projector import LinearProjector
-from reflex.models.vision import VisionBackbone
-from reflex.models.vlm import VLMBackbone
+from tether.models.base_vla import BaseVLA
+from tether.models.heads import VLAHead
+from tether.models.heads.flow_matching_head import FlowMatchingHead
+from tether.models.llm import LLMBackbone
+from tether.models.projectors.linear_projector import LinearProjector
+from tether.models.vision import VisionBackbone
+from tether.models.vlm import VLMBackbone
 
 
 # ─── Stubs for the spine slot classes ─────────────────────────────────

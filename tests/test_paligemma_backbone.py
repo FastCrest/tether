@@ -21,9 +21,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.llm import LLMBackbone
-from reflex.models.llm.paligemma_backbone import PaliGemmaBackbone
-from reflex.registry.components import LLM_BACKBONES
+from tether.models.llm import LLMBackbone
+from tether.models.llm.paligemma_backbone import PaliGemmaBackbone
+from tether.registry.components import LLM_BACKBONES
 
 
 # ─── Registration + ABC ─────────────────────────────────────────────────

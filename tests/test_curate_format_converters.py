@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/format_converters/ — 4 converters."""
+"""Tests for src/tether/curate/format_converters/ — 4 converters."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.curate.format_converters import (
+from tether.curate.format_converters import (
     CONVERTER_REGISTRY,
     EMBODIMENT_OXE_MAP,
     HDF5Converter,
@@ -279,7 +279,7 @@ def test_rlds_dataset_info_schema(tmp_path: Path) -> None:
 
     RLDSConverter().convert(input_jsonl=jsonl, output_dir=out)
     info = json.loads((out / "dataset_info.json").read_text())
-    assert info["name"] == "reflex_curate_dataset"
+    assert info["name"] == "tether_curate_dataset"
     assert info["splits"][0]["num_examples"] == 2
     assert "steps" in info["features"]
     assert "action" in info["features"]["steps"]["feature_spec"]
@@ -305,7 +305,7 @@ def test_oxe_full_emits_embodiment_id(tmp_path: Path) -> None:
 
 
 def test_video_encoder_handles_no_frames() -> None:
-    from reflex.curate.format_converters.shared.video_encoder import (
+    from tether.curate.format_converters.shared.video_encoder import (
         encode_frames_to_mp4,
     )
     with pytest.raises(ValueError, match="no frames"):
@@ -314,7 +314,7 @@ def test_video_encoder_handles_no_frames() -> None:
 
 def test_video_encoder_decode_image_field_hash_only() -> None:
     """64-char SHA-256 hex shouldn't be misinterpreted as base64 image."""
-    from reflex.curate.format_converters.shared.video_encoder import decode_image_field
+    from tether.curate.format_converters.shared.video_encoder import decode_image_field
     sha256_hex = "0" * 64
     assert decode_image_field(sha256_hex) is None
     assert decode_image_field(None) is None
@@ -322,7 +322,7 @@ def test_video_encoder_decode_image_field_hash_only() -> None:
 
 
 def test_video_encoder_collect_frames_skips_undecodable() -> None:
-    from reflex.curate.format_converters.shared.video_encoder import collect_frames_from_rows
+    from tether.curate.format_converters.shared.video_encoder import collect_frames_from_rows
     rows = [
         {"image_b64": None},
         {"image_b64": "abc"},  # too short
@@ -335,7 +335,7 @@ def test_video_encoder_writes_mp4(tmp_path: Path) -> None:
     """End-to-end: PNG frames in → mp4 out (requires [curate-video] + Pillow)."""
     pytest.importorskip("imageio_ffmpeg")
     Image = pytest.importorskip("PIL.Image")
-    from reflex.curate.format_converters.shared.video_encoder import (
+    from tether.curate.format_converters.shared.video_encoder import (
         encode_frames_to_mp4,
     )
     import io as _io

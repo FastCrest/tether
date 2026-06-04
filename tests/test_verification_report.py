@@ -3,7 +3,7 @@
 Covers:
   - Skeleton (no parity) has metadata, file manifest, sha256, "not yet verified"
   - With parity: PASS/FAIL shown, max_abs_diff tabulated, fixtures listed
-  - Missing reflex_config.json: falls back to "unknown" without crashing
+  - Missing tether_config.json: falls back to "unknown" without crashing
   - Parity section stays consistent when overwriting a prior report
 """
 from __future__ import annotations
@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from reflex.verification_report import REPORT_FILENAME, write_verification_report
+from tether.verification_report import REPORT_FILENAME, write_verification_report
 
 
 def _make_export_dir(tmp_path: Path, with_config: bool = True) -> Path:
     d = tmp_path / "export"
     d.mkdir()
     if with_config:
-        (d / "reflex_config.json").write_text(json.dumps({
+        (d / "tether_config.json").write_text(json.dumps({
             "model_id": "lerobot/smolvla_base",
             "model_type": "smolvla",
             "target": "orin-nano",
@@ -38,7 +38,7 @@ def test_skeleton_without_parity(tmp_path):
 
     assert path.name == REPORT_FILENAME
     text = path.read_text()
-    assert "# Reflex Export Verification" in text
+    assert "# Tether Export Verification" in text
     assert "`lerobot/smolvla_base`" in text
     assert "ONNX opset:** 19" in text
     assert "Not yet verified" in text
@@ -90,12 +90,12 @@ def test_with_parity_failing(tmp_path):
 
 
 def test_missing_config_is_tolerated(tmp_path):
-    # No reflex_config.json — values fall back to "unknown" without crashing
+    # No tether_config.json — values fall back to "unknown" without crashing
     export_dir = _make_export_dir(tmp_path, with_config=False)
     path = write_verification_report(export_dir, parity=None)
     text = path.read_text()
     assert "unknown" in text
-    assert "# Reflex Export Verification" in text
+    assert "# Tether Export Verification" in text
 
 
 def test_overwrites_prior_report(tmp_path):

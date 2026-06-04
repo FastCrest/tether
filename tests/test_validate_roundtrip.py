@@ -1,4 +1,4 @@
-"""Tests for `reflex validate` round-trip orchestrator.
+"""Tests for `tether validate` round-trip orchestrator.
 
 Covers fixture determinism, the seed-bridge invariant, threshold pass/fail
 decisions, missing-ONNX error, unsupported-model rejection, and CI template
@@ -15,10 +15,10 @@ import numpy as np
 import pytest
 import torch
 
-from reflex import _onnx_backend, _pytorch_backend, validate_roundtrip
-from reflex.ci_template import emit_ci_template
-from reflex.fixtures.vla_fixtures import load_fixtures
-from reflex.validate_roundtrip import (
+from tether import _onnx_backend, _pytorch_backend, validate_roundtrip
+from tether.ci_template import emit_ci_template
+from tether.fixtures.vla_fixtures import load_fixtures
+from tether.validate_roundtrip import (
     UNSUPPORTED_MODEL_MESSAGE,
     ValidateRoundTrip,
 )
@@ -35,7 +35,7 @@ def _write_min_config(
     num_steps: int = 10,
     extras: dict | None = None,
 ) -> Path:
-    """Write a minimal reflex_config.json for orchestrator tests."""
+    """Write a minimal tether_config.json for orchestrator tests."""
     export_dir.mkdir(parents=True, exist_ok=True)
     config = {
         "model_type": model_type,
@@ -46,7 +46,7 @@ def _write_min_config(
     }
     if extras:
         config.update(extras)
-    config_path = export_dir / "reflex_config.json"
+    config_path = export_dir / "tether_config.json"
     config_path.write_text(json.dumps(config))
     return config_path
 
@@ -246,20 +246,20 @@ def test_unsupported_model_raises_unknown(tmp_path):
 def test_ci_template_emission(tmp_path):
     """emit_ci_template writes a valid YAML containing key markers, and
     refuses to overwrite without overwrite=True."""
-    out = tmp_path / "workflows" / "reflex-validate.yml"
-    emit_ci_template(out, reflex_version="0.1.0")
+    out = tmp_path / "workflows" / "tether-validate.yml"
+    emit_ci_template(out, tether_version="0.1.0")
     assert out.exists()
     text = out.read_text()
-    assert "reflex validate" in text
+    assert "tether validate" in text
     assert "ubuntu-latest" in text
     assert "0.1.0" in text
 
     # Second call without overwrite must raise.
     with pytest.raises(FileExistsError):
-        emit_ci_template(out, reflex_version="0.1.0")
+        emit_ci_template(out, tether_version="0.1.0")
 
     # Overwrite path works.
-    emit_ci_template(out, reflex_version="0.2.0", overwrite=True)
+    emit_ci_template(out, tether_version="0.2.0", overwrite=True)
     assert "0.2.0" in out.read_text()
 
 
@@ -293,17 +293,17 @@ def test_seed_bridge_in_orchestrator(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(
-    os.getenv("REFLEX_INTEGRATION") != "1",
-    reason="integration test; set REFLEX_INTEGRATION=1 (requires HF token + ~30 min)",
+    os.getenv("TETHER_INTEGRATION") != "1",
+    reason="integration test; set TETHER_INTEGRATION=1 (requires HF token + ~30 min)",
 )
 def test_integration_smolvla_export(tmp_path):
     """End-to-end with a real SmolVLA export.
 
-    Requires REFLEX_INTEGRATION=1 + HF token + ~30 minutes. Uses
-    `reflex.export` to produce a real export, then runs validate against it.
+    Requires TETHER_INTEGRATION=1 + HF token + ~30 minutes. Uses
+    `tether.export` to produce a real export, then runs validate against it.
     Uses a looser 1e-3 threshold for real models.
     """
-    from reflex.export import export_model  # type: ignore[attr-defined]
+    from tether.export import export_model  # type: ignore[attr-defined]
 
     export_dir = tmp_path / "smolvla_export"
     export_model(

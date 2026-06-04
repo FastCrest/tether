@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import modal
 
-app = modal.App("reflex-probe-a10g-driver")
+app = modal.App("tether-probe-a10g-driver")
 
 image = (
     modal.Image.from_registry("nvidia/cuda:12.5.1-cudnn-runtime-ubuntu22.04", add_python="3.12")

@@ -22,7 +22,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-inference-weights-parity")
+app = modal.App("tether-inference-weights-parity")
 
 
 def _hf_secret():
@@ -55,8 +55,8 @@ image = (
         "typer", "rich",
     )
     .run_commands(
-        # reflex-vla first (may pull plain onnxruntime as transitive)
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        # tether-vla first (may pull plain onnxruntime as transitive)
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         # Force GPU build (uninstall plain ORT first to avoid the silent
         # CUDAExecutionProvider-unavailable failure we hit on first fire).
         "pip uninstall -y onnxruntime || true",

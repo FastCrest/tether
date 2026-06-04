@@ -1,7 +1,7 @@
-"""Tests for src/reflex/pro/license.py — Phase 1 self-distilling-serve Day 2.
+"""Tests for src/tether/pro/license.py — Phase 1 self-distilling-serve Day 2.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture decision #5: HW-bound
-JWT at ~/.reflex/pro.license + 24h heartbeat. Phase 1 ships substrate
+JWT at ~/.tether/pro.license + 24h heartbeat. Phase 1 ships substrate
 (format + validation) without cryptographic verification — Phase 1.5 wires
 actual signing. License absence = exit 1, NEVER silent degrade.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.pro.license import (
+from tether.pro.license import (
     DEFAULT_LICENSE_PATH,
     HEARTBEAT_FRESHNESS_S,
     LICENSE_VERSION,

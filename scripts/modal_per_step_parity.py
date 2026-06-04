@@ -35,7 +35,7 @@ from pathlib import Path
 
 import modal
 
-app = modal.App("reflex-per-step-parity")
+app = modal.App("tether-per-step-parity")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -82,28 +82,28 @@ image = (
     )
     .add_local_dir(
         os.path.join(REPO_ROOT, "src"),
-        remote_path="/root/reflex-vla/src",
+        remote_path="/root/tether-vla/src",
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "pyproject.toml"),
-        remote_path="/root/reflex-vla/pyproject.toml",
+        remote_path="/root/tether-vla/pyproject.toml",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "README.md"),
-        remote_path="/root/reflex-vla/README.md",
+        remote_path="/root/tether-vla/README.md",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "LICENSE"),
-        remote_path="/root/reflex-vla/LICENSE",
+        remote_path="/root/tether-vla/LICENSE",
         copy=True,
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        'pip install -e "/root/reflex-vla[monolithic]"',
+        'pip install -e "/root/tether-vla[monolithic]"',
     )
     .env({
         "HF_HOME": HF_CACHE,
@@ -149,7 +149,7 @@ def parity_test() -> dict:
     import numpy as np
     import onnxruntime as ort
 
-    from reflex.exporters.decomposed import (
+    from tether.exporters.decomposed import (
         PI05_HEAD_DIM,
         PI05_KV_HEADS,
         PI05_PALIGEMMA_LAYERS,
@@ -300,7 +300,7 @@ def parity_test() -> dict:
 
 
 def _past_kv_names(num_layers: int) -> list[str]:
-    """Mirror reflex.exporters.decomposed._past_kv_names() — flat list of
+    """Mirror tether.exporters.decomposed._past_kv_names() — flat list of
     past_k_0, past_v_0, past_k_1, past_v_1, ... per layer."""
     names = []
     for i in range(num_layers):

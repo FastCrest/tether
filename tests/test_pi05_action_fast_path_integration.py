@@ -6,7 +6,7 @@ short-circuit at predict_action_chunk:480-495 fires correctly when fed
 repeated similar chunks via the actual inference path.
 
 Approach: bypass Pi05DecomposedInference.__init__ (heavy — loads ONNX
-files + reflex_config.json) and manually assemble a minimal instance
+files + tether_config.json) and manually assemble a minimal instance
 with mocked sessions + a patched _run_expert that returns
 deterministic actions. Verify:
   1. Repeated similar chunks alternate expert/cache (max_skips cap is
@@ -22,8 +22,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.runtime.action_fast_path import ActionFastPath
-from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+from tether.runtime.action_fast_path import ActionFastPath
+from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
 
 @pytest.fixture
@@ -225,7 +225,7 @@ def test_metric_emitted_on_skip(fixture_inference, monkeypatch):
         skip_count["n"] += 1
 
     monkeypatch.setattr(
-        "reflex.observability.prometheus.inc_action_skip",
+        "tether.observability.prometheus.inc_action_skip",
         fake_inc,
         raising=False,
     )

@@ -4,7 +4,7 @@ Revived from archive/scripts/modal_libero10.py. April's hunt ran this
 against the DECOMPOSED ONNX path — 0% task success, 12 reimplementation
 bugs, see reflex_context/05_sessions/2026-04-17_libero_correctness_hunt.md.
 
-Phase 1 (THIS SCRIPT, REFLEX_NATIVE=1): PyTorch-native baseline.
+Phase 1 (THIS SCRIPT, TETHER_NATIVE=1): PyTorch-native baseline.
   Answers "does the harness actually work for our pipeline at all?" A
   non-zero success rate here means the infra is fine and we can measure.
 
@@ -24,9 +24,9 @@ import time
 
 import modal
 
-app = modal.App("reflex-libero-monolithic")
+app = modal.App("tether-libero-monolithic")
 
-# Image: MuJoCo + vla-eval + reflex on debian_slim (reliable — nvidia/cuda had
+# Image: MuJoCo + vla-eval + tether on debian_slim (reliable — nvidia/cuda had
 # Ubuntu mirror hash issues in Apr builds).
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -96,19 +96,19 @@ image = (
         # Verify envs import works — this is what failed in run 1 (missing bddl).
         " && python -c 'from libero.libero.envs import OffScreenRenderEnv; print(\"LIBERO envs OK\")'"
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
     .add_local_file(
-        "scripts/patch_libero.py", "/root/reflex-vla/scripts/patch_libero.py", copy=True
+        "scripts/patch_libero.py", "/root/tether-vla/scripts/patch_libero.py", copy=True
     )
     # Skip [monolithic] extras on this image: lerobot==0.5.1 (pinned by
     # the extra) requires Python >=3.12, but LIBERO + robosuite stack
     # pins us to Python 3.11. Instead, the export step below uses
-    # --decomposed — REFLEX_NATIVE=1 bypasses the ONNX files anyway,
+    # --decomposed — TETHER_NATIVE=1 bypasses the ONNX files anyway,
     # and the decomposed export still produces the config +
     # policy_preprocessor_*.safetensors that vla_eval needs.
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .run_commands("cd /root/tether-vla && pip install -e .")
     .env(
         {
             "MUJOCO_GL": "osmesa",
@@ -137,10 +137,10 @@ def run_libero10():
 
     os.environ["MUJOCO_GL"] = "egl"
 
-    export_dir = "/tmp/reflex_libero_export"
+    export_dir = "/tmp/tether_libero_export"
     results: dict = {
         "benchmark": "LIBERO-10",
-        "model": "HuggingFaceVLA/smolvla_libero via Reflex ONNX",
+        "model": "HuggingFaceVLA/smolvla_libero via Tether ONNX",
         "steps": [],
         "task_success": None,
         "per_task": [],
@@ -159,7 +159,7 @@ def run_libero10():
     t0 = time.time()
     r = subprocess.run(
         [
-            "reflex",
+            "tether",
             "export",
             "HuggingFaceVLA/smolvla_libero",
             "--target",
@@ -168,7 +168,7 @@ def run_libero10():
             export_dir,
             # The monolithic default (post-dogfood 2026-04-19) needs
             # `[monolithic]` extras that require Python 3.12. LIBERO stack
-            # is Python 3.11. REFLEX_NATIVE=1 in the adapter bypasses ONNX
+            # is Python 3.11. TETHER_NATIVE=1 in the adapter bypasses ONNX
             # anyway, so the decomposed export's per-stage files are fine
             # here — we only need the config + normalizer safetensors.
             "--decomposed",
@@ -194,10 +194,10 @@ def run_libero10():
         f for f in norm_files if os.path.exists(os.path.join(export_dir, f))
     ]
 
-    # If reflex export didn't copy them, print the last of its stdout so we
+    # If tether export didn't copy them, print the last of its stdout so we
     # can see the Copied X/4 line (or whatever went wrong).
     if len(norm_present) < 2:
-        print("  reflex export stdout tail (for normalizer copy diagnosis):")
+        print("  tether export stdout tail (for normalizer copy diagnosis):")
         print(r.stdout[-2000:])
 
     log(
@@ -208,22 +208,22 @@ def run_libero10():
     )
 
     # ── Step 2: Start adapter server via the reusable module ──────
-    print("\n=== Step 2: Start reflex.runtime.adapters.vla_eval ===")
+    print("\n=== Step 2: Start tether.runtime.adapters.vla_eval ===")
     server_env = {
         **os.environ,
-        "REFLEX_EXPORT_DIR": export_dir,
-        "REFLEX_ACTION_DIM_OUT": "7",  # LIBERO: 6 joints + gripper
-        "REFLEX_DEVICE": "cuda",       # A10G GPU available
+        "TETHER_EXPORT_DIR": export_dir,
+        "TETHER_ACTION_DIM_OUT": "7",  # LIBERO: 6 joints + gripper
+        "TETHER_DEVICE": "cuda",       # A10G GPU available
         "MUJOCO_GL": "osmesa",
         # Route to the native PyTorch SmolVLA path — bypasses the decomposed
         # ONNX export (which hits per-step 2% velocity drift) and runs lerobot
         # SmolVLAPolicy directly. ONNX export still shipped for Jetson/TRT.
-        "REFLEX_NATIVE": "1",
+        "TETHER_NATIVE": "1",
         # A/B: disable our 180° H+W image flip. Hypothesis: vla-eval's
         # LIBERO integration may already apply the flip, in which case we
         # were double-flipping. Unset / "0" = apply flip (default);
         # "1" = skip flip. Run 10 tests this.
-        "REFLEX_LIBERO_NO_FLIP": "1",
+        "TETHER_LIBERO_NO_FLIP": "1",
     }
     # Route server stdout to a file so we can print it on error.
     server_log_path = "/tmp/adapter_server.log"
@@ -232,7 +232,7 @@ def run_libero10():
         [
             "python",
             "-m",
-            "reflex.runtime.adapters.vla_eval",
+            "tether.runtime.adapters.vla_eval",
             "--port",
             "8000",
         ],
@@ -291,7 +291,7 @@ def run_libero10():
             if any(
                 marker in line
                 for marker in (
-                    "ReflexVlaEvalAdapter ready",
+                    "TetherVlaEvalAdapter ready",
                     "Loaded normalizer",
                     "norm=",
                     "VLM orchestrator",
@@ -665,7 +665,7 @@ def main():
 
     if result.get("task_success") is not None:
         print(
-            f"\n  HEADLINE: SmolVLA via Reflex achieves "
+            f"\n  HEADLINE: SmolVLA via Tether achieves "
             f"{result['task_success']:.1f}% on LIBERO-10"
         )
 

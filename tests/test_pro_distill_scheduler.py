@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/distill_scheduler.py — Phase 1 self-distilling-serve Day 3.
+"""Tests for src/tether/pro/distill_scheduler.py — Phase 1 self-distilling-serve Day 3.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture: pure trigger-decision
 primitive with 5 modes (manual / nightly / cron / samples / quality-drop)
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from reflex.pro.distill_scheduler import (
+from tether.pro.distill_scheduler import (
     ALL_TRIGGER_MODES,
     DEFAULT_MIN_KICK_GAP_S,
     DEFAULT_NIGHTLY_UTC_HOUR,
@@ -393,7 +393,7 @@ def test_should_kick_now_default_uses_current_time():
 
 def test_self_distilling_serve_loss_step_exported_from_snapflow():
     """The new dual-loss function must be importable + callable."""
-    from reflex.distill.snapflow import (
+    from tether.distill.snapflow import (
         DEFAULT_DUAL_LOSS_TEACHER_ALPHA,
         self_distilling_serve_loss_step,
     )

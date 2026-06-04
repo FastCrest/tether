@@ -1,10 +1,10 @@
-"""Tests for src/reflex/curate/metadata/ — episode metadata auto-tagging."""
+"""Tests for src/tether/curate/metadata/ — episode metadata auto-tagging."""
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from reflex.curate.metadata import (
+from tether.curate.metadata import (
     EnrichmentResult,
     TASK_TYPES,
     action_complexity,

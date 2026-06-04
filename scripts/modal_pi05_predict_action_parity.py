@@ -65,13 +65,13 @@ image = (
         "num2words",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
 
 
-app = modal.App("reflex-pi05-spine-parity")
+app = modal.App("tether-pi05-spine-parity")
 _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
 
 
@@ -201,11 +201,11 @@ def run_parity(
     # loader can't find weights nested under paligemma_with_expert.paligemma.*.
     print("\n=== Step 5: Build Pi05VLA (from loaded lerobot weights) ===", flush=True)
     start = time.time()
-    from reflex.models.vlas.pi05 import Pi05VLA
-    from reflex.models.vision.siglip_backbone import SigLIPBackbone
-    from reflex.models.llm.paligemma_backbone import PaliGemmaBackbone
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
-    from reflex.exporters.pi0_prefix import build_pi05_expert_with_prefix
+    from tether.models.vlas.pi05 import Pi05VLA
+    from tether.models.vision.siglip_backbone import SigLIPBackbone
+    from tether.models.llm.paligemma_backbone import PaliGemmaBackbone
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.exporters.pi0_prefix import build_pi05_expert_with_prefix
 
     paligemma = policy.model.paligemma_with_expert.paligemma
     vision = SigLIPBackbone(model=paligemma.model.vision_tower)
@@ -323,7 +323,7 @@ def run_parity(
         print(f"  v_t[0, 0, :8]: lerobot {v_t_ler[0, 0, :8]}  mine {v_t_mine[0, 0, :8]}")
 
         # ─── Intra-attention diff via layer's debug_captures ───────────
-        from reflex.models.heads.expert_stack import Pi05ExpertGQALayer
+        from tether.models.heads.expert_stack import Pi05ExpertGQALayer
         Pi05ExpertGQALayer.debug_captures = {}
         Pi05ExpertGQALayer.debug_layer_id = 0
         ler_eager_captures: dict = {}

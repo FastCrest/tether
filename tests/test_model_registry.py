@@ -1,4 +1,4 @@
-"""Tests for the model registry + `reflex models {list,pull,info}` CLI.
+"""Tests for the model registry + `tether models {list,pull,info}` CLI.
 
 Covers:
 - Registry data invariants (every entry parses; no duplicate model_ids;
@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from reflex.registry import (
+from tether.registry import (
     REGISTRY,
     ModelEntry,
     ModelBenchmark,
@@ -160,7 +160,7 @@ def runner():
 
 @pytest.fixture
 def cli_app():
-    from reflex.cli import app
+    from tether.cli import app
     return app
 
 
@@ -276,4 +276,4 @@ class TestCliPull:
                 ["models", "pull", "pi05-base", "--target-dir", str(tmp_path / "out")],
             )
         assert result.exit_code == 0, result.output
-        assert "reflex export" in result.output
+        assert "tether export" in result.output

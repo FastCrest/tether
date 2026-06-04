@@ -21,7 +21,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-stateout-smoke")
+app = modal.App("tether-stateout-smoke")
 
 
 def _hf_secret():
@@ -67,7 +67,7 @@ image = (
     )
     .run_commands(
         f'echo "bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -94,7 +94,7 @@ def smoke(
     log = logging.getLogger("smoke")
 
     import torch
-    from reflex.distill.snapflow_pi0_model import (
+    from tether.distill.snapflow_pi0_model import (
         load_snapflow_student,
         enable_snapflow_state_out,
     )

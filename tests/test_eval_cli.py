@@ -1,4 +1,4 @@
-"""Tests for the `reflex eval` CLI verb — Phase 1 eval-as-a-service Day 3."""
+"""Tests for the `tether eval` CLI verb — Phase 1 eval-as-a-service Day 3."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from typer.testing import CliRunner
 
-from reflex.cli import app
-from reflex.eval.preflight import PreflightResult
+from tether.cli import app
+from tether.eval.preflight import PreflightResult
 
 
 runner = CliRunner()
@@ -29,7 +29,7 @@ def stub_preflight_pass(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "reflex.eval.preflight.PreflightSmokeTest.run", _stub,
+        "tether.eval.preflight.PreflightSmokeTest.run", _stub,
     )
 
 
@@ -45,7 +45,7 @@ def stub_preflight_fail(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "reflex.eval.preflight.PreflightSmokeTest.run", _stub,
+        "tether.eval.preflight.PreflightSmokeTest.run", _stub,
     )
 
 
@@ -63,7 +63,7 @@ def stub_modal_runner(monkeypatch):
     """Stub modal_runner.run_libero_on_modal so tests don't hit real Modal.
     Returns 1 episode per task with terminal_reason='adapter_error' to
     preserve the Day 3 "exit 5 on all-adapter-error" CLI semantics."""
-    from reflex.eval.libero import EpisodeResult
+    from tether.eval.libero import EpisodeResult
 
     def _stub(*, config, export_dir, **kwargs):
         # Synthesize 1 EpisodeResult per task in config.tasks
@@ -78,7 +78,7 @@ def stub_modal_runner(monkeypatch):
         return out
 
     monkeypatch.setattr(
-        "reflex.eval.modal_runner.run_libero_on_modal", _stub,
+        "tether.eval.modal_runner.run_libero_on_modal", _stub,
     )
 
 
@@ -139,7 +139,7 @@ def test_eval_prints_banner_with_inputs(fake_export, stub_preflight_pass, stub_m
               "--seed", "42", "--tasks", "libero_spatial,libero_object"],
     )
     # Stub runners produce all-adapter-error → exit 5; that's expected Day 3
-    assert "Reflex Eval" in result.output
+    assert "Tether Eval" in result.output
     assert "libero_spatial" in result.output
     assert "libero_object" in result.output
     assert "Seed:" in result.output
@@ -173,7 +173,7 @@ def test_cost_preview_exits_clean_without_running_preflight(fake_export, monkeyp
         )
 
     monkeypatch.setattr(
-        "reflex.eval.preflight.PreflightSmokeTest.run", _stub,
+        "tether.eval.preflight.PreflightSmokeTest.run", _stub,
     )
     result = runner.invoke(
         app, ["eval", str(fake_export), "--cost-preview", "--num-episodes", "5"],
@@ -260,7 +260,7 @@ def test_eval_passes_preflight_timeout_through(fake_export, monkeypatch, stub_mo
         )
 
     monkeypatch.setattr(
-        "reflex.eval.preflight.PreflightSmokeTest.run", _stub,
+        "tether.eval.preflight.PreflightSmokeTest.run", _stub,
     )
     runner.invoke(
         app, ["eval", str(fake_export), "--preflight-timeout", "120"],
@@ -360,19 +360,19 @@ def test_tasks_csv_drops_empty_entries(fake_export, stub_preflight_pass, stub_mo
 
 
 def test_resolve_task_runner_rejects_unknown_runtime(tmp_path):
-    from reflex.eval.runner_dispatch import resolve_task_runner
+    from tether.eval.runner_dispatch import resolve_task_runner
     with pytest.raises(ValueError, match="runtime must be one of"):
         resolve_task_runner(runtime="kubernetes", export_dir=tmp_path)
 
 
 def test_resolve_task_runner_modal_returns_callable(tmp_path):
-    from reflex.eval.runner_dispatch import resolve_task_runner
+    from tether.eval.runner_dispatch import resolve_task_runner
     fn = resolve_task_runner(runtime="modal", export_dir=tmp_path)
     assert callable(fn)
 
 
 def test_resolve_task_runner_local_returns_callable(tmp_path):
-    from reflex.eval.runner_dispatch import resolve_task_runner
+    from tether.eval.runner_dispatch import resolve_task_runner
     fn = resolve_task_runner(runtime="local", export_dir=tmp_path)
     assert callable(fn)
 
@@ -381,8 +381,8 @@ def test_modal_stub_runner_emits_adapter_error(tmp_path):
     """Modal per-episode stub is back-compat only -- real Modal callers
     use resolve_suite_runner. Verifies the per-episode shape still
     surfaces a structured adapter_error row."""
-    from reflex.eval.libero import LiberoSuiteConfig
-    from reflex.eval.runner_dispatch import resolve_task_runner
+    from tether.eval.libero import LiberoSuiteConfig
+    from tether.eval.runner_dispatch import resolve_task_runner
 
     fn = resolve_task_runner(runtime="modal", export_dir=tmp_path)
     config = LiberoSuiteConfig(num_episodes=1, tasks=("libero_spatial",))
@@ -394,8 +394,8 @@ def test_modal_stub_runner_emits_adapter_error(tmp_path):
 
 
 def test_local_stub_runner_emits_adapter_error(tmp_path):
-    from reflex.eval.libero import LiberoSuiteConfig
-    from reflex.eval.runner_dispatch import resolve_task_runner
+    from tether.eval.libero import LiberoSuiteConfig
+    from tether.eval.runner_dispatch import resolve_task_runner
 
     fn = resolve_task_runner(runtime="local", export_dir=tmp_path)
     config = LiberoSuiteConfig(num_episodes=1, tasks=("libero_spatial",), runtime="local")
@@ -406,7 +406,7 @@ def test_local_stub_runner_emits_adapter_error(tmp_path):
 
 
 def test_default_libero_tasks_returns_phase1_list():
-    from reflex.eval.runner_dispatch import (
+    from tether.eval.runner_dispatch import (
         LIBERO_DEFAULT_TASKS_PHASE1,
         default_libero_tasks,
     )

@@ -1,4 +1,4 @@
-"""Tests for src/reflex/eval/libero.py — Phase 1 eval-as-a-service Day 1.
+"""Tests for src/tether/eval/libero.py — Phase 1 eval-as-a-service Day 1.
 
 Per ADR 2026-04-25-eval-as-a-service-architecture: substrate is pure
 orchestration (config + dispatcher + per-task fan-out). Day 2 wires
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.eval.libero import (
+from tether.eval.libero import (
     ALL_RUNTIMES,
     ALL_TERMINAL_REASONS,
     DEFAULT_NUM_EPISODES,
@@ -58,7 +58,7 @@ def test_terminal_reasons_bounded_enum():
 
 
 def test_default_seed_matches_bench_convention():
-    """seed=0 default per ADR (matches reflex bench cli.py:608)."""
+    """seed=0 default per ADR (matches tether bench cli.py:608)."""
     assert DEFAULT_SEED == 0
 
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.runtime.rtc_adapter import (
+from tether.runtime.rtc_adapter import (
     LatencyTracker,
     RtcAdapter,
     RtcAdapterConfig,
@@ -20,7 +20,7 @@ from reflex.runtime.rtc_adapter import (
     _build_lerobot_rtc_config,
     require_rtc,
 )
-from reflex.runtime.buffer import ActionChunkBuffer
+from tether.runtime.buffer import ActionChunkBuffer
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ class TestRequireRtc:
 
     def test_require_rtc_raises_when_unavailable(self, monkeypatch):
         # Force the unavailable path even if lerobot is installed
-        monkeypatch.setattr("reflex.runtime.rtc_adapter._RTC_AVAILABLE", False)
+        monkeypatch.setattr("tether.runtime.rtc_adapter._RTC_AVAILABLE", False)
         with pytest.raises(ImportError, match="lerobot"):
             require_rtc()
 
@@ -178,7 +178,7 @@ class TestRtcAdapterConstruction:
 
     def test_disabled_does_not_require_lerobot(self, monkeypatch):
         """Even with lerobot unavailable, disabled config must construct."""
-        monkeypatch.setattr("reflex.runtime.rtc_adapter._RTC_AVAILABLE", False)
+        monkeypatch.setattr("tether.runtime.rtc_adapter._RTC_AVAILABLE", False)
         cfg = RtcAdapterConfig(enabled=False)
         adapter = RtcAdapter(
             policy=_FakePolicy(),
@@ -188,7 +188,7 @@ class TestRtcAdapterConstruction:
         assert adapter._processor is None
 
     def test_enabled_requires_lerobot(self, monkeypatch):
-        monkeypatch.setattr("reflex.runtime.rtc_adapter._RTC_AVAILABLE", False)
+        monkeypatch.setattr("tether.runtime.rtc_adapter._RTC_AVAILABLE", False)
         cfg = RtcAdapterConfig(enabled=True)
         with pytest.raises(ImportError, match="lerobot"):
             RtcAdapter(

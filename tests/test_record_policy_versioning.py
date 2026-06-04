@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.runtime.record import RecordWriter
+from tether.runtime.record import RecordWriter
 
 
 def _read_jsonl(path: Path) -> list[dict]:

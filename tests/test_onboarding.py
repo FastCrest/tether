@@ -1,4 +1,4 @@
-"""Tests for src/reflex/onboarding.py — first-run consent + recurring prompts."""
+"""Tests for src/tether/onboarding.py — first-run consent + recurring prompts."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from reflex.onboarding import (
+from tether.onboarding import (
     ONBOARDING_VERSION,
     OnboardingState,
     get_onboarding_state,

@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/signature.py.
+"""Tests for src/tether/pro/signature.py.
 
 Generates a fresh Ed25519 keypair per test, monkey-patches the bundled
 public key, then exercises the verify path end-to-end including tamper
@@ -12,7 +12,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from reflex.pro import signature
+from tether.pro import signature
 
 
 def _gen_keypair() -> tuple[Ed25519PrivateKey, str]:

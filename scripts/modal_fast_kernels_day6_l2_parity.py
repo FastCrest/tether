@@ -17,7 +17,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-fast-kernels-day6-l2")
+app = modal.App("tether-fast-kernels-day6-l2")
 
 
 def _repo_head_sha() -> str:
@@ -52,7 +52,7 @@ image = (
         "ninja",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -91,7 +91,7 @@ def run_day6_l2(model_id: str = "lerobot/pi05_libero_finetuned_v044", n_pairs: i
     print(f"[d6] [{time.time()-t0:.1f}s] PI05Policy loaded", flush=True)
 
     t0 = time.time()
-    from reflex.models.vlas.pi05 import Pi05VLA
+    from tether.models.vlas.pi05 import Pi05VLA
     vla = Pi05VLA.from_lerobot_policy(policy)
     del policy
     vla.vision_backbone.to("cuda")
@@ -101,7 +101,7 @@ def run_day6_l2(model_id: str = "lerobot/pi05_libero_finetuned_v044", n_pairs: i
 
     # Path B: Triton runtime built from the SAME VLA
     t0 = time.time()
-    from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
+    from tether.runtime.fast_inference.pi05 import Pi05FastKernelsInference
     triton_runtime = Pi05FastKernelsInference(vla, capture=False)
     triton_runtime.prepare_triton_inference()
     print(f"[d6] [{time.time()-t0:.1f}s] Triton runtime ready (bf16 weights reshaped from same VLA)", flush=True)

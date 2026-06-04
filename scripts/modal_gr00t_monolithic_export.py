@@ -7,7 +7,7 @@ GR00T differs from pi0 / pi0.5 / SmolVLA in three ways:
    decoder-only stack → no DynamicCache, no prefix-mask surgery needed.
 3. The exported monolithic ONNX is the *per-step* velocity function:
    noisy_actions + timestep + position_ids → velocity (same shape).
-   `reflex serve` wraps it in the canonical 4-step denoise loop.
+   `tether serve` wraps it in the canonical 4-step denoise loop.
 
 Parity target: cos=1.0 vs PyTorch `GR00TFullStack.forward` at machine
 precision on shared seeded inputs. This is the equivalent of pi0's
@@ -60,10 +60,10 @@ image = (
         "pydantic>=2.0",
         "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
     .env({
         "HF_HOME": HF_CACHE_PATH,
         "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers",
@@ -97,8 +97,8 @@ def export_gr00t_monolithic_modal(
     import torch
     import numpy as np
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[modal] Loading {model_id}...")
     t0 = time.time()
@@ -195,8 +195,8 @@ def parity_test_monolithic(
     import torch
     import onnxruntime as ort
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[parity] Loading {model_id}...")
     t0 = time.time()
@@ -300,8 +300,8 @@ def denoise_loop_parity(
     import torch
     import onnxruntime as ort
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[loop-parity] Loading {model_id}...")
     state_dict, _ = load_checkpoint(model_id)
@@ -398,15 +398,15 @@ def export_gr00t_with_vlm_modal(
     - state + vlm_kv are first-class inputs (not zero-stubbed)
     - uses the Step 2 state_encoder port + Step 3 fixed pos_embed logic
     - produces expert_stack_with_vlm.onnx (kept separate from the old
-      model.onnx for compatibility with existing reflex serve config)
+      model.onnx for compatibility with existing tether serve config)
     """
     import time
     from pathlib import Path
 
     import torch
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[modal-vlm] Loading {model_id}...")
     t0 = time.time()
@@ -510,8 +510,8 @@ def parity_test_with_vlm(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import torch
     import onnxruntime as ort
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[parity-vlm] Loading {model_id}...")
     state_dict, _ = load_checkpoint(model_id)

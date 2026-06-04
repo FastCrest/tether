@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-from reflex.runtime.inference_weights import (
+from tether.runtime.inference_weights import (
     InferenceWeightsRuntime,
     WeightBindingError,
     validate_name_mapping,

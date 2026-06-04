@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from reflex.postprocess.openvla import (
+from tether.postprocess.openvla import (
     logits_to_tokens,
     tokens_to_action_bins,
     bins_to_normalized,

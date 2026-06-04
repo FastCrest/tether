@@ -18,7 +18,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-fast-kernels-day4-smoke")
+app = modal.App("tether-fast-kernels-day4-smoke")
 
 
 def _repo_head_sha() -> str:
@@ -37,7 +37,7 @@ _BRANCH = "lift/5-day1-2-vendor-triton-kernels"
 
 image = (
     # CUDA devel image required for torch.utils.cpp_extension.load() to JIT-compile
-    # the vendored .cpp/.cu sources in src/reflex/kernels/cuda/. debian_slim
+    # the vendored .cpp/.cu sources in src/tether/kernels/cuda/. debian_slim
     # has runtime CUDA libs but no nvcc; this image has both.
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04",
@@ -64,7 +64,7 @@ image = (
         # Reference HEAD SHA (not branch name) so each new commit forces a
         # rebuild of this layer — bypasses Modal's pip-layer caching when
         # iterating on bugs.
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -96,7 +96,7 @@ def run_day4_smoke(model_id: str = "lerobot/pi05_libero_finetuned_v044") -> dict
     print(f"[d4] [{time.time()-t0:.1f}s] PI05Policy loaded", flush=True)
 
     t0 = time.time()
-    from reflex.models.vlas.pi05 import Pi05VLA
+    from tether.models.vlas.pi05 import Pi05VLA
     vla = Pi05VLA.from_lerobot_policy(policy)
     print(f"[d4] [{time.time()-t0:.1f}s] Pi05VLA built on spine", flush=True)
 
@@ -111,7 +111,7 @@ def run_day4_smoke(model_id: str = "lerobot/pi05_libero_finetuned_v044") -> dict
 
     # ── Build the FastKernels runtime ──────────────────────────────────
     t0 = time.time()
-    from reflex.runtime.fast_inference.pi05 import Pi05FastKernelsInference
+    from tether.runtime.fast_inference.pi05 import Pi05FastKernelsInference
     runtime = Pi05FastKernelsInference(
         vla,
         num_views=2,

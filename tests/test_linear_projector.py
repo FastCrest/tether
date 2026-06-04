@@ -18,10 +18,10 @@ from __future__ import annotations
 import pytest
 import torch
 
-from reflex.models.projectors import Projector
-from reflex.models.projectors.linear_projector import LinearProjector
-from reflex.registry.components import PROJECTORS
-from reflex.registry.builder import build_from_cfg
+from tether.models.projectors import Projector
+from tether.models.projectors.linear_projector import LinearProjector
+from tether.registry.components import PROJECTORS
+from tether.registry.builder import build_from_cfg
 
 
 # ─── Registration + construction ────────────────────────────────────────

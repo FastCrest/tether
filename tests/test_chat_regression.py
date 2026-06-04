@@ -1,4 +1,4 @@
-"""Regression tests for `reflex chat` hallucination behavior.
+"""Regression tests for `tether chat` hallucination behavior.
 
 Diagnoses the failure mode documented in 03_experiments/2026-05-02-chat-hallucination-spike.md:
 the agent fabricated model names, sizes, and latencies on research-shaped queries
@@ -18,9 +18,9 @@ The full N=135 hallucination spike that produced the recommendation is preserved
 
 from __future__ import annotations
 
-from reflex.chat.executor import _BUILDERS, _STATIC, _argv_for
-from reflex.chat.loop import SYSTEM_PROMPT
-from reflex.chat.schema import by_name
+from tether.chat.executor import _BUILDERS, _STATIC, _argv_for
+from tether.chat.loop import SYSTEM_PROMPT
+from tether.chat.schema import by_name
 
 
 def test_list_models_described_as_registry_source_of_truth() -> None:

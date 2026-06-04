@@ -1,14 +1,14 @@
 """Verify the TRT FP16 + multi-batch interaction.
 
 Known sharp edge: TRT engines compile against a specific input shape.
-Our exporters bake static shapes (batch=1). When `reflex serve --max-batch N`
+Our exporters bake static shapes (batch=1). When `tether serve --max-batch N`
 fires a batched request, the TRT engine has to handle batch=N input.
 
 ORT's TensorRT EP supports this in two ways:
   1. Falls back to CUDAExecutionProvider for shapes the engine doesn't have.
   2. Builds and caches a new engine per distinct shape (slow first hit).
 
-This test runs `reflex serve --max-batch 4` against pi0 and verifies:
+This test runs `tether serve --max-batch 4` against pi0 and verifies:
   - The server starts cleanly (warmup builds engine for batch=1)
   - Concurrent batched requests (4 at a time) succeed
   - inference_mode reported in responses
@@ -27,7 +27,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-trt-batch-verify")
+app = modal.App("tether-trt-batch-verify")
 
 image = (
     modal.Image.from_registry(
@@ -47,11 +47,11 @@ def test_trt_batch():
     import time
     import urllib.request
 
-    # Install reflex from git
-    print("=== pip install reflex-vla[serve,gpu] ===", flush=True)
+    # Install tether from git
+    print("=== pip install tether[serve,gpu] ===", flush=True)
     r = subprocess.run(
         ["pip", "install",
-         "reflex-vla[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla"],
+         "tether-vla[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla"],
         capture_output=True, text=True, timeout=600,
     )
     if r.returncode != 0:
@@ -59,10 +59,10 @@ def test_trt_batch():
     print("  install ok", flush=True)
 
     # Export pi0 — the model we benchmarked batching on earlier
-    print("\n=== reflex export lerobot/pi0_base ===", flush=True)
+    print("\n=== tether export lerobot/pi0_base ===", flush=True)
     t0 = time.time()
     r = subprocess.run(
-        ["reflex", "export", "lerobot/pi0_base", "--target", "desktop",
+        ["tether", "export", "lerobot/pi0_base", "--target", "desktop",
          "--output", "/tmp/pi0"],
         capture_output=True, text=True, timeout=600,
     )
@@ -106,7 +106,7 @@ def test_trt_batch():
         return results
 
     def run_scenario(label, port, max_batch, n_concurrent):
-        cmd = ["reflex", "serve", "/tmp/pi0", "--port", str(port),
+        cmd = ["tether", "serve", "/tmp/pi0", "--port", str(port),
                "--host", "127.0.0.1", "--device", "cuda"]
         if max_batch > 1:
             cmd.extend(["--max-batch", str(max_batch),

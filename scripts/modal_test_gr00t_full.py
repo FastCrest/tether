@@ -1,8 +1,8 @@
 """Test GR00T full-stack export (raw actions in, raw actions out).
 
 Exercises the full stack: action_encoder → DiT → action_decoder, pinned
-to embodiment 0. Validates that `reflex export` produces an ONNX that
-`reflex serve` can drive with its standard flow-matching loop.
+to embodiment 0. Validates that `tether export` produces an ONNX that
+`tether serve` can drive with its standard flow-matching loop.
 
 Usage:
     modal run scripts/modal_test_gr00t_full.py
@@ -10,7 +10,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-gr00t-full-test")
+app = modal.App("tether-gr00t-full-test")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -22,10 +22,10 @@ image = (
         "typer", "rich", "pydantic>=2.0", "pyyaml",
         "fastapi", "uvicorn", "httpx",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -43,15 +43,15 @@ def run_full():
         tag = "PASS" if status == "pass" else "FAIL"
         print(f"{tag}: {name} — {detail}", flush=True)
 
-    export_dir = "/tmp/reflex_gr00t_full_export"
-    server_log = "/tmp/reflex_gr00t_full_server.log"
+    export_dir = "/tmp/tether_gr00t_full_export"
+    server_log = "/tmp/tether_gr00t_full_server.log"
 
     # Step 1: Build full stack
     print("=== Step 1: Build GR00T full stack ===", flush=True)
     start = time.time()
     try:
-        from reflex.checkpoint import load_checkpoint
-        from reflex.exporters.gr00t import build_gr00t_full_stack
+        from tether.checkpoint import load_checkpoint
+        from tether.exporters.gr00t import build_gr00t_full_stack
         state_dict, _ = load_checkpoint("nvidia/GR00T-N1.6-3B")
         full, meta = build_gr00t_full_stack(state_dict, embodiment_id=0)
         elapsed = time.time() - start
@@ -82,13 +82,13 @@ def run_full():
         log("forward", "fail", f"{str(e)[:300]}\n{traceback.format_exc()[:500]}")
         return results
 
-    # Step 3: reflex export (CLI, uses export_gr00t_full now)
-    print("\n=== Step 3: reflex export nvidia/GR00T-N1.6-3B ===", flush=True)
+    # Step 3: tether export (CLI, uses export_gr00t_full now)
+    print("\n=== Step 3: tether export nvidia/GR00T-N1.6-3B ===", flush=True)
     del state_dict
     del full
     start = time.time()
     r = subprocess.run([
-        "reflex", "export", "nvidia/GR00T-N1.6-3B",
+        "tether", "export", "nvidia/GR00T-N1.6-3B",
         "--target", "desktop",
         "--output", export_dir,
     ], capture_output=True, text=True, timeout=900)
@@ -106,13 +106,13 @@ def run_full():
         log("export", "fail", tail)
         return results
 
-    # Step 4: reflex serve
-    print("\n=== Step 4: reflex serve + POST /act ===", flush=True)
+    # Step 4: tether serve
+    print("\n=== Step 4: tether serve + POST /act ===", flush=True)
     log_fh = open(server_log, "wb")
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     server_process = subprocess.Popen(
-        ["reflex", "serve", export_dir, "--port", "8799", "--host", "127.0.0.1", "--device", "cpu"],
+        ["tether", "serve", export_dir, "--port", "8799", "--host", "127.0.0.1", "--device", "cpu"],
         stdout=log_fh, stderr=subprocess.STDOUT,
         env=env,
     )

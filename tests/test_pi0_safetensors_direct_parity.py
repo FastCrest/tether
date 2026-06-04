@@ -11,7 +11,7 @@ this test exercises the full pipeline against the real lerobot checkpoint
 and verifies tensor values match.
 
 **This test is heavy** (loads ~3.3 GB lerobot pi0_base checkpoint twice).
-Skipped by default; opt-in via `REFLEX_RUN_PARITY=1`. Auto-run on Modal,
+Skipped by default; opt-in via `TETHER_RUN_PARITY=1`. Auto-run on Modal,
 not in local CI.
 """
 from __future__ import annotations
@@ -23,8 +23,8 @@ import pytest
 import torch
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("REFLEX_RUN_PARITY") != "1",
-    reason="Heavy parity test — set REFLEX_RUN_PARITY=1 to run (loads ~3.3 GB checkpoint)",
+    os.environ.get("TETHER_RUN_PARITY") != "1",
+    reason="Heavy parity test — set TETHER_RUN_PARITY=1 to run (loads ~3.3 GB checkpoint)",
 )
 
 
@@ -41,7 +41,7 @@ def test_pi0_phase_b_key_set_matches_phase_a():
     """Phase B's flat dict has IDENTICAL keys to Phase A's."""
     from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 
-    from reflex.models.vlas.pi0 import Pi0VLA
+    from tether.models.vlas.pi0 import Pi0VLA
 
     safetensors_path = _find_pi0_safetensors()
 
@@ -67,7 +67,7 @@ def test_pi0_phase_b_tensor_values_match_phase_a():
     """Phase B's tensor values are bit-identical to Phase A's (modulo dtype)."""
     from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 
-    from reflex.models.vlas.pi0 import Pi0VLA
+    from tether.models.vlas.pi0 import Pi0VLA
 
     safetensors_path = _find_pi0_safetensors()
 

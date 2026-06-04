@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from reflex.safety.guard import ActionGuard, SafetyLimits, SafetyCheckResult
+from tether.safety.guard import ActionGuard, SafetyLimits, SafetyCheckResult
 
 
 class TestSafetyLimits:

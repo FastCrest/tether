@@ -24,7 +24,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.exporters.decomposed import (
+from tether.exporters.decomposed import (
     PI05_HEAD_DIM,
     PI05_KV_HEADS,
     PI05_PALIGEMMA_LAYERS,

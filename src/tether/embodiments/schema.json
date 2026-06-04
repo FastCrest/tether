@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tether.fastcrest.com/schemas/embodiment-v1.json",
+  "title": "Tether VLA — embodiment config",
+  "description": "Per-robot config: action space, normalization, gripper, cameras, control, constraints. Read by tether serve via --embodiment <name>. See features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs.md.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "embodiment",
+    "action_space",
+    "normalization",
+    "cameras",
+    "control",
+    "constraints"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Bump when fields are removed or renamed (additive changes don't bump)."
+    },
+    "embodiment": {
+      "type": "string",
+      "enum": ["franka", "so100", "ur5", "trossen", "stretch", "quadcopter", "custom"],
+      "description": "Embodiment slug. Must match the file name minus .json for presets."
+    },
+    "action_space": {
+      "type": "object",
+      "required": ["type", "dim", "ranges"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["continuous", "discrete"]
+        },
+        "dim": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Number of action dimensions (typically 6-8 for arms, +1 for gripper)."
+        },
+        "ranges": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "number" }
+          },
+          "description": "Per-dim [min, max] hard limits. Length must equal action_space.dim."
+        }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "required": ["mean_action", "std_action", "mean_state", "std_state"],
+      "additionalProperties": false,
+      "properties": {
+        "mean_action": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 1
+        },
+        "std_action": {
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+          "minItems": 1
+        },
+        "mean_state": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 1
+        },
+        "std_state": {
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+          "minItems": 1
+        }
+      },
+      "description": "Action/state denormalization stats. Lengths must match action_space.dim and state dim respectively (cross-validated outside JSON schema)."
+    },
+    "gripper": {
+      "type": "object",
+      "required": ["component_idx", "close_threshold", "inverted"],
+      "additionalProperties": false,
+      "description": "Optional. Present for embodiments with a gripper end-effector (arms). Omitted for drones and other gripper-less robots.",
+      "properties": {
+        "component_idx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index into the action vector that controls the gripper."
+        },
+        "close_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Action value above which gripper is considered 'close'."
+        },
+        "inverted": {
+          "type": "boolean",
+          "description": "If true, low values close the gripper instead of high values."
+        }
+      }
+    },
+    "payload_release": {
+      "type": "object",
+      "required": ["component_idx", "trigger_threshold"],
+      "additionalProperties": false,
+      "description": "Optional. Present for embodiments with a payload-release actuator (drones with delivery, etc.). Mutually exclusive with `gripper` in practice — an embodiment has one end-effector type.",
+      "properties": {
+        "component_idx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index into the action vector that controls payload release."
+        },
+        "trigger_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Action value above which payload is released."
+        }
+      }
+    },
+    "cameras": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["name", "resolution", "fps", "color_space"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "resolution": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "integer", "minimum": 32, "maximum": 4096 }
+          },
+          "fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 240 },
+          "color_space": {
+            "type": "string",
+            "enum": ["rgb8", "bgr8", "mono8", "rgba8"]
+          }
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "required": ["frequency_hz", "chunk_size", "rtc_execution_horizon"],
+      "additionalProperties": false,
+      "properties": {
+        "frequency_hz": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000,
+          "description": "Robot control loop rate (Hz)."
+        },
+        "chunk_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Number of actions in a single inference chunk."
+        },
+        "rtc_execution_horizon": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000,
+          "description": "Integer count of actions to lock during RTC replan. Per ADR 2026-04-25-auto-calibration-architecture decision #8. Legacy fractional values (0 < value < 1) auto-migrate to int(value * chunk_size) at load time with a one-time deprecation warning. Schema v2 will reject fractional values."
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["max_ee_velocity", "collision_check"],
+      "additionalProperties": false,
+      "properties": {
+        "max_ee_velocity": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 50.0,
+          "description": "Velocity cap (m/s) — end-effector for arms, flight speed for aerial embodiments."
+        },
+        "max_gripper_velocity": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10.0,
+          "description": "Gripper open/close velocity cap (rad/s or normalized). Required when `gripper` is present; otherwise omitted."
+        },
+        "collision_check": {
+          "type": "boolean",
+          "description": "Whether the runtime should run a per-step collision check before commanding."
+        }
+      }
+    }
+  }
+}

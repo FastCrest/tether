@@ -22,14 +22,14 @@ from fastapi.testclient import TestClient
 
 from pydantic import BaseModel
 
-from reflex.runtime.buffer import ActionChunkBuffer
-from reflex.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
+from tether.runtime.buffer import ActionChunkBuffer
+from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
 
 
 # ---------------------------------------------------------------------------
 # Module-level Pydantic request — must be at module scope, not inside a
 # closure (Pydantic 2.13 ForwardRef breaks on closure-defined BaseModels).
-# Mirrors the real PredictRequest in src/reflex/runtime/server.py.
+# Mirrors the real PredictRequest in src/tether/runtime/server.py.
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/rollback.py — Phase 1 Day 7.
+"""Tests for src/tether/pro/rollback.py — Phase 1 Day 7.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture decisions #4 + #7:
 ≤60s warm rollback via policy-versioning secondary slot. Both auto
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.pro.rollback import (
+from tether.pro.rollback import (
     RollbackHandler,
     RollbackOutcome,
 )

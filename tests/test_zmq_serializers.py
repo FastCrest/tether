@@ -10,7 +10,7 @@ import pytest
 
 cv2 = pytest.importorskip("cv2", reason="opencv-python-headless not installed")
 
-from reflex.runtime.transports.zmq.serializers import (
+from tether.runtime.transports.zmq.serializers import (
     JPEG_WHITELIST,
     SCHEMA_VERSION,
     JpegEncodingError,
@@ -101,7 +101,7 @@ def test_whitelisted_key_gets_jpeg():
 
 def test_non_whitelisted_uint8_3d_warns(caplog):
     """Non-whitelisted uint8 3D array triggers a one-time warning."""
-    from reflex.runtime.transports.zmq.serializers import _warned_keys
+    from tether.runtime.transports.zmq.serializers import _warned_keys
     _warned_keys.discard("mystery_camera")  # reset for this test
 
     import logging

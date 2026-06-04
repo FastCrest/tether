@@ -1,4 +1,4 @@
-# Reflex VLA — ARM64 runtime image (Jetson Orin / Nano / Thor)
+# Tether VLA — ARM64 runtime image (Jetson Orin / Nano / Thor)
 #
 # This is intentionally a *thin* runtime-only image.
 #   ✓ It is 1.6-2.0 GB and can be built on x86_64 with docker buildx.
@@ -9,8 +9,8 @@
 #     the Jetson Zoo onnxruntime-gpu wheel which is built against JetPack.
 #
 # Recommended usage:
-#   docker build -t reflex-vla:arm64 -f Dockerfile.arm64 .
-#   docker run --rm --runtime=nvidia -it reflex-vla:arm64
+#   docker build -t tether:arm64 -f Dockerfile.arm64 .
+#   docker run --rm --runtime=nvidia -it tether:arm64
 #
 # If you want a fully-bundled JetPack image (larger, no host-leak):
 #   see Dockerfile.jetpack
@@ -37,11 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   --build-arg JETPACK_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu129
 ARG JETPACK_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
 
-WORKDIR /reflex
+WORKDIR /tether
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 
-# 1) Install reflex-vla with [jetson] extra — serve + monolithic export
+# 1) Install tether with [jetson] extra — serve + monolithic export
 #    stack without the x86_64 [gpu] wheels or lerobot (needs Python 3.12).
 # 2) Install Jetson Zoo onnxruntime-gpu over the top of any CPU wheel that
 #    may have been pulled transitively by transformers / pi0.
@@ -69,11 +69,11 @@ EOR
 # (e.g. Unitree G1, Franka Emika, UR5, etc.)
 # This is intentionally commented out because it adds ~1 GB of weights.
 # Users can mount a host weights cache or download at first run.
-# RUN reflex preset --fetch all
+# RUN tether preset --fetch all
 
-# The default reflex go command expects a writable cache dir.
-ENV REFLEX_CACHE_DIR=/reflex/.cache
-RUN mkdir -p /reflex/.cache
+# The default tether go command expects a writable cache dir.
+ENV TETHER_CACHE_DIR=/tether/.cache
+RUN mkdir -p /tether/.cache
 
-ENTRYPOINT ["python3", "-m", "reflex.cli"]
+ENTRYPOINT ["python3", "-m", "tether.cli"]
 CMD ["--help"]

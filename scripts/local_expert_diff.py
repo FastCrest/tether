@@ -96,7 +96,7 @@ def main():
 
     # ── Run our expert ONNX with stacked k/v ────────────────────────
     import onnxruntime as ort
-    sess = ort.InferenceSession("/tmp/reflex_libero_export3/expert_stack.onnx",
+    sess = ort.InferenceSession("/tmp/tether_libero_export3/expert_stack.onnx",
                                 providers=["CPUExecutionProvider"])
     pos_ids = torch.arange(chunk).unsqueeze(0).numpy().astype(np.int64)
     prefix_off = np.array([[prefix_embs.shape[1]]], dtype=np.int64)  # [B, 1]

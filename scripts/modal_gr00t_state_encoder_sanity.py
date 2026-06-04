@@ -21,7 +21,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-gr00t-state-sanity")
+app = modal.App("tether-gr00t-state-sanity")
 
 
 def _hf_secret():
@@ -63,7 +63,7 @@ image = (
         "rich",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -80,8 +80,8 @@ def run_sanity(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import numpy as np
     import torch
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[sanity] Loading {model_id}...")
     t0 = time.time()

@@ -54,7 +54,7 @@ def _repo_head_sha() -> str:
 _HEAD = _repo_head_sha()
 
 
-# Image: lerobot==0.5.1 (upstream PI0Policy) + reflex-vla (Pi0VLA spine).
+# Image: lerobot==0.5.1 (upstream PI0Policy) + tether-vla (Pi0VLA spine).
 # No LIBERO / MuJoCo needed — we're doing one forward pass, not a rollout.
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -75,13 +75,13 @@ image = (
         "num2words",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
 
 
-app = modal.App("reflex-pi0-spine-parity")
+app = modal.App("tether-pi0-spine-parity")
 _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
 
 
@@ -237,12 +237,12 @@ def run_parity(
     # is a separate concern, fixed later.
     print("\n=== Step 5: Build Pi0VLA (from loaded lerobot weights) ===", flush=True)
     start = time.time()
-    from reflex.models.vlas.pi0 import Pi0VLA
-    from reflex.models.vision.siglip_backbone import SigLIPBackbone
-    from reflex.models.llm.paligemma_backbone import PaliGemmaBackbone
-    from reflex.models.projectors.linear_projector import LinearProjector
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
-    from reflex.exporters.pi0_prefix import build_pi0_expert_with_prefix
+    from tether.models.vlas.pi0 import Pi0VLA
+    from tether.models.vision.siglip_backbone import SigLIPBackbone
+    from tether.models.llm.paligemma_backbone import PaliGemmaBackbone
+    from tether.models.projectors.linear_projector import LinearProjector
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.exporters.pi0_prefix import build_pi0_expert_with_prefix
 
     paligemma = policy.model.paligemma_with_expert.paligemma
     vision = SigLIPBackbone(model=paligemma.model.vision_tower)

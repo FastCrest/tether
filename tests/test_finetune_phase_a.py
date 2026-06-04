@@ -1,9 +1,9 @@
-"""Tests for Phase A shared finetune infra — prerequisite for `reflex distill`.
+"""Tests for Phase A shared finetune infra — prerequisite for `tether distill`.
 
 3 new modules under test:
-  - src/reflex/finetune/backends/base.py   (Backend Protocol + context types)
-  - src/reflex/finetune/hooks/__init__.py  (HookRegistry)
-  - src/reflex/finetune/postprocess.py     (finalize() chain)
+  - src/tether/finetune/backends/base.py   (Backend Protocol + context types)
+  - src/tether/finetune/hooks/__init__.py  (HookRegistry)
+  - src/tether/finetune/postprocess.py     (finalize() chain)
 
 These are the three Phase-A files the architecture doc said must land
 before distill can plug in. Tests here pin their contracts so future
@@ -16,9 +16,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from reflex.finetune.backends import Backend, CheckpointResult, TrainerContext, resolve_backend
-from reflex.finetune.config import FinetuneConfig
-from reflex.finetune.hooks import HookRegistry, LIFECYCLE_HOOKS
+from tether.finetune.backends import Backend, CheckpointResult, TrainerContext, resolve_backend
+from tether.finetune.config import FinetuneConfig
+from tether.finetune.hooks import HookRegistry, LIFECYCLE_HOOKS
 
 
 class TestHookRegistry:
@@ -123,7 +123,7 @@ class TestCheckpointResult:
 
 class TestBackendProtocol:
     def test_lerobot_backend_conforms(self):
-        from reflex.finetune.backends.lerobot_backend import LerobotBackend
+        from tether.finetune.backends.lerobot_backend import LerobotBackend
         b = LerobotBackend()
         assert isinstance(b, Backend)  # runtime_checkable protocol
 
@@ -148,7 +148,7 @@ class TestResolveBackend:
             dataset="lerobot/libero",
             output=tmp_path,
         )
-        from reflex.finetune.backends.lerobot_backend import LerobotBackend
+        from tether.finetune.backends.lerobot_backend import LerobotBackend
         b = resolve_backend(cfg)
         assert isinstance(b, LerobotBackend)
 
@@ -166,7 +166,7 @@ class TestResolveBackend:
     def test_distill_snapflow_returns_snapflow_backend(self, tmp_path):
         """After Phase B 2/3, SnapFlowBackend exists — resolve_backend
         should return an instance for phase='distill', method='snapflow'."""
-        from reflex.finetune.backends.snapflow_backend import SnapFlowBackend
+        from tether.finetune.backends.snapflow_backend import SnapFlowBackend
         cfg = FinetuneConfig(
             base="lerobot/pi0_base",
             dataset="lerobot/libero",
@@ -202,7 +202,7 @@ class TestResolveBackend:
 
 class TestPostprocess:
     def test_finalize_export_failure_returns_export_failed(self, tmp_path):
-        from reflex.finetune.postprocess import finalize
+        from tether.finetune.postprocess import finalize
 
         cfg = FinetuneConfig(
             base="lerobot/smolvla_base",
@@ -224,7 +224,7 @@ class TestPostprocess:
         )
 
         with patch(
-            "reflex.finetune.run._auto_export",
+            "tether.finetune.run._auto_export",
             return_value=(None, "torch.onnx.export raised: OOM"),
         ):
             result = finalize(ctx, ckpt_result)
@@ -233,7 +233,7 @@ class TestPostprocess:
         assert "OOM" in (result.error or "")
 
     def test_finalize_fires_on_postprocess_hook(self, tmp_path):
-        from reflex.finetune.postprocess import finalize
+        from tether.finetune.postprocess import finalize
 
         cfg = FinetuneConfig(
             base="lerobot/smolvla_base",
@@ -269,7 +269,7 @@ class TestPostprocess:
     def test_hook_can_veto_ship(self, tmp_path):
         """libero_drop_gate pattern: a handler sets ctx.extra
         ["force_abort"]=True and finalize returns status='aborted'."""
-        from reflex.finetune.postprocess import finalize
+        from tether.finetune.postprocess import finalize
 
         cfg = FinetuneConfig(
             base="lerobot/pi0_base",

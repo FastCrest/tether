@@ -1,4 +1,4 @@
-"""Tests for the `reflex serve --policy-a/--policy-b/--split` flags (Day 5).
+"""Tests for the `tether serve --policy-a/--policy-b/--split` flags (Day 5).
 
 Per ADR 2026-04-25-policy-versioning-architecture: validation-only Phase 1.
 Full 2-policy serving lands Days 9-10 integration; this commit ships the
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from reflex.cli import app
+from tether.cli import app
 
 
 runner = CliRunner()
@@ -23,7 +23,7 @@ def fake_export(tmp_path):
     p = tmp_path / "export"
     p.mkdir()
     (p / "model.onnx").write_bytes(b"fake")
-    (p / "reflex_config.json").write_text("{}")
+    (p / "tether_config.json").write_text("{}")
     return p
 
 
@@ -32,7 +32,7 @@ def fake_export_b(tmp_path):
     p = tmp_path / "export_b"
     p.mkdir()
     (p / "model.onnx").write_bytes(b"fake")
-    (p / "reflex_config.json").write_text("{}")
+    (p / "tether_config.json").write_text("{}")
     return p
 
 
@@ -170,13 +170,13 @@ def test_shadow_policy_logs_phase15_warning(fake_export, tmp_path, monkeypatch):
     shadow = tmp_path / "shadow"
     shadow.mkdir()
     # Force the server-load path to fail fast so we just observe the
-    # validation + banner output. Patch ReflexServer.load to raise.
+    # validation + banner output. Patch TetherServer.load to raise.
 
     def _fake_load(self):
         raise SystemExit(0)  # short-circuit before real model load
 
     monkeypatch.setattr(
-        "reflex.runtime.server.ReflexServer.load", _fake_load,
+        "tether.runtime.server.TetherServer.load", _fake_load,
     )
     result = runner.invoke(
         app, [
@@ -198,13 +198,13 @@ def test_2policy_valid_combo_surfaces_active_banner(fake_export, fake_export_b, 
     """--policy-a + --policy-b + --no-rtc + --split=50 -> validation passes,
     surfaces the '2-policy mode active' banner, then proceeds to load.
     Per ADR Day 9-10 integration: full 2-policy serving is now wired
-    via setup_two_policy_serving + create_app. ReflexServer.load is
+    via setup_two_policy_serving + create_app. TetherServer.load is
     stubbed to short-circuit before the actual model load."""
     def _fake_load(self):
         raise SystemExit(0)
 
     monkeypatch.setattr(
-        "reflex.runtime.server.ReflexServer.load", _fake_load,
+        "tether.runtime.server.TetherServer.load", _fake_load,
     )
     result = runner.invoke(
         app, [

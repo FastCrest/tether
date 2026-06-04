@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/policy_router.py — episode-sticky A/B router.
+"""Tests for src/tether/runtime/policy_router.py — episode-sticky A/B router.
 
 Covers: deterministic hashing, stickiness, fallback-to-request-id degraded
 mode, split boundaries (0/100, 50/50, 80/20, 99/1), LRU eviction,
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from reflex.runtime.policy_router import (
+from tether.runtime.policy_router import (
     ALL_SLOTS,
     PolicyRouter,
     RoutingDecision,

@@ -8,7 +8,7 @@ in isolation. This covers the production-facing HTTP behavior:
 2. POST /guard/reset clears the state; subsequent /act succeeds.
 3. GET /guard/status reports current state accurately.
 
-Uses FastAPI TestClient against a minimal test-double ReflexServer —
+Uses FastAPI TestClient against a minimal test-double TetherServer —
 no ONNX load, no GPU. The test isolates the HTTP+guard wiring, which
 is the gap our unit tests don't cover.
 """
@@ -21,12 +21,12 @@ import pytest
 
 
 def _build_app_with_tripped_guard():
-    """Spin a FastAPI app with a stub ReflexServer whose guard is already
+    """Spin a FastAPI app with a stub TetherServer whose guard is already
     tripped. Returns (app, server) so tests can manipulate the server."""
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
 
-    from reflex.safety.guard import ActionGuard, SafetyLimits
+    from tether.safety.guard import ActionGuard, SafetyLimits
 
     # Build a real ActionGuard and trip it
     guard = ActionGuard(
@@ -38,7 +38,7 @@ def _build_app_with_tripped_guard():
     guard.check(np.array([[10.0, 10.0]]))
     assert guard.tripped
 
-    # Fake server that quacks like ReflexServer for the endpoints we care about
+    # Fake server that quacks like TetherServer for the endpoints we care about
     class StubServer:
         def __init__(self):
             self._action_guard = guard

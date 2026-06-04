@@ -1,6 +1,6 @@
 # Transport Layer
 
-Reflex supports multiple wire transports for `reflex serve`. The transport
+Tether supports multiple wire transports for `tether serve`. The transport
 decouples the wire protocol from the inference runtime — PolicyRuntime
 produces actions; the transport delivers them to the robot client.
 
@@ -8,8 +8,8 @@ produces actions; the transport delivers them to the robot client.
 
 | Transport | Flag | When to use | Install |
 |---|---|---|---|
-| **HTTP** (default) | `--transport http` | Standard REST API. Works with any HTTP client (curl, Python requests, browser). Best for prototyping + debugging. | `pip install reflex-vla[serve]` |
-| **ZMQ** | `--transport zmq` | Low-latency binary wire. 20× lower bandwidth for multi-camera setups. 10× smaller robot-side install. Best for production robot deployments where every millisecond matters. | Server: `pip install reflex-vla[serve]`. Robot: `pip install pyzmq msgpack numpy opencv-python-headless` (~25 MB) |
+| **HTTP** (default) | `--transport http` | Standard REST API. Works with any HTTP client (curl, Python requests, browser). Best for prototyping + debugging. | `pip install tether[serve]` |
+| **ZMQ** | `--transport zmq` | Low-latency binary wire. 20× lower bandwidth for multi-camera setups. 10× smaller robot-side install. Best for production robot deployments where every millisecond matters. | Server: `pip install tether[serve]`. Robot: `pip install pyzmq msgpack numpy opencv-python-headless` (~25 MB) |
 | **ROS2** | (v1.0) | Native ROS2 action server. Reserved for v1.0. | — |
 
 ## Quick Start
@@ -18,7 +18,7 @@ produces actions; the transport delivers them to the robot client.
 
 ```bash
 # Server
-reflex serve ./my_export/ --port 8000
+tether serve ./my_export/ --port 8000
 
 # Client (any language)
 curl -X POST http://localhost:8000/act \
@@ -30,12 +30,12 @@ curl -X POST http://localhost:8000/act \
 
 ```bash
 # Server (GPU machine)
-reflex serve ./my_export/ --transport zmq --port 5555
+tether serve ./my_export/ --transport zmq --port 5555
 ```
 
 ```python
 # Client (robot, 25 MB install)
-from reflex.runtime.transports.zmq.client import ZmqRuntimeClient
+from tether.runtime.transports.zmq.client import ZmqRuntimeClient
 import numpy as np
 
 client = ZmqRuntimeClient("tcp://gpu-server:5555")

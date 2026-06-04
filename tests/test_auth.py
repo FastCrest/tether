@@ -1,11 +1,11 @@
-"""Tests for src/reflex/runtime/auth.py — Bearer auth + concurrency limiter."""
+"""Tests for src/tether/runtime/auth.py — Bearer auth + concurrency limiter."""
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from reflex.runtime.auth import (
+from tether.runtime.auth import (
     ConcurrencyLimiter,
     constant_time_token_match,
     extract_bearer_token,
@@ -84,14 +84,14 @@ def test_constant_time_match_different_length():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_prefers_bearer_over_x_reflex_key():
+def test_resolve_prefers_bearer_over_x_tether_key():
     """When both headers are set, Bearer wins."""
     token = resolve_request_token("Bearer bearer-token", "x-key-token")
     assert token == "bearer-token"
 
 
-def test_resolve_falls_back_to_x_reflex_key():
-    """No Bearer → use X-Reflex-Key."""
+def test_resolve_falls_back_to_x_tether_key():
+    """No Bearer → use X-Tether-Key."""
     token = resolve_request_token(None, "legacy-token")
     assert token == "legacy-token"
 
@@ -100,11 +100,11 @@ def test_resolve_returns_none_when_no_headers():
     assert resolve_request_token(None, None) is None
 
 
-def test_resolve_strips_x_reflex_key_whitespace():
+def test_resolve_strips_x_tether_key_whitespace():
     assert resolve_request_token(None, "  spaced  ") == "spaced"
 
 
-def test_resolve_empty_x_reflex_key_returns_none():
+def test_resolve_empty_x_tether_key_returns_none():
     assert resolve_request_token(None, "   ") is None
 
 

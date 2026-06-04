@@ -45,15 +45,15 @@ jobs:
       - name: Pull image
         run: docker pull ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
 
-      - name: reflex --help (via ENTRYPOINT)
+      - name: tether --help (via ENTRYPOINT)
         run: |
-          # The Dockerfile has ENTRYPOINT=["reflex"]. `docker run <image> --help`
-          # invokes `reflex --help`, which is Typer's root-help path and
+          # The Dockerfile has ENTRYPOINT=["tether"]. `docker run <image> --help`
+          # invokes `tether --help`, which is Typer's root-help path and
           # should exit 0 with the usage printed.
           docker run --rm ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} --help
           echo "exit=$?"
 
-      - name: reflex targets (via ENTRYPOINT)
+      - name: tether targets (via ENTRYPOINT)
         run: |
           docker run --rm ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} targets
 
@@ -65,13 +65,13 @@ jobs:
           # gate gives but against the published image.
           docker run --rm --entrypoint python \
             ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} \
-            -c "from reflex.runtime.server import create_app; \
-                from reflex.runtime.pi0_onnx_server import Pi0OnnxServer; \
-                from reflex.runtime.smolvla_onnx_server import SmolVLAOnnxServer; \
-                from reflex.runtime.ros2_bridge import create_ros2_bridge_node; \
-                from reflex.verification_report import write_verification_report; \
-                from reflex.safety.guard import ActionGuard; \
-                from reflex.exporters.monolithic import export_monolithic; \
+            -c "from tether.runtime.server import create_app; \
+                from tether.runtime.pi0_onnx_server import Pi0OnnxServer; \
+                from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer; \
+                from tether.runtime.ros2_bridge import create_ros2_bridge_node; \
+                from tether.verification_report import write_verification_report; \
+                from tether.safety.guard import ActionGuard; \
+                from tether.exporters.monolithic import export_monolithic; \
                 print('all production modules imported OK')"
 
       - name: Summarize
@@ -79,6 +79,6 @@ jobs:
         run: |
           echo "### Docker smoke PASS" >> "$GITHUB_STEP_SUMMARY"
           echo "Image: \`ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`reflex --help\` exit 0" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`reflex targets\` exit 0" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`tether --help\` exit 0" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`tether targets\` exit 0" >> "$GITHUB_STEP_SUMMARY"
           echo "- all production modules importable" >> "$GITHUB_STEP_SUMMARY"

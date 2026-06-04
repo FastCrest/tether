@@ -15,7 +15,7 @@ Passes if for each model:
 """
 import modal
 
-app = modal.App("reflex-serve-roundtrip-test")
+app = modal.App("tether-serve-roundtrip-test")
 
 # HF cache isn't needed — we don't load PyTorch weights; just onnxruntime.
 onnx_output = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=False)
@@ -25,7 +25,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "reflex-vla[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla.git"
+        "tether-vla[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla.git"
     )
 )
 
@@ -51,8 +51,8 @@ def roundtrip_test():
     log.info("=== pi0 roundtrip ===")
     pi0_dir = Path(ONNX_OUTPUT_PATH) / "monolithic"  # existing pi0 export
     if (pi0_dir / "model.onnx").exists():
-        # Write a minimal reflex_config.json so the server knows what it has
-        (pi0_dir / "reflex_config.json").write_text(json.dumps({
+        # Write a minimal tether_config.json so the server knows what it has
+        (pi0_dir / "tether_config.json").write_text(json.dumps({
             "model_type": "pi0",
             "export_kind": "monolithic",
             "num_denoising_steps": 10,
@@ -62,7 +62,7 @@ def roundtrip_test():
             "max_state_dim": 32,
         }))
 
-        from reflex.runtime.pi0_onnx_server import Pi0OnnxServer
+        from tether.runtime.pi0_onnx_server import Pi0OnnxServer
         srv = Pi0OnnxServer(str(pi0_dir))
         srv.load()
         rng = np.random.RandomState(7)

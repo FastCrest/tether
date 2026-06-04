@@ -1,4 +1,4 @@
-"""Tests for src/reflex/mcp/ros2_tools.py — ROS2-MCP bridge tool surface.
+"""Tests for src/tether/mcp/ros2_tools.py — ROS2-MCP bridge tool surface.
 
 Uses a FakeROS2Context so the tests run without rclpy.
 """
@@ -15,7 +15,7 @@ pytest.importorskip("fastmcp")
 
 from fastmcp import FastMCP
 
-from reflex.mcp.ros2_tools import ROS2Context, register_ros2_tools
+from tether.mcp.ros2_tools import ROS2Context, register_ros2_tools
 
 
 @dataclass

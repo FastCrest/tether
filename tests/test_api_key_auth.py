@@ -1,6 +1,6 @@
-"""X-Reflex-Key header auth for reflex serve.
+"""X-Tether-Key header auth for tether serve.
 
-These tests verify the goal `api-key-auth`: `reflex serve --api-key FOO`
+These tests verify the goal `api-key-auth`: `tether serve --api-key FOO`
 enables header auth that rejects unauthenticated /act and /config
 requests with HTTP 401, while /health stays open for load balancer
 readiness probes.
@@ -19,7 +19,7 @@ import pytest
 
 @pytest.fixture
 def minimal_export_dir(tmp_path):
-    """Minimal reflex_config.json so the server can at least instantiate."""
+    """Minimal tether_config.json so the server can at least instantiate."""
     cfg = {
         "model_id": "lerobot/smolvla_base",
         "model_type": "smolvla",
@@ -28,7 +28,7 @@ def minimal_export_dir(tmp_path):
         "action_dim": 32,
         "expert": {"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
     }
-    (tmp_path / "reflex_config.json").write_text(json.dumps(cfg))
+    (tmp_path / "tether_config.json").write_text(json.dumps(cfg))
     # Touch an "onnx" file so the CLI path wouldn't fail sanity checks —
     # we're not testing the CLI here, but some create_app code paths peek.
     (tmp_path / "model.onnx").write_bytes(b"\x00")
@@ -39,7 +39,7 @@ def _build_testable_app(export_dir, api_key):
     """Build create_app() with a stubbed server so no model is loaded.
 
     We don't want to spin up ORT for this test — the goal is to verify
-    the HTTP auth middleware, not inference. Replace ReflexServer with a
+    the HTTP auth middleware, not inference. Replace TetherServer with a
     minimal stub before create_app() wires it in.
     """
     from fastapi import Depends, FastAPI, Header, HTTPException
@@ -49,17 +49,17 @@ def _build_testable_app(export_dir, api_key):
     # the real create_app structure. This is what nan-guard-style test
     # isolation looks like — avoid importing ORT/torch just to verify 5
     # lines of HTTP middleware.
-    app = FastAPI(title="Test Reflex")
+    app = FastAPI(title="Test Tether")
 
     async def _require_api_key(
-        x_reflex_key: str | None = Header(default=None, alias="X-Reflex-Key"),
+        x_tether_key: str | None = Header(default=None, alias="X-Tether-Key"),
     ) -> None:
         if api_key is None:
             return
-        if not x_reflex_key or x_reflex_key != api_key:
+        if not x_tether_key or x_tether_key != api_key:
             raise HTTPException(
                 status_code=401,
-                detail="missing or invalid X-Reflex-Key header",
+                detail="missing or invalid X-Tether-Key header",
             )
 
     @app.get("/health")
@@ -102,14 +102,14 @@ class TestApiKeyEnabled:
         app = _build_testable_app(minimal_export_dir, api_key="secret-key")
         r = _client(app).post("/act", json={})
         assert r.status_code == 401
-        assert "X-Reflex-Key" in r.json()["detail"]
+        assert "X-Tether-Key" in r.json()["detail"]
 
     def test_act_wrong_header_returns_401(self, minimal_export_dir):
         app = _build_testable_app(minimal_export_dir, api_key="secret-key")
         r = _client(app).post(
             "/act",
             json={},
-            headers={"X-Reflex-Key": "wrong-key"},
+            headers={"X-Tether-Key": "wrong-key"},
         )
         assert r.status_code == 401
 
@@ -118,7 +118,7 @@ class TestApiKeyEnabled:
         r = _client(app).post(
             "/act",
             json={},
-            headers={"X-Reflex-Key": "secret-key"},
+            headers={"X-Tether-Key": "secret-key"},
         )
         assert r.status_code == 200
 
@@ -130,7 +130,7 @@ class TestApiKeyEnabled:
         app = _build_testable_app(minimal_export_dir, api_key="secret-key")
         r = _client(app).get(
             "/config",
-            headers={"X-Reflex-Key": "secret-key"},
+            headers={"X-Tether-Key": "secret-key"},
         )
         assert r.status_code == 200
 

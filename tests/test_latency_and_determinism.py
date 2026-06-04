@@ -4,11 +4,11 @@ The server adds two field groups to every /act response:
 
 * latency percentiles (p50/p95/p99 + jitter_ms) computed over a rolling
   1024-sample window;
-* deployment fingerprint (model_hash, config_hash, reflex_version) so
+* deployment fingerprint (model_hash, config_hash, tether_version) so
   callers can assert they're hitting the expected artifact.
 
 These tests exercise the two pure helpers on a minimally-instantiated
-ReflexServer so we don't need ONNX runtime or a real export.
+TetherServer so we don't need ONNX runtime or a real export.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import pytest
 
 @pytest.fixture
 def stub_export_dir(tmp_path):
-    """Minimal export dir — reflex_config.json + stub onnx file."""
+    """Minimal export dir — tether_config.json + stub onnx file."""
     cfg = {
         "model_id": "lerobot/smolvla_base",
         "model_type": "smolvla",
@@ -28,16 +28,16 @@ def stub_export_dir(tmp_path):
         "action_dim": 32,
         "expert": {"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
     }
-    (tmp_path / "reflex_config.json").write_text(json.dumps(cfg))
+    (tmp_path / "tether_config.json").write_text(json.dumps(cfg))
     (tmp_path / "model.onnx").write_bytes(b"\x00\x01\x02\x03")
     return tmp_path
 
 
 @pytest.fixture
 def stub_server(stub_export_dir):
-    """Instantiate ReflexServer without calling load() (no ONNX runtime)."""
-    from reflex.runtime.server import ReflexServer
-    return ReflexServer(stub_export_dir, device="cpu")
+    """Instantiate TetherServer without calling load() (no ONNX runtime)."""
+    from tether.runtime.server import TetherServer
+    return TetherServer(stub_export_dir, device="cpu")
 
 
 class TestLatencyHistograms:
@@ -82,7 +82,7 @@ class TestLatencyHistograms:
 class TestDeterminismHash:
     def test_fields_present(self, stub_server):
         fields = stub_server._determinism_fields()
-        assert set(fields.keys()) == {"model_hash", "config_hash", "reflex_version"}
+        assert set(fields.keys()) == {"model_hash", "config_hash", "tether_version"}
 
     def test_model_hash_is_stable(self, stub_server):
         """Same bytes on disk → same hash across calls."""
@@ -108,8 +108,8 @@ class TestDeterminismHash:
         assert a == b
         assert len(a) == 16
 
-    def test_reflex_version_is_string(self, stub_server):
-        v = stub_server._determinism_fields()["reflex_version"]
+    def test_tether_version_is_string(self, stub_server):
+        v = stub_server._determinism_fields()["tether_version"]
         assert isinstance(v, str)
         # "unknown" if the package metadata can't be read — still a string.
         assert len(v) > 0

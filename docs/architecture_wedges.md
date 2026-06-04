@@ -1,8 +1,8 @@
 # The Wedge: Server Architecture
 
-The Reflex inference server uses a **Wedge composition pattern** to safely, adaptively, and reliably run vision-language-action (VLA) models in production. Four orthogonal "wedges" (Safety, Split, Adaptive, Deadline) layer safety constraints, cloud failover, latency optimization, and hard time limits around the core denoise-and-predict loop.
+The Tether inference server uses a **Wedge composition pattern** to safely, adaptively, and reliably run vision-language-action (VLA) models in production. Four orthogonal "wedges" (Safety, Split, Adaptive, Deadline) layer safety constraints, cloud failover, latency optimization, and hard time limits around the core denoise-and-predict loop.
 
-> **Model layer (v0.10.0+):** the *model* the server runs on is composed via the **BaseVLA spine** — a 6-slot taxonomy (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`) where every supported VLA is a thin (~100 LOC) `BaseVLA` subclass declaring which slots it uses. Pi0VLA / Pi05VLA / SmolVLA use the 2-tower split (vision_backbone + llm_backbone separate); GR00TVLA uses the fused `vlm_backbone` slot for Eagle. OpenVLA stays as a non-spine shim per decision S-4. See `src/reflex/models/vlas/` for the worked composition examples; the per-VLA `NAME_MAPPING` ClassVar handles HF-checkpoint key renames per decision S-1.
+> **Model layer (v0.10.0+):** the *model* the server runs on is composed via the **BaseVLA spine** — a 6-slot taxonomy (`vision_backbone`, `llm_backbone`, `vlm_backbone`, `projector`, `vla_head`, `text_encoder`) where every supported VLA is a thin (~100 LOC) `BaseVLA` subclass declaring which slots it uses. Pi0VLA / Pi05VLA / SmolVLA use the 2-tower split (vision_backbone + llm_backbone separate); GR00TVLA uses the fused `vlm_backbone` slot for Eagle. OpenVLA stays as a non-spine shim per decision S-4. See `src/tether/models/vlas/` for the worked composition examples; the per-VLA `NAME_MAPPING` ClassVar handles HF-checkpoint key renames per decision S-1.
 
 ---
 
@@ -57,10 +57,10 @@ Each wedge is **independently toggleable** via startup flags. This allows:
 
 ```bash
 # Generate safety limits from robot URDF:
-reflex guard init --urdf robot.urdf --output safety.json
+tether guard init --urdf robot.urdf --output safety.json
 
 # Start server with safety enforcement:
-reflex serve ./my-export/ --safety-config safety.json
+tether serve ./my-export/ --safety-config safety.json
 ```
 
 **Safety config schema** (`safety.json`):
@@ -116,7 +116,7 @@ reflex serve ./my-export/ --safety-config safety.json
 
 ```bash
 # Edge-first (cloud is optional):
-reflex serve ./my-export/ --cloud-fallback http://cloud-vla:8000
+tether serve ./my-export/ --cloud-fallback http://cloud-vla:8000
 ```
 
 **Split config** (internal, created by the server):
@@ -177,7 +177,7 @@ Step N: final denoise step (if not converged)
 
 ```bash
 # Enable adaptive denoising:
-reflex serve ./my-export/ --adaptive-steps
+tether serve ./my-export/ --adaptive-steps
 
 # Monitor convergence at runtime:
 # (telemetry field denoising_steps will vary per request)
@@ -218,10 +218,10 @@ reflex serve ./my-export/ --adaptive-steps
 
 ```bash
 # Hard 100ms deadline:
-reflex serve ./my-export/ --deadline-ms 100
+tether serve ./my-export/ --deadline-ms 100
 
 # Deadline fallback still enforces the budget (returns last-good/zeros on miss):
-reflex serve ./my-export/ --deadline-ms 200  # with alerting
+tether serve ./my-export/ --deadline-ms 200  # with alerting
 ```
 
 **Telemetry**:
@@ -318,7 +318,7 @@ Here's a detailed trace of a request through all wedges:
 | `--num-denoising-steps`   | int   | `10`        | Fixed denoise steps (without `--adaptive-steps`)                                                      |
 | `--providers`             | str   | auto-detect | Explicit ORT execution providers, comma-separated. E.g., `CUDAExecutionProvider,CPUExecutionProvider` |
 | `--no-strict-providers`   | bool  | `false`     | Disable strict provider loading and allow CPU fallback if requested providers fail to load |
-| `--safety-config`         | path  | `None`      | Path to `safety.json` from `reflex guard init`. Enables ActionGuard.                                  |
+| `--safety-config`         | path  | `None`      | Path to `safety.json` from `tether guard init`. Enables ActionGuard.                                  |
 | `--adaptive-steps`        | bool  | `false`     | Enable TurboOptimizer velocity convergence early-stop                                                 |
 | `--cloud-fallback`        | str   | `""`        | Cloud endpoint URL (e.g., `http://cloud-vla:8000`). Enables Split setup.                              |
 | `--deadline-ms`           | float | `0.0`       | Deadline in milliseconds. Default `0.0` means disabled (internally treated as `None`).                |
@@ -466,14 +466,14 @@ Span: act
 ├─ gen_ai.action.embodiment = "franka"
 ├─ gen_ai.action.chunk_size = 50
 ├─ gen_ai.action.denoise_steps = 7
-├─ reflex.instruction = "pick up cup"
-├─ reflex.state_dim = 6
-├─ reflex.image_bytes = 921600
-├─ reflex.inference_ms = 42.5
-├─ reflex.inference_mode = "onnx_cuda"
-├─ reflex.guard.violation_count = 0
-├─ reflex.a2c2.applied = false
-└─ reflex.record.seq = 12345
+├─ tether.instruction = "pick up cup"
+├─ tether.state_dim = 6
+├─ tether.image_bytes = 921600
+├─ tether.inference_ms = 42.5
+├─ tether.inference_mode = "onnx_cuda"
+├─ tether.guard.violation_count = 0
+├─ tether.a2c2.applied = false
+└─ tether.record.seq = 12345
 ```
 
 ### JSONL Recording
@@ -514,7 +514,7 @@ When enabled via `--record <dir>`, the server writes one line per request to a t
 
 | Symptom                       | Likely cause                | Fix                                                     |
 | ----------------------------- | --------------------------- | ------------------------------------------------------- |
-| p99 > 100ms                   | Model + overhead too slow   | Run benchmark: `reflex bench ./export --iterations 100` |
+| p99 > 100ms                   | Model + overhead too slow   | Run benchmark: `tether bench ./export --iterations 100` |
 | p99 spikes                    | Large batches stalling      | Lower `--max-batch-cost-ms` (e.g., 50 ms)               |
 | Deadlines missed              | Inference > deadline        | Raise `--deadline-ms` or optimize model                 |
 | Adaptive-steps not triggering | Model doesn't converge fast | Check per-model benchmarks; disable for now             |
@@ -523,7 +523,7 @@ When enabled via `--record <dir>`, the server writes one line per request to a t
 
 | Symptom                                   | Likely cause                       | Fix                                                                          |
 | ----------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
-| `safety_violations: 50+` per request      | Safety limits too tight            | Regenerate: `reflex guard init --urdf robot.urdf --margin 0.2`               |
+| `safety_violations: 50+` per request      | Safety limits too tight            | Regenerate: `tether guard init --urdf robot.urdf --margin 0.2`               |
 | `guard_tripped` errors                    | Max clamps exceeded                | `POST /guard/reset` and investigate upstream (sensor drift, bad instruction) |
 | `safety_detail: "action 0: X violations"` | Specific action index always fails | Check if VLM conditioning is broken (bad image/instruction pair)             |
 
@@ -552,7 +552,7 @@ When enabled via `--record <dir>`, the server writes one line per request to a t
 Good for iterating on model without constraints:
 
 ```bash
-reflex serve ./pi0 \
+tether serve ./pi0 \
   --num-denoising-steps 10
   # No safety, no split, no deadline
 ```
@@ -562,7 +562,7 @@ reflex serve ./pi0 \
 Typical Jetson/Orin setup:
 
 ```bash
-reflex serve ./pi0 \
+tether serve ./pi0 \
   --safety-config ./safety.json \
   --deadline-ms 100 \
   --device cuda
@@ -573,7 +573,7 @@ reflex serve ./pi0 \
 Large model on GPU farm:
 
 ```bash
-reflex serve ./gr00t \
+tether serve ./gr00t \
   --safety-config ./safety.json \
   --adaptive-steps \
   --device cuda
@@ -585,13 +585,13 @@ Edge-first with cloud as hot standby:
 
 ```bash
 # Edge node
-reflex serve ./pi0 \
+tether serve ./pi0 \
   --safety-config ./safety.json \
   --cloud-fallback http://cloud-vla:8000 \
   --deadline-ms 100
 
 # Cloud node
-reflex serve ./gr00t \
+tether serve ./gr00t \
   --safety-config ./safety.json \
   --adaptive-steps \
   --device cuda

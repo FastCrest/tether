@@ -1,4 +1,4 @@
-"""Tests for src/reflex/eval/video.py — Phase 1 eval-as-a-service Day 5."""
+"""Tests for src/tether/eval/video.py — Phase 1 eval-as-a-service Day 5."""
 from __future__ import annotations
 
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.eval.video import (
+from tether.eval.video import (
     DEFAULT_FPS,
     DEFAULT_MAX_BYTES_PER_EPISODE,
     FALLBACK_CRF,

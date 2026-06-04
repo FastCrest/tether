@@ -1,12 +1,12 @@
 """Phase III.2: real-model batching benchmark.
 
-Tests `reflex serve --max-batch N` with an actual VLA (pi0, ~50ms per chunk
+Tests `tether serve --max-batch N` with an actual VLA (pi0, ~50ms per chunk
 on GPU). With a real compute load, batching should give 2-3x throughput at
 batch=4 — the fake-Identity-op test only measured queue overhead.
 
 Strategy:
   1. Export pi0 to ONNX (with dynamic batch axis from the existing exporter).
-  2. Boot reflex serve in three configs (batch=1, 4, 8) on A10G with ORT-GPU.
+  2. Boot tether serve in three configs (batch=1, 4, 8) on A10G with ORT-GPU.
   3. Fire 32 concurrent /act requests at each, measure throughput.
 
 Usage:
@@ -15,7 +15,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-batching-real")
+app = modal.App("tether-batching-real")
 
 image = (
     # Use NVIDIA's TRT container so cuDNN 9 (including libcudnn_adv) is
@@ -37,10 +37,10 @@ image = (
         "fastapi", "uvicorn", "httpx",
         "yourdfpy", "trimesh",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 
@@ -57,7 +57,7 @@ def test_real_batching():
     export_dir = "/tmp/pi0_export"
     t0 = time.time()
     r = subprocess.run(
-        ["reflex", "export", "lerobot/pi0_base", "--target", "desktop",
+        ["tether", "export", "lerobot/pi0_base", "--target", "desktop",
          "--output", export_dir],
         capture_output=True, text=True, timeout=600,
     )
@@ -93,7 +93,7 @@ def test_real_batching():
         return False
 
     def run_scenario(label: str, port: int, max_batch: int, n_concurrent: int):
-        cmd = ["reflex", "serve", export_dir,
+        cmd = ["tether", "serve", export_dir,
                "--port", str(port), "--host", "127.0.0.1",
                "--device", "cuda"]
         if max_batch > 1:
@@ -101,7 +101,7 @@ def test_real_batching():
                         "--batch-timeout-ms", "20"])
         # Use a real file for stdout — subprocess.PIPE deadlocks if the
         # process logs more than one OS pipe buffer (~64KB) before we read.
-        stdout_path = f"/tmp/reflex_serve_{port}.log"
+        stdout_path = f"/tmp/tether_serve_{port}.log"
         stdout_fh = open(stdout_path, "wb")
         proc = subprocess.Popen(
             cmd, stdout=stdout_fh, stderr=subprocess.STDOUT,

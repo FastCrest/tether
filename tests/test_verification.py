@@ -1,4 +1,4 @@
-from reflex.verification_report import _HASH_CHUNK, _sha256
+from tether.verification_report import _HASH_CHUNK, _sha256
 
 
 def test_sha256_empty_file(tmp_path):
@@ -21,8 +21,8 @@ def test_sha256_small_file(tmp_path):
 
 def test_sha256_large_file(tmp_path):
     path = tmp_path / "large.bin"
-    payload = b"reflex-vla-sha256-test\n" * (
-        (_HASH_CHUNK // len(b"reflex-vla-sha256-test\n")) + 3
+    payload = b"tether-vla-sha256-test\n" * (
+        (_HASH_CHUNK // len(b"tether-vla-sha256-test\n")) + 3
     )
     path.write_bytes(payload)
 

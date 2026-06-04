@@ -1,7 +1,7 @@
 """Modal: LIBERO-10 eval against FluxVLA's published pi0.5 fine-tuned checkpoint.
 
 Validates the LIBERO 97.85%-average claim from FluxVLA's README against our
-reflex export + serve pipeline. Closes the customer-visible LIBERO benchmark
+tether export + serve pipeline. Closes the customer-visible LIBERO benchmark
 gap (we currently report 64% on `lerobot/pi05_libero_finetuned_v044`; FluxVLA
 publishes 97.85% on their finetune).
 
@@ -13,7 +13,7 @@ Pipeline:
    from HF (cached on Modal volume after first run).
 2. Convert FluxVLA's raw training safetensors → lerobot-format HF layout
    (one-off shim until lift #1 BaseVLA spine + name_mapping land).
-3. Run reflex's standard pi0.5 export pipeline against the converted checkpoint
+3. Run tether's standard pi0.5 export pipeline against the converted checkpoint
    (decomposed VLM-prefix + per-step expert ONNX). Includes parity verification
    (cos = +1.0 hard gate vs PyTorch reference).
 4. Run LIBERO eval against the export at N=50 trials/task across all 4 LIBERO-10
@@ -25,7 +25,7 @@ Pipeline:
 Methodology gates (per `02_research/competitors/fluxvla.md`):
 
 - 180° image rotation matching their `eval_utils.py:98-99` — confirmed in
-  reflex's LIBERO wrapper, mirrored here.
+  tether's LIBERO wrapper, mirrored here.
 - `num_steps_wait=10` dummy-action grace at episode start — already standard
   in our LIBERO loop.
 - Per-suite `max_steps` (Spatial 220, Object 280, Goal 300, Long 520) match
@@ -53,7 +53,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-fluxvla-checkpoint-eval")
+app = modal.App("tether-fluxvla-checkpoint-eval")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -120,7 +120,7 @@ CONVERTED_CHECKPOINT_DIR = f"{ONNX_OUT}/fluxvla_pi05_libero10_converted"
 # Where the exported decomposed ONNX lands.
 EXPORTED_ONNX_DIR = f"{ONNX_OUT}/fluxvla_pi05_libero10_export"
 
-# Same image recipe as modal_libero_pi05_decomposed.py (the proven LIBERO+reflex
+# Same image recipe as modal_libero_pi05_decomposed.py (the proven LIBERO+tether
 # image). osmesa + pinned mujoco + PYTHONPATH /opt/LIBERO all matter.
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -176,7 +176,7 @@ image = (
     .run_commands("python /root/patch_libero.py")
     .run_commands(
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -533,10 +533,10 @@ def _run_libero_suite(
 ) -> dict:
     """Run LIBERO rollouts for a single suite at N=num_episodes/task.
 
-    Wires the shared rollout helper extracted to src/reflex/eval/libero_rollout.py
+    Wires the shared rollout helper extracted to src/tether/eval/libero_rollout.py
     on 2026-05-20. Returns the rollout dict shape; caller aggregates per-suite.
     """
-    from reflex.eval.libero_rollout import (
+    from tether.eval.libero_rollout import (
         load_pi05_policy_and_processors,
         run_libero_rollout,
     )

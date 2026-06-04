@@ -1,10 +1,10 @@
-"""Tests for src/reflex/runtime/two_policy_dispatcher.py — closes the
+"""Tests for src/tether/runtime/two_policy_dispatcher.py — closes the
 locally-testable policy-versioning Phase 1 chunk.
 
 Per ADR 2026-04-25-policy-versioning-architecture: the dispatcher
 composes PolicyRouter + Policy + PolicyCrashTracker into a single
 predict() entry point. End-to-end /act -> route -> dispatch -> crash
-update flow tested without needing the real ReflexServer.
+update flow tested without needing the real TetherServer.
 """
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import asyncio
 
 import pytest
 
-from reflex.runtime.policy import Policy
-from reflex.runtime.two_policy_dispatcher import (
+from tether.runtime.policy import Policy
+from tether.runtime.two_policy_dispatcher import (
     TwoPolicyDecision,
     TwoPolicyDispatcher,
 )

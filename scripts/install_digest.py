@@ -1,4 +1,4 @@
-"""Pull pypistats download counts for reflex-vla and print a Markdown digest.
+"""Pull pypistats download counts for tether-vla and print a Markdown digest.
 
 Run weekly: python scripts/install_digest.py [--days 7]
 
@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 
 import httpx
 
-API = "https://pypistats.org/api/packages/reflex-vla"
+API = "https://pypistats.org/api/packages/tether-vla"
 
 
 def _fetch(endpoint: str) -> dict:
@@ -48,7 +48,7 @@ def main() -> int:
         }, indent=2))
         return 0
 
-    print(f"# reflex-vla install digest — {date.today().isoformat()}")
+    print(f"# tether-vla install digest — {date.today().isoformat()}")
     print()
     print(f"- **Last day:** {last_day:,} downloads")
     print(f"- **Last 7 days:** {last_week:,} downloads")

@@ -1,6 +1,6 @@
 name: Build and publish arm64 Docker image (Jetson)
 
-# Publishes ghcr.io/fastcrest/reflex-vla:<version>-arm64 for Jetson
+# Publishes ghcr.io/fastcrest/tether:<version>-arm64 for Jetson
 # Orin / Orin Nano / Thor. Uses QEMU emulation on the GitHub-hosted
 # x86 runner to cross-build for linux/arm64. Build time: ~8-15 min
 # (slower than native, but good enough for release cuts).

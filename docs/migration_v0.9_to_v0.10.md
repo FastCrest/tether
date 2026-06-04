@@ -1,6 +1,6 @@
 # Migration guide: v0.9 → v0.10
 
-> If you only use `reflex` as a CLI, you don't need to change anything — `reflex export`, `reflex models *`, `reflex serve`, `reflex chat` all keep working. This guide is for **library users** who import from `reflex.exporters.*`.
+> If you only use `tether` as a CLI, you don't need to change anything — `tether export`, `tether models *`, `tether serve`, `tether chat` all keep working. This guide is for **library users** who import from `tether.exporters.*`.
 
 ## TL;DR
 
@@ -10,11 +10,11 @@ v0.10.0 lands the **BaseVLA spine refactor** (lift #1). Several exporter modules
 
 | v0.9 import path | v0.10 path | Day |
 |---|---|---|
-| `reflex.exporters.pi0_exporter` | `reflex.exporters.pi0` | 11 |
-| `reflex.exporters.smolvla_exporter` | `reflex.exporters.smolvla` | 11 |
-| `reflex.exporters.gr00t_exporter` | `reflex.exporters.gr00t` | 11 |
-| `reflex.exporters.openvla_exporter` | `reflex.exporters.openvla` | 8 |
-| `reflex.exporters.pi0_prefix_exporter` | `reflex.exporters.pi0_prefix` | 9 |
+| `tether.exporters.pi0_exporter` | `tether.exporters.pi0` | 11 |
+| `tether.exporters.smolvla_exporter` | `tether.exporters.smolvla` | 11 |
+| `tether.exporters.gr00t_exporter` | `tether.exporters.gr00t` | 11 |
+| `tether.exporters.openvla_exporter` | `tether.exporters.openvla` | 8 |
+| `tether.exporters.pi0_prefix_exporter` | `tether.exporters.pi0_prefix` | 9 |
 
 The legacy modules are **gone** — they raise `ModuleNotFoundError`. No compat aliases. The test `tests/test_day10_cli_vla_type.py::test_legacy_exporter_modules_deleted` pins this so future regressions are caught.
 
@@ -31,9 +31,9 @@ The numerics didn't change. The PRs that landed the rename also passed bit-ident
 **Before (v0.9):**
 
 ```python
-from reflex.exporters.smolvla_exporter import build_expert_stack
-from reflex.exporters.pi0_exporter import build_pi0_expert_stack, PI0_ACTION_KEYS
-from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+from tether.exporters.smolvla_exporter import build_expert_stack
+from tether.exporters.pi0_exporter import build_pi0_expert_stack, PI0_ACTION_KEYS
+from tether.exporters.gr00t_exporter import build_gr00t_full_stack
 
 # ...your code unchanged
 ```
@@ -41,9 +41,9 @@ from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
 **After (v0.10):**
 
 ```python
-from reflex.exporters.smolvla import build_expert_stack
-from reflex.exporters.pi0 import build_pi0_expert_stack, PI0_ACTION_KEYS
-from reflex.exporters.gr00t import build_gr00t_full_stack
+from tether.exporters.smolvla import build_expert_stack
+from tether.exporters.pi0 import build_pi0_expert_stack, PI0_ACTION_KEYS
+from tether.exporters.gr00t import build_gr00t_full_stack
 
 # ...your code unchanged
 ```
@@ -52,20 +52,20 @@ A bulk `sed` covers it:
 
 ```bash
 find . -name '*.py' -exec sed -i \
-    -e 's|reflex\.exporters\.pi0_exporter|reflex.exporters.pi0|g' \
-    -e 's|reflex\.exporters\.smolvla_exporter|reflex.exporters.smolvla|g' \
-    -e 's|reflex\.exporters\.gr00t_exporter|reflex.exporters.gr00t|g' \
-    -e 's|reflex\.exporters\.openvla_exporter|reflex.exporters.openvla|g' \
-    -e 's|reflex\.exporters\.pi0_prefix_exporter|reflex.exporters.pi0_prefix|g' \
+    -e 's|tether\.exporters\.pi0_exporter|tether.exporters.pi0|g' \
+    -e 's|tether\.exporters\.smolvla_exporter|tether.exporters.smolvla|g' \
+    -e 's|tether\.exporters\.gr00t_exporter|tether.exporters.gr00t|g' \
+    -e 's|tether\.exporters\.openvla_exporter|tether.exporters.openvla|g' \
+    -e 's|tether\.exporters\.pi0_prefix_exporter|tether.exporters.pi0_prefix|g' \
     {} +
 ```
 
 ## What's new
 
-If you want to build VLAs through the new spine composition (rather than the legacy direct-build path), see `src/reflex/models/vlas/` for the worked examples and [`docs/adding_a_vla.md`](./adding_a_vla.md) for the cookbook. The TL;DR is:
+If you want to build VLAs through the new spine composition (rather than the legacy direct-build path), see `src/tether/models/vlas/` for the worked examples and [`docs/adding_a_vla.md`](./adding_a_vla.md) for the cookbook. The TL;DR is:
 
 ```python
-from reflex.models.vlas.pi05 import Pi05VLA
+from tether.models.vlas.pi05 import Pi05VLA
 
 vla = Pi05VLA.from_pretrained("lerobot/pi05_libero_finetuned_v044")
 actions = vla.predict_action(
@@ -79,8 +79,8 @@ actions = vla.predict_action(
 
 The legacy `*_exporter.py` modules grew to host both **builders** (load checkpoint → reconstruct the action expert as a PyTorch module) and **exporters** (build expert → write ONNX). The spine refactor split these concerns:
 
-- **Builders** stay in `reflex.exporters.<family>` (renamed from `<family>_exporter` for brevity).
-- **Composition classes** live in `reflex.models.vlas.<family>`. They wrap the builders behind a uniform `BaseVLA` 6-slot interface.
+- **Builders** stay in `tether.exporters.<family>` (renamed from `<family>_exporter` for brevity).
+- **Composition classes** live in `tether.models.vlas.<family>`. They wrap the builders behind a uniform `BaseVLA` 6-slot interface.
 
 The drop of the `_exporter` suffix reflects this: the module is no longer JUST an exporter. It's the family's source of truth for builders + classes + constants.
 

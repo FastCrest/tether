@@ -1,4 +1,4 @@
-"""Unit tests for src/reflex/runtime/cuda_graphs.py.
+"""Unit tests for src/tether/runtime/cuda_graphs.py.
 
 These tests use mock ORT sessions to exercise the wrapper's metric emission +
 fallback logic without requiring a GPU. Integration tests covering the actual
@@ -11,14 +11,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from reflex.observability.prometheus import (
+from tether.observability.prometheus import (
     REGISTRY,
-    reflex_cuda_graph_capture_failed_at_init_total,
-    reflex_cuda_graph_captured_total,
-    reflex_cuda_graph_eager_fallback_total,
-    reflex_cuda_graph_replayed_total,
+    tether_cuda_graph_capture_failed_at_init_total,
+    tether_cuda_graph_captured_total,
+    tether_cuda_graph_eager_fallback_total,
+    tether_cuda_graph_replayed_total,
 )
-from reflex.runtime.cuda_graphs import (
+from tether.runtime.cuda_graphs import (
     VALID_SESSION_NAMES,
     CudaGraphWrapper,
     EagerSessionWrapper,
@@ -35,7 +35,7 @@ def test_cli_serve_help_advertises_cuda_graphs_flag():
     """Guard against accidental --cuda-graphs flag removal or rename."""
     from typer.testing import CliRunner
 
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["serve", "--help"])
@@ -48,7 +48,7 @@ def test_create_app_accepts_cuda_graphs_enabled_kwarg():
     2026-04-24-cuda-graphs-architecture. Catches signature drift."""
     import inspect
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     sig = inspect.signature(create_app)
     assert "cuda_graphs_enabled" in sig.parameters
@@ -107,11 +107,11 @@ def test_first_run_increments_captured_and_replayed():
     w = CudaGraphWrapper(mock_sess, "vlm_prefix", embodiment="franka", model_id="cg-test-1")
 
     cap_before = _get_counter(
-        reflex_cuda_graph_captured_total,
+        tether_cuda_graph_captured_total,
         {"embodiment": "franka", "model_id": "cg-test-1", "session": "vlm_prefix"},
     )
     rep_before = _get_counter(
-        reflex_cuda_graph_replayed_total,
+        tether_cuda_graph_replayed_total,
         {"embodiment": "franka", "model_id": "cg-test-1", "session": "vlm_prefix"},
     )
 
@@ -120,11 +120,11 @@ def test_first_run_increments_captured_and_replayed():
     assert result == ["output"]
     assert w.captured is True
     assert _get_counter(
-        reflex_cuda_graph_captured_total,
+        tether_cuda_graph_captured_total,
         {"embodiment": "franka", "model_id": "cg-test-1", "session": "vlm_prefix"},
     ) == cap_before + 1
     assert _get_counter(
-        reflex_cuda_graph_replayed_total,
+        tether_cuda_graph_replayed_total,
         {"embodiment": "franka", "model_id": "cg-test-1", "session": "vlm_prefix"},
     ) == rep_before + 1
 
@@ -137,11 +137,11 @@ def test_subsequent_runs_only_increment_replayed():
     w.run(None, {"x": [1]})  # first call (capture)
 
     cap_after_first = _get_counter(
-        reflex_cuda_graph_captured_total,
+        tether_cuda_graph_captured_total,
         {"embodiment": "so100", "model_id": "cg-test-2", "session": "expert_denoise"},
     )
     rep_after_first = _get_counter(
-        reflex_cuda_graph_replayed_total,
+        tether_cuda_graph_replayed_total,
         {"embodiment": "so100", "model_id": "cg-test-2", "session": "expert_denoise"},
     )
 
@@ -150,12 +150,12 @@ def test_subsequent_runs_only_increment_replayed():
 
     # Captured stayed flat
     assert _get_counter(
-        reflex_cuda_graph_captured_total,
+        tether_cuda_graph_captured_total,
         {"embodiment": "so100", "model_id": "cg-test-2", "session": "expert_denoise"},
     ) == cap_after_first
     # Replayed incremented by 5
     assert _get_counter(
-        reflex_cuda_graph_replayed_total,
+        tether_cuda_graph_replayed_total,
         {"embodiment": "so100", "model_id": "cg-test-2", "session": "expert_denoise"},
     ) == rep_after_first + 5
 
@@ -173,7 +173,7 @@ def test_capture_exception_increments_fallback_and_reraises():
     w = CudaGraphWrapper(mock_sess, "vlm_prefix", embodiment="franka", model_id="cg-test-3")
 
     fb_before = _get_counter(
-        reflex_cuda_graph_eager_fallback_total,
+        tether_cuda_graph_eager_fallback_total,
         {"embodiment": "franka", "model_id": "cg-test-3", "reason": "capture_failed"},
     )
 
@@ -182,7 +182,7 @@ def test_capture_exception_increments_fallback_and_reraises():
 
     assert w.captured is False  # never flipped
     assert _get_counter(
-        reflex_cuda_graph_eager_fallback_total,
+        tether_cuda_graph_eager_fallback_total,
         {"embodiment": "franka", "model_id": "cg-test-3", "reason": "capture_failed"},
     ) == fb_before + 1
 
@@ -200,7 +200,7 @@ def test_replay_exception_increments_fallback_with_replay_reason():
     assert w.captured is True
 
     fb_before = _get_counter(
-        reflex_cuda_graph_eager_fallback_total,
+        tether_cuda_graph_eager_fallback_total,
         {"embodiment": "ur5", "model_id": "cg-test-4", "reason": "replay_failed"},
     )
 
@@ -208,7 +208,7 @@ def test_replay_exception_increments_fallback_with_replay_reason():
         w.run(None, {})
 
     assert _get_counter(
-        reflex_cuda_graph_eager_fallback_total,
+        tether_cuda_graph_eager_fallback_total,
         {"embodiment": "ur5", "model_id": "cg-test-4", "reason": "replay_failed"},
     ) == fb_before + 1
 
@@ -230,13 +230,13 @@ def test_invalidate_resets_captured_flag():
 
     # Next run is treated as capture (increments captured counter)
     cap_before = _get_counter(
-        reflex_cuda_graph_captured_total,
+        tether_cuda_graph_captured_total,
         {"embodiment": "franka", "model_id": "cg-test-5", "session": "vlm_prefix"},
     )
     w.run(None, {})
     assert w.captured is True
     assert _get_counter(
-        reflex_cuda_graph_captured_total,
+        tether_cuda_graph_captured_total,
         {"embodiment": "franka", "model_id": "cg-test-5", "session": "vlm_prefix"},
     ) == cap_before + 1
 
@@ -345,7 +345,7 @@ def test_try_capture_returns_eager_wrapper_on_capture_failure():
         return capture_sess if cg_enabled else eager_sess
 
     fb_before = _get_counter(
-        reflex_cuda_graph_capture_failed_at_init_total,
+        tether_cuda_graph_capture_failed_at_init_total,
         {"embodiment": "franka", "model_id": "cg-try-2",
          "session": "vlm_prefix", "reason": "OOMError"},
     )
@@ -360,7 +360,7 @@ def test_try_capture_returns_eager_wrapper_on_capture_failure():
     assert result.session is eager_sess
     assert call_count["n"] == 2  # tried capture, then built eager
     assert _get_counter(
-        reflex_cuda_graph_capture_failed_at_init_total,
+        tether_cuda_graph_capture_failed_at_init_total,
         {"embodiment": "franka", "model_id": "cg-try-2",
          "session": "vlm_prefix", "reason": "OOMError"},
     ) == fb_before + 1

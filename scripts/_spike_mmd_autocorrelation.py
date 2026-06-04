@@ -15,7 +15,7 @@ reject at ~alpha (5%). We compare:
   - EPISODE-block permutation (proposed fix: shuffle whole episodes)
 
 Fast self-contained MMD: same multi-bandwidth RBF + median-heuristic gammas as
-reflex.verify_metrics, but the pooled kernel is built ONCE per trial and each
+tether.verify_metrics, but the pooled kernel is built ONCE per trial and each
 permutation is a quadratic form h^T K h (biased MMD; a permutation test is
 self-consistent for biased-vs-unbiased, so calibration is identical). A sanity
 block checks this fast statistic tracks the production one. No GPU, no cost.
@@ -29,7 +29,7 @@ import numpy as np
 
 # --------------------------------------------------------------------------
 # Fast cached-kernel MMD (multi-bandwidth RBF, median heuristic) — same math
-# as reflex.verify_metrics.two_sample_test, but K built once per trial.
+# as tether.verify_metrics.two_sample_test, but K built once per trial.
 # --------------------------------------------------------------------------
 def _pooled_sqdists(P):
     sq = np.sum(P * P, axis=1)

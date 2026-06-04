@@ -20,9 +20,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.heads import VLAHead
-from reflex.models.heads.flow_matching_head import FlowMatchingHead
-from reflex.registry.components import VLA_HEADS
+from tether.models.heads import VLAHead
+from tether.models.heads.flow_matching_head import FlowMatchingHead
+from tether.registry.components import VLA_HEADS
 
 
 # ─── Registration + ABC ─────────────────────────────────────────────────
@@ -155,7 +155,7 @@ def test_state_dict_smolvla_requires_head_dim(monkeypatch):
         captured["head_dim"] = head_dim
         return _make_stub_expert_stack(), {}
 
-    import reflex.exporters.smolvla as smolvla_mod
+    import tether.exporters.smolvla as smolvla_mod
     monkeypatch.setattr(smolvla_mod, "build_expert_stack", fake_build)
 
     with pytest.raises(ValueError, match="head_dim required"):

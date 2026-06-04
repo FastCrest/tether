@@ -28,7 +28,7 @@ Usage:
 
 Tuned for safety: this hits the LIVE worker. If you don't want to pay the
 Cloudflare ops + D1 writes, run against a self-hosted worker via
-REFLEX_CONTRIB_ENDPOINT env override.
+TETHER_CONTRIB_ENDPOINT env override.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ from typing import Any
 import httpx
 
 
-DEFAULT_WORKER = "https://reflex-contributions.fastcrest.workers.dev"
+DEFAULT_WORKER = "https://tether-contributions.fastcrest.workers.dev"
 
 
 @dataclass
@@ -57,7 +57,7 @@ class StressOutcome:
 
 
 def _worker_url() -> str:
-    return os.environ.get("REFLEX_CONTRIB_ENDPOINT", DEFAULT_WORKER).rstrip("/")
+    return os.environ.get("TETHER_CONTRIB_ENDPOINT", DEFAULT_WORKER).rstrip("/")
 
 
 def _smoke_contributor_id() -> str:
@@ -258,7 +258,7 @@ def cleanup_stress_contributors() -> dict:
     ]
     try:
         result = subprocess.run(
-            ["wrangler", "d1", "execute", "reflex-contributions", "--remote",
+            ["wrangler", "d1", "execute", "tether-contributions", "--remote",
              "--command", cmd_chain[0]],
             cwd=worker_dir,
             capture_output=True, text=True, timeout=120,

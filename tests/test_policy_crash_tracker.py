@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/policy_crash_tracker.py — Day 8 substrate.
+"""Tests for src/tether/runtime/policy_crash_tracker.py — Day 8 substrate.
 
 Per ADR 2026-04-25-policy-versioning-architecture: per-slot
 consecutive-crash counter + drain/degrade verdict.
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.runtime.policy_crash_tracker import (
+from tether.runtime.policy_crash_tracker import (
     ALL_VERDICTS,
     CrashTrackerVerdict,
     PolicyCrashTracker,

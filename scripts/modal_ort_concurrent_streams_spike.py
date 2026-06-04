@@ -37,7 +37,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-ort-concurrent-streams-spike")
+app = modal.App("tether-ort-concurrent-streams-spike")
 
 
 def _hf_secret():
@@ -69,7 +69,7 @@ def _build_bust() -> str:
 _HEAD = _repo_head_sha()
 _BUST = _build_bust()
 
-# Reuse the reflex-vla image setup — it has the eager-dlopen-nvidia-libs
+# Reuse the tether-vla image setup — it has the eager-dlopen-nvidia-libs
 # loadchain debugged for ORT-CUDA EP (per 2026-04-30 per-step-overhead
 # experiment, commit 462c191).
 image = (
@@ -92,7 +92,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -120,13 +120,13 @@ def spike_modal(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     logger = logging.getLogger("ort-spike")
 
-    # CRITICAL: import reflex first to trigger _eager_dlopen_nvidia_libs
+    # CRITICAL: import tether first to trigger _eager_dlopen_nvidia_libs
     # which puts the right CUDA-12-family libs (libcurand, libcublas,
     # libcudnn, libcusparse, etc) on the dlopen path for ORT-CUDA EP.
     # Without this, ORT silently falls back to CPU + we measure
     # CPU-thread parallelism, not GPU stream parallelism. Caught in v2.
-    import reflex
-    logger.info("[spike] imported reflex (eager-dlopen-nvidia-libs hook)")
+    import tether
+    logger.info("[spike] imported tether (eager-dlopen-nvidia-libs hook)")
 
     # ---- Build a synthetic model ~target_latency_ms ----
     # v3 was too small (2.4 ms / call on A100; launch-overhead-dominated).

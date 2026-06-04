@@ -1,4 +1,4 @@
-"""Tests for Reflex Comply evidence-bundle export."""
+"""Tests for Tether Comply evidence-bundle export."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ def _seed_b64() -> str:
 
 def _write_verify_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
-    (path / "PARITY.md").write_text("# Reflex Action-Parity Verification\n\n**Verdict: PASS**\n")
+    (path / "PARITY.md").write_text("# Tether Action-Parity Verification\n\n**Verdict: PASS**\n")
     (path / "parity.cert.json").write_text(
         json.dumps(
             {
-                "schema_version": "reflex.parity_cert.v1",
+                "schema_version": "tether.parity_cert.v1",
                 "generated_at": "2026-06-01T00:00:00Z",
                 "optimized_ref": "robot-policy/export",
                 "original_ref": "robot-policy/native",
@@ -95,8 +95,8 @@ def _write_actionguard(path: Path) -> Path:
 
 
 def test_comply_export_writes_signed_verifiable_bundle(tmp_path):
-    from reflex.comply.export import export_conformity_bundle, verify_conformity_bundle
-    from reflex.comply.schemas import DeploymentMetadata
+    from tether.comply.export import export_conformity_bundle, verify_conformity_bundle
+    from tether.comply.schemas import DeploymentMetadata
 
     verify_dir = _write_verify_dir(tmp_path / "verify")
     audit = _write_audit_log(tmp_path / "audit.jsonl")
@@ -131,7 +131,7 @@ def test_comply_export_writes_signed_verifiable_bundle(tmp_path):
     assert (out / "artifacts" / "safety_violations.jsonl").read_text().strip()
 
     conformity = json.loads((out / "conformity.json").read_text())
-    assert conformity["schema_version"] == "reflex.comply_bundle.v1"
+    assert conformity["schema_version"] == "tether.comply_bundle.v1"
     assert conformity["signature"]["key_id"] == "test-key"
     assert conformity["evidence"]["audit_summary"]["request_count"] == 2
     assert conformity["evidence"]["audit_summary"]["safety_violation_count"] == 1
@@ -144,13 +144,13 @@ def test_comply_export_writes_signed_verifiable_bundle(tmp_path):
 
 def test_comply_cli_export_and_verify(tmp_path, monkeypatch):
     typer_testing = __import__("typer.testing").testing
-    from reflex.cli import app
+    from tether.cli import app
 
     verify_dir = _write_verify_dir(tmp_path / "verify")
     audit = _write_audit_log(tmp_path / "audit.jsonl")
     guard = _write_actionguard(tmp_path / "safety_config.json")
     out = tmp_path / "bundle"
-    monkeypatch.setenv("REFLEX_COMPLY_TEST_KEY", _seed_b64())
+    monkeypatch.setenv("TETHER_COMPLY_TEST_KEY", _seed_b64())
 
     runner = typer_testing.CliRunner()
     export_result = runner.invoke(
@@ -167,7 +167,7 @@ def test_comply_cli_export_and_verify(tmp_path, monkeypatch):
             "--out",
             str(out),
             "--signing-key",
-            "env:REFLEX_COMPLY_TEST_KEY",
+            "env:TETHER_COMPLY_TEST_KEY",
             "--key-id",
             "cli-key",
             "--no-env-sbom",

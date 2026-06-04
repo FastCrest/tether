@@ -1,4 +1,4 @@
-"""Tests for src/reflex/eval/modal_runner.py — Modal subprocess wrapper."""
+"""Tests for src/tether/eval/modal_runner.py — Modal subprocess wrapper."""
 from __future__ import annotations
 
 import subprocess
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from reflex.eval.libero import EpisodeResult, LiberoSuiteConfig
-from reflex.eval.modal_runner import (
+from tether.eval.libero import EpisodeResult, LiberoSuiteConfig
+from tether.eval.modal_runner import (
     DEFAULT_MODAL_SCRIPT,
     TASK_SUITE_MAX_STEPS,
     ModalInvocationResult,

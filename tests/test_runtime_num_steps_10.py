@@ -1,7 +1,7 @@
 """Regression test for `runtime-num-steps-10` GOALS.yaml gate.
 
 The runtime server classes were originally written assuming num_steps=1.
-They need to correctly surface num_denoising_steps from reflex_config.json
+They need to correctly surface num_denoising_steps from tether_config.json
 so customers know what denoise schedule the artifact was exported with.
 
 Verifies:
@@ -9,7 +9,7 @@ Verifies:
      hardcoded).
   2. SmolVLAOnnxServer.predict() does the same.
   3. create_app dispatches to the monolithic server classes based on
-     `export_kind: monolithic` + `model_type` in reflex_config.json.
+     `export_kind: monolithic` + `model_type` in tether_config.json.
 
 The real num_steps=10 runtime roundtrip is covered by
 `scripts/modal_serve_roundtrip_test.py` (via Pi0OnnxServer); this file
@@ -38,9 +38,9 @@ def _mock_ort_session(input_names: list[str], output_shape: tuple = (1, 50, 32))
 def test_pi0_server_reports_num_steps_from_config(tmp_path):
     """Pi0OnnxServer.predict() returns num_denoising_steps from config,
     not a hardcoded 1."""
-    from reflex.runtime.pi0_onnx_server import Pi0OnnxServer
+    from tether.runtime.pi0_onnx_server import Pi0OnnxServer
 
-    (tmp_path / "reflex_config.json").write_text(json.dumps({
+    (tmp_path / "tether_config.json").write_text(json.dumps({
         "model_type": "pi0",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -55,7 +55,7 @@ def test_pi0_server_reports_num_steps_from_config(tmp_path):
     ])
     srv._input_names = [i.name for i in srv._session.get_inputs()]
     srv._ready = True
-    srv.config = json.loads((tmp_path / "reflex_config.json").read_text())
+    srv.config = json.loads((tmp_path / "tether_config.json").read_text())
 
     resp = srv.predict(
         image=np.zeros((224, 224, 3), dtype=np.uint8),
@@ -74,9 +74,9 @@ def test_pi0_server_reports_num_steps_from_config(tmp_path):
 
 def test_smolvla_server_reports_num_steps_from_config(tmp_path):
     """SmolVLAOnnxServer.predict() returns num_denoising_steps from config."""
-    from reflex.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+    from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
 
-    (tmp_path / "reflex_config.json").write_text(json.dumps({
+    (tmp_path / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -92,7 +92,7 @@ def test_smolvla_server_reports_num_steps_from_config(tmp_path):
     ])
     srv._input_names = [i.name for i in srv._session.get_inputs()]
     srv._ready = True
-    srv.config = json.loads((tmp_path / "reflex_config.json").read_text())
+    srv.config = json.loads((tmp_path / "tether_config.json").read_text())
 
     resp = srv.predict(
         image=np.zeros((512, 512, 3), dtype=np.uint8),
@@ -110,9 +110,9 @@ def test_smolvla_server_reports_num_steps_from_config(tmp_path):
 def test_pi05_server_uses_pi0_shape_without_state_input(tmp_path):
     """Pi05OnnxServer reuses pi0-style camera/lang/noise inputs but should
     not require a state input because pi0.5 carries proprio in language."""
-    from reflex.runtime.pi05_onnx_server import Pi05OnnxServer
+    from tether.runtime.pi05_onnx_server import Pi05OnnxServer
 
-    (tmp_path / "reflex_config.json").write_text(json.dumps({
+    (tmp_path / "tether_config.json").write_text(json.dumps({
         "model_type": "pi05",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -128,7 +128,7 @@ def test_pi05_server_uses_pi0_shape_without_state_input(tmp_path):
     ])
     srv._input_names = [i.name for i in srv._session.get_inputs()]
     srv._ready = True
-    srv.config = json.loads((tmp_path / "reflex_config.json").read_text())
+    srv.config = json.loads((tmp_path / "tether_config.json").read_text())
 
     resp = srv.predict(
         image=np.zeros((224, 224, 3), dtype=np.uint8),
@@ -143,11 +143,11 @@ def test_pi05_server_uses_pi0_shape_without_state_input(tmp_path):
     assert "state" not in srv._session.run.call_args.args[1]
 
 
-def test_reflex_server_uses_model_onnx_for_gr00t_monolithic(tmp_path, monkeypatch):
-    from reflex.runtime.server import ReflexServer
+def test_tether_server_uses_model_onnx_for_gr00t_monolithic(tmp_path, monkeypatch):
+    from tether.runtime.server import TetherServer
 
     (tmp_path / "model.onnx").write_bytes(b"fake")
-    (tmp_path / "reflex_config.json").write_text(json.dumps({
+    (tmp_path / "tether_config.json").write_text(json.dumps({
         "model_type": "gr00t",
         "export_kind": "monolithic",
         "chunk_size": 50,
@@ -164,10 +164,10 @@ def test_reflex_server_uses_model_onnx_for_gr00t_monolithic(tmp_path, monkeypatc
         ], output_shape=(1, 50, 64))
         self._inference_mode = "onnx_gpu"
 
-    monkeypatch.setattr(ReflexServer, "_load_onnx", _fake_load_onnx)
-    monkeypatch.setattr(ReflexServer, "_load_vlm_orchestrator", lambda self: None)
+    monkeypatch.setattr(TetherServer, "_load_onnx", _fake_load_onnx)
+    monkeypatch.setattr(TetherServer, "_load_vlm_orchestrator", lambda self: None)
 
-    srv = ReflexServer(str(tmp_path), device="cpu")
+    srv = TetherServer(str(tmp_path), device="cpu")
     srv.load()
 
     assert loaded["path"] == tmp_path / "model.onnx"
@@ -177,20 +177,20 @@ def test_reflex_server_uses_model_onnx_for_gr00t_monolithic(tmp_path, monkeypatc
 
 def test_create_app_dispatch_monolithic(tmp_path, monkeypatch):
     """create_app routes to Pi0OnnxServer / SmolVLAOnnxServer when
-    reflex_config.json declares `export_kind: monolithic`."""
+    tether_config.json declares `export_kind: monolithic`."""
     pytest.importorskip("fastapi")
-    from reflex.runtime import server as server_module
+    from tether.runtime import server as server_module
 
     # Write a fake model.onnx + config so _find_onnx_path succeeds
     (tmp_path / "model.onnx").write_bytes(b"fake")
-    (tmp_path / "reflex_config.json").write_text(json.dumps({
+    (tmp_path / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
     }))
 
     # Stub SmolVLAOnnxServer so we don't actually load the fake ONNX
-    from reflex.runtime import smolvla_onnx_server as smolvla_server_module
+    from tether.runtime import smolvla_onnx_server as smolvla_server_module
     original_server_cls = smolvla_server_module.SmolVLAOnnxServer
     instances = []
 

@@ -1,11 +1,11 @@
-"""Modal integration smoke test for `reflex eval` (Day 6).
+"""Modal integration smoke test for `tether eval` (Day 6).
 
 USER-AUTHORIZED ONLY: this test invokes Modal and costs ~$1 in
 compute (1 LIBERO task x 3 episodes on A10G). It is SKIPPED by default
-via the REFLEX_RUN_MODAL_TESTS=1 env gate.
+via the TETHER_RUN_MODAL_TESTS=1 env gate.
 
 To run:
-    REFLEX_RUN_MODAL_TESTS=1 pytest tests/integration/test_eval_modal_smoke.py -v -s
+    TETHER_RUN_MODAL_TESTS=1 pytest tests/integration/test_eval_modal_smoke.py -v -s
 
 Per ADR 2026-04-25-eval-as-a-service-architecture decision #2:
 wraps the existing scripts/modal_libero_*.py recipe. This test
@@ -29,14 +29,14 @@ from pathlib import Path
 import pytest
 
 
-# ---- Gate: skip unless REFLEX_RUN_MODAL_TESTS=1 -------------------------
+# ---- Gate: skip unless TETHER_RUN_MODAL_TESTS=1 -------------------------
 
 
-_RUN_GATE = os.environ.get("REFLEX_RUN_MODAL_TESTS") == "1"
+_RUN_GATE = os.environ.get("TETHER_RUN_MODAL_TESTS") == "1"
 pytestmark = pytest.mark.skipif(
     not _RUN_GATE,
     reason=(
-        "Modal-billable test (~$1). Set REFLEX_RUN_MODAL_TESTS=1 to run. "
+        "Modal-billable test (~$1). Set TETHER_RUN_MODAL_TESTS=1 to run. "
         "Quarterly CI cost-table audit runs this; per-PR uses stubbed "
         "unit tests."
     ),
@@ -50,19 +50,19 @@ pytestmark = pytest.mark.skipif(
 def export_dir(tmp_path_factory):
     """Path to a real exported model on disk.
 
-    Default: looks for `~/reflex-eval-test-export` (an export the user
-    has staged manually). Override via REFLEX_EVAL_TEST_EXPORT_DIR.
+    Default: looks for `~/tether-eval-test-export` (an export the user
+    has staged manually). Override via TETHER_EVAL_TEST_EXPORT_DIR.
     """
     candidate = os.environ.get(
-        "REFLEX_EVAL_TEST_EXPORT_DIR",
-        str(Path.home() / "reflex-eval-test-export"),
+        "TETHER_EVAL_TEST_EXPORT_DIR",
+        str(Path.home() / "tether-eval-test-export"),
     )
     p = Path(candidate)
     if not p.exists():
         pytest.skip(
             f"Test export not found at {candidate}. Set "
-            f"REFLEX_EVAL_TEST_EXPORT_DIR to point at a real export "
-            f"OR run `reflex export <hf_id> {candidate}` first."
+            f"TETHER_EVAL_TEST_EXPORT_DIR to point at a real export "
+            f"OR run `tether export <hf_id> {candidate}` first."
         )
     return p
 
@@ -88,7 +88,7 @@ def test_modal_eval_end_to_end(tmp_path, export_dir, modal_auth_present):
     """Smoke: 1 task x 3 episodes on Modal A10G. ~$0.20 per ADR cost table.
 
     Asserts:
-    - reflex eval CLI exits 0
+    - tether eval CLI exits 0
     - report.json written with schema_version=1
     - cost block populated
     - aggregate.n_total >= 1 (at least one episode ran)
@@ -98,7 +98,7 @@ def test_modal_eval_end_to_end(tmp_path, export_dir, modal_auth_present):
     # Invoke via subprocess so we get the same path a real customer would
     result = subprocess.run(
         [
-            "reflex", "eval", str(export_dir),
+            "tether", "eval", str(export_dir),
             "--suite", "libero",
             "--num-episodes", "3",
             "--tasks", "libero_spatial",
@@ -134,7 +134,7 @@ def test_modal_preflight_only(tmp_path, modal_auth_present):
 
     This costs nothing if it short-circuits inside the bundled image.
     """
-    from reflex.eval.preflight import PreflightSmokeTest
+    from tether.eval.preflight import PreflightSmokeTest
 
     # Run the local preflight (NOT on Modal — that would need a Modal
     # function wrapper). Verifies the smoke-test scaffold is healthy.

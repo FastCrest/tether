@@ -1,6 +1,6 @@
 # Adding a new VLA model
 
-This cookbook walks through the steps to add a new vision-language-action (VLA) model to Reflex. Sibling to [`adding_a_robot.md`](./adding_a_robot.md) (embodiments). As of v0.10.0, adding a new VLA backbone is a ~100 LOC composition class on the **BaseVLA spine**, not a duplicated 600-1000 LOC exporter pipeline.
+This cookbook walks through the steps to add a new vision-language-action (VLA) model to Tether. Sibling to [`adding_a_robot.md`](./adding_a_robot.md) (embodiments). As of v0.10.0, adding a new VLA backbone is a ~100 LOC composition class on the **BaseVLA spine**, not a duplicated 600-1000 LOC exporter pipeline.
 
 ## The 6-slot taxonomy
 
@@ -19,14 +19,14 @@ Every VLA on the spine declares which of 6 component slots it uses:
 
 ## Step 1 — Pick your slot pattern
 
-Look at the existing VLA classes in `src/reflex/models/vlas/`:
+Look at the existing VLA classes in `src/tether/models/vlas/`:
 
 | Family | Pattern | File |
 |---|---|---|
-| Pi0VLA | 2-tower (vision + llm + head) | `src/reflex/models/vlas/pi0.py` |
-| Pi05VLA | 2-tower, state-in-language | `src/reflex/models/vlas/pi05.py` |
-| SmolVLA | 2-tower + state projector | `src/reflex/models/vlas/smolvla.py` |
-| GR00TVLA | fused VLM + DiT head | `src/reflex/models/vlas/gr00t.py` |
+| Pi0VLA | 2-tower (vision + llm + head) | `src/tether/models/vlas/pi0.py` |
+| Pi05VLA | 2-tower, state-in-language | `src/tether/models/vlas/pi05.py` |
+| SmolVLA | 2-tower + state projector | `src/tether/models/vlas/smolvla.py` |
+| GR00TVLA | fused VLM + DiT head | `src/tether/models/vlas/gr00t.py` |
 
 Pick the closest match. Mirror its `REQUIRED_SLOTS` declaration.
 
@@ -34,11 +34,11 @@ Pick the closest match. Mirror its `REQUIRED_SLOTS` declaration.
 
 If your VLA needs a slot type that doesn't already exist as a concrete class, build a thin wrapper:
 
-- **Vision backbones** in `src/reflex/models/vision/` (e.g., `SigLIPBackbone`, `SmolVLAVisionBackbone`)
-- **LLM backbones** in `src/reflex/models/llm/` (e.g., `PaliGemmaBackbone`, `SmolVLALLMBackbone`)
-- **Fused VLMs** in `src/reflex/models/vlm/` (e.g., `EagleBackbone`)
-- **Projectors** in `src/reflex/models/projectors/` (e.g., `LinearProjector`)
-- **Heads** in `src/reflex/models/heads/` (e.g., `FlowMatchingHead`, `DITHead`)
+- **Vision backbones** in `src/tether/models/vision/` (e.g., `SigLIPBackbone`, `SmolVLAVisionBackbone`)
+- **LLM backbones** in `src/tether/models/llm/` (e.g., `PaliGemmaBackbone`, `SmolVLALLMBackbone`)
+- **Fused VLMs** in `src/tether/models/vlm/` (e.g., `EagleBackbone`)
+- **Projectors** in `src/tether/models/projectors/` (e.g., `LinearProjector`)
+- **Heads** in `src/tether/models/heads/` (e.g., `FlowMatchingHead`, `DITHead`)
 
 Each component inherits from its slot's ABC (`VisionBackbone`, `LLMBackbone`, etc) and registers via the matching component Registry decorator (`@VISION_BACKBONES.register`, etc).
 
@@ -47,11 +47,11 @@ Each component inherits from its slot's ABC (`VisionBackbone`, `LLMBackbone`, et
 Template (~100 LOC):
 
 ```python
-# src/reflex/models/vlas/myvla.py
+# src/tether/models/vlas/myvla.py
 from typing import Any, ClassVar
 import torch
-from reflex.models.base_vla import BaseVLA
-from reflex.registry.components import VLAS
+from tether.models.base_vla import BaseVLA
+from tether.registry.components import VLAS
 
 
 @VLAS.register
@@ -77,7 +77,7 @@ class MyVLA(BaseVLA):
 
 ## Step 4 — Register in `data.py`
 
-Add a `ModelEntry` to `src/reflex/registry/data.py`:
+Add a `ModelEntry` to `src/tether/registry/data.py`:
 
 ```python
 ModelEntry(
@@ -97,7 +97,7 @@ ModelEntry(
 
 ## Step 5 — Update validators
 
-Add the new family to the allowed list in `src/reflex/registry/models.py::ModelEntry.__post_init__`:
+Add the new family to the allowed list in `src/tether/registry/models.py::ModelEntry.__post_init__`:
 
 ```python
 if self.family not in ("pi0", "pi05", "smolvla", "openvla", "groot", "myvla"):
@@ -139,12 +139,12 @@ Write the result to `reflex_context/03_experiments/YYYY-MM-DD-myvla-spine-parity
 
 ## Step 8 — Add to CLI integration
 
-`reflex models list` + `reflex models info` already pick up new entries automatically via `ModelEntry.resolved_vla_type`. `reflex export <model_id>` dispatch happens by `model_type` (== family) in `src/reflex/cli.py::export()` — add a branch there if your family needs custom orchestration; otherwise the default fall-through works.
+`tether models list` + `tether models info` already pick up new entries automatically via `ModelEntry.resolved_vla_type`. `tether export <model_id>` dispatch happens by `model_type` (== family) in `src/tether/cli.py::export()` — add a branch there if your family needs custom orchestration; otherwise the default fall-through works.
 
 ## See also
 
 - [`adding_a_robot.md`](./adding_a_robot.md) — sibling cookbook for embodiments
 - [`architecture_wedges.md`](./architecture_wedges.md) — server-level composition pattern
-- `src/reflex/models/base_vla.py` — the spine ABC (REQUIRED_SLOTS / OPTIONAL_SLOTS / from_config)
+- `src/tether/models/base_vla.py` — the spine ABC (REQUIRED_SLOTS / OPTIONAL_SLOTS / from_config)
 - `reflex_context/01_decisions/2026-05-19-fluxvla-lift-program-decisions.md` — the 19 architectural decisions that shape the spine
 - `reflex_context/features/03_export/basevla-spine_plan.md` — the lift #1 12-day plan that landed this refactor

@@ -28,7 +28,7 @@ import torch.nn as nn
 
 def test_vision_backbone_abc_default_is_no_op():
     """The Vision ABC's prepare_triton returns {} — unused slots stay empty."""
-    from reflex.models.vision import VisionBackbone
+    from tether.models.vision import VisionBackbone
 
     class _Stub(VisionBackbone):
         def forward(self, images, *a, **kw):
@@ -40,7 +40,7 @@ def test_vision_backbone_abc_default_is_no_op():
 
 
 def test_llm_backbone_abc_default_is_no_op():
-    from reflex.models.llm import LLMBackbone
+    from tether.models.llm import LLMBackbone
 
     class _Stub(LLMBackbone):
         def forward(self, *a, **kw):
@@ -50,7 +50,7 @@ def test_llm_backbone_abc_default_is_no_op():
 
 
 def test_vlm_backbone_abc_default_is_no_op():
-    from reflex.models.vlm import VLMBackbone
+    from tether.models.vlm import VLMBackbone
 
     class _Stub(VLMBackbone):
         def forward(self, *a, **kw):
@@ -60,7 +60,7 @@ def test_vlm_backbone_abc_default_is_no_op():
 
 
 def test_projector_abc_default_is_no_op():
-    from reflex.models.projectors import Projector
+    from tether.models.projectors import Projector
 
     class _Stub(Projector):
         def forward(self, x, *a, **kw):
@@ -70,7 +70,7 @@ def test_projector_abc_default_is_no_op():
 
 
 def test_vla_head_abc_default_is_no_op():
-    from reflex.models.heads import VLAHead
+    from tether.models.heads import VLAHead
 
     class _Stub(VLAHead):
         def forward(self, *a, **kw):
@@ -83,7 +83,7 @@ def test_vla_head_abc_default_is_no_op():
 
 
 def test_linear_projector_prepare_triton_with_bias():
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.models.projectors.linear_projector import LinearProjector
 
     proj = LinearProjector(in_dim=8, out_dim=16, bias=True)
     out = proj.prepare_triton(prefix="state_proj.")
@@ -97,7 +97,7 @@ def test_linear_projector_prepare_triton_with_bias():
 
 
 def test_linear_projector_prepare_triton_no_bias():
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.models.projectors.linear_projector import LinearProjector
 
     proj = LinearProjector(in_dim=8, out_dim=16, bias=False)
     out = proj.prepare_triton(prefix="")
@@ -105,7 +105,7 @@ def test_linear_projector_prepare_triton_no_bias():
 
 
 def test_linear_projector_prepare_triton_empty_prefix_matches_named():
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.models.projectors.linear_projector import LinearProjector
 
     proj = LinearProjector(in_dim=4, out_dim=8)
     out = proj.prepare_triton(prefix="")
@@ -121,7 +121,7 @@ def test_linear_projector_prepare_triton_empty_prefix_matches_named():
 
 
 def test_linear_projector_no_aliasing_on_returned_tensors():
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.models.projectors.linear_projector import LinearProjector
 
     proj = LinearProjector(in_dim=4, out_dim=8)
     original_weight = proj.linear.weight.clone()
@@ -147,7 +147,7 @@ def test_linear_projector_no_aliasing_on_returned_tensors():
 def test_flow_matching_head_prepare_triton_namespaces_under_expert_stack():
     """FlowMatchingHead wraps an ExpertStack; prepare_triton must nest the
     wrapped module's params under ``{prefix}expert_stack.{name}``."""
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
 
     # Minimum stub: a tiny nn.Module pretending to be an ExpertStack.
     class _StubStack(nn.Module):
@@ -166,7 +166,7 @@ def test_flow_matching_head_prepare_triton_namespaces_under_expert_stack():
 
 
 def test_linear_projector_no_duplicate_keys():
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.models.projectors.linear_projector import LinearProjector
 
     proj = LinearProjector(in_dim=8, out_dim=16, bias=True)
     keys = list(proj.prepare_triton(prefix="any.").keys())
@@ -174,7 +174,7 @@ def test_linear_projector_no_duplicate_keys():
 
 
 def test_flow_matching_head_no_duplicate_keys():
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
 
     class _StubStack(nn.Module):
         def __init__(self):
@@ -192,7 +192,7 @@ def test_flow_matching_head_no_duplicate_keys():
 
 @pytest.mark.parametrize("prefix", ["", "foo.", "deeply.nested.prefix."])
 def test_prefix_consistency_linear_projector(prefix: str):
-    from reflex.models.projectors.linear_projector import LinearProjector
+    from tether.models.projectors.linear_projector import LinearProjector
 
     proj = LinearProjector(in_dim=4, out_dim=8)
     out = proj.prepare_triton(prefix=prefix)
@@ -202,7 +202,7 @@ def test_prefix_consistency_linear_projector(prefix: str):
 
 @pytest.mark.parametrize("prefix", ["", "vla_head."])
 def test_prefix_consistency_flow_matching_head(prefix: str):
-    from reflex.models.heads.flow_matching_head import FlowMatchingHead
+    from tether.models.heads.flow_matching_head import FlowMatchingHead
 
     class _StubStack(nn.Module):
         def __init__(self):

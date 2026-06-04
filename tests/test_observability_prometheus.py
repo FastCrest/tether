@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from prometheus_client.parser import text_string_to_metric_families
 
-from reflex.observability import prometheus as p
-from reflex.observability import (
+from tether.observability import prometheus as p
+from tether.observability import (
     METRICS_CONTENT_TYPE,
     inc_cache_hit,
     inc_cache_miss,
@@ -57,8 +57,8 @@ class TestRenderFormat:
 
     def test_render_includes_help_and_type_lines(self):
         out = render_metrics().decode("utf-8")
-        assert "# HELP reflex_act_latency_seconds" in out
-        assert "# TYPE reflex_act_latency_seconds histogram" in out
+        assert "# HELP tether_act_latency_seconds" in out
+        assert "# TYPE tether_act_latency_seconds histogram" in out
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ class TestRecordActLatency:
             record_act_latency(0.020, embodiment="ur5", model_id="pi05")
         out = render_metrics().decode()
         families = {f.name: f for f in text_string_to_metric_families(out)}
-        h = families["reflex_act_latency_seconds"]
+        h = families["tether_act_latency_seconds"]
         # Find the count sample for the (ur5, pi05) label set
         count_samples = [
             s for s in h.samples
@@ -88,7 +88,7 @@ class TestRecordActLatency:
     def test_observe_onnx_load_time(self):
         observe_onnx_load_time(2.5, model_id="pi05")
         out = render_metrics().decode()
-        assert "reflex_onnx_load_time_seconds" in out
+        assert "tether_onnx_load_time_seconds" in out
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ class TestCounters:
         inc_cache_hit(embodiment="franka", cache_type="action_chunk")
         out = render_metrics().decode()
         families = {f.name: f for f in text_string_to_metric_families(out)}
-        c = families["reflex_cache_hit"]
+        c = families["tether_cache_hit"]
         types_seen = {
             s.labels["cache_type"]
             for s in c.samples
@@ -126,16 +126,16 @@ class TestCounters:
 
     def test_slo_violation(self):
         inc_slo_violation(embodiment="franka", kind="p99_latency")
-        assert "reflex_slo_violations_total" in render_metrics().decode()
+        assert "tether_slo_violations_total" in render_metrics().decode()
 
     def test_fallback_invocation(self):
         inc_fallback_invocation(embodiment="so100", target="hold_position")
-        assert "reflex_fallback_invocations_total" in render_metrics().decode()
+        assert "tether_fallback_invocations_total" in render_metrics().decode()
 
     def test_model_swap(self):
         inc_model_swap(embodiment="franka", from_model="pi0", to_model="pi05")
         out = render_metrics().decode()
-        assert "reflex_model_swaps_total" in out
+        assert "tether_model_swaps_total" in out
         assert 'from_model="pi0"' in out
         assert 'to_model="pi05"' in out
 
@@ -162,36 +162,36 @@ class TestGauges:
         # Use a unique embodiment label for isolation
         emb = "franka-test-cm-symmetric"
         before_out = render_metrics().decode()
-        before_val = _gauge_value(before_out, "reflex_in_flight_requests", embodiment=emb)
+        before_val = _gauge_value(before_out, "tether_in_flight_requests", embodiment=emb)
 
         with track_in_flight(embodiment=emb):
             mid_out = render_metrics().decode()
-            mid_val = _gauge_value(mid_out, "reflex_in_flight_requests", embodiment=emb)
+            mid_val = _gauge_value(mid_out, "tether_in_flight_requests", embodiment=emb)
             assert mid_val == before_val + 1
 
         after_out = render_metrics().decode()
-        after_val = _gauge_value(after_out, "reflex_in_flight_requests", embodiment=emb)
+        after_val = _gauge_value(after_out, "tether_in_flight_requests", embodiment=emb)
         assert after_val == before_val
 
     def test_in_flight_decrements_on_exception(self):
         emb = "franka-test-cm-exception"
-        before_val = _gauge_value(render_metrics().decode(), "reflex_in_flight_requests", embodiment=emb)
+        before_val = _gauge_value(render_metrics().decode(), "tether_in_flight_requests", embodiment=emb)
         with pytest.raises(RuntimeError):
             with track_in_flight(embodiment=emb):
                 raise RuntimeError("simulated /act failure")
-        after_val = _gauge_value(render_metrics().decode(), "reflex_in_flight_requests", embodiment=emb)
+        after_val = _gauge_value(render_metrics().decode(), "tether_in_flight_requests", embodiment=emb)
         assert after_val == before_val
 
     def test_set_server_up(self):
         set_server_up(1)
-        assert "reflex_server_up 1" in render_metrics().decode()
+        assert "tether_server_up 1" in render_metrics().decode()
         set_server_up(0)
-        assert "reflex_server_up 0" in render_metrics().decode()
+        assert "tether_server_up 0" in render_metrics().decode()
 
     def test_set_episodes_active(self):
         set_episodes_active(embodiment="franka", value=5)
         out = render_metrics().decode()
-        assert 'reflex_episodes_active{embodiment="franka"} 5' in out
+        assert 'tether_episodes_active{embodiment="franka"} 5' in out
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +270,7 @@ class TestMetricsEndpoint:
         r = client.get("/metrics")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/plain")
-        assert "reflex_act_latency_seconds" in r.text
+        assert "tether_act_latency_seconds" in r.text
 
     def test_endpoint_skips_auth(self):
         """Per plan: /metrics has no auth — operators network-isolate.

@@ -9,7 +9,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-smolvla-export")
+app = modal.App("tether-smolvla-export")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -232,10 +232,10 @@ def main():
     print("Running SmolVLA export test on Modal A100...")
     results = test_smolvla_export.remote()
 
-    with open("/tmp/reflex_export_test.json", "w") as f:
+    with open("/tmp/tether_export_test.json", "w") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\nResults saved: /tmp/reflex_export_test.json")
+    print(f"\nResults saved: /tmp/tether_export_test.json")
     for step in results["steps"]:
         status = "PASS" if step["status"] == "pass" else "FAIL" if step["status"] == "fail" else "SKIP"
         print(f"  {status}: {step['step']} — {step['detail']}")

@@ -11,7 +11,7 @@ Usage:
 import os
 import modal
 
-app = modal.App("reflex-gr00t-probe")
+app = modal.App("tether-gr00t-probe")
 
 
 image = (

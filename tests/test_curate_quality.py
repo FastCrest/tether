@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/quality/ — per-episode quality scoring.
+"""Tests for src/tether/curate/quality/ — per-episode quality scoring.
 
 Covers each signal independently + composite + per-embodiment weights +
 ranking property (high-quality episodes should outscore low-quality ones).
@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.curate.quality import (
+from tether.curate.quality import (
     DEFAULT_WEIGHTS,
     EMBODIMENT_WEIGHTS,
     QualityResult,
@@ -20,7 +20,7 @@ from reflex.curate.quality import (
     success_signal,
     weights_for,
 )
-from reflex.curate.quality.baseline import baseline_median
+from tether.curate.quality.baseline import baseline_median
 
 
 # ── baseline_median ──────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from reflex.verify_metrics import (
+from tether.verify_metrics import (
     EmbodiedParity,
     aggregate_embodied,
     energy_distance,
@@ -138,7 +138,7 @@ def test_two_sample_degenerate_grouping_does_not_fabricate_significance():
 def test_block_aggregation_matches_full_kernel_mmd():
     # The episode-block path computes the observed MMD^2 from (U x U) block sums;
     # it must EXACTLY equal the full (N x N) kernel MMD^2 for the same split.
-    import reflex.verify_metrics as vm
+    import tether.verify_metrics as vm
 
     rng = np.random.default_rng(3)
     Xb, Xg = _episodic_arm(rng, n_eps=4, steps=40)
@@ -161,7 +161,7 @@ def test_block_path_never_builds_full_kernel(monkeypatch):
     # The scaling guarantee: the groups path must NEVER materialize the full
     # (N, N) kernel (that is the ~2.6 GB OOM risk at the N>=30 floor). Booby-trap
     # _pooled_kernel; if the block path completes, it never touched it.
-    import reflex.verify_metrics as vm
+    import tether.verify_metrics as vm
 
     def _boom(*_a, **_k):
         raise AssertionError("groups path must not build the full (N,N) kernel")

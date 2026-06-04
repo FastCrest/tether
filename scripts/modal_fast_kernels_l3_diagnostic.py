@@ -16,7 +16,7 @@ import subprocess
 
 import modal
 
-app = modal.App("reflex-fast-kernels-l3-diagnostic")
+app = modal.App("tether-fast-kernels-l3-diagnostic")
 
 
 def _repo_head_sha() -> str:
@@ -87,7 +87,7 @@ image = (
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -142,7 +142,7 @@ def run_l3_diagnostic(
     print(f"[l3-diag] [{time.time()-t0:.1f}s] PI05Policy loaded", flush=True)
 
     t0 = time.time()
-    from reflex.runtime.fast_inference.libero_adapter import TritonLIBEROAdapter
+    from tether.runtime.fast_inference.libero_adapter import TritonLIBEROAdapter
     # Build from a CPU copy to avoid weight corruption
     policy_cpu = PI05Policy.from_pretrained(model_id)
     policy_cpu = policy_cpu.to(dtype=torch.float32).to("cpu")

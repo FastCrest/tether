@@ -831,7 +831,7 @@ def parity_cuda_pi0():
     """CUDAExecutionProvider vs CPUExecutionProvider parity for the pi0
     monolithic ONNX. Confirms the GPU serve path produces identical
     outputs (within float32 tolerance) — a strict gate for
-    `reflex serve --device cuda`."""
+    `tether serve --device cuda`."""
     import numpy as np
     import onnxruntime as ort
     from pathlib import Path

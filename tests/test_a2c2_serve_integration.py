@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from reflex.kernels.a2c2_correction import A2C2Config, A2C2Head
+from tether.kernels.a2c2_correction import A2C2Config, A2C2Head
 
 
 def _stub_ort_session(input_names: list[str], output_shape=(1, 50, 32)):
@@ -33,7 +33,7 @@ def _make_export_dir(tmp_path: Path) -> Path:
     export_dir = tmp_path / "export"
     export_dir.mkdir()
     (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "reflex_config.json").write_text(json.dumps({
+    (export_dir / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -84,7 +84,7 @@ def _setup_app(tmp_path, monkeypatch, *, a2c2_ckpt: str | None = None):
     )
 
     export_dir = _make_export_dir(tmp_path)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     return create_app(
         str(export_dir), device="cpu",
@@ -107,7 +107,7 @@ def test_a2c2_hook_not_loaded_when_checkpoint_unset(tmp_path, monkeypatch):
     app = _setup_app(tmp_path, monkeypatch, a2c2_ckpt=None)
     with TestClient(app) as client:
         client.get("/health")
-        server = app.state.reflex_server
+        server = app.state.tether_server
         assert getattr(server, "a2c2_hook", "MISSING") is None
 
 
@@ -118,7 +118,7 @@ def test_a2c2_hook_loaded_when_checkpoint_set(tmp_path, monkeypatch):
     app = _setup_app(tmp_path, monkeypatch, a2c2_ckpt=ckpt)
     with TestClient(app) as client:
         client.get("/health")
-        server = app.state.reflex_server
+        server = app.state.tether_server
         hook = getattr(server, "a2c2_hook", None)
         assert hook is not None
         assert hook.head.config.action_dim == 32
@@ -134,7 +134,7 @@ def test_a2c2_hook_load_failure_disables_gracefully(tmp_path, monkeypatch):
     )
     with TestClient(app) as client:
         client.get("/health")
-        assert getattr(app.state.reflex_server, "a2c2_hook", "MISSING") is None
+        assert getattr(app.state.tether_server, "a2c2_hook", "MISSING") is None
 
 
 def test_act_response_includes_a2c2_telemetry_when_hook_loaded(tmp_path, monkeypatch):
@@ -189,7 +189,7 @@ def test_a2c2_hook_records_outcomes_after_each_act(tmp_path, monkeypatch):
                 "state": [0.0] * 6,
             })
             assert resp.status_code == 200
-        hook = app.state.reflex_server.a2c2_hook
+        hook = app.state.tether_server.a2c2_hook
         n_lat, n_succ = hook.sample_count()
         assert n_lat == 3
         assert n_succ == 3
@@ -212,5 +212,5 @@ def test_metrics_endpoint_includes_a2c2_counters(tmp_path, monkeypatch):
         metrics_resp = client.get("/metrics")
         assert metrics_resp.status_code == 200
         body = metrics_resp.text
-        assert "reflex_a2c2_applied_total" in body
-        assert "reflex_a2c2_skipped_total" in body
+        assert "tether_a2c2_applied_total" in body
+        assert "tether_a2c2_skipped_total" in body

@@ -1,12 +1,12 @@
 """Unit tests for the Lift #5 Day 3 shape whitelist.
 
-The whitelist guards ``reflex serve --fast-kernels`` from running on
+The whitelist guards ``tether serve --fast-kernels`` from running on
 non-PaliGemma-SigLIP-base models — silent-wrong outputs would result from
 Triton block-size mismatches with the vendored kernel hard-codes.
 """
 from __future__ import annotations
 
-from reflex.kernels._shape_whitelist import (
+from tether.kernels._shape_whitelist import (
     PI05_SHAPE_SIGNATURES,
     REQUIRED_CONFIG_KEYS,
     supported_signatures,

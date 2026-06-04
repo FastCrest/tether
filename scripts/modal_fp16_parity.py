@@ -2,7 +2,7 @@
 
 Runs the SAME input batch through the FP32 ONNX and the FP16 ONNX,
 compares per-action cos sim + max_abs diff. Uses `parity_gate()` from
-`reflex.exporters.fp16_convert` — PASS requires cos > 0.999 AND
+`tether.exporters.fp16_convert` — PASS requires cos > 0.999 AND
 max_abs < 5e-3 (the defaults for flow-matching VLAs where the fp16
 quantization noise is expected to stay in that range).
 
@@ -16,7 +16,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-fp16-parity")
+app = modal.App("tether-fp16-parity")
 
 
 def _hf_secret():
@@ -54,7 +54,7 @@ image = (
         "onnxruntime-gpu>=1.20",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -80,7 +80,7 @@ def parity_modal(
     import numpy as np
     import onnxruntime as ort
 
-    from reflex.exporters.fp16_convert import parity_gate
+    from tether.exporters.fp16_convert import parity_gate
 
     fp32_path = Path(ONNX_OUTPUT_PATH) / fp32_subdir / "model.onnx"
     fp16_path = Path(ONNX_OUTPUT_PATH) / fp16_subdir / "model.onnx"

@@ -23,11 +23,11 @@ import pytest
 import torch
 import torch.nn as nn
 
-from reflex.models.base_vla import BaseVLA
-from reflex.models.heads import VLAHead
-from reflex.models.vlas.gr00t import GR00TVLA
-from reflex.models.vlm import VLMBackbone
-from reflex.registry.components import VLAS, VLA_HEADS, VLM_BACKBONES
+from tether.models.base_vla import BaseVLA
+from tether.models.heads import VLAHead
+from tether.models.vlas.gr00t import GR00TVLA
+from tether.models.vlm import VLMBackbone
+from tether.registry.components import VLAS, VLA_HEADS, VLM_BACKBONES
 
 
 # ─── Registration + slot declarations ───────────────────────────────────
@@ -39,13 +39,13 @@ def test_gr00t_vla_registered():
 
 
 def test_dit_head_registered():
-    from reflex.models.heads.dit_head import DITHead
+    from tether.models.heads.dit_head import DITHead
     assert "DITHead" in VLA_HEADS
     assert VLA_HEADS.get("DITHead") is DITHead
 
 
 def test_eagle_backbone_registered():
-    from reflex.models.vlm.eagle_backbone import EagleBackbone
+    from tether.models.vlm.eagle_backbone import EagleBackbone
     assert "EagleBackbone" in VLM_BACKBONES
     assert VLM_BACKBONES.get("EagleBackbone") is EagleBackbone
 

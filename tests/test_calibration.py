@@ -1,4 +1,4 @@
-"""Unit tests for reflex.eval.calibration.
+"""Unit tests for tether.eval.calibration.
 
 Goal: calibration-metrics (weight 8). Zollo 2025 showed ECE/Brier/NLL
 are the non-simulation metrics most monotonically linked to real-task
@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.eval.calibration import (
+from tether.eval.calibration import (
     compute_brier,
     compute_ece,
     compute_nll,

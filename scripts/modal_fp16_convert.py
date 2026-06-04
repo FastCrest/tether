@@ -7,7 +7,7 @@ already fit.
 
 This script:
 1. Loads a FP32 monolithic ONNX from the `pi0-onnx-outputs` Modal volume.
-2. Runs `reflex.exporters.fp16_convert.convert_fp32_to_fp16` with the
+2. Runs `tether.exporters.fp16_convert.convert_fp32_to_fp16` with the
    LayerNorm-adjacent op blocklist.
 3. Writes the FP16 ONNX + `.bin` external data alongside the original.
 4. Reports size reduction.
@@ -27,7 +27,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-fp16-convert")
+app = modal.App("tether-fp16-convert")
 
 
 def _hf_secret():
@@ -63,7 +63,7 @@ image = (
         "numpy",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -88,7 +88,7 @@ def convert_modal(
     import time
     from pathlib import Path
 
-    from reflex.exporters.fp16_convert import convert_fp32_to_fp16
+    from tether.exporters.fp16_convert import convert_fp32_to_fp16
 
     src_path = Path(ONNX_OUTPUT_PATH) / src_subdir / model_filename
     dst_path = Path(ONNX_OUTPUT_PATH) / dst_subdir / model_filename
