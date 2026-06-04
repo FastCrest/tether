@@ -11,20 +11,14 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
-import torch.nn as nn
 
 from tether.exporters.vlm_prefix_exporter import (
-    DEFAULT_IMAGE_SIZE,
-    DEFAULT_PREFIX_SEQ_LEN,
     DEFAULT_VLM_KV_DIM,
-    VisionEncoderForONNX,
-    export_vlm_prefix,
 )
 from tether.runtime.vlm_components import (
     HIDDEN_SIZE,
@@ -605,10 +599,12 @@ class TestOrchestratorGracefulDegradation:
                 return mock_vision_session
             raise FileNotFoundError(f"Not found: {path}")
 
-        with patch.dict("sys.modules", {}):
-            import onnxruntime
-            with patch.object(onnxruntime, "InferenceSession", side_effect=mock_session_init):
-                from tether.runtime.vlm_orchestrator import VLMPrefixOrchestrator
+        fake_ort = MagicMock()
+        fake_ort.InferenceSession.side_effect = mock_session_init
+        with patch.dict("sys.modules", {"onnxruntime": fake_ort}):
+            with patch.object(
+                VLMPrefixOrchestrator, "_load_tokenizer_and_processor"
+            ):
                 orch = VLMPrefixOrchestrator(tmp_path, config)
 
                 assert orch.is_loaded
@@ -623,10 +619,10 @@ class TestOrchestratorGracefulDegradation:
         (tmp_path / "tether_config.json").write_text(json.dumps(config))
         # No ONNX files created
 
-        from tether.runtime.vlm_orchestrator import VLMPrefixOrchestrator
-        orch = VLMPrefixOrchestrator(tmp_path, config)
+        with patch.object(VLMPrefixOrchestrator, "_load_tokenizer_and_processor"):
+            orch = VLMPrefixOrchestrator(tmp_path, config)
 
-        assert not orch.is_loaded
+            assert not orch.is_loaded
 
 
 # ---------------------------------------------------------------------------
@@ -685,11 +681,10 @@ class TestOrchestratorFullPipeline:
             "input_ids": np.ones((1, 32), dtype=np.int64),
         }
 
-        import onnxruntime
-        with patch.object(onnxruntime, "InferenceSession", side_effect=mock_ort_init):
-            with patch.object(
-                VLMPrefixOrchestrator, "_load_tokenizer_and_processor"
-            ):
+        fake_ort = MagicMock()
+        fake_ort.InferenceSession.side_effect = mock_ort_init
+        with patch.dict("sys.modules", {"onnxruntime": fake_ort}):
+            with patch.object(VLMPrefixOrchestrator, "_load_tokenizer_and_processor"):
                 orch = VLMPrefixOrchestrator(tmp_path, config)
                 orch._tokenizer = mock_tokenizer
 
