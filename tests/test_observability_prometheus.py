@@ -116,7 +116,7 @@ class TestCounters:
             inc_safety_violation(embodiment="ur5", kind=kind)
         out = render_metrics().decode()
         families = {f.name: f for f in text_string_to_metric_families(out)}
-        c = families["reflex_safety_violations"]
+        c = families["tether_safety_violations"]
         kinds_seen = {
             s.labels["violation_kind"]
             for s in c.samples
@@ -143,7 +143,7 @@ class TestCounters:
         inc_denoise_steps(embodiment="franka", n_steps=10)
         out = render_metrics().decode()
         families = {f.name: f for f in text_string_to_metric_families(out)}
-        c = families["reflex_denoise_steps"]
+        c = families["tether_denoise_steps"]
         franka_total = sum(
             s.value
             for s in c.samples
