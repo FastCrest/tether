@@ -5164,6 +5164,99 @@ def agent_run_once(
     console.print("Agent cycle complete.")
 
 
+@agent_app.command("install-service")
+def agent_install_service(
+    config_path: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        help="Path to agent config.",
+    ),
+    kind: str = typer.Option(
+        "auto",
+        "--kind",
+        help="Service kind: auto, systemd, or launchd.",
+    ),
+    tether_bin: Optional[str] = typer.Option(
+        None,
+        "--tether-bin",
+        help="Tether executable path for the generated service.",
+    ),
+    home: Optional[Path] = typer.Option(
+        None,
+        "--home",
+        help="Override home directory for service file placement.",
+    ),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply",
+        help="Write the service file. Default prints a dry-run preview.",
+    ),
+) -> None:
+    """Generate or write an autostart service for the Tether Agent."""
+    from tether.agent import config as agent_config
+    from tether.agent import service as agent_service
+
+    resolved_config = config_path or agent_config.default_config_path()
+    try:
+        plan = agent_service.build_service_plan(
+            kind=kind,
+            config_path=resolved_config,
+            tether_bin=tether_bin,
+            home=home,
+        )
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if apply_changes:
+        path = agent_service.write_service(plan)
+        console.print(f"Wrote {plan.kind} service to {path}.")
+        return
+
+    console.print(f"# {plan.kind} service: {plan.path}")
+    console.print(plan.content.rstrip())
+    console.print("# Dry run only. Re-run with --apply to write this file.")
+
+
+@agent_app.command("uninstall-service")
+def agent_uninstall_service(
+    kind: str = typer.Option(
+        "auto",
+        "--kind",
+        help="Service kind: auto, systemd, or launchd.",
+    ),
+    home: Optional[Path] = typer.Option(
+        None,
+        "--home",
+        help="Override home directory for service file placement.",
+    ),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply",
+        help="Delete the service file. Default prints a dry-run path.",
+    ),
+) -> None:
+    """Remove the Tether Agent autostart service file."""
+    from tether.agent import service as agent_service
+
+    try:
+        target = agent_service.service_path(
+            agent_service.detect_service_kind() if kind == "auto" else kind,
+            home=home,
+        )
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+    if apply_changes:
+        removed = agent_service.remove_service(kind=kind, home=home)
+        console.print(f"Removed service file path {removed}.")
+        return
+
+    console.print(f"# {kind} service path: {target}")
+    console.print("# Dry run only. Re-run with --apply to delete this file.")
+
+
 app.add_typer(agent_app, name="agent")
 
 

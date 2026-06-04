@@ -189,3 +189,72 @@ def test_agent_run_once_path(
     assert result.exit_code == 0, result.output
     assert fake_agent_modules["run_once"] == [cfg]
     assert "Agent cycle complete" in result.output
+
+
+def test_agent_install_service_dry_run(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "agent",
+            "install-service",
+            "--kind",
+            "systemd",
+            "--config",
+            str(tmp_path / "agent.json"),
+            "--tether-bin",
+            "/opt/tether/bin/tether",
+            "--home",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "ExecStart=/opt/tether/bin/tether agent start --config" in result.output
+    assert "Dry run only" in result.output
+    assert not (tmp_path / ".config" / "systemd" / "user" / "tether-agent.service").exists()
+
+
+def test_agent_install_and_uninstall_service_apply(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    install = runner.invoke(
+        app,
+        [
+            "agent",
+            "install-service",
+            "--kind",
+            "systemd",
+            "--config",
+            str(tmp_path / "agent.json"),
+            "--tether-bin",
+            "/opt/tether/bin/tether",
+            "--home",
+            str(tmp_path),
+            "--apply",
+        ],
+    )
+    service_path = tmp_path / ".config" / "systemd" / "user" / "tether-agent.service"
+
+    assert install.exit_code == 0, install.output
+    assert service_path.exists()
+    assert "Wrote systemd service" in install.output
+
+    uninstall = runner.invoke(
+        app,
+        [
+            "agent",
+            "uninstall-service",
+            "--kind",
+            "systemd",
+            "--home",
+            str(tmp_path),
+            "--apply",
+        ],
+    )
+
+    assert uninstall.exit_code == 0, uninstall.output
+    assert not service_path.exists()
