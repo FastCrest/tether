@@ -116,6 +116,60 @@ def main(
         raise typer.Exit()
 
 
+def _maybe_write_embodiment_bundle(
+    output: str,
+    embodiment: str,
+    calibration: str,
+) -> None:
+    """If --embodiment <name> was set on export, write the embodiment's
+    calibration bundle into the export directory. No-op when empty.
+
+    Currently supports: so_arm100.
+    Bundle layout: <output>/embodiment/<name>/calibration.json
+    """
+    if not embodiment:
+        return
+    name = embodiment.strip().lower()
+    if name not in ("so_arm100", "so-arm100"):
+        err_console.print(
+            f"[red]--embodiment {embodiment!r} not recognized. "
+            f"Supported: so_arm100. (For the runtime preset-config "
+            f"flag used by `reflex serve`, see --embodiment on serve "
+            f"— that supports more presets like franka/so100/ur5.)[/red]"
+        )
+        raise typer.Exit(2)
+    try:
+        from reflex.embodiments.so_arm100 import SOARM100Adapter
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(
+            f"[red]Failed to import SOARM100Adapter: {exc}[/red]"
+        )
+        raise typer.Exit(2)
+
+    if calibration:
+        try:
+            adapter = SOARM100Adapter.from_calibration(calibration)
+        except FileNotFoundError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2)
+        except ValueError as exc:
+            err_console.print(f"[red]Calibration rejected: {exc}[/red]")
+            raise typer.Exit(2)
+    else:
+        adapter = SOARM100Adapter.default()
+        console.print(
+            "  [yellow]No --calibration; embedding factory-default config. "
+            "Run `reflex calibrate so_arm100 --port /dev/ttyUSB0` or pass "
+            "--calibration to use your physical arm's homing offsets.[/yellow]"
+        )
+
+    bundle_path = (
+        Path(output) / "embodiment" / "so_arm100" / "calibration.json"
+    )
+    written = adapter.save_calibration(bundle_path)
+    console.print(f"  Embodiment bundle: {written}")
+
+
 @app.command(hidden=True)
 def export(
     model: str = typer.Argument(help="HuggingFace model ID or local checkpoint path"),
@@ -159,6 +213,24 @@ def export(
              "with target_time=1 baked in. Output ONNX has the same I/O "
              "signature as the matching teacher family's monolithic export, "
              "so `tether serve` loads it through the standard path.",
+    ),
+    embodiment: str = typer.Option(
+        "",
+        "--embodiment",
+        help="Embed an embodiment adapter + calibration into the export bundle. "
+             "Supported: 'so_arm100' (SO-ARM100 + LeRobot interop). When set, "
+             "the export writes embodiment/<name>/calibration.json into OUTPUT "
+             "so `reflex serve --embodiment <name>` can load it back. Pair "
+             "with --calibration to import an existing LeRobot calibration.",
+    ),
+    calibration: str = typer.Option(
+        "",
+        "--calibration",
+        help="Path to a calibration JSON consumed by --embodiment. For "
+             "so_arm100, this is a LeRobot SO-100/101 calibration file "
+             "(`~/.cache/huggingface/lerobot/calibration/robots/so_follower/<id>.json`). "
+             "If omitted, the bundle ships with the factory-default config "
+             "(safe but unaware of your physical arm's homing offsets).",
     ),
 ):
     """Export a VLA model to ONNX + TensorRT for edge deployment."""
@@ -231,6 +303,8 @@ def export(
             console.print(f"  Verification manifest: {report_path}")
         except Exception as exc:
             console.print(f"[yellow]Verification manifest skipped: {exc}[/yellow]")
+
+        _maybe_write_embodiment_bundle(output, embodiment, calibration)
 
         console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
         raise typer.Exit(0)
@@ -320,6 +394,7 @@ def export(
         console.print(f"  Mode:   {result.get('export_mode', requested_export_mode.value)}")
         console.print(f"  Prefix: {result['vlm_prefix_onnx']} ({result['vlm_prefix_mb']:.1f} MB)")
         console.print(f"  Expert: {result['expert_denoise_onnx']} ({result['expert_denoise_mb']:.1f} MB)")
+        _maybe_write_embodiment_bundle(output, embodiment, calibration)
         console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
         raise typer.Exit(0)
 
@@ -515,6 +590,8 @@ def export(
         console.print(f"  [dim]Verification manifest: {report_path}[/dim]")
     except Exception as exc:
         console.print(f"[yellow]Verification manifest skipped: {exc}[/yellow]")
+
+    _maybe_write_embodiment_bundle(output, embodiment, calibration)
 
     console.print(f"\n  [dim]Run on target hardware:[/dim]")
     console.print(f"  [cyan]tether bench {output}[/cyan]")
@@ -1349,6 +1426,15 @@ def verify_cmd(
         "./verify_output", "--output",
         help="Directory for the PARITY.md receipt (+ JSON). Created if missing.",
     ),
+    embodiment: str = typer.Option(
+        "", "--embodiment",
+        help="Embodiment adapter for parity-cert provenance. Supported: "
+             "'so_arm100'. When set, the parity cert records the adapter slug "
+             "and calibration source path so downstream auditors can trace "
+             "which physical-robot configuration the export was certified "
+             "against. Falls back to checking the bundle for an embedded "
+             "embodiment/<name>/calibration.json.",
+    ),
     signing_key: str = typer.Option(
         "", "--signing-key",
         help="Optional Ed25519 private key for parity.cert.json. Accepts env:VAR, file:path, PEM, or base64 32-byte seed.",
@@ -1407,6 +1493,46 @@ def verify_cmd(
             )
             raise typer.Exit(2)
 
+    # ─── --embodiment so_arm100 sanity check ───────────────────────────────
+    # The OSS verify path is policy-only; the adapter doesn't change the
+    # numerical gate. We DO want to surface "is the bundle aware of the
+    # embodiment you claim to verify against?" so a downstream auditor sees
+    # the link in the parity cert + receipt. Sanity-checks the embedded
+    # calibration loads + records the source path for telemetry.
+    embodiment_metadata: dict | None = None
+    if embodiment:
+        emb_norm = embodiment.strip().lower()
+        if emb_norm not in ("so_arm100", "so-arm100"):
+            err_console.print(
+                f"[red]--embodiment {embodiment!r} not recognized for verify. "
+                f"Supported: so_arm100.[/red]"
+            )
+            raise typer.Exit(2)
+        try:
+            from tether.embodiments.so_arm100 import SOARM100Adapter
+            try:
+                adapter = SOARM100Adapter.from_bundle(checkpoint_or_export)
+                src = adapter.config._source_path
+            except FileNotFoundError:
+                console.print(
+                    "  [yellow]Bundle has no embedded so_arm100 calibration; "
+                    "verify will run policy-only and the parity cert will "
+                    "record the embodiment as 'so_arm100/default'.[/yellow]"
+                )
+                adapter = SOARM100Adapter.default()
+                src = ""
+            embodiment_metadata = {
+                "name": "so_arm100",
+                "calibration_source": src,
+                "joint_names": list(adapter.joint_names),
+                "action_dim": adapter.action_dim,
+            }
+        except Exception as exc:  # noqa: BLE001
+            err_console.print(
+                f"[red]Failed to validate so_arm100 embodiment: {exc}[/red]"
+            )
+            raise typer.Exit(2)
+
     console.print("\n[bold]Tether Verify[/bold] [dim](action-parity gate · v0)[/dim]")
     console.print(f"  Optimized:  {checkpoint_or_export}")
     console.print(f"  Original:   {original or '[dim](same checkpoint)[/dim]'}")
@@ -1415,6 +1541,11 @@ def verify_cmd(
     console.print(f"  Episodes:   {num_episodes} per task per arm")
     console.print(f"  Seed:       {seed}")
     console.print(f"  Output:     {output}")
+    if embodiment_metadata:
+        console.print(
+            f"  Embodiment: [cyan]so_arm100[/cyan] "
+            f"(cal={embodiment_metadata['calibration_source'] or 'default'})"
+        )
 
     try:
         verdict = run_verify(
@@ -1506,6 +1637,23 @@ def verify_cmd(
     except Exception as exc:  # noqa: BLE001
         err_console.print(f"[red]Parity cert write failed: {exc}[/red]")
         raise typer.Exit(2)
+
+    # Embodiment sidecar — separate file so the parity-cert schema stays
+    # frozen + signature-stable. Auditors join via the verdict_id field.
+    if embodiment_metadata is not None:
+        sidecar = Path(output) / "embodiment.json"
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "embodiment": embodiment_metadata,
+                    "verdict_passed": verdict.passed,
+                },
+                indent=2,
+            )
+        )
+        if not output_json:
+            console.print(f"  [dim]Embodiment sidecar: {sidecar}[/dim]")
 
     raise typer.Exit(0 if verdict.passed else 1)
 
@@ -2098,12 +2246,43 @@ def serve(
     # early — before any compute or runtime checks — so a bad config fails
     # loud at the CLI layer, not at first /act.
     embodiment_cfg = None
+    so_arm100_adapter = None
     if custom_embodiment_config or embodiment:
         from tether.embodiments import EmbodimentConfig, list_presets
         from tether.embodiments.validate import (
             format_errors,
             validate_embodiment_config,
         )
+        # so_arm100 / so-arm100 are aliases for the so100 preset (same physical
+        # arm). When the user passes `--embodiment so_arm100`, also try to load
+        # the bundle-embedded LeRobot calibration so the runtime can stream
+        # commands to the wire. The EmbodimentConfig (runtime preset) stays
+        # the same; the adapter is a sibling that the wire-loop consults.
+        preset_lookup = embodiment
+        if embodiment.strip().lower() in ("so_arm100", "so-arm100"):
+            preset_lookup = "so100"
+            try:
+                from reflex.embodiments.so_arm100 import SOARM100Adapter
+                try:
+                    so_arm100_adapter = SOARM100Adapter.from_bundle(export_dir)
+                    console.print(
+                        f"  [dim]so_arm100 calibration loaded from bundle "
+                        f"({so_arm100_adapter.config._source_path or 'embedded'})[/dim]"
+                    )
+                except FileNotFoundError:
+                    so_arm100_adapter = SOARM100Adapter.default()
+                    console.print(
+                        "  [yellow]Bundle has no embedded so_arm100 calibration; "
+                        "using factory defaults. Re-export with "
+                        "`reflex export ... --embodiment so_arm100 "
+                        "--calibration <cal.json>` to embed your physical arm's "
+                        "homing offsets.[/yellow]"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                err_console.print(
+                    f"[red]Failed to construct SOARM100Adapter: {exc}[/red]"
+                )
+                raise typer.Exit(1)
         try:
             if custom_embodiment_config:
                 if embodiment:
@@ -2113,7 +2292,7 @@ def serve(
                     )
                 embodiment_cfg = EmbodimentConfig.load_custom(custom_embodiment_config)
             else:
-                embodiment_cfg = EmbodimentConfig.load_preset(embodiment)
+                embodiment_cfg = EmbodimentConfig.load_preset(preset_lookup)
         except (FileNotFoundError, ValueError) as exc:
             err_console.print(f"[red]Failed to load embodiment config: {exc}[/red]")
             console.print(
@@ -2228,6 +2407,11 @@ def serve(
         composed.append(f"[cyan]batch[/cyan]={max_batch}@{batch_timeout_ms:.0f}ms")
     if embodiment_cfg is not None:
         composed.append(f"[cyan]embodiment[/cyan]={embodiment_cfg.embodiment}")
+        if so_arm100_adapter is not None:
+            composed.append(
+                f"[cyan]so_arm100-adapter[/cyan]="
+                f"{Path(so_arm100_adapter.config._source_path).name if so_arm100_adapter.config._source_path else 'default'}"
+            )
     if record:
         composed.append(
             f"[cyan]record[/cyan]={record} ({record_images}"
@@ -5173,6 +5357,115 @@ def calibrate_so100_preflight(
     if skip_camera:
         cmd.append("--skip-camera")
     _sp.run(cmd, check=False)
+
+
+# ─── tether calibrate so_arm100 ─────────────────────────────────────────────
+# LeRobot-aligned SO-ARM100 calibration. Distinct from `tether calibrate
+# so100` (legacy tablet-tap rig, vendored from auto_soarm) — this subcommand
+# reads/writes the LeRobot calibration JSON format and is intended for users
+# who want to deploy LeRobot SmolVLA / pi0 checkpoints onto a SO-ARM100.
+so_arm100_calibrate_app = typer.Typer(
+    name="so_arm100",
+    help="SO-ARM100 calibration in LeRobot's JSON format.",
+    no_args_is_help=True,
+)
+calibrate_app.add_typer(so_arm100_calibrate_app, name="so_arm100")
+
+
+@so_arm100_calibrate_app.command("import")
+def calibrate_so_arm100_import(
+    source: str = typer.Argument(
+        ...,
+        help="Path to an existing LeRobot calibration JSON (e.g. "
+             "~/.cache/huggingface/lerobot/calibration/robots/so_follower/<id>.json).",
+    ),
+    output: str = typer.Option(
+        "~/.tether/calibration/so_arm100/calibration.json",
+        "--output",
+        help="Where to write the validated calibration. Parent dirs are created.",
+    ),
+) -> None:
+    """Import + validate an existing LeRobot calibration. No hardware required."""
+    from tether.embodiments.so_arm100 import SOARM100Adapter
+
+    try:
+        adapter = SOARM100Adapter.from_calibration(source)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    out_path = Path(output).expanduser()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    adapter.config.write_lerobot_calibration(out_path)
+    console.print(f"[green]Calibration imported[/green] → {out_path}")
+    console.print(
+        "  Joints: "
+        + ", ".join(
+            f"{j.name}(id={j.motor_id})" for j in adapter.config.joints
+        )
+    )
+
+
+@so_arm100_calibrate_app.command("default")
+def calibrate_so_arm100_default(
+    output: str = typer.Option(
+        "~/.tether/calibration/so_arm100/calibration.json",
+        "--output",
+        help="Where to write the default calibration JSON.",
+    ),
+) -> None:
+    """Write a factory-default SO-ARM100 calibration (no hardware required).
+
+    Useful for dry-run flows + tests; should be replaced with a real
+    calibration before running on a physical arm.
+    """
+    from tether.embodiments.so_arm100 import SOARM100Adapter
+
+    adapter = SOARM100Adapter.default()
+    out_path = Path(output).expanduser()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    adapter.config.write_lerobot_calibration(out_path)
+    console.print(f"[green]Default calibration written[/green] → {out_path}")
+    console.print(
+        "  [yellow]Factory defaults assume your servos are mid-pose with no "
+        "homing offsets — re-run with a real calibration before flying.[/yellow]"
+    )
+
+
+@so_arm100_calibrate_app.command("inspect")
+def calibrate_so_arm100_inspect(
+    calibration: str = typer.Argument(
+        ..., help="Path to a LeRobot calibration JSON to inspect.",
+    ),
+) -> None:
+    """Print a human-readable summary of a calibration file."""
+    from tether.embodiments.so_arm100 import SOARM100Adapter
+
+    try:
+        adapter = SOARM100Adapter.from_calibration(calibration)
+    except (FileNotFoundError, ValueError) as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    tbl = Table(title=f"SO-ARM100 calibration · {calibration}")
+    tbl.add_column("Joint", style="bold")
+    tbl.add_column("Motor ID", justify="right")
+    tbl.add_column("Drive mode", justify="right")
+    tbl.add_column("Homing offset", justify="right")
+    tbl.add_column("Range min", justify="right")
+    tbl.add_column("Range max", justify="right")
+    tbl.add_column("Soft limits", justify="right")
+    for j in adapter.config.joints:
+        tbl.add_row(
+            j.name,
+            str(j.motor_id),
+            str(j.drive_mode),
+            str(j.homing_offset),
+            str(j.range_min),
+            str(j.range_max),
+            f"[{j.position_limits[0]:.2f}, {j.position_limits[1]:.2f}]",
+        )
+    console.print(tbl)
 
 
 # ─── tether bench-game <game> {collect, eval} ───────────────────────────────
