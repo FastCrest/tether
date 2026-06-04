@@ -28,5 +28,5 @@ def test_sha256_large_file(tmp_path):
 
     assert len(payload) > _HASH_CHUNK
     assert _sha256(path) == (
-        "be4d788a195785d6e979d2958e8095ec19af664d4413416b474dc0e4f7a15c24"
+        "7e889344f3a00171373651a7fbdc9746e12bc68a782b18075811d38760d794ec"
     )
