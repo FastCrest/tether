@@ -135,6 +135,57 @@ def test_valid_worker_input_materializes_selected_evidence_and_result(tmp_path: 
     ]
 
 
+def test_output_uri_publishes_artifacts_and_rewrites_result_uris(tmp_path: Path) -> None:
+    output_uri = (tmp_path / "published" / "imp_job_1").resolve().as_uri()
+
+    result = run_improve_worker(
+        _worker_input(runner_config={"output_uri": output_uri}),
+        output_dir=tmp_path / "runs",
+        output_uri=output_uri,
+        now=1.0,
+    )
+
+    published_dir = tmp_path / "published" / "imp_job_1"
+    assert result["ok"] is True
+    assert result["artifact_uri"] == (published_dir / "candidate_artifact.json").resolve().as_uri()
+    assert result["outputs"]["manifest_uri"] == (
+        published_dir / "selected_evidence_manifest.json"
+    ).resolve().as_uri()
+    assert result["outputs"]["training_log_uri"] == (
+        published_dir / "training_log.jsonl"
+    ).resolve().as_uri()
+    assert result["outputs"]["verification_md_uri"] == (
+        published_dir / "VERIFICATION.md"
+    ).resolve().as_uri()
+    assert (published_dir / "candidate_artifact.json").exists()
+    assert (published_dir / "selected_evidence_manifest.json").exists()
+    assert (published_dir / "training_log.jsonl").exists()
+    assert (published_dir / "VERIFICATION.md").exists()
+    assert result["metadata"]["output_uri"] == output_uri
+    assert result["metadata"]["output_published"] is True
+    assert result["metadata"]["published_files"]["candidate_artifact.json"] == result["artifact_uri"]
+    assert output_uri in result["metadata"]["modal_gpu_follow_up_command"]
+
+
+def test_runner_config_output_uri_publishes_without_separate_argument(tmp_path: Path) -> None:
+    output_uri = (tmp_path / "published-from-config").resolve().as_uri()
+
+    result = run_improve_worker(
+        _worker_input(runner_config={"output_uri": output_uri}),
+        output_dir=tmp_path / "runs",
+        now=1.0,
+    )
+
+    published_dir = tmp_path / "published-from-config"
+    assert result["ok"] is True
+    assert result["artifact_uri"] == (published_dir / "candidate_artifact.json").resolve().as_uri()
+    assert result["outputs"]["manifest_uri"] == (
+        published_dir / "selected_evidence_manifest.json"
+    ).resolve().as_uri()
+    assert result["metadata"]["output_uri"] == output_uri
+    assert output_uri in result["metadata"]["modal_gpu_follow_up_command"]
+
+
 def test_selected_id_enforcement_rejects_unselected_evidence(tmp_path: Path) -> None:
     payload = _worker_input(failure_evidence=[_failure("fail_1"), _failure("fail_2")])
 
@@ -199,6 +250,7 @@ def test_malformed_input_returns_failure_envelope_not_traceback() -> None:
 def test_module_cli_writes_worker_result(tmp_path: Path) -> None:
     input_path = tmp_path / "worker_input.json"
     output_path = tmp_path / "worker_result.json"
+    published_dir = tmp_path / "published"
     input_path.write_text(json.dumps(_worker_input()), encoding="utf-8")
 
     completed = _run_module_cli(
@@ -207,6 +259,8 @@ def test_module_cli_writes_worker_result(tmp_path: Path) -> None:
         str(input_path),
         "--output-dir",
         str(tmp_path / "runs"),
+        "--output-uri",
+        published_dir.resolve().as_uri(),
         "--result-output",
         str(output_path),
     )
@@ -214,7 +268,10 @@ def test_module_cli_writes_worker_result(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     result = json.loads(output_path.read_text(encoding="utf-8"))
     assert result["ok"] is True
-    assert result["outputs"]["manifest_uri"].startswith("file://")
+    assert result["artifact_uri"] == (published_dir / "candidate_artifact.json").resolve().as_uri()
+    assert result["outputs"]["manifest_uri"] == (
+        published_dir / "selected_evidence_manifest.json"
+    ).resolve().as_uri()
     assert MODAL_GPU_FOLLOW_UP_COMMAND.split(" --worker-input")[0] in (
         result["metadata"]["modal_gpu_follow_up_command"]
     )
@@ -231,6 +288,20 @@ def test_module_cli_malformed_input_prints_failure_without_traceback(tmp_path: P
     result = json.loads(completed.stdout)
     assert result["ok"] is False
     assert result["error_code"] == "invalid_worker_input"
+
+
+def test_modal_follow_up_script_exists_and_uses_worker_contract() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "real_improve_worker_modal.py"
+    source = script.read_text(encoding="utf-8")
+
+    assert script.exists()
+    assert "fastcrest.improve.worker_input.v1" in source
+    assert "fastcrest.improve.worker_result.v1" in source
+    assert "run_improve_worker" in source
+    assert "output_uri" in source
+    assert "with_options(gpu=gpu" in source
+    assert "modal run scripts/real_improve_worker_modal.py" in MODAL_GPU_FOLLOW_UP_COMMAND
 
 
 def _run_module_cli(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:

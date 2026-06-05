@@ -17,11 +17,14 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import shutil
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse
 
 
 WORKER_INPUT_CONTRACT_VERSION = "fastcrest.improve.worker_input.v1"
@@ -90,6 +93,7 @@ def run_improve_worker(
     worker_input: Mapping[str, Any],
     *,
     output_dir: str | Path | None = None,
+    output_uri: str | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """Run the deterministic local Improve worker.
@@ -112,12 +116,13 @@ def run_improve_worker(
                 f"dry-run worker failed by request: {failure_mode}",
                 failure_mode=failure_mode,
             )
+        publish_uri = output_uri or _optional_output_uri(runner_config)
         materialized = materialize_selected_evidence(
             payload,
             output_dir=output_dir,
             now=time.time() if now is None else now,
         )
-        return _success_result(payload, materialized)
+        return _success_result(payload, materialized, output_uri=publish_uri)
     except ImproveWorkerError as exc:
         return _failure_result(context, exc.code, str(exc))
     except (OSError, TypeError, ValueError) as exc:
@@ -259,6 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the Tether Improve dry-run worker.")
     parser.add_argument("--worker-input", required=True, help="Worker input JSON file, or '-' for stdin.")
     parser.add_argument("--output-dir", help="Directory for local dry-run artifacts.")
+    parser.add_argument("--output-uri", help="Publish worker artifacts to this file:// or s3:// prefix.")
     parser.add_argument("--result-output", "--output", dest="result_output", help="Write result JSON here.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print result JSON.")
     args = parser.parse_args(argv)
@@ -268,7 +274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, json.JSONDecodeError) as exc:
         result = _failure_result({}, "invalid_worker_input", f"could not read worker input: {exc}")
     else:
-        result = run_improve_worker(payload, output_dir=args.output_dir)
+        result = run_improve_worker(payload, output_dir=args.output_dir, output_uri=args.output_uri)
 
     encoded = json.dumps(
         result,
@@ -286,6 +292,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _success_result(
     payload: Mapping[str, Any],
     materialized: MaterializedEvidence,
+    *,
+    output_uri: str | None,
 ) -> dict[str, Any]:
     artifact_path = materialized.output_dir / "candidate_artifact.json"
     metrics = _metrics(payload)
@@ -355,6 +363,30 @@ def _success_result(
             "modal_gpu_follow_up_command": modal_command,
         },
     }
+    if output_uri:
+        published = _publish_worker_outputs(
+            output_uri,
+            {
+                "candidate_artifact.json": artifact_path,
+                "selected_evidence_manifest.json": materialized.manifest_path,
+                "training_log.jsonl": log_path,
+                "VERIFICATION.md": verification_path,
+            },
+        )
+        result["artifact_uri"] = published["candidate_artifact.json"]
+        result["outputs"] = {
+            **result["outputs"],
+            "manifest_uri": published["selected_evidence_manifest.json"],
+            "training_log_uri": published["training_log.jsonl"],
+            "verification_md_uri": published["VERIFICATION.md"],
+            "final_checkpoint_uri": published["candidate_artifact.json"],
+        }
+        result["metadata"] = {
+            **result["metadata"],
+            "output_uri": _normalize_output_uri(output_uri),
+            "output_published": True,
+            "published_files": published,
+        }
     result["worker_result_hash"] = _hash_payload(result)
     return result
 
@@ -681,6 +713,86 @@ def _write_verification_md(
     )
 
 
+def _publish_worker_outputs(output_uri: str, files: Mapping[str, Path]) -> dict[str, str]:
+    normalized = _normalize_output_uri(output_uri)
+    parsed = urlparse(normalized)
+    if parsed.scheme == "file":
+        return _publish_file_outputs(parsed, files)
+    if parsed.scheme == "s3":
+        return _publish_s3_outputs(parsed, files)
+    raise ImproveWorkerError(
+        "output_publish_failed",
+        f"unsupported output_uri scheme: {parsed.scheme or '<local>'}",
+    )
+
+
+def _publish_file_outputs(parsed, files: Mapping[str, Path]) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    if not parsed.path:
+        raise ImproveWorkerError("output_publish_failed", "file output_uri must include a path")
+    output_dir = Path(parsed.path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    published: dict[str, str] = {}
+    for name, source in files.items():
+        source_path = Path(source)
+        if not source_path.exists() or not source_path.is_file():
+            raise ImproveWorkerError(
+                "output_publish_failed",
+                f"worker output missing before publish: {source_path}",
+            )
+        destination = output_dir / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.resolve() != destination.resolve():
+            shutil.copy2(source_path, destination)
+        published[name] = destination.resolve().as_uri()
+    return published
+
+
+def _publish_s3_outputs(parsed, files: Mapping[str, Path]) -> dict[str, str]:  # type: ignore[no-untyped-def]
+    if not parsed.netloc:
+        raise ImproveWorkerError("output_publish_failed", "s3 output_uri must include a bucket")
+    try:
+        import boto3  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ImproveWorkerError("output_publish_failed", "s3 output_uri requires boto3") from exc
+
+    endpoint_url = (
+        os.environ.get("AWS_ENDPOINT_URL")
+        or os.environ.get("S3_ENDPOINT_URL")
+        or os.environ.get("R2_ENDPOINT_URL")
+    )
+    client_kwargs = {"endpoint_url": endpoint_url} if endpoint_url else {}
+    client = boto3.client("s3", **client_kwargs)
+    bucket = parsed.netloc
+    prefix = parsed.path.strip("/")
+    published: dict[str, str] = {}
+    for name, source in files.items():
+        source_path = Path(source)
+        if not source_path.exists() or not source_path.is_file():
+            raise ImproveWorkerError(
+                "output_publish_failed",
+                f"worker output missing before publish: {source_path}",
+            )
+        key = f"{prefix}/{name}" if prefix else name
+        client.upload_file(str(source_path), bucket, key)
+        published[name] = f"s3://{bucket}/{key}"
+    return published
+
+
+def _normalize_output_uri(output_uri: str) -> str:
+    value = str(output_uri or "").strip().rstrip("/")
+    if not value:
+        raise ImproveWorkerError("output_publish_failed", "output_uri is required")
+    parsed = urlparse(value)
+    if parsed.scheme:
+        if parsed.scheme not in {"file", "s3"}:
+            raise ImproveWorkerError(
+                "output_publish_failed",
+                f"unsupported output_uri scheme: {parsed.scheme}",
+            )
+        return value
+    return Path(value).resolve().as_uri()
+
+
 def _resolve_output_dir(payload: Mapping[str, Any], output_dir: str | Path | None) -> Path:
     if output_dir is None:
         return Path.cwd() / "tether_improve_worker" / str(payload.get("job_id") or "unknown_job")
@@ -689,7 +801,16 @@ def _resolve_output_dir(payload: Mapping[str, Any], output_dir: str | Path | Non
 
 def _modal_follow_up_command(payload: Mapping[str, Any]) -> str:
     job_id = str(payload.get("job_id") or "<job_id>")
-    return MODAL_GPU_FOLLOW_UP_COMMAND.replace("<job_id>", job_id)
+    output_uri = _optional_output_uri(_object(payload.get("runner_config")))
+    command = MODAL_GPU_FOLLOW_UP_COMMAND
+    if output_uri:
+        command = command.replace("s3://<bucket>/improve/<job_id>/", output_uri.rstrip("/"))
+    return command.replace("<job_id>", job_id)
+
+
+def _optional_output_uri(runner_config: Mapping[str, Any]) -> str | None:
+    value = str(runner_config.get("output_uri") or "").strip()
+    return value or None
 
 
 def _requested_failure_mode(
