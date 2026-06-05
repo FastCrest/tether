@@ -1,0 +1,26 @@
+{
+  "schema_version": "cloud_burst_validation.v0",
+  "request_id": "brq_fixture_block",
+  "route_decision_id": "rtd_fixture_cloud",
+  "device_id": "dev_fixture",
+  "workload_type": "factory_visual_inspection",
+  "privacy_mode": "edge_only",
+  "cloud_allowed": true,
+  "max_cost_usd": 0.01,
+  "payload_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "payload_manifest": {
+    "parts": [
+      {
+        "kind": "tensor",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bytes": 2048
+      }
+    ]
+  },
+  "cloud_backend": {
+    "available": true,
+    "backend_id": "fake-cloud",
+    "estimated_latency_ms": 90.0,
+    "estimated_cost_usd": 0.002
+  }
+}

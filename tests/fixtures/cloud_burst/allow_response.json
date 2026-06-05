@@ -1,0 +1,16 @@
+{
+  "schema_version": "cloud_burst_validation.v0",
+  "status": "allow",
+  "request_id": "brq_fixture_allow",
+  "route_decision_id": "rtd_fixture_cloud",
+  "device_id": "dev_fixture",
+  "request_hash": "fixture-request-hash",
+  "backend_called": false,
+  "reasons": [
+    {
+      "code": "cloud_burst_allowed",
+      "severity": "info",
+      "message": "Cloud burst validation passed for dry-run handoff."
+    }
+  ]
+}
