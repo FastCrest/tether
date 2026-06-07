@@ -20,6 +20,7 @@ class ValidationResult:
     num_elements: int
     threshold: float
     details: str
+    cosine_sim: float = float("nan")
 
     def to_dict(self) -> dict:
         return {
@@ -27,6 +28,7 @@ class ValidationResult:
             "max_abs_diff": round(self.max_abs_diff, 6),
             "mean_abs_diff": round(self.mean_abs_diff, 6),
             "max_rel_diff": round(self.max_rel_diff, 6),
+            "cosine_sim": round(self.cosine_sim, 6),
             "num_elements": self.num_elements,
             "threshold": self.threshold,
             "details": self.details,
@@ -63,6 +65,17 @@ def validate_outputs(
     max_abs = float(abs_diff.max())
     mean_abs = float(abs_diff.mean())
 
+    reference_flat = reference.ravel().astype(np.float64, copy=False)
+    candidate_flat = candidate.ravel().astype(np.float64, copy=False)
+    reference_norm = float(np.linalg.norm(reference_flat))
+    candidate_norm = float(np.linalg.norm(candidate_flat))
+    if reference_norm == 0.0 or candidate_norm == 0.0:
+        cosine_sim = 0.0
+    else:
+        cosine_sim = float(
+            np.dot(reference_flat, candidate_flat) / (reference_norm * candidate_norm)
+        )
+
     denom = np.maximum(np.abs(reference), 1e-8)
     rel_diff = abs_diff / denom
     max_rel = float(rel_diff.max())
@@ -70,7 +83,7 @@ def validate_outputs(
     passed = max_abs < threshold
     details = (
         f"{name}: max_abs={max_abs:.6f}, mean_abs={mean_abs:.6f}, "
-        f"max_rel={max_rel:.4f}, threshold={threshold}"
+        f"max_rel={max_rel:.4f}, cosine_sim={cosine_sim:.6f}, threshold={threshold}"
     )
     if passed:
         logger.info("PASS %s", details)
@@ -85,6 +98,7 @@ def validate_outputs(
         num_elements=int(reference.size),
         threshold=threshold,
         details=details,
+        cosine_sim=cosine_sim,
     )
 
 
