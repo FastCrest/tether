@@ -57,7 +57,7 @@ Total: **3 files, 247.5MB**
 | File | Size | SHA256 |
 |---|---|---|
 | `model.onnx` | 245.3MB | `a1b2c3d4...` |
-| `reflex_config.json` | 1.2KB | `e5f6a7b8...` |
+| `tether_config.json` | 1.2KB | `e5f6a7b8...` |
 | `tokenizer.json` | 957KB  | `f9a0b1c2...` |
 ```
 

@@ -185,9 +185,9 @@ when you're ready for per-robot normalization + ActionGuard clamping.
 Then from your code:
 
 ```python
-from tether.client import ReflexClient
+from tether.client import TetherClient
 
-with ReflexClient("http://localhost:8000") as client:
+with TetherClient("http://localhost:8000") as client:
     with client.episode() as ep:                       # auto episode_id, RTC reset
         result = ep.act(image=numpy_frame, state=[0.1, 0.2, ...])
         print(result["actions"])                       # list of action chunks
@@ -240,9 +240,9 @@ The Python client sets `X-Tether-Key` when `api_key` is provided:
 ```python
 import os
 
-from tether.client import ReflexClient
+from tether.client import TetherClient
 
-with ReflexClient("http://localhost:8000", api_key=os.environ["TETHER_API_KEY"]) as client:
+with TetherClient("http://localhost:8000", api_key=os.environ["TETHER_API_KEY"]) as client:
     result = client.act(
         image=numpy_frame,
         state=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],

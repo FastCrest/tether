@@ -15,7 +15,10 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "License :: OSI Approved :: Apache Software License",
+    # License is declared via the SPDX `license = "BUSL-1.1"` expression above
+    # (PEP 639). BUSL-1.1 is not OSI-approved, so there is no License ::
+    # classifier — and emitting an Apache one here would both misrepresent the
+    # license and conflict with the SPDX field on modern build backends.
     "Programming Language :: Python :: 3",
 ]
 

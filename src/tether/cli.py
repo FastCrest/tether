@@ -36,7 +36,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deploy any VLA model to any edge ha
 
 [bold cyan]Most-used:[/bold cyan]
   [green]tether chat[/green]                start the natural-language assistant
-  [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
+  [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'fastcrest-tether\\[tui]'[/dim])
   [green]tether go --model X[/green]        one-command deploy: probe → pull → export → serve
   [green]tether doctor[/green]              diagnose install + GPU issues
   [green]tether models list[/green]         browse the curated model registry
@@ -3024,7 +3024,7 @@ def _check_trt_ep_load_chain(add) -> None:
     # in the doctor table.
     libs = [
         ("libnvinfer.so.10", "TensorRT runtime",
-         r"pip install 'tether\[serve,gpu]' (brings tensorrt>=10)"),
+         r"pip install 'fastcrest-tether\[serve,gpu]' (brings tensorrt>=10)"),
         ("libcublas.so.12", "CUDA cuBLAS",
          r"pip install nvidia-cublas-cu12 (auto-included in \[serve,gpu])"),
         ("libcudnn.so.9", "CUDA cuDNN",
@@ -3614,7 +3614,7 @@ def doctor(
         add(
             "fastapi + uvicorn",
             False,
-            f"not installed — run `pip install 'tether\\[{extra}]'` for the server",
+            f"not installed — run `pip install 'fastcrest-tether\\[{extra}]'` for the server",
         )
 
     # safetensors

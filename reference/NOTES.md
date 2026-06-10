@@ -206,7 +206,7 @@ Our buffer is great, but we lack:
   Steps:
   1. Read `/reference/lerobot/src/lerobot/policies/xvla/action_hub.py` fully.
   2. Extract action space definitions (min/max per joint, continuous vs. discrete).
-  3. Add action denormalization to `predict()` post-inference. Needs a config field in `reflex_config.json` (action_space definition).
+  3. Add action denormalization to `predict()` post-inference. Needs a config field in `tether_config.json` (action_space definition).
   4. For RTC: add soft constraint checking in a new `ActionRTC` class (similar to `ActionGuard`). Return violations as telemetry, let the robot decide to replan.
 
 ### Priority for our roadmap

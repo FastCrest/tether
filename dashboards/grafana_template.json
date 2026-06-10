@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Reflex VLA serve — out-of-the-box dashboard. 5 panels: latency p99, cache hit rate, in-flight, safety/SLO violations, server up. Tested against Grafana 10.4.0 (schemaVersion 39). Datasource ${DS_PROMETHEUS} resolved at import time. See features/01_serve/subfeatures/_ecosystem/prometheus-grafana.md.",
+  "description": "Tether VLA serve — out-of-the-box dashboard. 5 panels: latency p99, cache hit rate, in-flight, safety/SLO violations, server up. Tested against Grafana 10.4.0 (schemaVersion 39). Datasource ${DS_PROMETHEUS} resolved at import time. See features/01_serve/subfeatures/_ecosystem/prometheus-grafana.md.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -48,7 +48,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(reflex_act_latency_seconds_bucket[5m])) by (embodiment, le))",
+          "expr": "histogram_quantile(0.99, sum(rate(tether_act_latency_seconds_bucket[5m])) by (embodiment, le))",
           "legendFormat": "p99 — {{embodiment}}",
           "range": true,
           "refId": "A"
@@ -99,7 +99,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(reflex_cache_hit_total[5m])) / (sum(rate(reflex_cache_hit_total[5m])) + sum(rate(reflex_cache_miss_total[5m])))",
+          "expr": "sum(rate(tether_cache_hit_total[5m])) / (sum(rate(tether_cache_hit_total[5m])) + sum(rate(tether_cache_miss_total[5m])))",
           "legendFormat": "Hit rate",
           "refId": "A"
         }
@@ -146,8 +146,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "reflex_server_up",
-          "legendFormat": "reflex serve",
+          "expr": "tether_server_up",
+          "legendFormat": "tether serve",
           "refId": "A"
         }
       ],
@@ -181,7 +181,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(reflex_safety_violations_total[5m])) by (violation_kind)",
+          "expr": "sum(rate(tether_safety_violations_total[5m])) by (violation_kind)",
           "legendFormat": "safety: {{violation_kind}}",
           "refId": "A"
         },
@@ -190,7 +190,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(reflex_slo_violations_total[5m])) by (slo_kind)",
+          "expr": "sum(rate(tether_slo_violations_total[5m])) by (slo_kind)",
           "legendFormat": "SLO: {{slo_kind}}",
           "refId": "B"
         }
@@ -235,7 +235,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(reflex_in_flight_requests) by (embodiment)",
+          "expr": "sum(tether_in_flight_requests) by (embodiment)",
           "legendFormat": "{{embodiment}}",
           "refId": "A"
         }
@@ -247,7 +247,7 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["reflex-vla", "serve"],
+  "tags": ["tether-vla", "serve"],
   "templating": {
     "list": [
       {
@@ -260,7 +260,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(reflex_act_latency_seconds_count, embodiment)",
+        "definition": "label_values(tether_act_latency_seconds_count, embodiment)",
         "hide": 0,
         "includeAll": true,
         "multi": true,
@@ -268,7 +268,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(reflex_act_latency_seconds_count, embodiment)",
+          "query": "label_values(tether_act_latency_seconds_count, embodiment)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
@@ -285,7 +285,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(reflex_act_latency_seconds_count, model_id)",
+        "definition": "label_values(tether_act_latency_seconds_count, model_id)",
         "hide": 0,
         "includeAll": true,
         "multi": true,
@@ -293,7 +293,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(reflex_act_latency_seconds_count, model_id)",
+          "query": "label_values(tether_act_latency_seconds_count, model_id)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
@@ -305,8 +305,8 @@
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "Reflex VLA Serve",
-  "uid": "reflex-vla-serve",
+  "title": "Tether VLA Serve",
+  "uid": "tether-vla-serve",
   "version": 1,
   "weekStart": ""
 }

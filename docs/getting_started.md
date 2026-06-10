@@ -48,7 +48,7 @@ tether export nvidia/GR00T-N1.6-3B --target orin --output ./gr00t
 Each command:
 1. Downloads the checkpoint from HuggingFace (cached after first run)
 2. Runs the model-specific exporter (auto-dispatches based on key prefix)
-3. Writes ONNX + reflex_config.json into `--output`
+3. Writes ONNX + tether_config.json into `--output`
 4. Validates the ONNX numerically against the PyTorch reference (max_diff < 1e-5)
 5. If trtexec is available, builds a TensorRT engine
 
@@ -60,7 +60,7 @@ After export your output directory looks like:
 ./pi0/
 ├── expert_stack.onnx       # the graph (1.25MB)
 ├── expert_stack.onnx.data  # the weights (~1.3GB for pi0)
-├── reflex_config.json      # model meta — used by serve
+├── tether_config.json      # model meta — used by serve
 └── expert_stack.trt        # TRT engine (only if trtexec was available)
 ```
 
