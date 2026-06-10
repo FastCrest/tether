@@ -62,7 +62,7 @@ Bounded `failure_mode` enum, surfaced in the CLI + telemetry:
 | `egl-black-frames` | Force `MUJOCO_GL=osmesa` in your env. |
 | `dep-version-conflict` | Pin `robosuite==1.4.1`, `bddl==1.0.1`, `mujoco==3.3.2`. Use `--runtime modal` for known-good pins. |
 | `osmesa-compile-hang` | Increase `--preflight-timeout` (cold containers take 60-180s for first-scene compile). |
-| `import-error` | `pip install 'tether[eval-local]'` for local; `--runtime modal` for the bundled image. |
+| `import-error` | `pip install 'fastcrest-tether[eval-local]'` for local; `--runtime modal` for the bundled image. |
 
 The 5th failure (per-episode OOM) is per-call probabilistic; backoff + a legible error in the runner covers it.
 
@@ -145,7 +145,7 @@ Above-`$50` estimate triggers an extra **"are you sure?"** warning so the custom
 Phase 1: **Linux x86_64 only**. Requires the `[eval-local]` extra:
 
 ```bash
-pip install 'tether[eval-local]'
+pip install 'fastcrest-tether[eval-local]'
 ```
 
 `--runtime local` **never silently falls back to Modal**. If the local env is broken, `tether eval` fails loud with a remediation pointer. This avoids surprise Modal bills + masks real env-config issues.

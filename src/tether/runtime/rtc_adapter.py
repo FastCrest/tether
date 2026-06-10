@@ -55,7 +55,7 @@ def require_rtc() -> None:
     """Raise if lerobot's RTC module isn't installed in this env."""
     if not _RTC_AVAILABLE:
         raise ImportError(
-            "lerobot.policies.rtc not available. Install tether[rtc] "
+            "lerobot.policies.rtc not available. Install fastcrest-tether[rtc] "
             "or pip install lerobot>=0.5.1."
         )
 

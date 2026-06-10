@@ -4,7 +4,7 @@ The SO-ARM100 (TheRobotStudio + HuggingFace LeRobot, ~$150-250 BOM, 6-DOF,
 3D-printable) is the reference real-robot for the LeRobot ecosystem. This
 module is Tether's first-class adapter so users with a SO-ARM100 can run:
 
-    pip install tether[lerobot]
+    pip install fastcrest-tether[lerobot]
     tether export lerobot/smolvla_base --embodiment so_arm100 --output bundle/
     tether verify bundle/ --embodiment so_arm100 --num-episodes 30
     tether serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0

@@ -13,7 +13,7 @@ Companion to scripts/local_pi0_gemma_parity.py. Together they validate
 both halves of PaliGemma (vision + language) independently via Optimum.
 
 Prerequisites:
-  pip install 'tether[native]' 'optimum[onnxruntime]>=1.22' onnx onnxruntime
+  pip install 'fastcrest-tether[native]' 'optimum[onnxruntime]>=1.22' onnx onnxruntime
 """
 import sys
 import types

@@ -87,13 +87,13 @@ def create_mcp_server(
 
     Raises:
         ImportError: if `fastmcp` is not installed. Install via
-            `pip install tether[mcp]` or `pip install fastmcp`.
+            `pip install fastcrest-tether[mcp]` or `pip install fastmcp`.
     """
     try:
         from fastmcp import FastMCP
     except ImportError as exc:
         raise ImportError(
-            "fastmcp not installed. Install via `pip install tether[mcp]` "
+            "fastmcp not installed. Install via `pip install fastcrest-tether[mcp]` "
             "or `pip install fastmcp`."
         ) from exc
 

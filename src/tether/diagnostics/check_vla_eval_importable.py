@@ -32,7 +32,7 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             actual=f"ImportError: {exc}",
             remediation=(
                 "Adapter import failed. Likely a missing transitive dep. "
-                "Install the eval extra: `pip install 'tether[eval]'`. "
+                "Install the eval extra: `pip install 'fastcrest-tether[eval]'`. "
                 "If reproducible after install, file a bug at "
                 f"{DOCS_URL}."
             ),

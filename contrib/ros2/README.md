@@ -1,7 +1,7 @@
 # ROS2 Robot Adapter Starter Kits
 
 **Fork-and-customize** adapters for running Reflex VLA on real robots via ROS2.
-These are NOT part of the core `pip install tether` — they live in `contrib/`
+These are NOT part of the core `pip install fastcrest-tether` — they live in `contrib/`
 and you're expected to adapt them to your specific robot setup.
 
 ## Available Adapters

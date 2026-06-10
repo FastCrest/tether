@@ -47,7 +47,7 @@ Exporter uses onnx-diagnostic's `torch_export_patches(patch_transformers=True)` 
 
 ```bash
 # HTTP serve
-pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 tether export lerobot/smolvla_base --target desktop --output ./smol
 tether serve ./smol --port 8000
 

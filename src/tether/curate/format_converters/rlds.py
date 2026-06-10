@@ -80,7 +80,7 @@ class RLDSConverter(FormatConverter):
         except ImportError as exc:
             raise ImportError(
                 "RLDS conversion requires tensorflow + tensorflow_datasets: "
-                "pip install 'tether[curate-rlds]'"
+                "pip install 'fastcrest-tether[curate-rlds]'"
             ) from exc
 
         result = ConversionResult(

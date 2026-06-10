@@ -178,7 +178,7 @@ class SOARM100Adapter:
         Hardware deps (`scservo_sdk` / `lerobot.motors.feetech`) are only
         imported here, so this method raises ImportError when the user runs
         on a host without the SDK installed. Use `pip install
-        'tether[so100]'` (existing extra) to pull `scservo_sdk` on the
+        'fastcrest-tether[so100]'` (existing extra) to pull `scservo_sdk` on the
         machine wired to the arm.
         """
         if self._hw is not None:
@@ -365,7 +365,7 @@ class _FeetechAdapterRuntime:
         except ImportError as exc:
             raise ImportError(
                 "Feetech runtime requires `lerobot>=0.5` installed. "
-                "Install via `pip install 'tether[lerobot]'` on the host "
+                "Install via `pip install 'fastcrest-tether[lerobot]'` on the host "
                 "wired to the arm (Python >= 3.12)."
             ) from exc
 

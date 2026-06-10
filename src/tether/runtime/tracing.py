@@ -66,7 +66,7 @@ def setup_tracing(
 
     if not _check_otel_available():
         logger.info(
-            "OTel tracing skipped — `pip install tether[tracing]` to enable."
+            "OTel tracing skipped — `pip install fastcrest-tether[tracing]` to enable."
         )
         return False
 

@@ -24,7 +24,7 @@ I built Tether because the path from "we have a trained Vision-Language-Action m
 Getting pi0 / pi0.5 to cos=1.0 at num_steps=10 required three interacting patches (under `torch.export` + `transformers==5.3.0` + DynamicCache): (1) F.pad + logical AND for the block-causal mask instead of `torch.cat` (cat loses the suffix dim under FakeTensor); (2) freeze `DynamicLayer.update` during the unrolled Euler loop so the cache doesn't grow across iterations; (3) use `past_kv.get_seq_length()` instead of the pad-mask shape for mask assembly. GR00T's simpler DiT graph (no DynamicCache, no PaliGemma masking) traces cleanly with plain `torch.onnx.export(opset=19)` — no patches needed.
 
 ```bash
-pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 tether export lerobot/smolvla_base --output ./smol
 tether serve ./smol --port 8000
 # POST /act returns 50-step action chunks

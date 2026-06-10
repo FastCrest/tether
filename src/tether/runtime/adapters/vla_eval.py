@@ -166,7 +166,7 @@ def build_adapter_class():
 
     Deferred-import pattern: vla-eval's base class is only imported when the
     adapter is actually built, so importing this module (for the pure helpers
-    or for introspection) does not require ``tether[eval]``.
+    or for introspection) does not require ``fastcrest-tether[eval]``.
     """
     try:
         from vla_eval.model_servers.predict import PredictModelServer
@@ -176,7 +176,7 @@ def build_adapter_class():
         except ImportError as e:
             raise ImportError(
                 "vla-eval is not installed. Install with:\n"
-                "    pip install 'tether[eval]'\n"
+                "    pip install 'fastcrest-tether[eval]'\n"
                 "or\n"
                 "    pip install vla-eval"
             ) from e
@@ -427,7 +427,7 @@ def main() -> None:
     except ImportError as e:
         raise ImportError(
             "vla-eval is not installed. Install with:\n"
-            "    pip install 'tether[eval]'"
+            "    pip install 'fastcrest-tether[eval]'"
         ) from e
 
     adapter_cls = build_adapter_class()

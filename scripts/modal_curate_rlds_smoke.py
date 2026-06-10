@@ -1,7 +1,7 @@
 """Smoke test for the [curate-rlds] format converters on Modal.
 
 Validates:
-  1. `pip install tether[curate-rlds]` resolves cleanly with tensorflow +
+  1. `pip install fastcrest-tether[curate-rlds]` resolves cleanly with tensorflow +
      tensorflow_datasets pinned in pyproject.toml.
   2. `tether curate convert --format rlds` against a synthetic JSONL trace
      produces TFRecord + dataset_info.json + features.json output.
@@ -60,7 +60,7 @@ image = (
         "tensorflow-datasets>=4.9.0",
     )
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

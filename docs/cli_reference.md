@@ -58,7 +58,7 @@ tether go --model pi05-libero --dry-run
 | `--api-key` | _(none)_ | If set, `/act` requires `X-Tether-Key` header (or `Authorization: Bearer`) |
 | `--dry-run` | `false` | Probe + resolve + print plan; do not pull or serve |
 
-Full flag list: `tether go --help`. Note: models that ship as raw PyTorch require the `[monolithic]` extra (`pip install 'tether[monolithic]'`) for the inline export step.
+Full flag list: `tether go --help`. Note: models that ship as raw PyTorch require the `[monolithic]` extra (`pip install 'fastcrest-tether[monolithic]'`) for the inline export step.
 
 ---
 

@@ -48,10 +48,10 @@ def test_trt_batch():
     import urllib.request
 
     # Install tether from git
-    print("=== pip install tether[serve,gpu] ===", flush=True)
+    print("=== pip install fastcrest-tether[serve,gpu] ===", flush=True)
     r = subprocess.run(
         ["pip", "install",
-         "tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether"],
+         "fastcrest-tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether"],
         capture_output=True, text=True, timeout=600,
     )
     if r.returncode != 0:

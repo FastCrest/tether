@@ -2,10 +2,10 @@
 
 > by [FastCrest](https://fastcrest.com) — deployment infrastructure for vision-language-action models.
 
-[![PyPI](https://img.shields.io/pypi/v/tether.svg)](https://pypi.org/project/tether/)
-[![Python](https://img.shields.io/pypi/pyversions/tether.svg)](https://pypi.org/project/tether/)
-[![License](https://img.shields.io/pypi/l/tether.svg)](https://github.com/FastCrest/tether/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/pypi/dm/tether.svg)](https://pypi.org/project/tether/)
+[![PyPI](https://img.shields.io/pypi/v/fastcrest-tether.svg)](https://pypi.org/project/fastcrest-tether/)
+[![Python](https://img.shields.io/pypi/pyversions/fastcrest-tether.svg)](https://pypi.org/project/fastcrest-tether/)
+[![License](https://img.shields.io/pypi/l/fastcrest-tether.svg)](https://github.com/FastCrest/tether/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/pypi/dm/fastcrest-tether.svg)](https://pypi.org/project/fastcrest-tether/)
 
 ![Tether — pip install + tether doctor + tether --help on Modal A10G with TRT EP active](assets/tether-tweet.gif)
 
@@ -28,16 +28,16 @@ The bootstrap installer detects your platform (Mac / Jetson Orin / NVIDIA GPU / 
 **Manual install** if you know what you want:
 
 ```bash
-pip install tether                            # core
-pip install 'tether[serve,gpu,monolithic]'    # GPU production path
-pip install 'tether[serve,onnx]'              # Mac / CPU runtime
+pip install fastcrest-tether                            # core
+pip install 'fastcrest-tether[serve,gpu,monolithic]'    # GPU production path
+pip install 'fastcrest-tether[serve,onnx]'              # Mac / CPU runtime
 ```
 
 Requires Python ≥ 3.10.
 
 ### What's new in v0.11.2 (2026-05-29)
 
-- **`tether connect` works on a clean install** — `requests` is now a core dependency, so `tether connect status` no longer raises `ModuleNotFoundError` on `pip install tether` without extras (it had been an undeclared import that only resolved transitively).
+- **`tether connect` works on a clean install** — `requests` is now a core dependency, so `tether connect status` no longer raises `ModuleNotFoundError` on `pip install fastcrest-tether` without extras (it had been an undeclared import that only resolved transitively).
 - **`--fast-kernels` cleared the formal N=100/task L3 LIBERO parity gate** — on Pi0.5 LIBERO-10 tasks 0-2 (600 episodes), Triton fast kernels scored 91.3% (274/300) vs native ORT 85.3% (256/300) — 6.0pp *ahead* of native, so kill-trigger 3 stays clear and the opt-in Triton runtime stays on.
 - **Hardened monolithic serve/bench path, with external-data ONNX** — dedicated ORT provider-options + tokenizer-loading modules are extracted from the request hot path; ONNX models with external weight data (`.onnx` + `.onnx_data`, required once a graph exceeds the 2 GB protobuf limit) now load in both serve and the weight-fusion export pass.
 - **Cleaner streams** — integration-command errors route to stderr, so `--json` consumers and shell pipelines get a clean stdout.
@@ -65,8 +65,8 @@ Breaking: module renames — `tether.exporters.{pi0,smolvla,gr00t}_exporter` →
 We ship patches frequently — make sure you're on the latest:
 
 ```bash
-pip install --upgrade tether              # pip
-uv add --refresh tether                   # uv (the --refresh flag is required;
+pip install --upgrade fastcrest-tether              # pip
+uv add --refresh fastcrest-tether                   # uv (the --refresh flag is required;
                                               # uv caches the package index aggressively
                                               # and won't see new releases without it)
 ```
@@ -83,7 +83,7 @@ only needed for caches built by v0.5.3 or earlier.
 
 ## Performance
 
-`tether[serve,gpu]` uses ONNX Runtime's TensorRT execution provider out of the box. Measured on Modal A10G (Ampere, sm_8.6) on 2026-04-29 against SmolVLA monolithic (5 warmup + 20 measured forward passes, batch=1):
+`fastcrest-tether[serve,gpu]` uses ONNX Runtime's TensorRT execution provider out of the box. Measured on Modal A10G (Ampere, sm_8.6) on 2026-04-29 against SmolVLA monolithic (5 warmup + 20 measured forward passes, batch=1):
 
 | Provider | Mean latency | p95 |
 |---|---|---|
@@ -125,7 +125,7 @@ Full reproducer + 9-iteration debug log: [`reflex_context/03_experiments/2026-04
 Adds ~2 GB to `[serve,gpu]` install (the `tensorrt` package + bundled libs). If you don't want it:
 
 ```bash
-pip install 'tether[serve,gpu-min]'   # ORT-CUDA only, ~5x slower on transformers
+pip install 'fastcrest-tether[serve,gpu-min]'   # ORT-CUDA only, ~5x slower on transformers
 ```
 
 Or disable the `LD_LIBRARY_PATH` patch (e.g. if it conflicts with another env-aware tool):
@@ -275,7 +275,7 @@ Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alia
 ### Install notes
 
 - `[monolithic]` extra is required for the cos=+1.000000 verified export path (pins transformers==5.3.0)
-- CPU-only: `pip install 'tether[serve,onnx,monolithic]'`
+- CPU-only: `pip install 'fastcrest-tether[serve,onnx,monolithic]'`
 - GPU install needs the FULL cuDNN 9 system library (not just the pip wheel). Easiest path: NVIDIA's container `docker run --gpus all -it nvcr.io/nvidia/tensorrt:24.10-py3`, then `apt-get install -y clang` (for lerobot→evdev), then the pip install
 - `tether serve` errors loudly if cuDNN can't load — no silent CPU fallback
 - First `tether go` downloads weights (~1-14 GB depending on model) — cached on subsequent runs

@@ -90,7 +90,7 @@ python -m tether.admin.issue_license \
 
 ```bash
 # On the customer's machine
-pip install --upgrade tether
+pip install --upgrade fastcrest-tether
 tether pro activate REFLEX-XXXX-XXXX-XXXX
 # ✓ License fetched, signature verified, written to ~/.reflex/pro.license
 # ✓ Hardware bound

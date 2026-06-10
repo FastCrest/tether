@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 CACHE_TTL_SECONDS = 24 * 60 * 60
-PYPI_URL = "https://pypi.org/pypi/tether/json"
+PYPI_URL = "https://pypi.org/pypi/fastcrest-tether/json"
 
 
 def _cache_path() -> Path:
@@ -28,11 +28,11 @@ def _is_dev_install() -> bool:
     presumably developing tether itself and doesn't want a nag.
 
     Only `.pth`-style editable installs trigger this. Regular `pip install .`
-    or `pip install tether` from PyPI both proceed normally.
+    or `pip install fastcrest-tether` from PyPI both proceed normally.
     """
     try:
         from importlib.metadata import distribution
-        dist = distribution("tether")
+        dist = distribution("fastcrest-tether")
         # Editable installs (pip install -e .) leave a __editable__*.pth
         # file in site-packages that re-routes to the source dir.
         files = dist.files or []
@@ -113,6 +113,6 @@ def maybe_nag(current_version: str) -> None:
 
     if _parse_version(latest) > _parse_version(current_version):
         sys.stderr.write(
-            f"\033[2m[tether] {latest} is available — upgrade: pip install -U tether "
+            f"\033[2m[tether] {latest} is available — upgrade: pip install -U fastcrest-tether "
             f"(you have {current_version}, set TETHER_NO_UPGRADE_CHECK=1 to silence)\033[0m\n"
         )

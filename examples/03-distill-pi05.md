@@ -13,7 +13,7 @@ SnapFlow ([arxiv 2604.05656](https://arxiv.org/abs/2604.05656)) is the canonical
 ## Install
 
 ```bash
-pip install 'tether[monolithic]'
+pip install 'fastcrest-tether[monolithic]'
 ```
 
 ## The command

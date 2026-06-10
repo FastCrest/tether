@@ -1,7 +1,7 @@
 """Test that the README quickstart install path actually works on a fresh box.
 
 Spins up a clean Linux container, runs the EXACT command from README:
-  pip install 'tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether'
+  pip install 'fastcrest-tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether'
   tether export lerobot/smolvla_base --target desktop --output ./sv
   tether serve ./sv --port 8000 --device cuda
   curl -X POST http://localhost:8000/act ...
@@ -61,8 +61,8 @@ def test_fresh_install():
 
     # Step 1: pip install with the EXACT README command
     step(
-        "1. pip install tether[serve,gpu] from git",
-        "pip install 'tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether'",
+        "1. pip install fastcrest-tether[serve,gpu] from git",
+        "pip install 'fastcrest-tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether'",
         timeout=600,
     )
 

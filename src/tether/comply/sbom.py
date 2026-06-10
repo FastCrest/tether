@@ -43,15 +43,15 @@ def generate_sbom(
     components: list[dict[str, Any]] = [
         {
             "type": "application",
-            "bom-ref": f"pkg:pypi/tether@{__version__}",
-            "name": "tether",
+            "bom-ref": f"pkg:pypi/fastcrest-tether@{__version__}",
+            "name": "fastcrest-tether",
             "version": __version__,
-            "purl": f"pkg:pypi/tether@{__version__}",
+            "purl": f"pkg:pypi/fastcrest-tether@{__version__}",
         }
     ]
 
     if include_environment:
-        seen = {"tether"}
+        seen = {"fastcrest-tether"}
         for dist in sorted(metadata.distributions(), key=lambda d: (d.metadata.get("Name") or "").lower()):
             comp = _component_from_distribution(dist)
             if comp is None:

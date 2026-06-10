@@ -25,7 +25,7 @@ Getting pi0 / pi0.5 to cos=1.0 at num_steps=10 needed three interacting patches 
 Three commands from zero to serving:
 
 ```bash
-pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 tether export lerobot/pi0_base --output ./p0
 tether serve ./p0 --port 8000
 ```

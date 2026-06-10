@@ -14,7 +14,7 @@ Apache 2.0, works today on x86 CUDA + desktop GPUs, Jetson support
 coming in v0.3.
 
 ```bash
-pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 tether export --monolithic lerobot/smolvla_base --output ./smol
 tether serve ./smol
 # POST http://localhost:8000/act → 50-step action chunks

@@ -1227,7 +1227,7 @@ def create_app(
         from fastapi import Depends, FastAPI, Header, HTTPException
         from fastapi.responses import JSONResponse
     except ImportError:
-        raise ImportError("Install fastapi: pip install 'tether[serve]'")
+        raise ImportError("Install fastapi: pip install 'fastcrest-tether[serve]'")
 
     # Route: decomposed-ONNX by default; native PyTorch path under TETHER_NATIVE=1.
     # The native path bypasses our ONNX export and runs lerobot's SmolVLAPolicy

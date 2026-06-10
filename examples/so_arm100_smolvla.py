@@ -19,8 +19,8 @@ Hardware requirements:
     - USB-to-serial bridge on /dev/ttyUSB0 (Linux) or /dev/tty.usbserial-* (Mac)
 
 Python requirements:
-    pip install 'tether[serve,gpu,monolithic,lerobot]'   # GPU host
-    pip install 'tether[serve,onnx,lerobot,so100]'       # Mac / Pi at the arm
+    pip install 'fastcrest-tether[serve,gpu,monolithic,lerobot]'   # GPU host
+    pip install 'fastcrest-tether[serve,onnx,lerobot,so100]'       # Mac / Pi at the arm
 
 Calibration:
     If you already have a LeRobot calibration file (recorded via
