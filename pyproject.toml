@@ -319,6 +319,17 @@ packages = ["src/tether", "src/reflex"]
 # duplicate ZIP entries (rejected by PyPI) — removed in v0.11.1.
 artifacts = ["*.cpp", "*.cu", "*.txt", "*.json"]
 
+[tool.hatch.build.targets.sdist]
+# The sdist otherwise ships every VCS-tracked file. Exclude internal /
+# non-shipping material so it can't be redistributed via the pip package.
+# `outreach/` (a fundraising ask with a personal email) and `launch/` (an
+# unpublished Show HN draft) were removed from the repo entirely; this guard
+# stops them — or anything like them — from reappearing in a future sdist.
+exclude = [
+  "outreach",
+  "launch",
+]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100
