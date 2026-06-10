@@ -69,7 +69,7 @@ def _build_bust() -> str:
 _HEAD = _repo_head_sha()
 _BUST = _build_bust()
 
-# Reuse the tether-vla image setup — it has the eager-dlopen-nvidia-libs
+# Reuse the tether image setup — it has the eager-dlopen-nvidia-libs
 # loadchain debugged for ORT-CUDA EP (per 2026-04-30 per-step-overhead
 # experiment, commit 462c191).
 image = (
@@ -92,7 +92,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

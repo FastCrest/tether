@@ -26,7 +26,9 @@ image = (
     .apt_install("git", "wget", "curl", "fontconfig", "fonts-jetbrains-mono")
     .pip_install("uv")
     .run_commands(
-        "uv pip install --system 'tether-vla[serve,gpu]==0.8.0'",
+        # Install from the repo until `tether` is published to PyPI (the old
+        # pinned 'reflex-vla==0.8.0' / 'tether-vla' package names are dead).
+        "uv pip install --system 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'",
         "uv pip install --system 'tensorrt>=10.0,<11'",
         # agg = official asciinema gif renderer (Rust binary)
         "wget -qO /usr/local/bin/agg https://github.com/asciinema/agg/releases/download/v1.5.0/agg-x86_64-unknown-linux-gnu",

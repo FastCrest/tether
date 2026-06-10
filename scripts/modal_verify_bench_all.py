@@ -152,12 +152,12 @@ def _run_all_impl(
     extras = "serve,gpu-min,monolithic"
     install_cmd = [
         "pip", "install",
-        f"tether-vla[{extras}] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla",
+        f"tether[{extras}] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether",
     ]
     if source_norm == "local":
         install_cmd = ["pip", "install", "-e", f"/workspace/tether-vla[{extras}]"]
     print(
-        f"=== Installing tether-vla[{extras}] from {source_norm} ===",
+        f"=== Installing tether[{extras}] from {source_norm} ===",
         flush=True,
     )
     r = _run_streamed(

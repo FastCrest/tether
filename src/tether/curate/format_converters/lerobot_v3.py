@@ -357,7 +357,7 @@ dataset_info:
 license: {self.license}
 robot_type: {self.robot_type}
 fps: {self.fps}
-generator: tether-vla curate / lerobot-v3 converter
+generator: tether curate / lerobot-v3 converter
 generated_at: {result.started_at}
 ---
 

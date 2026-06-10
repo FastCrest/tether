@@ -2,9 +2,9 @@
 
 Reflex's "embodiment" surface is split across two co-existing layers:
 
-  1. `reflex.embodiments.EmbodimentConfig` — frozen-dataclass preset (JSON-
+  1. `tether.embodiments.EmbodimentConfig` — frozen-dataclass preset (JSON-
      backed) consumed by the serve runtime, action guard, and validation.
-  2. `reflex.models.adapt.EmbodimentAdapter` — URDF-derived cross-embodiment
+  2. `tether.models.adapt.EmbodimentAdapter` — URDF-derived cross-embodiment
      remapping helper.
 
 `SOARM100Adapter` is the SO-ARM100 specialization that:
@@ -52,7 +52,7 @@ from tether.embodiments.so_arm100.lerobot_bridge import (
 logger = logging.getLogger(__name__)
 
 # Canonical preset name (matches the file at
-# `reflex.embodiments.presets/so100.json`). The "so100" preset is the same
+# `tether.embodiments.presets/so100.json`). The "so100" preset is the same
 # physical arm as the "so_arm100" adapter — the preset uses the shorter slug
 # for backward compatibility with v0.x users who already have it in scripts.
 PRESET_NAME: str = "so100"
@@ -125,7 +125,7 @@ class SOARM100Adapter:
         return SO_ARM100_JOINT_NAMES
 
     def to_embodiment_config(self):
-        """Return the matching `reflex.embodiments.EmbodimentConfig` preset.
+        """Return the matching `tether.embodiments.EmbodimentConfig` preset.
 
         SO-ARM100 reuses the bundled `so100.json` preset for action ranges +
         normalization stats — these are policy-agnostic and stable. Per-arm
@@ -133,7 +133,7 @@ class SOARM100Adapter:
         `config` field and is fed separately to the serve loop, NOT smuggled
         into the EmbodimentConfig.
 
-        Returns a `reflex.embodiments.EmbodimentConfig` instance.
+        Returns a `tether.embodiments.EmbodimentConfig` instance.
         """
         from tether.embodiments import EmbodimentConfig
         return EmbodimentConfig.load_preset(PRESET_NAME)
@@ -160,7 +160,7 @@ class SOARM100Adapter:
         action_chunk: np.ndarray,
     ) -> list[list[tuple[int, int]]]:
         """Translate a (T, 6) action chunk to a per-step stream of servo
-        commands. Used by `reflex serve --embodiment so_arm100`'s wire loop."""
+        commands. Used by `tether serve --embodiment so_arm100`'s wire loop."""
         return chunk_to_servo_command_stream(action_chunk, self.config)
 
     def state_from_servo(
@@ -178,7 +178,7 @@ class SOARM100Adapter:
         Hardware deps (`scservo_sdk` / `lerobot.motors.feetech`) are only
         imported here, so this method raises ImportError when the user runs
         on a host without the SDK installed. Use `pip install
-        'reflex-vla[so100]'` (existing extra) to pull `scservo_sdk` on the
+        'tether[so100]'` (existing extra) to pull `scservo_sdk` on the
         machine wired to the arm.
         """
         if self._hw is not None:
@@ -229,7 +229,7 @@ class SOARM100Adapter:
               "source": "<original calib path or empty>",
               "lerobot_calibration": {<same shape as LeRobot JSON>},
               "runtime": {control + gripper + safety fields},
-              "joints": {<reflex-side extension fields per joint>}
+              "joints": {<tether-side extension fields per joint>}
             }
         """
         return {
@@ -270,7 +270,7 @@ class SOARM100Adapter:
 
     @classmethod
     def from_bundle(cls, bundle_dir: str | Path) -> SOARM100Adapter:
-        """Load an adapter from a previously-exported reflex bundle.
+        """Load an adapter from a previously-exported tether bundle.
 
         Looks for `embodiment/so_arm100/calibration.json` under the bundle.
         Raises FileNotFoundError if the bundle wasn't exported with the
@@ -337,7 +337,7 @@ class SOARM100Adapter:
         raise FileNotFoundError(
             f"No SO-ARM100 calibration found in bundle at {bundle}. "
             f"Expected one of: {[str(c) for c in candidates]}. "
-            f"Re-export with `reflex export <model> --embodiment so_arm100`."
+            f"Re-export with `tether export <model> --embodiment so_arm100`."
         )
 
 
@@ -365,7 +365,7 @@ class _FeetechAdapterRuntime:
         except ImportError as exc:
             raise ImportError(
                 "Feetech runtime requires `lerobot>=0.5` installed. "
-                "Install via `pip install 'reflex-vla[lerobot]'` on the host "
+                "Install via `pip install 'tether[lerobot]'` on the host "
                 "wired to the arm (Python >= 3.12)."
             ) from exc
 

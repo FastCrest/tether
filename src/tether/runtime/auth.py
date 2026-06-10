@@ -7,7 +7,7 @@ servers return HTTP 429 + `Retry-After` instead of slowing down every
 request (TGI's overload pattern).
 
 Pattern source: TGI (HuggingFace text-generation-inference) streaming + auth
-pattern. See tether-vla/reference/deep_dive_tgi_streaming_auth.md.
+pattern. See reference/deep_dive_tgi_streaming_auth.md in the tether repo.
 
 Feature spec: features/01_serve/subfeatures/_ecosystem/auth-bearer/
 """

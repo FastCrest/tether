@@ -1,7 +1,7 @@
 /**
  * Reflex telemetry endpoint — Cloudflare Worker.
  *
- * Receives heartbeat POSTs from `pip install reflex-vla` deployments
+ * Receives heartbeat POSTs from `pip install tether` deployments
  * running with a valid Pro license OR free-tier telemetry enabled.
  * Validates the payload shape, writes one row per heartbeat to D1,
  * and returns 204 No Content.

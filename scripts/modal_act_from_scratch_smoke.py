@@ -10,7 +10,7 @@ training ACT from scratch (no LoRA, no pretrained base) via:
 
 This script fires it on Modal A10G against a public LeRobot dataset to
 confirm:
-  1. The tether-vla install pulls all the new code (config + run + cli).
+  1. The tether install pulls all the new code (config + run + cli).
   2. _build_lerobot_command produces a valid lerobot-train invocation
      with --policy.type=act, no --policy.pretrained_path, --policy.chunk_size=N.
   3. lerobot-train accepts the args and starts training.
@@ -85,7 +85,7 @@ image = (
         "rich",
     )
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -128,7 +128,7 @@ def act_smoke(
     if not hasattr(FinetuneConfig, "policy"):
         return {
             "status": "FAIL",
-            "error": "FinetuneConfig.policy field missing — wrong tether-vla commit",
+            "error": "FinetuneConfig.policy field missing — wrong tether commit",
             "head_sha": "(unknown)",
         }
 

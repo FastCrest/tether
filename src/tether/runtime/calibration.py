@@ -384,7 +384,7 @@ class CalibrationCache:
         if sv > SCHEMA_VERSION:
             raise ValueError(
                 f"calibration cache schema_version={sv} exceeds supported "
-                f"version {SCHEMA_VERSION}. Upgrade tether-vla or delete "
+                f"version {SCHEMA_VERSION}. Upgrade tether or delete "
                 f"the cache file."
             )
         if sv < 1:
@@ -554,8 +554,8 @@ def _probe_ram_gb() -> int:
 
 
 def _probe_tether_version() -> str:
-    """Probe installed tether-vla version. Returns 'unknown' on any failure."""
-    return _safe_pkg_version("tether-vla") or _safe_pkg_version("tether") or "unknown"
+    """Probe installed tether version. Returns 'unknown' on any failure."""
+    return _safe_pkg_version("tether") or "unknown"
 
 
 def _safe_pkg_version(pkg: str) -> str | None:

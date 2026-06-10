@@ -23,7 +23,7 @@ def _run(**kwargs) -> CheckResult:
             expected="onnxruntime installed",
             actual="ImportError — onnxruntime is missing",
             remediation=(
-                "pip install tether[serve] (CPU) or tether-vla[gpu] (GPU). "
+                "pip install tether[serve] (CPU) or tether[gpu] (GPU). "
                 "ONNX runtime is required for the inference path."
             ),
             duration_ms=0.0,

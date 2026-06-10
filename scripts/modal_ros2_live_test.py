@@ -1,7 +1,7 @@
 """Modal: ros2-bridge LIVE test with real rclpy (ros:humble container).
 
 Spins up a Modal container from the official ros:humble image, installs
-tether-vla, starts `tether ros2-serve` in the background, then uses a
+tether, starts `tether ros2-serve` in the background, then uses a
 client script to pub synthetic image/state/task, subscribe to the
 action topic, and verify chunks arrive.
 
@@ -54,7 +54,7 @@ image = (
         'echo "numpy>=1.24,<2.0" > /tmp/reflex_cons.txt',
     )
     .pip_install(
-        "tether-vla[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla.git",
+        "tether[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether.git",
         extra_options="-c /tmp/reflex_cons.txt",
     )
     .env({

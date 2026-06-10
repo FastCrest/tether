@@ -64,7 +64,7 @@ def validate():
     results["gpu"] = nvsmi.stdout.strip()
     print(f"GPU: {results['gpu']}")
 
-    for pkg in ["tether-vla", "tensorrt", "onnxruntime-gpu", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"]:
+    for pkg in ["reflex-vla", "tensorrt", "onnxruntime-gpu", "nvidia-cublas-cu12", "nvidia-cudnn-cu12"]:
         proc = subprocess.run(["pip", "show", pkg], capture_output=True, text=True)
         if proc.returncode == 0:
             for line in proc.stdout.split("\n"):

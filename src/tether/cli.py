@@ -42,7 +42,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deploy any VLA model to any edge ha
   [green]tether models list[/green]         browse the curated model registry
 
 [dim]All commands:[/dim]  tether --help
-[dim]Examples:[/dim]      https://github.com/FastCrest/tether-vla/tree/main/examples
+[dim]Examples:[/dim]      https://github.com/FastCrest/tether/tree/main/examples
 [dim]Docs:[/dim]          https://fastcrest.com  ·  https://pypi.org/project/tether/
 """
 
@@ -79,7 +79,7 @@ def _version_callback(value: bool) -> None:
             f"tether {__version__}\n"
             f"Tether VLA — Copyright (c) 2026 FastCrest. "
             f"Source-available under BSL 1.1 (auto-converts to Apache 2.0 on 2030-04-28).\n"
-            f"https://github.com/FastCrest/tether-vla"
+            f"https://github.com/FastCrest/tether"
         )
         raise typer.Exit()
 
@@ -101,7 +101,7 @@ def main(
     except Exception:  # noqa: BLE001
         pass  # never block the CLI on onboarding issues
 
-    # Once-per-day PyPI check for a newer tether-vla; silent if up-to-date.
+    # Once-per-day PyPI check for a newer tether; silent if up-to-date.
     # Honors TETHER_NO_UPGRADE_CHECK=1; skipped on dev installs.
     try:
         from tether.upgrade_check import maybe_nag
@@ -134,12 +134,12 @@ def _maybe_write_embodiment_bundle(
         err_console.print(
             f"[red]--embodiment {embodiment!r} not recognized. "
             f"Supported: so_arm100. (For the runtime preset-config "
-            f"flag used by `reflex serve`, see --embodiment on serve "
+            f"flag used by `tether serve`, see --embodiment on serve "
             f"— that supports more presets like franka/so100/ur5.)[/red]"
         )
         raise typer.Exit(2)
     try:
-        from reflex.embodiments.so_arm100 import SOARM100Adapter
+        from tether.embodiments.so_arm100 import SOARM100Adapter
     except Exception as exc:  # noqa: BLE001
         err_console.print(
             f"[red]Failed to import SOARM100Adapter: {exc}[/red]"
@@ -159,7 +159,7 @@ def _maybe_write_embodiment_bundle(
         adapter = SOARM100Adapter.default()
         console.print(
             "  [yellow]No --calibration; embedding factory-default config. "
-            "Run `reflex calibrate so_arm100 --port /dev/ttyUSB0` or pass "
+            "Run `tether calibrate so_arm100 --port /dev/ttyUSB0` or pass "
             "--calibration to use your physical arm's homing offsets.[/yellow]"
         )
 
@@ -188,7 +188,7 @@ def export(
              "path, one ONNX file). Opt into --decomposed only if you specifically need "
              "the 5-stage export for debugging; --decomposed is the older path with "
              "known correctness gaps. Monolithic requires `pip install "
-             "'tether-vla[monolithic]'` (pins transformers==5.3.0).",
+             "'tether[monolithic]'` (pins transformers==5.3.0).",
     ),
     export_mode: str = typer.Option(
         "auto",
@@ -220,7 +220,7 @@ def export(
         help="Embed an embodiment adapter + calibration into the export bundle. "
              "Supported: 'so_arm100' (SO-ARM100 + LeRobot interop). When set, "
              "the export writes embodiment/<name>/calibration.json into OUTPUT "
-             "so `reflex serve --embodiment <name>` can load it back. Pair "
+             "so `tether serve --embodiment <name>` can load it back. Pair "
              "with --calibration to import an existing LeRobot calibration.",
     ),
     calibration: str = typer.Option(
@@ -2262,7 +2262,7 @@ def serve(
         if embodiment.strip().lower() in ("so_arm100", "so-arm100"):
             preset_lookup = "so100"
             try:
-                from reflex.embodiments.so_arm100 import SOARM100Adapter
+                from tether.embodiments.so_arm100 import SOARM100Adapter
                 try:
                     so_arm100_adapter = SOARM100Adapter.from_bundle(export_dir)
                     console.print(
@@ -2274,7 +2274,7 @@ def serve(
                     console.print(
                         "  [yellow]Bundle has no embedded so_arm100 calibration; "
                         "using factory defaults. Re-export with "
-                        "`reflex export ... --embodiment so_arm100 "
+                        "`tether export ... --embodiment so_arm100 "
                         "--calibration <cal.json>` to embed your physical arm's "
                         "homing offsets.[/yellow]"
                     )
@@ -2627,7 +2627,7 @@ def serve(
         if tether_srv is None:
             err_console.print(
                 "[red]Could not find TetherServer on the app state; MCP needs a live "
-                "inference engine. Report this at github.com/FastCrest/tether-vla/issues.[/red]"
+                "inference engine. Report this at github.com/FastCrest/tether/issues.[/red]"
             )
             raise typer.Exit(1)
         mcp_srv = create_mcp_server(tether_srv)
@@ -3078,7 +3078,7 @@ def _check_trt_ep_load_chain(add) -> None:
             False,
             "TensorrtExecutionProvider not in onnxruntime's available "
             "providers list. Either onnxruntime-gpu isn't installed (use "
-            "'tether-vla[serve,gpu]') or you're on a CPU-only ORT build.",
+            "'tether[serve,gpu]') or you're on a CPU-only ORT build.",
         )
         return
 
@@ -3377,7 +3377,7 @@ def doctor(
                     f"❌ JetPack R{jetpack_major} ships CUDA 11.4. ORT 1.20+ "
                     f"requires CUDA 12.x → CUDAExecutionProvider will silently "
                     f"fall to CPU. Upgrade to JetPack R36+ (Orin) or use "
-                    f"tether-vla[serve,onnx] for CPU-only inference.",
+                    f"tether[serve,onnx] for CPU-only inference.",
                 )
             elif jp_int >= 36:
                 add(
@@ -3681,9 +3681,9 @@ def doctor(
     # Tether itself
     try:
         from tether import __version__ as tether_version
-        add("tether-vla", True, f"version {tether_version}")
+        add("tether", True, f"version {tether_version}")
     except Exception as e:
-        add("tether-vla", False, str(e))
+        add("tether", False, str(e))
 
     # Curate data-contribution status (informational; no pass/fail).
     try:

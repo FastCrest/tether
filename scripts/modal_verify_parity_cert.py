@@ -8,7 +8,7 @@ the *fixed* episode-block MMD gate (PR #201) + embodied parity?
 N=30 episodes/arm × 1 task = the gate's design floor (>=30). Runs the ORIGINAL
 (native) and OPTIMIZED (Triton export of the same weights) arms via
 `tether.verify.gather_paired_samples`, then the calibrated episode-block two-sample
-test + embodied parity. Installs tether-vla from git @ local HEAD (must be pushed;
+test + embodied parity. Installs tether from git @ local HEAD (must be pushed;
 should be main with the #201 fix).
 
 This is a ~2-hour single-container run (native arm ~1 hr). It therefore sets a long
@@ -91,7 +91,7 @@ image = (
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({

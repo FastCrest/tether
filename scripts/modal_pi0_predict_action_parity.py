@@ -54,7 +54,7 @@ def _repo_head_sha() -> str:
 _HEAD = _repo_head_sha()
 
 
-# Image: lerobot==0.5.1 (upstream PI0Policy) + tether-vla (Pi0VLA spine).
+# Image: lerobot==0.5.1 (upstream PI0Policy) + tether (Pi0VLA spine).
 # No LIBERO / MuJoCo needed — we're doing one forward pass, not a rollout.
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -75,7 +75,7 @@ image = (
         "num2words",
     )
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

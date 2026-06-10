@@ -1731,7 +1731,7 @@ def create_app(
         # OTEL_EXPORTER_OTLP_ENDPOINT is set (or default localhost:4317).
         # No-ops cleanly if deps absent — server behavior unchanged.
         setup_tracing(
-            service_name="tether-vla",
+            service_name="tether",
             endpoint=otel_endpoint,
             sample_rate=otel_sample,
         )

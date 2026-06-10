@@ -8,7 +8,7 @@ topics which are UR-internal and deprecated).
 Usage::
 
     # Terminal 1: GPU machine
-    reflex serve ./my_export/ --transport zmq --port 5555
+    tether serve ./my_export/ --transport zmq --port 5555
 
     # Terminal 2: Robot (ROS2 + ur_robot_driver)
     python3 contrib/ros2/ur3/adapter.py \
@@ -43,7 +43,7 @@ except ImportError:
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from _common.observation_builder import ObservationBuilder
 from _common.action_publisher import ActionPublisher
-from _common.reflex_client import ReflexClient
+from _common.tether_client import TetherClient
 
 
 # Default UR topic names (ur_robot_driver convention)
@@ -71,7 +71,7 @@ class URAdapterNode(Node if HAS_ROS2 else object):
     """ROS2 node that bridges UR sensors → Reflex VLA → UR actuators.
 
     Subscribes to camera + joint states, constructs observation,
-    calls reflex serve, sends FollowJointTrajectory goals.
+    calls tether serve, sends FollowJointTrajectory goals.
     """
 
     def __init__(
@@ -88,7 +88,7 @@ class URAdapterNode(Node if HAS_ROS2 else object):
         self.instruction = instruction
         self.image_size = image_size
 
-        self.client = ReflexClient(server_url)
+        self.client = TetherClient(server_url)
         self.obs_builder = ObservationBuilder(
             image_keys=["camera"],
             state_dim=UR_STATE_DIM,

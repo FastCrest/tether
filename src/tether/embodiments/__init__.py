@@ -141,7 +141,7 @@ class EmbodimentConfig:
             user_dir = Path.home() / ".cache" / "tether" / "embodiments"
             raise ValueError(
                 f"Unknown embodiment preset '{name}'.\n"
-                f"  Available bundled presets: {available or '(none — package may be stale, try: pip install --upgrade tether-vla)'}\n"
+                f"  Available bundled presets: {available or '(none — package may be stale, try: pip install --upgrade tether)'}\n"
                 f"  Workarounds:\n"
                 f"    1. Drop --embodiment to run without normalization (raw actions).\n"
                 f"    2. Use one of the bundled presets above.\n"

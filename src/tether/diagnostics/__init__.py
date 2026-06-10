@@ -98,7 +98,7 @@ class Check:
                 actual=f"raised {type(e).__name__}: {e}",
                 remediation=(
                     f"Check {self.check_id} crashed — file a bug at "
-                    f"https://github.com/FastCrest/tether-vla/issues with the "
+                    f"https://github.com/FastCrest/tether/issues with the "
                     f"full traceback above."
                 ),
                 duration_ms=(time.monotonic() - t0) * 1000.0,

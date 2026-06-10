@@ -40,9 +40,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install tether-vla
+      - name: Install tether
         run: |
-          pip install 'tether[serve,onnx,dev] @ git+https://github.com/FastCrest/tether-vla@v{tether_version}'
+          pip install 'tether[serve,onnx,dev] @ git+https://github.com/FastCrest/tether@v{tether_version}'
 
       - name: Export SmolVLA
         run: |
@@ -71,8 +71,8 @@ jobs:
   #       uses: actions/setup-python@v5
   #       with:
   #         python-version: "3.11"
-  #     - name: Install tether-vla
-  #       run: pip install 'tether[serve,onnx,dev] @ git+https://github.com/FastCrest/tether-vla@v{tether_version}'
+  #     - name: Install tether
+  #       run: pip install 'tether[serve,onnx,dev] @ git+https://github.com/FastCrest/tether@v{tether_version}'
   #     - name: Export pi0
   #       run: tether export lerobot/pi0_base --target desktop --output ./pi0_export
   #     - name: Validate round-trip parity
@@ -96,8 +96,8 @@ jobs:
   #       uses: actions/setup-python@v5
   #       with:
   #         python-version: "3.11"
-  #     - name: Install tether-vla
-  #       run: pip install 'tether[serve,onnx,dev] @ git+https://github.com/FastCrest/tether-vla@v{tether_version}'
+  #     - name: Install tether
+  #       run: pip install 'tether[serve,onnx,dev] @ git+https://github.com/FastCrest/tether@v{tether_version}'
   #     - name: Export GR00T
   #       run: tether export nvidia/GR00T-N1-2B --target desktop --output ./gr00t_export
   #     - name: Validate round-trip parity

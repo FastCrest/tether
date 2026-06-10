@@ -103,7 +103,7 @@ def encode_image(image: Any, jpeg_quality: int = 85) -> str:
         from PIL import Image as PILImage
     except ImportError:
         raise TetherClientError(
-            "Pillow required to encode numpy arrays / PIL images; install tether-vla[serve] or pip install Pillow"
+            "Pillow required to encode numpy arrays / PIL images; install tether[serve] or pip install Pillow"
         )
     if isinstance(image, PILImage.Image):
         buf = io.BytesIO()

@@ -29,7 +29,7 @@ class TestDockerfileArm64:
 
     def test_installs_reflex(self):
         content = (REPO_ROOT / "Dockerfile.arm64").read_text()
-        # The pip install line should pull tether-vla with [serve] extras.
+        # The pip install line should pull tether with [serve] extras.
         assert "pip install" in content
         assert "serve" in content
 
