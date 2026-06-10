@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Tether fleet dashboard — per-robot breakdown. Requires `tether serve --robot-id <id>` on each process so the `reflex_robot_info` gauge is populated. Panels join hot metrics against robot_info via `instance`. Tested against Grafana 10.4.0 (schemaVersion 39). See features/01_serve/subfeatures/_ecosystem/fleet-telemetry/fleet-telemetry.md.",
+  "description": "Tether fleet dashboard — per-robot breakdown. Requires `tether serve --robot-id <id>` on each process so the `tether_robot_info` gauge is populated. Panels join hot metrics against robot_info via `instance`. Tested against Grafana 10.4.0 (schemaVersion 39). See features/01_serve/subfeatures/_ecosystem/fleet-telemetry/fleet-telemetry.md.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -11,7 +11,7 @@
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "title": "Active robots",
-      "description": "Count of robot processes reporting `reflex_robot_info`. One series per robot_id; drops to 0 when a robot goes offline.",
+      "description": "Count of robot processes reporting `tether_robot_info`. One series per robot_id; drops to 0 when a robot goes offline.",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "id": 1,
       "type": "stat",
@@ -30,7 +30,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "count(reflex_robot_info{robot_id=~\"$robot\"})",
+          "expr": "count(tether_robot_info{robot_id=~\"$robot\"})",
           "legendFormat": "robots",
           "refId": "A"
         }
@@ -58,7 +58,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le, instance) (rate(reflex_act_latency_seconds_bucket[5m]))) * on (instance) group_left(robot_id) reflex_robot_info{robot_id=~\"$robot\"}",
+          "expr": "histogram_quantile(0.99, sum by (le, instance) (rate(tether_act_latency_seconds_bucket[5m]))) * on (instance) group_left(robot_id) tether_robot_info{robot_id=~\"$robot\"}",
           "legendFormat": "{{robot_id}}",
           "refId": "A"
         }
@@ -81,7 +81,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum by (instance) (rate(reflex_act_latency_seconds_count[1m])) * on (instance) group_left(robot_id) reflex_robot_info{robot_id=~\"$robot\"}",
+          "expr": "sum by (instance) (rate(tether_act_latency_seconds_count[1m])) * on (instance) group_left(robot_id) tether_robot_info{robot_id=~\"$robot\"}",
           "legendFormat": "{{robot_id}}",
           "refId": "A"
         }
@@ -104,7 +104,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum by (instance, violation_kind) (increase(reflex_safety_violations_total[5m])) * on (instance) group_left(robot_id) reflex_robot_info{robot_id=~\"$robot\"}",
+          "expr": "sum by (instance, violation_kind) (increase(tether_safety_violations_total[5m])) * on (instance) group_left(robot_id) tether_robot_info{robot_id=~\"$robot\"}",
           "legendFormat": "{{robot_id}} / {{violation_kind}}",
           "refId": "A"
         }
@@ -126,7 +126,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum by (instance) (reflex_in_flight_requests) * on (instance) group_left(robot_id) reflex_robot_info{robot_id=~\"$robot\"}",
+          "expr": "sum by (instance) (tether_in_flight_requests) * on (instance) group_left(robot_id) tether_robot_info{robot_id=~\"$robot\"}",
           "legendFormat": "{{robot_id}}",
           "refId": "A"
         }
@@ -148,7 +148,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "sum by (instance, slo_kind) (increase(reflex_slo_violations_total[5m])) * on (instance) group_left(robot_id) reflex_robot_info{robot_id=~\"$robot\"}",
+          "expr": "sum by (instance, slo_kind) (increase(tether_slo_violations_total[5m])) * on (instance) group_left(robot_id) tether_robot_info{robot_id=~\"$robot\"}",
           "legendFormat": "{{robot_id}} / {{slo_kind}}",
           "refId": "A"
         }
@@ -157,20 +157,20 @@
   ],
   "refresh": "10s",
   "schemaVersion": 39,
-  "tags": ["reflex", "fleet", "vla"],
+  "tags": ["tether", "fleet", "vla"],
   "templating": {
     "list": [
       {
         "current": { "selected": true, "text": "All", "value": "$__all" },
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "definition": "label_values(reflex_robot_info, robot_id)",
+        "definition": "label_values(tether_robot_info, robot_id)",
         "hide": 0,
         "includeAll": true,
         "label": "Robot",
         "multi": true,
         "name": "robot",
         "options": [],
-        "query": { "query": "label_values(reflex_robot_info, robot_id)", "refId": "StandardVariableQuery" },
+        "query": { "query": "label_values(tether_robot_info, robot_id)", "refId": "StandardVariableQuery" },
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -182,8 +182,8 @@
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "Reflex Fleet",
-  "uid": "reflex-fleet",
+  "title": "Tether Fleet",
+  "uid": "tether-fleet",
   "version": 1,
   "weekStart": "",
   "__inputs": [

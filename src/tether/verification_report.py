@@ -63,7 +63,7 @@ def _format_parity(parity: dict[str, Any] | None) -> str:
     if not parity:
         return (
             "## Parity\n\n"
-            "_Not yet verified._ Run `tether validate <export_dir>` to populate.\n"
+            "_Not yet verified._ Run `tether validate export <export_dir>` to populate.\n"
         )
     summary = parity.get("summary", {}) or {}
     results = parity.get("results", []) or []
@@ -174,7 +174,7 @@ def write_verification_report(
     if model_id != "unknown":
         lines.append("```bash")
         lines.append(f"tether export {model_id} --target {target} --output <dir>")
-        lines.append("tether validate <dir>")
+        lines.append("tether validate export <dir>")
         lines.append("```")
         lines.append("")
     lines.append(

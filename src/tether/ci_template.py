@@ -50,7 +50,7 @@ jobs:
 
       - name: Validate round-trip parity
         run: |
-          tether validate ./sv_export --threshold 1e-4 --num-cases 3 --output-json > validate_result.json
+          tether validate export ./sv_export --threshold 1e-4 --num-cases 3 --output-json > validate_result.json
 
       - name: Upload validation report
         if: always()
