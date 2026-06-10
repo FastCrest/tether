@@ -6,7 +6,7 @@ onnx-diagnostic patches; same torch.export + torch.onnx.export pipeline;
 same post-export Where-type fix.
 
 Usage (local):
-    pip install 'tether[monolithic]'
+    pip install 'fastcrest-tether[monolithic]'
     tether export lerobot/smolvla_base --monolithic --output ./smol
 
 Requires (pinned in the ``monolithic`` extra):
@@ -148,7 +148,7 @@ def _require_monolithic_deps() -> None:
         raise ImportError(
             "Missing dependencies for monolithic export:\n  - "
             + "\n  - ".join(missing)
-            + "\n\nInstall with: pip install 'tether[monolithic]'"
+            + "\n\nInstall with: pip install 'fastcrest-tether[monolithic]'"
         )
 
 

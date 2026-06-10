@@ -20,7 +20,7 @@ import httpx
 API = "https://pypistats.org/api/packages"
 # Pre-rename name first; "tether" 404s until its first PyPI publish and is
 # skipped gracefully until then.
-PACKAGES = ["reflex-vla", "tether"]
+PACKAGES = ["reflex-vla", "fastcrest-tether"]
 
 
 def _fetch_one(package: str, endpoint: str) -> dict:

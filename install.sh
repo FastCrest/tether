@@ -119,7 +119,7 @@ if [ "$IS_OLD_NANO" -eq 1 ]; then
   echo
   info "Recommended paths:"
   echo "  ${BOLD}1. Run on a Mac${RESET} (CPU path, works for chat + dev)"
-  echo "       pip install 'tether[serve,onnx]'"
+  echo "       pip install 'fastcrest-tether[serve,onnx]'"
   echo "  ${BOLD}2. Run on Jetson Orin${RESET} (Orin Nano / NX / AGX) — full GPU support"
   echo "  ${BOLD}3. Run in the cloud${RESET} (Modal, Lambda, RunPod with NVIDIA T4+)"
   echo
@@ -222,7 +222,7 @@ if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
 fi
 
 # -- Jetson: pre-install GPU deps from Jetson AI Lab --------------------------
-# This MUST happen BEFORE `pip install tether[serve]` so that:
+# This MUST happen BEFORE `pip install fastcrest-tether[serve]` so that:
 #   1. numpy<2 is locked in place before torch's transitive dep pulls 2.x
 #   2. torch comes from the Jetson AI Lab aarch64 wheel (not PyPI x86_64)
 #   3. onnxruntime-gpu comes from Jetson AI Lab (not the unresolvable PyPI one)
@@ -282,7 +282,7 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
 fi
 
 # -- Run pip install ----------------------------------------------------------
-PIP_TARGET="tether[$EXTRAS]"
+PIP_TARGET="fastcrest-tether[$EXTRAS]"
 info "Installing: $PIP_TARGET"
 echo
 "$PYTHON" -m pip install --upgrade "$PIP_TARGET"

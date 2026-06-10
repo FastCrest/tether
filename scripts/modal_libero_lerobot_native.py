@@ -116,7 +116,7 @@ image = (
     # when --snapflow-student is used. Uses the github-token secret to
     # clone the private repo. Cheap — this only pulls the Python package.
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({

@@ -213,7 +213,7 @@ goals:
 
   - id: fresh-install-verified
     status: done
-    description: "`pip install 'tether[serve,gpu] @ git+https://...'` succeeds on a fresh python:3.12-slim container and `tether --help` runs. Catches dep resolution breakage, broken editable installs, missing files in the wheel. Regression-check every release."
+    description: "`pip install 'fastcrest-tether[serve,gpu] @ git+https://...'` succeeds on a fresh python:3.12-slim container and `tether --help` runs. Catches dep resolution breakage, broken editable installs, missing files in the wheel. Regression-check every release."
     check: "test -f tests/test_fresh_install.py && .venv/bin/python -m pytest tests/test_fresh_install.py -q 2>/dev/null"
     weight: 8
 
@@ -416,8 +416,8 @@ goals:
     weight: 10
 
   - id: serve-one-line-install
-    description: "pip install tether && tether serve <hf-id> works on a Jetson with no Docker, no Triton YAML, no NVIDIA Container Toolkit. The DX win that beats Triton even though Triton wins on raw features. Most customers will tolerate a 1.5x latency hit for a 60s install vs a 4-hour Triton-on-Jetson setup."
-    check: "test -f docs/quickstart_jetson.md && grep -q 'pip install tether' README.md 2>/dev/null"
+    description: "pip install fastcrest-tether && tether serve <hf-id> works on a Jetson with no Docker, no Triton YAML, no NVIDIA Container Toolkit. The DX win that beats Triton even though Triton wins on raw features. Most customers will tolerate a 1.5x latency hit for a 60s install vs a 4-hour Triton-on-Jetson setup."
+    check: "test -f docs/quickstart_jetson.md && grep -q 'pip install fastcrest-tether' README.md 2>/dev/null"
     weight: 7
 
   # ── DEFERRED LONG-TERM SERVE (Phase 4-5; do NOT build now) ────────

@@ -53,7 +53,7 @@ def _warn_rtc_horizon_migration(
     )
 
 # Embodiment preset JSONs are bundled INSIDE the package so they ship with
-# `pip install tether` (since v0.5.2). For dev workflows the repo also
+# `pip install fastcrest-tether` (since v0.5.2). For dev workflows the repo also
 # keeps editable copies in <repo>/configs/embodiments/ — those are checked
 # as a fallback when running from source if the in-package presets are
 # missing for some reason. Canonical runtime location is the package.

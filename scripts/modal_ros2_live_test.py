@@ -54,7 +54,7 @@ image = (
         'echo "numpy>=1.24,<2.0" > /tmp/reflex_cons.txt',
     )
     .pip_install(
-        "tether[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether.git",
+        "fastcrest-tether[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether.git",
         extra_options="-c /tmp/reflex_cons.txt",
     )
     .env({

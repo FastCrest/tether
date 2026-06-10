@@ -70,7 +70,7 @@ class SafetyLimits:
                 effort_max=eff_max,
             )
         except ImportError:
-            logger.warning("yourdfpy not installed. Install with: pip install 'tether[safety]'")
+            logger.warning("yourdfpy not installed. Install with: pip install 'fastcrest-tether[safety]'")
             return cls()
 
     @classmethod

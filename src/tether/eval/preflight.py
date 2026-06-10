@@ -187,7 +187,7 @@ _REMEDIATION_BY_MODE: dict[str, str] = {
         "execute (no AppArmor / SELinux blocks)."
     ),
     "import-error": (
-        "LIBERO import failed. Install via `pip install 'tether[eval-"
+        "LIBERO import failed. Install via `pip install 'fastcrest-tether[eval-"
         "local]'` for local runs, or use --runtime modal which ships LIBERO "
         "in the bundled image."
     ),

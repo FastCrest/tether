@@ -68,7 +68,7 @@ image = (
     .pip_install("Pillow>=10.0.0")  # for synthetic input image generation
     .run_commands(
         # SHA-pinned so the image rebuilds on every commit (avoids stale-image cache).
-        f'pip install "tether[serve,gpu] @ '
+        f'pip install "fastcrest-tether[serve,gpu] @ '
         f'git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[_gh_secret()],
     )

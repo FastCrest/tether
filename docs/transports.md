@@ -8,8 +8,8 @@ produces actions; the transport delivers them to the robot client.
 
 | Transport | Flag | When to use | Install |
 |---|---|---|---|
-| **HTTP** (default) | `--transport http` | Standard REST API. Works with any HTTP client (curl, Python requests, browser). Best for prototyping + debugging. | `pip install tether[serve]` |
-| **ZMQ** | `--transport zmq` | Low-latency binary wire. 20× lower bandwidth for multi-camera setups. 10× smaller robot-side install. Best for production robot deployments where every millisecond matters. | Server: `pip install tether[serve]`. Robot: `pip install pyzmq msgpack numpy opencv-python-headless` (~25 MB) |
+| **HTTP** (default) | `--transport http` | Standard REST API. Works with any HTTP client (curl, Python requests, browser). Best for prototyping + debugging. | `pip install fastcrest-tether[serve]` |
+| **ZMQ** | `--transport zmq` | Low-latency binary wire. 20× lower bandwidth for multi-camera setups. 10× smaller robot-side install. Best for production robot deployments where every millisecond matters. | Server: `pip install fastcrest-tether[serve]`. Robot: `pip install pyzmq msgpack numpy opencv-python-headless` (~25 MB) |
 | **ROS2** | (v1.0) | Native ROS2 action server. Reserved for v1.0. | — |
 
 ## Quick Start

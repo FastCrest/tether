@@ -54,7 +54,7 @@ image = (
         "lerobot==0.5.1",
     )
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_BRANCH}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_BRANCH}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

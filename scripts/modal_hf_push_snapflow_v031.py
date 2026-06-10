@@ -74,7 +74,7 @@ Net: **+3.4 percentage points over teacher at ~10× fewer denoising steps.**
 Full reproduction via [Tether VLA](https://github.com/FastCrest/tether):
 
 ```bash
-pip install tether
+pip install fastcrest-tether
 tether distill \\
     --teacher lerobot/pi05_libero_finetuned_v044 \\
     --steps 10000 \\

@@ -4,7 +4,7 @@ Pretends to be a first-time user who has only read the README.md of
 tether. Uses NVIDIA's TRT container (as the README recommends for
 GPU) and follows the quickstart verbatim:
 
-  1. Install (pip install 'tether[serve,gpu] @ git+...')
+  1. Install (pip install 'fastcrest-tether[serve,gpu] @ git+...')
   2. Explore CLI (tether --help, tether models, tether targets, tether doctor)
   3. Export (tether export lerobot/smolvla_base --target desktop --output ./smol)
   4. Serve (tether serve ./smol --port 8000 &)
@@ -57,11 +57,11 @@ image = (
     # from the public git URL. If this fails, that's a real customer failure.
     .run_commands(
         # Customers don't get a pre-cloned repo; they install from the public URL.
-        # README (post-fix) says: pip install 'tether[serve,gpu,monolithic] @ git+...'
+        # README (post-fix) says: pip install 'fastcrest-tether[serve,gpu,monolithic] @ git+...'
         # SHA-pinning the install URL is what forces Modal to rebuild the image
         # when we commit — without this, the cached image from the previous dogfood
         # run is reused and the new fixes aren't actually tested.
-        f'pip install "tether[serve,gpu,monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
+        f'pip install "fastcrest-tether[serve,gpu,monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
     )
 )
 

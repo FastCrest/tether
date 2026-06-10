@@ -70,7 +70,7 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             expected="transformers installed for tokenizer probe",
             actual="transformers not installed",
             remediation=(
-                "pip install tether[monolithic] to enable tokenizer probes "
+                "pip install fastcrest-tether[monolithic] to enable tokenizer probes "
                 "(only needed if your client tokenizes prompts before /act)."
             ),
             duration_ms=0.0,

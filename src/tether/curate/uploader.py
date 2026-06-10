@@ -285,7 +285,7 @@ def _request_signed_url(
     try:
         import httpx
     except ImportError as exc:
-        raise UploadStub(f"httpx not available — install tether[serve]: {exc}") from exc
+        raise UploadStub(f"httpx not available — install fastcrest-tether[serve]: {exc}") from exc
 
     url = f"{_worker_url()}/v1/uploads/sign"
     payload = {

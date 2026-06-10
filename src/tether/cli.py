@@ -43,7 +43,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deploy any VLA model to any edge ha
 
 [dim]All commands:[/dim]  tether --help
 [dim]Examples:[/dim]      https://github.com/FastCrest/tether/tree/main/examples
-[dim]Docs:[/dim]          https://fastcrest.com  ·  https://pypi.org/project/tether/
+[dim]Docs:[/dim]          https://fastcrest.com  ·  https://pypi.org/project/fastcrest-tether/
 """
 
 
@@ -188,7 +188,7 @@ def export(
              "path, one ONNX file). Opt into --decomposed only if you specifically need "
              "the 5-stage export for debugging; --decomposed is the older path with "
              "known correctness gaps. Monolithic requires `pip install "
-             "'tether[monolithic]'` (pins transformers==5.3.0).",
+             "'fastcrest-tether[monolithic]'` (pins transformers==5.3.0).",
     ),
     export_mode: str = typer.Option(
         "auto",
@@ -271,7 +271,7 @@ def export(
         except ImportError as exc:
             err_console.print(f"[red]{exc}[/red]", markup=False)
             err_console.print(
-                "\nFix: pip install 'tether[monolithic]' "
+                "\nFix: pip install 'fastcrest-tether[monolithic]' "
                 "(pins transformers==5.3.0; use a clean venv to avoid "
                 "the base transformers<5.0 conflict)",
                 style="cyan", markup=False,
@@ -288,7 +288,7 @@ def export(
         except ImportError as exc:
             err_console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
             err_console.print(
-                "\nFix: pip install 'tether[monolithic]'",
+                "\nFix: pip install 'fastcrest-tether[monolithic]'",
                 style="cyan", markup=False,
             )
             raise typer.Exit(2)
@@ -356,7 +356,7 @@ def export(
         except ImportError as exc:
             err_console.print(f"[red]{exc}[/red]", markup=False)
             err_console.print(
-                "\nFix: pip install 'tether[monolithic]' "
+                "\nFix: pip install 'fastcrest-tether[monolithic]' "
                 "(pins transformers==5.3.0; use a clean venv to avoid "
                 "the base transformers<5.0 conflict)",
                 style="cyan", markup=False,
@@ -822,7 +822,7 @@ def benchmark_cmd(
     benchmark: str = typer.Option(
         "",
         "--benchmark",
-        help="Also run task-success eval: simpler, maniskill (requires pip install 'tether[eval]'). LIBERO archived 2026-04-17 — see archive/scripts/.",
+        help="Also run task-success eval: simpler, maniskill (requires pip install 'fastcrest-tether[eval]'). LIBERO archived 2026-04-17 — see archive/scripts/.",
     ),
     episodes_per_task: int = typer.Option(
         10, help="Episodes per task for --benchmark (full suites use 50)"
@@ -884,7 +884,7 @@ def benchmark_cmd(
         except ImportError:
             console.print(
                 f"--benchmark {benchmark} requires the eval extra.\n"
-                f"  Install with: pip install 'tether[eval]'\n"
+                f"  Install with: pip install 'fastcrest-tether[eval]'\n"
                 f"  Or run without --benchmark for latency-only.",
                 style="red", markup=False,
             )
@@ -1823,7 +1823,7 @@ def serve(
              "lerobot's RTCProcessor so the robot keeps executing the tail "
              "of one chunk while the next chunk is being computed. 2-3× "
              "effective throughput on Jetson-class latency. Requires "
-             "`pip install tether[rtc]` (pulls lerobot==0.5.1).",
+             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.5.1).",
     ),
     rtc_execution_horizon: int = typer.Option(
         10,
@@ -1965,7 +1965,7 @@ def serve(
              "stdio (default), the MCP server owns stdin/stdout and FastAPI "
              "is NOT started (use for Claude Desktop / Cursor integration). "
              "With --mcp-transport http, both MCP (on --mcp-port) and FastAPI "
-             "(on --port) run concurrently. Requires `pip install tether[mcp]`.",
+             "(on --port) run concurrently. Requires `pip install fastcrest-tether[mcp]`.",
     ),
     mcp_transport: str = typer.Option(
         "stdio",
@@ -1983,7 +1983,7 @@ def serve(
         "",
         "--otel-endpoint",
         help="OTLP gRPC endpoint for trace export (e.g. 'localhost:4317' for "
-             "Phoenix, or an OTel Collector). Requires `pip install tether"
+             "Phoenix, or an OTel Collector). Requires `pip install fastcrest-tether"
              "[tracing]`. When unset, falls back to $OTEL_EXPORTER_OTLP_ENDPOINT "
              "and then 'localhost:4317'. Traces include gen_ai.operation.name, "
              "gen_ai.request.model, gen_ai.action.embodiment, gen_ai.action."
@@ -2447,7 +2447,7 @@ def serve(
         from tether.runtime.server import create_app
         import uvicorn
     except ImportError:
-        console.print("Install serve dependencies: pip install 'tether[serve]'", style="red", markup=False)
+        console.print("Install serve dependencies: pip install 'fastcrest-tether[serve]'", style="red", markup=False)
         raise typer.Exit(1)
 
     if replan_hz > 0 and execute_hz <= 0:
@@ -2618,7 +2618,7 @@ def serve(
         except ImportError:
             console.print(
                 "MCP dependency not installed. Run:\n"
-                "  pip install 'tether[mcp]'",
+                "  pip install 'fastcrest-tether[mcp]'",
                 style="red", markup=False,
             )
             raise typer.Exit(1)
@@ -3069,7 +3069,7 @@ def _check_trt_ep_load_chain(add) -> None:
         import onnxruntime as ort
     except ImportError:
         add("ORT-TRT EP active", False,
-            "onnxruntime not installed — pip install 'tether[serve,gpu]'")
+            "onnxruntime not installed — pip install 'fastcrest-tether[serve,gpu]'")
         return
 
     if "TensorrtExecutionProvider" not in ort.get_available_providers():
@@ -3078,7 +3078,7 @@ def _check_trt_ep_load_chain(add) -> None:
             False,
             "TensorrtExecutionProvider not in onnxruntime's available "
             "providers list. Either onnxruntime-gpu isn't installed (use "
-            "'tether[serve,gpu]') or you're on a CPU-only ORT build.",
+            "'fastcrest-tether[serve,gpu]') or you're on a CPU-only ORT build.",
         )
         return
 
@@ -3377,7 +3377,7 @@ def doctor(
                     f"❌ JetPack R{jetpack_major} ships CUDA 11.4. ORT 1.20+ "
                     f"requires CUDA 12.x → CUDAExecutionProvider will silently "
                     f"fall to CPU. Upgrade to JetPack R36+ (Orin) or use "
-                    f"tether[serve,onnx] for CPU-only inference.",
+                    f"fastcrest-tether[serve,onnx] for CPU-only inference.",
                 )
             elif jp_int >= 36:
                 add(
@@ -3681,9 +3681,9 @@ def doctor(
     # Tether itself
     try:
         from tether import __version__ as tether_version
-        add("tether", True, f"version {tether_version}")
+        add("fastcrest-tether", True, f"version {tether_version}")
     except Exception as e:
-        add("tether", False, str(e))
+        add("fastcrest-tether", False, str(e))
 
     # Curate data-contribution status (informational; no pass/fail).
     try:
@@ -3999,7 +3999,7 @@ def models_pull(
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        err_console.print("[red]huggingface_hub not installed. pip install tether[/red]")
+        err_console.print("[red]huggingface_hub not installed. pip install fastcrest-tether[/red]")
         raise typer.Exit(2)
 
     try:
@@ -4140,7 +4140,7 @@ def go(
     For models that ship as raw PyTorch (requires_export=True in registry),
     this command pulls + exports inline (5-15 min) + serves. The export step
     requires the [monolithic] extra:
-      pip install 'tether[monolithic]'
+      pip install 'fastcrest-tether[monolithic]'
     Without it, `tether go` errors with the install command.
 
     Exported artifacts cache at ~/.cache/tether/exports/<model_id>/ — re-runs
@@ -4314,7 +4314,7 @@ def go(
                 console.print(f"{exc}", style="red", markup=False)
                 console.print(
                     "\n`tether go` needs the monolithic export extras to deploy this model.\n"
-                    "Fix: pip install 'tether[monolithic]'\n"
+                    "Fix: pip install 'fastcrest-tether[monolithic]'\n"
                     "(pins transformers==5.3.0; use a clean venv to avoid the "
                     "base transformers<5.0 conflict)",
                     style="cyan", markup=False,
@@ -5746,7 +5746,7 @@ def chat(
     tui: bool = typer.Option(
         False, "--tui",
         help="Use the Textual full-screen TUI (multi-panel layout, scroll-back, mouse). "
-             "Requires `pip install 'tether[tui]'`. Falls back to the Rich REPL if "
+             "Requires `pip install 'fastcrest-tether[tui]'`. Falls back to the Rich REPL if "
              "textual isn't installed.",
     ),
     resume: bool = typer.Option(

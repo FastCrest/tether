@@ -64,7 +64,7 @@ image = (
         # Reference HEAD SHA (not branch name) so each new commit forces a
         # rebuild of this layer — bypasses Modal's pip-layer caching when
         # iterating on bugs.
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

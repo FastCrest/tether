@@ -425,7 +425,7 @@ def run_ros2_bridge(
             from tether.mcp import create_mcp_server, register_ros2_tools
         except ImportError as exc:
             raise ImportError(
-                "MCP optional dep not installed. Run: pip install 'tether[mcp]'"
+                "MCP optional dep not installed. Run: pip install 'fastcrest-tether[mcp]'"
             ) from exc
 
         mcp_srv = create_mcp_server(server)

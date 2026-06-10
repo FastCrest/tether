@@ -555,7 +555,7 @@ def _probe_ram_gb() -> int:
 
 def _probe_tether_version() -> str:
     """Probe installed tether version. Returns 'unknown' on any failure."""
-    return _safe_pkg_version("tether") or "unknown"
+    return _safe_pkg_version("fastcrest-tether") or "unknown"
 
 
 def _safe_pkg_version(pkg: str) -> str | None:
