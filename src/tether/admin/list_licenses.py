@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 
-from tether.admin._client import admin_request
+from tether.admin._client import AdminError, admin_request
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,7 +19,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Output raw JSON (for scripts).")
     args = parser.parse_args(argv)
 
-    resp = admin_request("GET", f"/admin/list?limit={args.limit}")
+    if args.limit < 1:
+        sys.stderr.write("ERROR: --limit must be >= 1\n")
+        return 2
+
+    try:
+        resp = admin_request("GET", f"/admin/list?limit={args.limit}")
+    except AdminError as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        return exc.exit_code
     licenses = resp.get("licenses", [])
 
     if args.json:
