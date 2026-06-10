@@ -115,6 +115,35 @@ def parity_gate(
     }
 
 
+def _remove_stale_external_data(dst: Path) -> list[Path]:
+    """Delete external-data leftovers from a PRIOR conversion of *this* model.
+
+    ``onnx.save`` writes the FP16 weights to ``{dst.stem}.bin`` next to ``dst``.
+    A leftover ``.bin``/``.data`` from an earlier run at the same path would sit
+    alongside the new one and inflate our size accounting, so we clear it first.
+
+    Scope is strictly this model's stem. The previous implementation globbed
+    every ``*.bin`` / ``*.data`` in ``dst.parent`` and unlinked them — which
+    destroyed *other* models' weight files whenever a user converted into a
+    shared export directory (real data-loss bug). ``dst`` itself (the ``.onnx``)
+    is never touched.
+
+    Returns the list of paths actually removed (for logging / tests).
+    """
+    removed: list[Path] = []
+    for old in dst.parent.glob(f"{dst.stem}*"):
+        if old == dst:
+            continue
+        if old.suffix not in (".bin", ".data"):
+            continue
+        try:
+            old.unlink()
+            removed.append(old)
+        except OSError:
+            pass
+    return removed
+
+
 def convert_fp32_to_fp16(
     fp32_onnx_path: str | Path,
     fp16_onnx_path: str | Path,
@@ -205,15 +234,10 @@ def convert_fp32_to_fp16(
         )
 
     logger.info("[fp16] Saving %s...", dst)
-    # Remove any leftover external data from a prior run at this path —
-    # onnx.save would otherwise leave both the old and new .bin on disk
-    # and our size accounting would double-count.
-    for pat in ("*.bin", "*.data"):
-        for old in dst.parent.glob(pat):
-            try:
-                old.unlink()
-            except Exception:
-                pass
+    # Clear leftover external data from a prior conversion of THIS model only.
+    # (Scoped to dst.stem — see _remove_stale_external_data; a blanket
+    # *.bin/*.data sweep would delete other models' weights in a shared dir.)
+    _remove_stale_external_data(dst)
 
     onnx.save(
         model_fp16,
