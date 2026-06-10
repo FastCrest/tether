@@ -34,7 +34,7 @@ tether serve ./my-export/ \
     --otel-sample 0.1
 ```
 
-Spans land under `service:tether-vla` in APM.
+Spans land under `service:tether` in APM.
 
 ## Flags
 

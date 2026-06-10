@@ -17,7 +17,7 @@ tether serve ./my-export/ --robot-id warehouse-02 --port 8000
 tether serve ./my-export/ --robot-id arm-prototype-alpha --port 8000
 ```
 
-Your Prometheus config scrapes each instance. In Grafana, import [`dashboards/reflex_fleet.json`](../dashboards/reflex_fleet.json) and select one or more robots from the dropdown.
+Your Prometheus config scrapes each instance. In Grafana, import [`dashboards/tether_fleet.json`](../dashboards/tether_fleet.json) and select one or more robots from the dropdown.
 
 ## How it works
 

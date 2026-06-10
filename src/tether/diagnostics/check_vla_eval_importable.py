@@ -17,7 +17,7 @@ from __future__ import annotations
 from . import Check, CheckResult, register
 
 CHECK_ID = "check_vla_eval_importable"
-DOCS_URL = "https://github.com/FastCrest/tether-vla/blob/main/src/tether/runtime/adapters/vla_eval.py"
+DOCS_URL = "https://github.com/FastCrest/tether/blob/main/src/tether/runtime/adapters/vla_eval.py"
 
 
 def _run(model_path: str, **kwargs) -> CheckResult:

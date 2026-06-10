@@ -51,7 +51,7 @@ _HEAD = _repo_head_sha()
 
 
 # Lightweight image — no LIBERO / robosuite / MuJoCo needed. Just torch +
-# lerobot + tether-vla, since both paths call the same underlying model.
+# lerobot + tether, since both paths call the same underlying model.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
@@ -75,7 +75,7 @@ image = (
         "num2words",
     )
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
 )

@@ -55,12 +55,12 @@ image = (
         "Pillow",
         "pyarrow",  # for the LeRobot v3 fallback test
         # The [curate-rlds] extra deps directly so we don't need the
-        # full tether-vla install pulling unrelated stuff.
+        # full tether install pulling unrelated stuff.
         "tensorflow>=2.13.0",
         "tensorflow-datasets>=4.9.0",
     )
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

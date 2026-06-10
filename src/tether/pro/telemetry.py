@@ -181,7 +181,7 @@ def emit(
             url,
             json=payload.to_dict(),
             timeout=_REQUEST_TIMEOUT_S,
-            headers={"User-Agent": f"tether-vla/{tether_version}"},
+            headers={"User-Agent": f"tether/{tether_version}"},
         )
         if 200 <= resp.status_code < 300:
             logger.debug("Telemetry heartbeat posted: %s", payload.org_hash)
@@ -426,7 +426,7 @@ def emit_free(
                 data=data,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": f"tether-vla/{tether_version}",
+                    "User-Agent": f"tether/{tether_version}",
                 },
                 method="POST",
             )
@@ -445,7 +445,7 @@ def emit_free(
             url,
             json=payload.to_dict(),
             timeout=_REQUEST_TIMEOUT_S,
-            headers={"User-Agent": f"tether-vla/{tether_version}"},
+            headers={"User-Agent": f"tether/{tether_version}"},
         )
         if 200 <= resp.status_code < 300:
             _write_free_cache()

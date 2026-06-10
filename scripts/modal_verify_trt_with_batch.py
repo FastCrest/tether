@@ -51,7 +51,7 @@ def test_trt_batch():
     print("=== pip install tether[serve,gpu] ===", flush=True)
     r = subprocess.run(
         ["pip", "install",
-         "tether-vla[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla"],
+         "tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether"],
         capture_output=True, text=True, timeout=600,
     )
     if r.returncode != 0:

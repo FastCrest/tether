@@ -9,7 +9,7 @@ Run:
 
 Source-of-truth values come from TECHNICAL_PLAN.md §4.5 / Appendix D.2
 (franka lines 1943-1974, so100 lines 1976-1999) plus per-robot URDF
-references in tether-vla/reference/mujoco_menagerie/.
+references in tether/reference/mujoco_menagerie/.
 """
 from __future__ import annotations
 

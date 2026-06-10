@@ -1,4 +1,4 @@
-"""Once-per-day check for a newer tether-vla on PyPI.
+"""Once-per-day check for a newer tether on PyPI.
 
 Runs on CLI startup; if a newer version exists, prints a one-line nag to stderr.
 Cached for 24h in TETHER_HOME so we don't ping PyPI on every invocation.
@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 CACHE_TTL_SECONDS = 24 * 60 * 60
-PYPI_URL = "https://pypi.org/pypi/tether-vla/json"
+PYPI_URL = "https://pypi.org/pypi/tether/json"
 
 
 def _cache_path() -> Path:
@@ -32,7 +32,7 @@ def _is_dev_install() -> bool:
     """
     try:
         from importlib.metadata import distribution
-        dist = distribution("tether-vla")
+        dist = distribution("tether")
         # Editable installs (pip install -e .) leave a __editable__*.pth
         # file in site-packages that re-routes to the source dir.
         files = dist.files or []
@@ -113,6 +113,6 @@ def maybe_nag(current_version: str) -> None:
 
     if _parse_version(latest) > _parse_version(current_version):
         sys.stderr.write(
-            f"\033[2m[tether] {latest} is available — upgrade: pip install -U tether-vla "
+            f"\033[2m[tether] {latest} is available — upgrade: pip install -U tether "
             f"(you have {current_version}, set TETHER_NO_UPGRADE_CHECK=1 to silence)\033[0m\n"
         )

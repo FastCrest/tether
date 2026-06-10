@@ -260,7 +260,7 @@ def _git_info(repo_dir: Path) -> tuple[str, bool]:
 def _tether_version() -> str:
     try:
         from importlib.metadata import version
-        return version("tether-vla")
+        return version("tether")
     except Exception:  # noqa: BLE001
         return "0.1.0+dev"
 

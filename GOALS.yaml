@@ -34,27 +34,27 @@ goals:
   - id: vlm-prefix-encoder
     status: done
     description: "VLM backbone exports as real SigLIP+SmolLM2 ONNX (not stub) with vlm_kv_dim=960 so /act returns task-conditioned actions"
-    check: "test -f src/reflex/exporters/vlm_prefix_exporter.py && grep -q 'AutoModel\\|from_pretrained' src/reflex/exporters/vlm_prefix_exporter.py 2>/dev/null && ! grep -q 'AdaptiveAvgPool2d' src/reflex/exporters/vlm_prefix_exporter.py 2>/dev/null"
+    check: "test -f src/tether/exporters/vlm_prefix_exporter.py && grep -q 'AutoModel\\|from_pretrained' src/tether/exporters/vlm_prefix_exporter.py 2>/dev/null && ! grep -q 'AdaptiveAvgPool2d' src/tether/exporters/vlm_prefix_exporter.py 2>/dev/null"
     weight: 10
 
   - id: text-embedder-onnx
     status: done
-    description: "reflex export produces text_embedder.onnx (real SmolLM2 embed_tokens) so text encoding uses real embeddings not seeded-random fallback"
-    check: "grep -q 'text_embedder' src/reflex/exporters/vlm_prefix_exporter.py 2>/dev/null && grep -q 'embed_tokens' src/reflex/exporters/vlm_prefix_exporter.py 2>/dev/null"
+    description: "tether export produces text_embedder.onnx (real SmolLM2 embed_tokens) so text encoding uses real embeddings not seeded-random fallback"
+    check: "grep -q 'text_embedder' src/tether/exporters/vlm_prefix_exporter.py 2>/dev/null && grep -q 'embed_tokens' src/tether/exporters/vlm_prefix_exporter.py 2>/dev/null"
     weight: 10
 
   # ── HIGH (weight 8-9) ─────────────────────────────────────────────
 
   - id: distill-snapflow
     status: done
-    description: "reflex distill implements SnapFlow (arxiv 2604.05656, April 2026) — teacher-student 1-NFE distillation for flow-matching VLAs. Supersedes the earlier DMPO goal; SnapFlow was picked after 2026-04-20 research showed it was the only published method with measured-task-success on real VLAs. v0.3.1 delivered pi0.5 end-to-end: 10k-step distill, 29/30 = 96.7% LIBERO (beats teacher's 28/30 = 93.3%). First public reproduction of the paper."
-    check: "test -f src/reflex/distill/snapflow.py && test -f src/reflex/distill/snapflow_pi0_model.py && .venv/bin/python -c 'from reflex.distill.snapflow import snapflow_loss_step; from reflex.distill.snapflow_pi0_model import enable_snapflow, load_snapflow_student' 2>/dev/null"
+    description: "tether distill implements SnapFlow (arxiv 2604.05656, April 2026) — teacher-student 1-NFE distillation for flow-matching VLAs. Supersedes the earlier DMPO goal; SnapFlow was picked after 2026-04-20 research showed it was the only published method with measured-task-success on real VLAs. v0.3.1 delivered pi0.5 end-to-end: 10k-step distill, 29/30 = 96.7% LIBERO (beats teacher's 28/30 = 93.3%). First public reproduction of the paper."
+    check: "test -f src/tether/distill/snapflow.py && test -f src/tether/distill/snapflow_pi0_model.py && .venv/bin/python -c 'from tether.distill.snapflow import snapflow_loss_step; from tether.distill.snapflow_pi0_model import enable_snapflow, load_snapflow_student' 2>/dev/null"
     weight: 9
 
   - id: distill-snapflow-student-onnx
     status: done
-    description: "Distilled student exports to monolithic ONNX with 1-NFE baked in (target_time=1 as constant). CLI: `reflex export <checkpoint> --from-distilled`. Output has same I/O signature as teacher family's monolithic ONNX so downstream serve path is unmodified. Parity vs PyTorch `sample_actions_1step`: cos=1.0, max_abs=4.77e-06 (machine precision). Shipped artifact retains the 29/30 LIBERO number measured on the PyTorch path."
-    check: "grep -q 'export_snapflow_student_monolithic' src/reflex/exporters/monolithic.py && grep -q 'from_distilled' src/reflex/cli.py"
+    description: "Distilled student exports to monolithic ONNX with 1-NFE baked in (target_time=1 as constant). CLI: `tether export <checkpoint> --from-distilled`. Output has same I/O signature as teacher family's monolithic ONNX so downstream serve path is unmodified. Parity vs PyTorch `sample_actions_1step`: cos=1.0, max_abs=4.77e-06 (machine precision). Shipped artifact retains the 29/30 LIBERO number measured on the PyTorch path."
+    check: "grep -q 'export_snapflow_student_monolithic' src/tether/exporters/monolithic.py && grep -q 'from_distilled' src/tether/cli.py"
     weight: 9
 
   - id: distill-snapflow-fp16-libero
@@ -81,7 +81,7 @@ goals:
 
   - id: pi0-onnx-parity
     status: done
-    description: "End-to-end pi0 ONNX export produces cos >= 0.999 vs reference PyTorch sample_actions on shared noise. Covers PaliGemma vision + Gemma language backbone + Gemma expert + flow matching loop. src/reflex/exporters/pi0_exporter.py (584 lines) exists but cos-parity has never been verified on shared-noise discipline. The cross-framework moat for pi0 — one of 4 models claimed to work."
+    description: "End-to-end pi0 ONNX export produces cos >= 0.999 vs reference PyTorch sample_actions on shared noise. Covers PaliGemma vision + Gemma language backbone + Gemma expert + flow matching loop. src/tether/exporters/pi0_exporter.py (584 lines) exists but cos-parity has never been verified on shared-noise discipline. The cross-framework moat for pi0 — one of 4 models claimed to work."
     check: "test -f tests/test_pi0_onnx_parity.py && .venv/bin/python -m pytest tests/test_pi0_onnx_parity.py -q 2>/dev/null"
     weight: 9
 
@@ -93,7 +93,7 @@ goals:
 
   - id: gr00t-onnx-parity
     status: done
-    description: "End-to-end NVIDIA GR00T N1.6 ONNX export produces cos >= 0.999 vs reference PyTorch. Requires DiT + AdaLN (2-chunk scale+shift) handling. src/reflex/exporters/gr00t_exporter.py (756 lines) exists; cos-parity never verified under shared-noise discipline."
+    description: "End-to-end NVIDIA GR00T N1.6 ONNX export produces cos >= 0.999 vs reference PyTorch. Requires DiT + AdaLN (2-chunk scale+shift) handling. src/tether/exporters/gr00t_exporter.py (756 lines) exists; cos-parity never verified under shared-noise discipline."
     check: "test -f tests/test_gr00t_onnx_parity.py && .venv/bin/python -m pytest tests/test_gr00t_onnx_parity.py -q 2>/dev/null"
     weight: 7
 
@@ -103,25 +103,25 @@ goals:
     weight: 4
 
   - id: jetson-benchmark-ci
-    description: "GitHub Action runs reflex bench on real Jetson hardware (CloudJetson or loaner) every commit, publishes ms/step per target to a public dashboard. Turns Leg B from static claim into per-commit proof."
+    description: "GitHub Action runs tether bench on real Jetson hardware (CloudJetson or loaner) every commit, publishes ms/step per target to a public dashboard. Turns Leg B from static claim into per-commit proof."
     check: "test -f .github/workflows/jetson-bench.yml"
     weight: 9
 
   - id: ros2-bridge
     status: done
-    description: "reflex serve --ros2 wraps the HTTP endpoint with a thin rclpy action server for native ROS2 integration"
-    check: "grep -q 'ros2' src/reflex/runtime/server.py 2>/dev/null || test -f src/reflex/runtime/ros2_bridge.py"
+    description: "tether serve --ros2 wraps the HTTP endpoint with a thin rclpy action server for native ROS2 integration"
+    check: "grep -q 'ros2' src/tether/runtime/server.py 2>/dev/null || test -f src/tether/runtime/ros2_bridge.py"
     weight: 8
 
   - id: calibration-metrics
     status: done
     description: "reflex eval --calibration computes ECE + Brier + NLL on any lerobot dataset — the one non-sim metric with a monotonic link to real-task success (Zollo 2025). Differentiator vs other VLA deployment tools."
-    check: "test -f src/reflex/eval/calibration.py && .venv/bin/python -c 'from reflex.eval.calibration import compute_ece, compute_brier, compute_nll' 2>/dev/null"
+    check: "test -f src/tether/eval/calibration.py && .venv/bin/python -c 'from tether.eval.calibration import compute_ece, compute_brier, compute_nll' 2>/dev/null"
     weight: 8
 
   - id: prefix-kv-cache-reuse
-    description: "reflex serve --cache-prefix reuses VLM prefix K/V across the 10-step denoise loop and multi-step rollouts. Dexmal 2510.26742 showed this unlocks 5-10x throughput for production trajectory serving."
-    check: "grep -q 'prefix_cache\\|cache_prefix' src/reflex/runtime/server.py 2>/dev/null"
+    description: "tether serve --cache-prefix reuses VLM prefix K/V across the 10-step denoise loop and multi-step rollouts. Dexmal 2510.26742 showed this unlocks 5-10x throughput for production trajectory serving."
+    check: "grep -q 'prefix_cache\\|cache_prefix' src/tether/runtime/server.py 2>/dev/null"
     weight: 8
 
   # ── MEDIUM-HIGH (weight 7) ────────────────────────────────────────
@@ -129,24 +129,24 @@ goals:
   - id: nan-guard-hardening
     status: done
     description: "Guard rejects NaN/Inf actions and halts after N consecutive clamps (staleness kill-switch)"
-    check: "grep -q 'nan' src/reflex/safety/guard.py 2>/dev/null && grep -q 'staleness\\|stale' src/reflex/safety/guard.py 2>/dev/null"
+    check: "grep -q 'nan' src/tether/safety/guard.py 2>/dev/null && grep -q 'staleness\\|stale' src/tether/safety/guard.py 2>/dev/null"
     weight: 7
 
   - id: xvla-exporter
-    description: "reflex export auto-detects and exports xVLA (880M, tokenized action head) to ONNX"
-    check: "test -f src/reflex/exporters/xvla_exporter.py && .venv/bin/python -c 'from reflex.exporters.xvla_exporter import export_xvla' 2>/dev/null"
+    description: "tether export auto-detects and exports xVLA (880M, tokenized action head) to ONNX"
+    check: "test -f src/tether/exporters/xvla_exporter.py && .venv/bin/python -c 'from tether.exporters.xvla_exporter import export_xvla' 2>/dev/null"
     weight: 7
 
   - id: api-key-auth
     status: done
-    description: "reflex serve --api-key enables X-Reflex-Key header auth that rejects unauthenticated requests with 401"
-    check: "grep -q 'api.key\\|api_key\\|X-Reflex-Key' src/reflex/runtime/server.py 2>/dev/null"
+    description: "tether serve --api-key enables X-Reflex-Key header auth that rejects unauthenticated requests with 401"
+    check: "grep -q 'api.key\\|api_key\\|X-Reflex-Key' src/tether/runtime/server.py 2>/dev/null"
     weight: 7
 
   - id: action-chunk-buffering
     status: done
-    description: "reflex serve --replan-hz N --execute-hz M handles async replan-while-execute with a ring buffer. Real production pattern (Physical Intelligence uses it) — robots execute at 100Hz, VLAs plan at 20Hz."
-    check: "grep -q 'replan_hz\\|sliding_window\\|action_buffer' src/reflex/runtime/server.py 2>/dev/null"
+    description: "tether serve --replan-hz N --execute-hz M handles async replan-while-execute with a ring buffer. Real production pattern (Physical Intelligence uses it) — robots execute at 100Hz, VLAs plan at 20Hz."
+    check: "grep -q 'replan_hz\\|sliding_window\\|action_buffer' src/tether/runtime/server.py 2>/dev/null"
     weight: 7
 
   - id: docker-image-distribution
@@ -160,18 +160,18 @@ goals:
   - id: latency-histograms
     status: done
     description: "/act response includes latency_p50, latency_p95, latency_p99, jitter_ms fields"
-    check: "grep -q 'latency_p95\\|p95' src/reflex/runtime/server.py 2>/dev/null"
+    check: "grep -q 'latency_p95\\|p95' src/tether/runtime/server.py 2>/dev/null"
     weight: 6
 
   - id: stripe-license-gating
     description: "Stripe subscription verification gates Pro-tier features (distill, fleet batching) behind a valid license key. Revenue feature — not a moat piece, just a wrapper."
-    check: "test -f src/reflex/licensing.py && .venv/bin/python -c 'from reflex.licensing import verify_license' 2>/dev/null"
+    check: "test -f src/tether/licensing.py && .venv/bin/python -c 'from tether.licensing import verify_license' 2>/dev/null"
     weight: 6
 
   - id: export-verification-report
     status: done
-    description: "Every reflex export auto-writes <export_dir>/VERIFICATION.md with per-stage cos, L2, max_abs, ONNX sizes, opset, target-hardware compat, provenance hash. 'Ship a receipt, not just a binary.'"
-    check: "grep -q 'VERIFICATION.md\\|verification_report' src/reflex/exporters/*.py 2>/dev/null"
+    description: "Every tether export auto-writes <export_dir>/VERIFICATION.md with per-stage cos, L2, max_abs, ONNX sizes, opset, target-hardware compat, provenance hash. 'Ship a receipt, not just a binary.'"
+    check: "grep -q 'VERIFICATION.md\\|verification_report' src/tether/exporters/*.py 2>/dev/null"
     weight: 6
 
   - id: quickstart-docs
@@ -182,13 +182,13 @@ goals:
 
   - id: adaptive-denoise-fix
     description: "Adaptive denoising works on pi0 (supported), is gated behind --experimental for smolvla/pi0.5/gr00t (unsafe)"
-    check: "grep -q 'experimental\\|EXPERIMENTAL' src/reflex/kernels/turbo.py 2>/dev/null"
+    check: "grep -q 'experimental\\|EXPERIMENTAL' src/tether/kernels/turbo.py 2>/dev/null"
     weight: 5
 
   - id: determinism-version-hash
     status: done
     description: "Every /act response includes model_hash, config_hash, reflex_version for reproducible debugging"
-    check: "grep -q 'model_hash' src/reflex/runtime/server.py 2>/dev/null"
+    check: "grep -q 'model_hash' src/tether/runtime/server.py 2>/dev/null"
     weight: 5
 
   # ── LOW (weight 3-4) ──────────────────────────────────────────────
@@ -200,26 +200,26 @@ goals:
 
   - id: openvla-exporter
     status: done
-    description: "reflex export auto-detects and exports OpenVLA (7.5B, tokenized head) beyond the current stub"
-    check: "grep -c 'def export_openvla' src/reflex/exporters/openvla_exporter.py 2>/dev/null | grep -q '[1-9]'"
+    description: "tether export auto-detects and exports OpenVLA (7.5B, tokenized head) beyond the current stub"
+    check: "grep -c 'def export_openvla' src/tether/exporters/openvla_exporter.py 2>/dev/null | grep -q '[1-9]'"
     weight: 4
 
   - id: sqlite-audit-log
-    description: "reflex serve --audit-db appends every /act call to a SHA-256 hash-chain SQLite log. RAISED weight 3 -> 8 (2026-04-23) per metrics gap audit — audit log is trust infrastructure (regulated industries unlock + customer compliance), not low-priority code. Long-term enterprise moat per wedge_priority_ranking guard wedge."
-    check: "test -f src/reflex/safety/audit_log.py && .venv/bin/python -c 'from reflex.safety.audit_log import AuditLog' 2>/dev/null"
+    description: "tether serve --audit-db appends every /act call to a SHA-256 hash-chain SQLite log. RAISED weight 3 -> 8 (2026-04-23) per metrics gap audit — audit log is trust infrastructure (regulated industries unlock + customer compliance), not low-priority code. Long-term enterprise moat per wedge_priority_ranking guard wedge."
+    check: "test -f src/tether/safety/audit_log.py && .venv/bin/python -c 'from tether.safety.audit_log import AuditLog' 2>/dev/null"
     weight: 8
 
   # ── LAUNCH VERIFICATION (durable pre-launch + regression gates) ───
 
   - id: fresh-install-verified
     status: done
-    description: "`pip install 'reflex-vla[serve,gpu] @ git+https://...'` succeeds on a fresh python:3.12-slim container and `reflex --help` runs. Catches dep resolution breakage, broken editable installs, missing files in the wheel. Regression-check every release."
+    description: "`pip install 'tether[serve,gpu] @ git+https://...'` succeeds on a fresh python:3.12-slim container and `tether --help` runs. Catches dep resolution breakage, broken editable installs, missing files in the wheel. Regression-check every release."
     check: "test -f tests/test_fresh_install.py && .venv/bin/python -m pytest tests/test_fresh_install.py -q 2>/dev/null"
     weight: 8
 
   - id: cuda-runtime-verified
     status: done
-    description: "Monolithic ONNX (SmolVLA + pi0) loads and runs on CUDAExecutionProvider with cos=1.0 vs CPUExecutionProvider on the same seeded inputs. Confirms the GPU serve path works end-to-end, not just the export. Without this, `reflex serve --device cuda` is a claim not a fact."
+    description: "Monolithic ONNX (SmolVLA + pi0) loads and runs on CUDAExecutionProvider with cos=1.0 vs CPUExecutionProvider on the same seeded inputs. Confirms the GPU serve path works end-to-end, not just the export. Without this, `tether serve --device cuda` is a claim not a fact."
     check: "test -f tests/test_cuda_runtime_parity.py && .venv/bin/python -m pytest tests/test_cuda_runtime_parity.py -q 2>/dev/null"
     weight: 8
 
@@ -231,25 +231,25 @@ goals:
 
   - id: docker-image-smoke-test
     status: done
-    description: "Published `ghcr.io/fastcrest/reflex-vla:<version>` image runs end-to-end: `docker run --gpus all -v <export>:/exports -p 8000:8000 <image>` followed by `curl POST /act` returns a valid action chunk. Catches Dockerfile breakage, missing deps, entrypoint bugs — every release, before customers hit it."
+    description: "Published `ghcr.io/fastcrest/tether:<version>` image runs end-to-end: `docker run --gpus all -v <export>:/exports -p 8000:8000 <image>` followed by `curl POST /act` returns a valid action chunk. Catches Dockerfile breakage, missing deps, entrypoint bugs — every release, before customers hit it."
     check: "test -f tests/test_docker_image_smoke.py && .venv/bin/python -m pytest tests/test_docker_image_smoke.py -q 2>/dev/null"
     weight: 7
 
   - id: ros2-bridge-live
     status: done
-    description: "`reflex ros2-serve` actually runs under real (not mocked) rclpy in a ros:humble container — subscribes to pub'd image/state/task topics, emits Float32MultiArray action chunks within the configured rate. Required because the current 8 tests use a FakeNode shim that will not catch rclpy API drift."
+    description: "`tether ros2-serve` actually runs under real (not mocked) rclpy in a ros:humble container — subscribes to pub'd image/state/task topics, emits Float32MultiArray action chunks within the configured rate. Required because the current 8 tests use a FakeNode shim that will not catch rclpy API drift."
     check: "test -f tests/test_ros2_bridge_live.py && .venv/bin/python -m pytest tests/test_ros2_bridge_live.py -q 2>/dev/null"
     weight: 7
 
   - id: cli-export-end-to-end
     status: done
-    description: "`reflex export <hf_id> --output <dir>` from the installed CLI produces a working export directory: reflex_config.json + model.onnx (or the legal decomposed-stage files) + VERIFICATION.md. Verifies the customer's first command from the README actually works — not just the Modal export scripts. If the CLI still routes to an abandoned decomposed exporter, this catches it before launch."
+    description: "`tether export <hf_id> --output <dir>` from the installed CLI produces a working export directory: reflex_config.json + model.onnx (or the legal decomposed-stage files) + VERIFICATION.md. Verifies the customer's first command from the README actually works — not just the Modal export scripts. If the CLI still routes to an abandoned decomposed exporter, this catches it before launch."
     check: "test -f tests/test_cli_export_end_to_end.py && .venv/bin/python -m pytest tests/test_cli_export_end_to_end.py -q 2>/dev/null"
     weight: 9
 
   - id: serve-act-roundtrip
     status: done
-    description: "`reflex serve <export_dir>` boots and an HTTP POST /act with image+instruction+state returns a valid action chunk (shape [chunk, action_dim], all-finite). Closes the loop between export + server code — we have ONNX parity but have never actually served a request end-to-end through the FastAPI layer."
+    description: "`tether serve <export_dir>` boots and an HTTP POST /act with image+instruction+state returns a valid action chunk (shape [chunk, action_dim], all-finite). Closes the loop between export + server code — we have ONNX parity but have never actually served a request end-to-end through the FastAPI layer."
     check: "test -f tests/test_serve_act_roundtrip.py && .venv/bin/python -m pytest tests/test_serve_act_roundtrip.py -q 2>/dev/null"
     weight: 9
 
@@ -261,7 +261,7 @@ goals:
 
   - id: guard-trip-integration
     status: done
-    description: "ActionGuard kill-switch integration: when max_consecutive_clamps is hit in a live `reflex serve`, POST /act returns the `guard_tripped` error (not actions), and POST /guard/reset clears the state. Verifies the full path from unit-tested guard → live HTTP behavior."
+    description: "ActionGuard kill-switch integration: when max_consecutive_clamps is hit in a live `tether serve`, POST /act returns the `guard_tripped` error (not actions), and POST /guard/reset clears the state. Verifies the full path from unit-tested guard → live HTTP behavior."
     check: "test -f tests/test_guard_trip_integration.py && .venv/bin/python -m pytest tests/test_guard_trip_integration.py -q 2>/dev/null"
     weight: 7
 
@@ -270,7 +270,7 @@ goals:
   - id: native-path-parity
     status: done
     description: "Native export path (lerobot SmolVLAPolicy + DecomposedRMSNorm) matches PyTorch reference to cos=1.0000 end-to-end. The one load-bearing number for reflex's deployment-parity claim."
-    check: "test -f src/reflex/runtime/smolvla_native.py && test -f scripts/local_full_diff.py && REFLEX_NATIVE=1 .venv/bin/python scripts/local_full_diff.py 2>&1 | grep -q 'cos=+1.000'"
+    check: "test -f src/tether/runtime/smolvla_native.py && test -f scripts/local_full_diff.py && REFLEX_NATIVE=1 .venv/bin/python scripts/local_full_diff.py 2>&1 | grep -q 'cos=+1.000'"
     weight: 10
 
   # ── MONETIZATION BLOCKERS (v0.2.1 → v0.3 ship list) ───────────────
@@ -293,7 +293,7 @@ goals:
   - id: gr00t-vlm-conditioning
     status: done
     description: "Export Eagle-2-HG VLM backbone as a separate ONNX, chain its KV output into the GR00T DiT per denoise step. DONE 2026-04-19: eagle_vlm.onnx (5.99 GB, cos=+1.000000 parity) + expert_stack_with_vlm.onnx (4.4 GB, cos=+1.000000 parity) + end-to-end chain test (image A vs B sensitivity max_abs=0.212, cos=+0.982 in BOTH PyTorch and ONNX paths — VLM conditioning is LIVE). See measured_numbers.md, reflex_context/01_architecture/gr00t_eagle_vlm_export_plan.md. GR00T is now fully deployable, not zero-stubbed."
-    check: "test -f src/reflex/exporters/eagle_export_stack.py && test -f scripts/modal_gr00t_eagle_vlm_export.py && test -f scripts/modal_gr00t_e2e_chain_test.py && .venv/bin/python -c 'from reflex.exporters.eagle_export_stack import build_eagle_export_stack' 2>/dev/null"
+    check: "test -f src/tether/exporters/eagle_export_stack.py && test -f scripts/modal_gr00t_eagle_vlm_export.py && test -f scripts/modal_gr00t_e2e_chain_test.py && .venv/bin/python -c 'from tether.exporters.eagle_export_stack import build_eagle_export_stack' 2>/dev/null"
     weight: 9
 
   - id: orin-nano-fp16-fit
@@ -304,14 +304,14 @@ goals:
 
   - id: docker-arm64-jetson
     status: done
-    description: "Native arm64 Docker image (`ghcr.io/fastcrest/reflex-vla:<version>-arm64` or multi-arch manifest) that runs on Jetson hardware. Current published image is x86_64 only; Jetson users must build from source. The 'zero-install Docker run' quickstart in our README works on x86 GPUs (A10G, RTX) but is a dead-end for the primary customer target. Requires: QEMU emulation or native arm64 build in GitHub Actions + Jetson-specific CUDA/cuDNN pinning + smoke test on real Jetson hardware."
+    description: "Native arm64 Docker image (`ghcr.io/fastcrest/tether:<version>-arm64` or multi-arch manifest) that runs on Jetson hardware. Current published image is x86_64 only; Jetson users must build from source. The 'zero-install Docker run' quickstart in our README works on x86 GPUs (A10G, RTX) but is a dead-end for the primary customer target. Requires: QEMU emulation or native arm64 build in GitHub Actions + Jetson-specific CUDA/cuDNN pinning + smoke test on real Jetson hardware."
     check: "test -f .github/workflows/docker-publish-arm64.yml && grep -q 'arm64\\|linux/arm64' .github/workflows/docker-publish-arm64.yml 2>/dev/null"
     weight: 7
 
   - id: fine-tuning-pipeline
     status: done
     description: "EXPLICIT SCOPE EXPANSION (2026-04-19): buyers often conflate 'deployment' with 'training' — they want an end-to-end workflow from their dataset to a deployed ONNX. v0.3 MVP landed 2026-04-20 — SmolVLA LoRA wrapper via subprocess-lerobot-train + auto-export. v0.5 adds pi0, parity-gate, calibration-first eval, preflight validator per finetune_SYNTHESIS.md. v1.0 conditional commit to orthogonalized platform. Full product decision in reflex_context/01_architecture/finetune_{competitive_research,sota_research,roadmap,architecture,SYNTHESIS}.md (5 docs, ~13k words)."
-    check: "(test -f src/reflex/finetune.py || test -f src/reflex/finetune/__init__.py) && PYTHONPATH=src .venv/bin/python -c 'from reflex.finetune import run_finetune, FinetuneConfig' 2>/dev/null"
+    check: "(test -f src/tether/finetune.py || test -f src/tether/finetune/__init__.py) && PYTHONPATH=src .venv/bin/python -c 'from tether.finetune import run_finetune, FinetuneConfig' 2>/dev/null"
     weight: 5
 
   # ── PHASE 2 LIBERO (added 2026-04-19 after first LIBERO-10 run = 0/10) ──
@@ -329,7 +329,7 @@ goals:
   - id: libero-via-monolithic-onnx
     status: done
     description: "Extend vla_eval.py to route through SmolVLAOnnxServer (monolithic cos=+1.000000 path) when a flag is set (e.g. REFLEX_MONOLITHIC=1). Currently LIBERO uses REFLEX_NATIVE=1 (PyTorch). The monolithic ONNX is what customers actually ship, so the task-success number on the monolithic path is the load-bearing customer claim. Depends on vla-eval-adapter-vlm-on producing a non-zero baseline first — otherwise we can't distinguish adapter-plumbing bugs from monolithic-path bugs."
-    check: "grep -q 'SmolVLAOnnxServer\\|REFLEX_MONOLITHIC' src/reflex/runtime/adapters/vla_eval.py 2>/dev/null"
+    check: "grep -q 'SmolVLAOnnxServer\\|REFLEX_MONOLITHIC' src/tether/runtime/adapters/vla_eval.py 2>/dev/null"
     weight: 9
 
   - id: libero-preprocessing-audit
@@ -371,19 +371,19 @@ goals:
   - id: libero-via-monolithic-onnx-pi05-teacher
     status: done
     description: "Verify pi0.5 monolithic ONNX teacher (num_steps=10, `lerobot/pi05_libero_finetuned_v044`) on LIBERO matches the PyTorch teacher task-success. Measured 2026-04-21: ONNX 27/30 = 90.0% vs PyTorch 28/30 = 93.3%, -3.3 pp single-episode net difference. Three-episode disagreement (ONNX -2, +1 vs PyTorch); not systematic bias, stochastic drift over 10 denoise × 500+ env steps. Teacher ONNX is deployable but strictly worse than the FP16 distilled student (96.7%, 6.5 GB) across accuracy/size/speed. Side-effect: fixed monolithic export for LIBERO-finetuned configs — compile_model=True + gradient_checkpointing=True were colliding with torch.export's dynamo tracer ('Guard failed on same frame')."
-    check: "grep -q 'compile_model.*False\\|torch.compile = lambda' src/reflex/exporters/monolithic.py 2>/dev/null"
+    check: "grep -q 'compile_model.*False\\|torch.compile = lambda' src/tether/exporters/monolithic.py 2>/dev/null"
     weight: 8
 
   - id: distill-state-out-pi05-v0.5
     status: partial
     description: "v0.5 RETRY SUCCESS 2026-04-22 PM. First attempt FAILED (0/4 LIBERO timeouts) due to SnapFlow self-distill having no teacher term + additive-bias state injection too weak. Retry plan shipped 4 changes: (1) loss → teacher-supervised L2(v_student, v_teacher); (2) state injection → prepend-as-token (pi0 pattern); (3) state_proj → warm-init from lerobot/pi0_libero_finetuned_v044; (4) optional state-sensitivity penalty (alpha=0.1). Stage-3 5k distill at A100-80GB batch=4 in 67min. LIBERO eval: 14/15 = 93.3%, EXACTLY matches pi0.5 PyTorch teacher baseline (28/30 = 93.3%). Per task: 0=4/5, 1=5/5, 2=5/5. State-out architecture is viable. Total cost: ~\$5. Full result + reasoning: reflex_vault 03_experiments/2026-04-22-v0.5-retry-stage3-libero-result.md. PARTIAL because the LOAD-BEARING product claim — cache-on LIBERO ≥ cache-off — has not yet been measured. That requires decomposed export of the v0.5 retry student + cache-on/off LIBERO eval. If cache-on ≥ cache-off, mark done + start serve work; else pivot to action-chunk caching."
-    check: "grep -q 'SnapFlowPI05StateOutPytorch' src/reflex/distill/snapflow_pi0_model.py 2>/dev/null"
+    check: "grep -q 'SnapFlowPI05StateOutPytorch' src/tether/distill/snapflow_pi0_model.py 2>/dev/null"
     weight: 9
 
   - id: decomposed-pi05-export-and-prefix-cache
     status: partial
-    description: "PARTIAL 2026-04-21/22. Decomposed export + cache code shipped. **Parity cos=1.0 ✅**, **LIBERO cache-off 28/30 = monolithic baseline ✅**, **latency probe 9.1× on matched inputs ✅**. BUT cache-on LIBERO = 25/30 < 28/30 — cache doesn't hit in production because **pi0.5 tokenizes proprio state INTO the language prompt**, so `lang_tokens` drifts every frame regardless of task description. The 9.1× latency probe fed bit-identical inputs so the cache hit; in actual deployment pi0.5 lang drifts → 0% hit rate. Structural issue documented in `reflex_vault/02_research/2026-04-22-pi05-state-in-language-invalidates-prefix-cache.md`. Remediations: (a) action-chunk cache keyed on raw obs (works regardless, another 10× on top); (b) split static prompt vs dynamic state in preprocessor; (c) pivot: prefix cache is a pi0-only feature. Shipped files: `src/reflex/exporters/decomposed.py`, `src/reflex/runtime/pi05_decomposed_server.py`, `scripts/modal_{export,verify,libero,latency}_pi05_decomposed.py`."
-    check: "test -f src/reflex/runtime/pi05_decomposed_server.py && test -f scripts/modal_latency_pi05_decomposed.py"
+    description: "PARTIAL 2026-04-21/22. Decomposed export + cache code shipped. **Parity cos=1.0 ✅**, **LIBERO cache-off 28/30 = monolithic baseline ✅**, **latency probe 9.1× on matched inputs ✅**. BUT cache-on LIBERO = 25/30 < 28/30 — cache doesn't hit in production because **pi0.5 tokenizes proprio state INTO the language prompt**, so `lang_tokens` drifts every frame regardless of task description. The 9.1× latency probe fed bit-identical inputs so the cache hit; in actual deployment pi0.5 lang drifts → 0% hit rate. Structural issue documented in `reflex_vault/02_research/2026-04-22-pi05-state-in-language-invalidates-prefix-cache.md`. Remediations: (a) action-chunk cache keyed on raw obs (works regardless, another 10× on top); (b) split static prompt vs dynamic state in preprocessor; (c) pivot: prefix cache is a pi0-only feature. Shipped files: `src/tether/exporters/decomposed.py`, `src/tether/runtime/pi05_decomposed_server.py`, `scripts/modal_{export,verify,libero,latency}_pi05_decomposed.py`."
+    check: "test -f src/tether/runtime/pi05_decomposed_server.py && test -f scripts/modal_latency_pi05_decomposed.py"
     weight: 8
 
   - id: libero-n50-paper-standard-sample
@@ -406,18 +406,18 @@ goals:
   - id: serve-episode-aware-cache
     status: failed
     description: "[FAILED 2026-04-22 PM] Hypothesized 5x serve speedup via episode-keyed lang-only VLM prefix cache. Built and tested (commit 8e577a0): EpisodeCache class, lang-only key, image ignored. LIBERO test failed catastrophically — 3 consecutive TASK 0 timeouts vs cache=none baseline 5/5. Root cause: PaliGemma's past_kv encodes BOTH vision and language. When robot moves (every frame), reusing past_kv from frame 0 feeds the action expert stale visual context → wrong actions. The latency microbench (8.95x) used bit-identical inputs so cache reuse was correct; in real deployment image moves and reuse breaks behavior. Full writeup: reflex_vault 03_experiments/2026-04-22-prefix-cache-moat-honest-finding.md. Cache code retained (works for stable inputs) but NOT shipped as customer-facing default. The REAL moat is the within-call decomposed cache (already shipped via decomposed export). New top serve goal: A2C2 correction head."
-    check: "grep -q 'episode_id' src/reflex/runtime/server.py 2>/dev/null"
+    check: "grep -q 'episode_id' src/tether/runtime/server.py 2>/dev/null"
     weight: 2
 
   - id: serve-rtc-wrapper
     description: "Wrap lerobot.policies.rtc for Real-Time Chunking (replan-while-execute pattern from arxiv 2506.07339). Pi0/pi05 are designed to be run with RTC; without it serve leaves 2-3x throughput on the table. PARTIAL 2026-04-24: Days 1-5 of B.3 sprint shipped (5 commits 2bd9a44 + 6c931fe + e032b34 + d21514b + 03a4345; 1678 lines, 87 tests). Foundation complete: RtcAdapter constructs lerobot RTCProcessor, predict_chunk_with_rtc body wired with latency dispatch + fallback, prev_chunk_left_over carry-forward, /act handler integration with episode_id reset hook. ARMED-BUT-INERT: shipped expert_denoise.onnx bakes the Euler loop into the graph, so RTC's per-step denoise_step contract has no Python loop to wrap. Real per-step RTC + Modal LIBERO validation DEFERRED TO PHASE 1 per ADR reflex_context/01_decisions/2026-04-24-defer-rtc-per-step-to-phase-1.md (gated on per-step expert export feature, tracked at reflex_context/features/03_export/per-step-expert-export.md). Design grounded in reference/deep_dive_lerobot_rtc.md (692 lines). Downstream research: learned-RTC-schedule from deployment traces (reasoning doc #3) — Phase 2+ after base RTC ships."
-    check: "test -f src/reflex/runtime/rtc_adapter.py && grep -q 'class RtcAdapter' src/reflex/runtime/rtc_adapter.py 2>/dev/null"
+    check: "test -f src/tether/runtime/rtc_adapter.py && grep -q 'class RtcAdapter' src/tether/runtime/rtc_adapter.py 2>/dev/null"
     status: partial
     weight: 10
 
   - id: serve-one-line-install
-    description: "pip install reflex-vla && reflex serve <hf-id> works on a Jetson with no Docker, no Triton YAML, no NVIDIA Container Toolkit. The DX win that beats Triton even though Triton wins on raw features. Most customers will tolerate a 1.5x latency hit for a 60s install vs a 4-hour Triton-on-Jetson setup."
-    check: "test -f docs/quickstart_jetson.md && grep -q 'pip install reflex-vla' README.md 2>/dev/null"
+    description: "pip install tether && tether serve <hf-id> works on a Jetson with no Docker, no Triton YAML, no NVIDIA Container Toolkit. The DX win that beats Triton even though Triton wins on raw features. Most customers will tolerate a 1.5x latency hit for a 60s install vs a 4-hour Triton-on-Jetson setup."
+    check: "test -f docs/quickstart_jetson.md && grep -q 'pip install tether' README.md 2>/dev/null"
     weight: 7
 
   # ── DEFERRED LONG-TERM SERVE (Phase 4-5; do NOT build now) ────────
@@ -465,7 +465,7 @@ goals:
 
   - id: serve-fix-decomposed-libero-state-out-preprocessor
     status: done
-    description: "DONE 2026-04-22 (commit c8fa7f4). scripts/modal_libero_pi05_decomposed.py now detects expert_takes_state=True in reflex_config.json and swaps to Pi05PrepareTokenizerStateOutStep. Fix lives in the harness (caller) not in src/reflex/runtime/pi05_decomposed_server.py because the server takes pre-tokenized lang_tokens as input — preprocessing correctness is a caller concern by design. Same fix pattern as commit 16a1057 for modal_libero_lerobot_native.py. Without this, state was double-fed (state_proj AND lang prompt) → lang_tokens drifted per frame → 0% cache hit rate."
+    description: "DONE 2026-04-22 (commit c8fa7f4). scripts/modal_libero_pi05_decomposed.py now detects expert_takes_state=True in reflex_config.json and swaps to Pi05PrepareTokenizerStateOutStep. Fix lives in the harness (caller) not in src/tether/runtime/pi05_decomposed_server.py because the server takes pre-tokenized lang_tokens as input — preprocessing correctness is a caller concern by design. Same fix pattern as commit 16a1057 for modal_libero_lerobot_native.py. Without this, state was double-fed (state_proj AND lang prompt) → lang_tokens drifted per frame → 0% cache hit rate."
     check: "grep -q 'swap_prepare_step_in_pipeline\\|Pi05PrepareTokenizerStateOutStep' scripts/modal_libero_pi05_decomposed.py 2>/dev/null"
     weight: 9
 
@@ -477,8 +477,8 @@ goals:
 
   - id: serve-pi05-prefix-cache-impl
     status: done
-    description: "[DONE 2026-04-22 PM, but discovered to be wrong-shaped — see serve-episode-aware-cache for the failed eval.] Built EpisodeCache class in src/reflex/runtime/episode_cache.py + cache_level='episode' branch in Pi05DecomposedInference. Code is correct for stable-input use cases (latency microbench validated 8.95x speedup). NOT used as customer-facing default — see honest finding doc for why. Code retained for potential future reuse (e.g. action-chunk cache layer or stationary-robot scenarios)."
-    check: "test -f src/reflex/runtime/episode_cache.py && grep -q 'cache_level == .episode.' src/reflex/runtime/pi05_decomposed_server.py 2>/dev/null"
+    description: "[DONE 2026-04-22 PM, but discovered to be wrong-shaped — see serve-episode-aware-cache for the failed eval.] Built EpisodeCache class in src/tether/runtime/episode_cache.py + cache_level='episode' branch in Pi05DecomposedInference. Code is correct for stable-input use cases (latency microbench validated 8.95x speedup). NOT used as customer-facing default — see honest finding doc for why. Code retained for potential future reuse (e.g. action-chunk cache layer or stationary-robot scenarios)."
+    check: "test -f src/tether/runtime/episode_cache.py && grep -q 'cache_level == .episode.' src/tether/runtime/pi05_decomposed_server.py 2>/dev/null"
     weight: 2
 
   - id: serve-cache-on-off-libero-real
@@ -500,37 +500,37 @@ goals:
 
   - id: serve-cuda-graphs
     description: "Capture the entire forward pass (VLM prefix + expert denoise) as one CUDA graph per-shape. Eliminates per-op kernel launch overhead. ~10-20%% latency win on Jetson where kernel launches are relatively expensive. Reference: vLLM's torch.cuda.graph + warmup pattern. Requires shape-stable inputs (we have static-shape decomposed exports — fits perfectly)."
-    check: "grep -q 'cuda.graph\\|capture_begin\\|cudagraph' src/reflex/runtime/*.py 2>/dev/null"
+    check: "grep -q 'cuda.graph\\|capture_begin\\|cudagraph' src/tether/runtime/*.py 2>/dev/null"
     weight: 7
 
   - id: serve-flash-attention-3
     description: "Upgrade SDPA → Flash Attention 3 in the PaliGemma + expert. ~2x faster attention on H100 / Hopper-class. Drop-in replacement; mostly an import + monkey-patch. NB: only applies to the PyTorch path; ONNX export uses ONNXRuntime's attention kernel (already optimized but not FA3-level). Worth adding to PyTorch eval to close the lerobot KV cache deepcopy + sample_actions perf gap."
-    check: "grep -q 'flash_attn_3\\|FlashAttention3' src/reflex/ 2>/dev/null"
+    check: "grep -q 'flash_attn_3\\|FlashAttention3' src/tether/ 2>/dev/null"
     weight: 5
 
   - id: serve-fp8-quantization-future
     description: "FP8 quant of pi0/pi05/SmolVLA monolithic ONNX. Halves memory + 2x faster matmul on Hopper (H100) and future Jetson Thor. Currently we ship FP16. NB: needs hardware-specific QAT or PTQ calibration to avoid task success drop. DEFERRED until first H100 customer or Thor hardware lands. Track here so future-me has the goal."
-    check: "test -f src/reflex/exporters/fp8_quant.py 2>/dev/null"
+    check: "test -f src/tether/exporters/fp8_quant.py 2>/dev/null"
     weight: 4
 
   - id: serve-adaptive-denoise-default
-    description: "Adaptive denoising / early-stop is gated as --experimental in src/reflex/kernels/turbo.py for smolvla/pi05/gr00t. Promote to default for pi0 (validated safe) + add per-model safety threshold. ~10-30%% latency win for 'easy' steps where flow-matching converges fast. Safety: gate on velocity threshold, never skip more than N steps total."
-    check: "grep -q 'adaptive.*default\\|EARLY_STOP_DEFAULT' src/reflex/kernels/turbo.py 2>/dev/null"
+    description: "Adaptive denoising / early-stop is gated as --experimental in src/tether/kernels/turbo.py for smolvla/pi05/gr00t. Promote to default for pi0 (validated safe) + add per-model safety threshold. ~10-30%% latency win for 'easy' steps where flow-matching converges fast. Safety: gate on velocity threshold, never skip more than N steps total."
+    check: "grep -q 'adaptive.*default\\|EARLY_STOP_DEFAULT' src/tether/kernels/turbo.py 2>/dev/null"
     weight: 6
 
   - id: serve-sub-frame-action-interpolation
     description: "Robot wants 100Hz commands; model predicts at 20Hz (50ms per chunk). Interpolate between predicted action[i] and action[i+1] in the runtime so robot gets smooth motion. Lives in RTC adapter / action buffer. Existing lerobot ActionInterpolator class is the reference impl. Smoother motion = visually + functionally better robot behavior with zero model retraining."
-    check: "grep -q 'ActionInterpolator\\|sub_frame\\|interpolate_actions' src/reflex/runtime/*.py 2>/dev/null"
+    check: "grep -q 'ActionInterpolator\\|sub_frame\\|interpolate_actions' src/tether/runtime/*.py 2>/dev/null"
     weight: 6
 
   - id: serve-compile-cache
     description: "torch.compile recompiles on every cold start (30-60s). Cache compiled artifacts to ~/.reflex/compile_cache/<model_hash>/ and reuse across server restarts. Requires hashing the model + dtype + device + input shapes. Also useful for distilled student variants — same architecture, different weights → cache hits. ~30-60s shaved from cold-start UX."
-    check: "test -f src/reflex/runtime/compile_cache.py 2>/dev/null"
+    check: "test -f src/tether/runtime/compile_cache.py 2>/dev/null"
     weight: 5
 
   - id: serve-sm-transport-jetson
     description: "When client (robot driver) and server (Reflex) are on the SAME Jetson, skip HTTP and use shared-memory transport for image + state input + action output. Triton has /dev/shm pattern. ~5-15%% latency reduction by eliminating serialization + socket overhead. Only relevant for on-device deployment (the primary Reflex use case). DEFERRED to Phase 2-3 when hardware bundles ship."
-    check: "test -f src/reflex/runtime/shm_transport.py 2>/dev/null"
+    check: "test -f src/tether/runtime/shm_transport.py 2>/dev/null"
     weight: 3
 
   # ── ARXIV-DRIVEN VLA-SPECIFIC GOALS (added 2026-04-22 PM) ─────────
@@ -541,29 +541,29 @@ goals:
   # easily copy' — exactly what our wedge is about.
 
   - id: serve-a2c2-correction-head
-    description: "A2C2 plug-in correction head (arXiv 2509.23224). B.4 GATE CLOSED 2026-04-24 as soft PROCEED with 3 constraints (writeup: reflex_context/03_experiments/2026-04-24-b4-gate-fire-attempt-and-findings.md). Harness shipped cdd3b76 (~1.5k LoC, 42 tests). First Modal fire (~$2, c321843) surfaced 2 gaps: (1) reflex serve does not dispatch decomposed exports — ReflexServer.load() looks for expert_stack.onnx, decomposed has vlm_prefix.onnx + expert_denoise.onnx; (2) low-vs-high-latency-on-same-deterministic-model is not a real distribution shift, so even with Gap 1 fixed the gate would say PROCEED meaninglessly. Real-data Modal fire (LeRobot offline → serve traces) needs Gap 1 fix + LeRobot HDF5 ingestion + ~$5 + 3-4 hr — DEFERRED, not gating B.5. Local synthetic-mode fire produced ratio 89.7x → ABORT-extrapolation, real signal that head architecture cannot generalize across latency bands. B.5 unblocked; design must respect 3 constraints: (a) train on target deployment latency band, (b) extend auto-skip with head.cfg.trained_latency_range runtime check, (c) train_a2c2_customer.py becomes load-bearing not optional."
-    check: "test -d src/reflex/correction && test -f scripts/train_a2c2.py && test -f scripts/validate_a2c2_transfer.py 2>/dev/null"
+    description: "A2C2 plug-in correction head (arXiv 2509.23224). B.4 GATE CLOSED 2026-04-24 as soft PROCEED with 3 constraints (writeup: reflex_context/03_experiments/2026-04-24-b4-gate-fire-attempt-and-findings.md). Harness shipped cdd3b76 (~1.5k LoC, 42 tests). First Modal fire (~$2, c321843) surfaced 2 gaps: (1) tether serve does not dispatch decomposed exports — ReflexServer.load() looks for expert_stack.onnx, decomposed has vlm_prefix.onnx + expert_denoise.onnx; (2) low-vs-high-latency-on-same-deterministic-model is not a real distribution shift, so even with Gap 1 fixed the gate would say PROCEED meaninglessly. Real-data Modal fire (LeRobot offline → serve traces) needs Gap 1 fix + LeRobot HDF5 ingestion + ~$5 + 3-4 hr — DEFERRED, not gating B.5. Local synthetic-mode fire produced ratio 89.7x → ABORT-extrapolation, real signal that head architecture cannot generalize across latency bands. B.5 unblocked; design must respect 3 constraints: (a) train on target deployment latency band, (b) extend auto-skip with head.cfg.trained_latency_range runtime check, (c) train_a2c2_customer.py becomes load-bearing not optional."
+    check: "test -d src/tether/correction && test -f scripts/train_a2c2.py && test -f scripts/validate_a2c2_transfer.py 2>/dev/null"
     status: in_progress
     weight: 10
 
   - id: serve-reflex-optimize-command
     description: "`reflex optimize <model>` — bundle EfficientVLA (arXiv 2506.10100) + dKV-Cache (arXiv 2505.15781) + FlashVLA (arXiv 2505.21200) as one CLI command that transforms any VLA → 3-5x faster inference. This is the packaging opportunity: each paper alone is a research artifact, but bundling them behind a single CLI invocation is a product. Competitive moat because it requires VLA-specific knowledge (which layers to cache, which ops to fuse, which attention patterns to skip) that general servers don't have."
-    check: "grep -q 'reflex optimize\\|def optimize_model' src/reflex/cli.py 2>/dev/null"
+    check: "grep -q 'reflex optimize\\|def optimize_model' src/tether/cli.py 2>/dev/null"
     weight: 9
 
   - id: serve-dexmal-3stage-streaming
     description: "Three-stage streaming inference pattern from Dexmal realtime-vla (arXiv 2510.26742) + Figure's Helix fast/slow framing. Splits inference into: (1) VLM encode (slow, per-episode), (2) expert denoise (fast, per-chunk), (3) action execution thread (continuous, per-timestep). Lets the motor stream continuously while upstream stages run async. Architectural — positions Reflex on the production pattern Figure uses. Complements episode cache (stage 1) + RTC (stage 2-3 overlap)."
-    check: "grep -q 'three_stage\\|motor_stream\\|stage_executor' src/reflex/runtime/*.py 2>/dev/null"
+    check: "grep -q 'three_stage\\|motor_stream\\|stage_executor' src/tether/runtime/*.py 2>/dev/null"
     weight: 7
 
   - id: serve-training-time-rtc-support
     description: "Training-Time RTC (arXiv 2512.05964) is how pi-0.6 and newer VLAs will be trained — RTC constraints baked in at training time instead of bolted on at inference. Reflex should detect train-time-RTC checkpoints (via config flag) and enable the matching fast-path in serve. Low engineering cost, high compatibility value — being the first inference stack to support pi-0.6 at launch is a wedge for that model family."
-    check: "grep -q 'train_time_rtc\\|rtc_trained' src/reflex/ 2>/dev/null"
+    check: "grep -q 'train_time_rtc\\|rtc_trained' src/tether/ 2>/dev/null"
     weight: 5
 
   - id: serve-jetson-thor-fp4-jetpack71
     description: "Jetson Thor + JetPack 7.1 + FP4 quantization + GR00T N1.7 support. Thor ships in volume in 2026 and will be the primary bundle target. FP4 halves memory vs FP8 and 4x vs FP16 — required to fit larger VLAs on Thor's 64GB. JetPack 7.1 is the SDK. GR00T N1.7 is the next NVIDIA reference VLA. Table-stakes for Phase 2 bundles."
-    check: "grep -q 'jetson_thor\\|fp4\\|jetpack_71' src/reflex/exporters/ 2>/dev/null"
+    check: "grep -q 'jetson_thor\\|fp4\\|jetpack_71' src/tether/exporters/ 2>/dev/null"
     weight: 5
 
   # ── DISTINCTIVE FEATURES (promoted from reflex_context/reasoning/serve_best_in_world_strategy.md) ──
@@ -577,27 +577,27 @@ goals:
 
   - id: serve-auto-calibration
     description: "On new deploys, first 10 episodes auto-tune per-embodiment config (normalization stats, velocity limits, RTC horizon, phash thresholds) from recorded trajectories. No manual config required — 'install Reflex, run 10 episodes, it configures itself.' Extends per-embodiment configs (weight 7) + record/replay (weight 8). Huge first-run UX win. 3-4 weeks build. Reasoning: reflex_context/reasoning/serve_best_in_world_strategy.md #16."
-    check: "test -f src/reflex/calibrate.py 2>/dev/null && grep -q 'auto_calibrate\\|reflex calibrate' src/reflex/cli.py 2>/dev/null"
+    check: "test -f src/tether/calibrate.py 2>/dev/null && grep -q 'auto_calibrate\\|tether calibrate' src/tether/cli.py 2>/dev/null"
     weight: 8
 
   - id: serve-scene-conditional-cache
     description: "Upgrade action-chunk cache key from image phash (brittle to lighting/camera jitter) to scene-level semantic features (CLIP embedding or similar). Same 'picking up the red cup' scenes hit cache even when pixels differ. Cheapest distinctive feature: 2-3 weeks, reuses existing action-chunk cache path in pi05_decomposed_server. Reasoning: reflex_context/reasoning/serve_best_in_world_strategy.md #4."
-    check: "grep -q 'scene_feature\\|clip_embed\\|semantic_cache' src/reflex/runtime/pi05_decomposed_server.py 2>/dev/null"
+    check: "grep -q 'scene_feature\\|clip_embed\\|semantic_cache' src/tether/runtime/pi05_decomposed_server.py 2>/dev/null"
     weight: 7
 
   - id: serve-self-distilling
     description: "THE MOST DURABLE MOAT (18mo replication window). Reflex runs background SnapFlow distillation on collected deployment traces. After N episodes, customer-specific student is A/B tested; if matches teacher on their tasks, promoted as production model. Robot gets faster with use. Pitch: 'the only serving product where your model improves by using it.' Requires record/replay (weight 8) + A/B harness + hot-swap. MVP 4-6 weeks (weekly cloud distill + manual A/B); full 8-12 weeks (online self-distill). Reasoning: reflex_context/reasoning/serve_best_in_world_strategy.md #1."
-    check: "test -f src/reflex/distill/online.py 2>/dev/null && grep -q 'online_distill\\|self_distill' src/reflex/cli.py 2>/dev/null"
+    check: "test -f src/tether/distill/online.py 2>/dev/null && grep -q 'online_distill\\|self_distill' src/tether/cli.py 2>/dev/null"
     weight: 8
 
   - id: serve-interpretability-replay
     description: "Every /act replay can be re-run with interpretability hooks enabled — attention maps, per-chunk action distributions, intermediate activations. Customer hits 'explain this failure' → sees which scene region the model attended to, which action dims varied most. Unique debugging moat (nobody has this for VLAs). Extends record/replay (weight 8). 6-10 weeks build. Reasoning: reflex_context/reasoning/serve_best_in_world_strategy.md #10."
-    check: "test -f src/reflex/runtime/interpretability.py 2>/dev/null && grep -q 'attention_maps\\|explain' src/reflex/cli.py 2>/dev/null"
+    check: "test -f src/tether/runtime/interpretability.py 2>/dev/null && grep -q 'attention_maps\\|explain' src/tether/cli.py 2>/dev/null"
     weight: 7
 
   - id: serve-one-command-deploy
     description: "THE DX KEYSTONE. `reflex deploy <robot-id>` does everything: detects embodiment, downloads matching config + distilled student from Reflex HF hub, compiles for customer's Jetson, runs safety check, starts serving, registers with monitoring. Integrates per-embodiment configs + auto-calibration + compile cache + telemetry + HF Hub. 4-6 weeks AFTER all components exist. Reasoning: reflex_context/reasoning/serve_best_in_world_strategy.md #20."
-    check: "grep -q 'def deploy_command\\|def cmd_deploy' src/reflex/cli.py 2>/dev/null"
+    check: "grep -q 'def deploy_command\\|def cmd_deploy' src/tether/cli.py 2>/dev/null"
     weight: 8
 
   # ── PHASE 0.5 FOUNDATION GOALS (extended from plan v3, promoted from features/ only) ──
@@ -606,20 +606,20 @@ goals:
   # (GOALS.yaml) tracks them and monitors.yaml detection signals align.
 
   - id: serve-per-embodiment-configs
-    description: "JSON/YAML schema + 3 presets (Franka / SO-100 / UR5). Encodes action_space (type, dim, ranges), normalization (mean/std), gripper (idx, thresholds, inverted), cameras (resolution+fps+color_space), control (frequency_hz, chunk_size, rtc_execution_horizon), constraints (max_ee_velocity, max_gripper_velocity). PHASE 0.5 FOUNDATION — unblocks RTC adapter, A2C2, action denormalization, reflex doctor, auto-calibration. SHIPPED 2026-04-24 (commits 950d070 + 5ae667a + 954d162; 1548 lines, 40 tests passing). Downstream wiring per consumer PR. Plan ref: serve_technical_plan_v3.md §4.5 + features/serve/per-embodiment-configs.md."
+    description: "JSON/YAML schema + 3 presets (Franka / SO-100 / UR5). Encodes action_space (type, dim, ranges), normalization (mean/std), gripper (idx, thresholds, inverted), cameras (resolution+fps+color_space), control (frequency_hz, chunk_size, rtc_execution_horizon), constraints (max_ee_velocity, max_gripper_velocity). PHASE 0.5 FOUNDATION — unblocks RTC adapter, A2C2, action denormalization, tether doctor, auto-calibration. SHIPPED 2026-04-24 (commits 950d070 + 5ae667a + 954d162; 1548 lines, 40 tests passing). Downstream wiring per consumer PR. Plan ref: serve_technical_plan_v3.md §4.5 + features/serve/per-embodiment-configs.md."
     check: "test -f configs/embodiments/franka.json 2>/dev/null && test -f configs/embodiments/so100.json 2>/dev/null && test -f configs/embodiments/ur5.json 2>/dev/null"
     status: done
     weight: 7
 
   - id: serve-action-denormalization-safety-net
     description: "Per-embodiment velocity/torque/position clamping in the serve path. SHIPPED 2026-04-24 (commit f20100e; +376 lines, 16 tests passing). Embodiment-config ActionGuard wired into /act handler — NaN/Inf zero-out + per-axis joint clamping + per-axis velocity caps. Reuses existing 331-line ActionGuard machinery via new from_embodiment_config classmethod (~50 LoC). Plan estimated 2-3 days; actual ~1 hr because existing ActionGuard already handled the hard parts. Day 3 LIBERO regression on Modal (~$1.50) deferred — re-cost when customer reports task-success degradation. effort_max defaults to 50 N·m per joint pending B.6 v2 schema extension (per-joint torque limits). Plan ref: features/01_serve/subfeatures/_rtc_a2c2/action-denormalization.md + _plan.md."
-    check: "grep -q 'embodiment_guard\\|ActionGuard.from_embodiment_config' src/reflex/runtime/server.py 2>/dev/null"
+    check: "grep -q 'embodiment_guard\\|ActionGuard.from_embodiment_config' src/tether/runtime/server.py 2>/dev/null"
     status: done
     weight: 7
 
   - id: serve-reflex-doctor
-    description: "`reflex doctor` CLI command — 10 falsifiable checks mapped to LeRobot GitHub issues: (1) model load OOM #386/#414, (2) ONNX provider unavailable #2137, (3) VLM tokenization errors #2119/#683, (4) image dim mismatch #1700, (5) action denormalization #414/#2210, (6) gripper config inverted #2210/#2531, (7) state deserialization #2458, (8) GPU memory > capacity #2137, (9) async RTC chunk boundary #2356/#2531, (10) CUDA/cuDNN version compat. SHIPPED 2026-04-24 across 2 commits (033536f Day 1 + b7cfe17 Day 2; 2378 lines, 39 tests, 0 flakes). All 10 checks register + run; falsifiability gate enforced via CheckResult.__post_init__. Frozen check spec at docs/doctor_check_list.md, draft-07 JSON Schema at docs/doctor_output_schema.json. CLI integrated into existing `reflex doctor` command (with optional --model/--embodiment/--rtc/--format/--skip flags). HIGH-ROI first-deploy UX per round-2 customer voice."
-    check: "test -d src/reflex/diagnostics && python -c 'from reflex.diagnostics import run_all_checks; r = run_all_checks(\"/tmp\", \"custom\"); assert len(r) == 10' 2>/dev/null"
+    description: "`tether doctor` CLI command — 10 falsifiable checks mapped to LeRobot GitHub issues: (1) model load OOM #386/#414, (2) ONNX provider unavailable #2137, (3) VLM tokenization errors #2119/#683, (4) image dim mismatch #1700, (5) action denormalization #414/#2210, (6) gripper config inverted #2210/#2531, (7) state deserialization #2458, (8) GPU memory > capacity #2137, (9) async RTC chunk boundary #2356/#2531, (10) CUDA/cuDNN version compat. SHIPPED 2026-04-24 across 2 commits (033536f Day 1 + b7cfe17 Day 2; 2378 lines, 39 tests, 0 flakes). All 10 checks register + run; falsifiability gate enforced via CheckResult.__post_init__. Frozen check spec at docs/doctor_check_list.md, draft-07 JSON Schema at docs/doctor_output_schema.json. CLI integrated into existing `tether doctor` command (with optional --model/--embodiment/--rtc/--format/--skip flags). HIGH-ROI first-deploy UX per round-2 customer voice."
+    check: "test -d src/tether/diagnostics && python -c 'from tether.diagnostics import run_all_checks; r = run_all_checks(\"/tmp\", \"custom\"); assert len(r) == 10' 2>/dev/null"
     status: done
     weight: 7
 
@@ -629,13 +629,13 @@ goals:
   # `monitors.yaml` detection signals align with goals.
 
   - id: serve-record-replay
-    description: "`reflex serve --record <dir>` dumps every /act request+response to disk with latency / cache-hit / guard-violation metadata. `reflex replay <file>` replays locally against a chosen model/config and diffs behavior. Unique value: robotics bugs happen in physical environments and are brutal to reproduce; nobody has this for VLAs today. LOAD-BEARING for 4 downstream goals: (1) A2C2 correction head training data (weight 10), (2) serve-auto-calibration (weight 8), (3) serve-self-distilling (weight 8), (4) serve-interpretability-replay (weight 7). SHIPPED 2026-04-24 across 4 atomic commits (6143028 + 1b89b50 + 3ef2d87 + d083065; +2120 lines, 80 pytest tests passing in 2.14s). Integration round-trip test + --image-dir deferred to consumer PRs. JSONL format specified in reflex_context/04_product/serve_technical_plan_v3.md Appendix D.1."
-    check: "test -f src/reflex/runtime/record.py 2>/dev/null && grep -q 'def replay' src/reflex/cli.py 2>/dev/null"
+    description: "`tether serve --record <dir>` dumps every /act request+response to disk with latency / cache-hit / guard-violation metadata. `reflex replay <file>` replays locally against a chosen model/config and diffs behavior. Unique value: robotics bugs happen in physical environments and are brutal to reproduce; nobody has this for VLAs today. LOAD-BEARING for 4 downstream goals: (1) A2C2 correction head training data (weight 10), (2) serve-auto-calibration (weight 8), (3) serve-self-distilling (weight 8), (4) serve-interpretability-replay (weight 7). SHIPPED 2026-04-24 across 4 atomic commits (6143028 + 1b89b50 + 3ef2d87 + d083065; +2120 lines, 80 pytest tests passing in 2.14s). Integration round-trip test + --image-dir deferred to consumer PRs. JSONL format specified in reflex_context/04_product/serve_technical_plan_v3.md Appendix D.1."
+    check: "test -f src/tether/runtime/record.py 2>/dev/null && grep -q 'def replay' src/tether/cli.py 2>/dev/null"
     status: done
     weight: 9
 
   - id: serve-cloud-latency-matrix
-    description: "Measure per-stage latency (VLM prefix / expert denoise / postprocess) across A10G + A100-80GB + H100 with p50/p95/p99 on pi0.5 decomposed + SmolVLA + pi0 FP16 + GR00T monolithic. Validates the projected-from-A10G scaling assumptions in serve_technical_plan_v3.md Appendix A BEFORE any Jetson measurements land. Writes per-hardware YAML to baselines/<hw>/<model>/<precision>.yaml per Appendix D.3 schema. 1-2 hr Modal + ~\\$5. Unblocks the `reflex bench` comparison feature and validates/invalidates the 'FA3 is 0% on ONNX serve path' claim flagged as `[unverified]` in Appendix A. RAISED weight 6 -> 8 (2026-04-23) per metrics gap audit — performance metrics should be w8-9, paired with jetson-latency-published w10."
+    description: "Measure per-stage latency (VLM prefix / expert denoise / postprocess) across A10G + A100-80GB + H100 with p50/p95/p99 on pi0.5 decomposed + SmolVLA + pi0 FP16 + GR00T monolithic. Validates the projected-from-A10G scaling assumptions in serve_technical_plan_v3.md Appendix A BEFORE any Jetson measurements land. Writes per-hardware YAML to baselines/<hw>/<model>/<precision>.yaml per Appendix D.3 schema. 1-2 hr Modal + ~\\$5. Unblocks the `tether bench` comparison feature and validates/invalidates the 'FA3 is 0% on ONNX serve path' claim flagged as `[unverified]` in Appendix A. RAISED weight 6 -> 8 (2026-04-23) per metrics gap audit — performance metrics should be w8-9, paired with jetson-latency-published w10."
     check: "test -f reflex_context/03_experiments/cloud_latency_matrix.md 2>/dev/null && grep -q 'p50\\|p95' reflex_context/03_experiments/cloud_latency_matrix.md 2>/dev/null"
     weight: 8
 
@@ -646,61 +646,61 @@ goals:
   # adoption metrics, not just innovation/moats.
 
   - id: serve-uptime-99-9
-    description: "reflex serve uptime ≥ 99.9% over rolling 30 days, validated via Prometheus alerts. SLA claim load-bearing for enterprise customers. Pairs with Phase 0.5 prewarm + crash-recovery."
-    check: "grep -q 'reflex_server_up' src/reflex/observability/prometheus.py 2>/dev/null"
+    description: "tether serve uptime ≥ 99.9% over rolling 30 days, validated via Prometheus alerts. SLA claim load-bearing for enterprise customers. Pairs with Phase 0.5 prewarm + crash-recovery."
+    check: "grep -q 'reflex_server_up' src/tether/observability/prometheus.py 2>/dev/null"
     weight: 10
 
   - id: serve-prewarm-crash-recovery
     description: "Prewarm at lifespan startup + crash-recovery circuit breaker on /act. SHIPPED 2026-04-24 — 6-state health machine (initializing → loading → warming → ready, with degraded + warmup_failed terminal-ish states). /health returns HTTP 503 unless state=ready (fixes load-balancer-thinks-server-ready-during-30s-warmup bug). /act circuit breaker: increments counter on consecutive predict exceptions OR error-result responses; resets on success; at threshold (default 5) flips to degraded → /act 503 + Retry-After: 60. CLI: --no-prewarm (default: prewarm ON) + --max-consecutive-crashes N. Loud lifecycle logs. ~165 LoC server + 25 LoC cli + 350 LoC tests (22 tests). Plan ref: features/01_serve/subfeatures/_dx_gaps/prewarm-crash-recovery.md."
-    check: "grep -q 'health_state\\|max_consecutive_crashes' src/reflex/runtime/server.py && grep -q 'no-prewarm' src/reflex/cli.py 2>/dev/null"
+    check: "grep -q 'health_state\\|max_consecutive_crashes' src/tether/runtime/server.py && grep -q 'no-prewarm' src/tether/cli.py 2>/dev/null"
     status: done
     weight: 8
 
   - id: serve-dataset-validator
-    description: "`reflex validate-dataset <path>` — pre-flight validation of LeRobot v3.0 training datasets BEFORE customers spend Modal credits on a doomed training run. SHIPPED 2026-04-24 — 8 falsifiable checks: info-json-parseable, schema-completeness (action + observation.state), data-files-present, shape-consistency (action_dim parquet vs info.json — LeRobot Issue #2531 root cause), action-finite (NaN/Inf/None), embodiment-action-dim-match (when --embodiment passed), episode-count-matches, timing-monotonic. Reuses Check/CheckResult pattern from `reflex doctor` (D.1). Pyarrow optional (skips parquet checks gracefully when missing). JSON + human report formats. Exit codes 0 ok / 1 warn / 2 blocker; --strict escalates warns to blockers. ~440 LoC validation pkg + 95 LoC cli + 295 LoC tests (23 tests). Plan ref: features/01_serve/subfeatures/_dx_gaps/dataset-validator.md."
-    check: "test -d src/reflex/validation && grep -q 'validate-dataset' src/reflex/cli.py 2>/dev/null"
+    description: "`reflex validate-dataset <path>` — pre-flight validation of LeRobot v3.0 training datasets BEFORE customers spend Modal credits on a doomed training run. SHIPPED 2026-04-24 — 8 falsifiable checks: info-json-parseable, schema-completeness (action + observation.state), data-files-present, shape-consistency (action_dim parquet vs info.json — LeRobot Issue #2531 root cause), action-finite (NaN/Inf/None), embodiment-action-dim-match (when --embodiment passed), episode-count-matches, timing-monotonic. Reuses Check/CheckResult pattern from `tether doctor` (D.1). Pyarrow optional (skips parquet checks gracefully when missing). JSON + human report formats. Exit codes 0 ok / 1 warn / 2 blocker; --strict escalates warns to blockers. ~440 LoC validation pkg + 95 LoC cli + 295 LoC tests (23 tests). Plan ref: features/01_serve/subfeatures/_dx_gaps/dataset-validator.md."
+    check: "test -d src/tether/validation && grep -q 'validate-dataset' src/tether/cli.py 2>/dev/null"
     status: done
     weight: 7
 
   - id: serve-customer-sdk
-    description: "`from reflex.client import ReflexClient, ReflexAsyncClient` — sync + async Python SDK for `reflex serve`. SHIPPED 2026-04-24. Consumes the server contract 1:1 with 5 typed exceptions: ReflexAuthError (401, no retry), ReflexValidationError (422, no retry), ReflexServerNotReadyError (503 warming/loading/warmup_failed, retry with Retry-After), ReflexServerDegradedError (503 circuit-broken, no retry by default — operator decision; opt-in via retry_on_degraded=True), ReflexClientError (base + network errors with exponential backoff). Episode context manager auto-generates episode_id and propagates so server's RTC adapter resets correctly. Image encoder accepts numpy/PIL/path/bytes/str. Bearer auth via X-Reflex-Key header. ~410 LoC client + ~470 LoC tests (31 tests). httpx>=0.24.0 added to base deps (lightweight; ~2MB). Plan ref: features/01_serve/subfeatures/_dx_gaps/customer-sdk.md."
-    check: "test -d src/reflex/client && python -c 'from reflex.client import ReflexClient, ReflexAsyncClient, encode_image' 2>/dev/null"
+    description: "`from tether.client import ReflexClient, ReflexAsyncClient` — sync + async Python SDK for `tether serve`. SHIPPED 2026-04-24. Consumes the server contract 1:1 with 5 typed exceptions: ReflexAuthError (401, no retry), ReflexValidationError (422, no retry), ReflexServerNotReadyError (503 warming/loading/warmup_failed, retry with Retry-After), ReflexServerDegradedError (503 circuit-broken, no retry by default — operator decision; opt-in via retry_on_degraded=True), ReflexClientError (base + network errors with exponential backoff). Episode context manager auto-generates episode_id and propagates so server's RTC adapter resets correctly. Image encoder accepts numpy/PIL/path/bytes/str. Bearer auth via X-Reflex-Key header. ~410 LoC client + ~470 LoC tests (31 tests). httpx>=0.24.0 added to base deps (lightweight; ~2MB). Plan ref: features/01_serve/subfeatures/_dx_gaps/customer-sdk.md."
+    check: "test -d src/tether/client && python -c 'from tether.client import ReflexClient, ReflexAsyncClient, encode_image' 2>/dev/null"
     status: done
     weight: 8
 
   - id: serve-model-zoo-cli
-    description: "`reflex models {list, pull, info}` — curated VLA registry browser/downloader. SHIPPED 2026-04-24. In-package registry (src/reflex/registry/data.py) with 5 seeded entries from public LeRobot weights (pi0-base, pi05-base, pi05-libero, smolvla-base, smolvla-libero). Filterable by family/device/embodiment. JSON + human Table output formats. `pull` calls huggingface_hub.snapshot_download into ~/.cache/reflex/models/<id>/. ModelEntry frozen dataclass with post_init validation guards (canonical family enum, kebab-case ids, positive action_dim). All seed entries require_export=True (raw PyTorch weights); CLI surfaces clear next-step hint pointing at `reflex export`. ~445 LoC + 245 LoC tests (36 tests). Plan ref: features/01_serve/subfeatures/_dx_gaps/model-zoo-cli.md."
-    check: "test -d src/reflex/registry && python -c 'from reflex.registry import REGISTRY, by_id; assert len(REGISTRY) >= 4 and by_id(\"pi05-base\") is not None' 2>/dev/null"
+    description: "`reflex models {list, pull, info}` — curated VLA registry browser/downloader. SHIPPED 2026-04-24. In-package registry (src/tether/registry/data.py) with 5 seeded entries from public LeRobot weights (pi0-base, pi05-base, pi05-libero, smolvla-base, smolvla-libero). Filterable by family/device/embodiment. JSON + human Table output formats. `pull` calls huggingface_hub.snapshot_download into ~/.cache/reflex/models/<id>/. ModelEntry frozen dataclass with post_init validation guards (canonical family enum, kebab-case ids, positive action_dim). All seed entries require_export=True (raw PyTorch weights); CLI surfaces clear next-step hint pointing at `tether export`. ~445 LoC + 245 LoC tests (36 tests). Plan ref: features/01_serve/subfeatures/_dx_gaps/model-zoo-cli.md."
+    check: "test -d src/tether/registry && python -c 'from tether.registry import REGISTRY, by_id; assert len(REGISTRY) >= 4 and by_id(\"pi05-base\") is not None' 2>/dev/null"
     status: done
     weight: 7
 
   - id: serve-one-command-deploy
-    description: "`reflex go --model X --embodiment Y` — one-command-deploy / launch-day hero command. SHIPPED 2026-04-24 as the 7th visible top-level CLI command. Pipeline: probe hardware (nvidia-smi → tegrastats → cpu fallback; 8 canonical device classes) → resolve model variant from registry given device class (3 strategies: exact-id, family+device, family-fallback; smallest-for-edge, largest-for-datacenter policy) → cache-check → pull via huggingface_hub if needed → if requires_export=True print export-then-rerun hint, else hand off to create_app + uvicorn. ~440 LoC + 245 LoC tests (29 tests). Phase 0.5 scope shipped; auto-export integration deferred to Phase 1 (heavy deps belong on Modal not the customer's edge box); auto-calibration deferred to Phase 1 (depends on D.2). Plan ref: features/01_serve/subfeatures/_dx_gaps/one-command-deploy.md."
-    check: "test -f src/reflex/runtime/hardware_probe.py && test -f src/reflex/runtime/model_resolver.py && grep -q 'def go(' src/reflex/cli.py 2>/dev/null"
+    description: "`tether go --model X --embodiment Y` — one-command-deploy / launch-day hero command. SHIPPED 2026-04-24 as the 7th visible top-level CLI command. Pipeline: probe hardware (nvidia-smi → tegrastats → cpu fallback; 8 canonical device classes) → resolve model variant from registry given device class (3 strategies: exact-id, family+device, family-fallback; smallest-for-edge, largest-for-datacenter policy) → cache-check → pull via huggingface_hub if needed → if requires_export=True print export-then-rerun hint, else hand off to create_app + uvicorn. ~440 LoC + 245 LoC tests (29 tests). Phase 0.5 scope shipped; auto-export integration deferred to Phase 1 (heavy deps belong on Modal not the customer's edge box); auto-calibration deferred to Phase 1 (depends on D.2). Plan ref: features/01_serve/subfeatures/_dx_gaps/one-command-deploy.md."
+    check: "test -f src/tether/runtime/hardware_probe.py && test -f src/tether/runtime/model_resolver.py && grep -q 'def go(' src/tether/cli.py 2>/dev/null"
     status: done
     weight: 9
 
   - id: serve-e2e-test
-    description: "End-to-end integration test harness for `reflex serve`. SHIPPED 2026-04-24. Covers 8 of 10 plan cases without Modal: /health state-machine, single /act, 100 concurrent (asyncio.gather + httpx.AsyncClient), action chunk validity (shape + NaN/Inf), malformed → 4xx, guard violation → proper error, crash recovery → 503 + Retry-After: 60, prewarm-state consistency. Uses the established stub-FastAPI-app pattern (4 test files now share the convention). 2 deferred cases (latency p99, cache hit rate) need real ONNX inference — gated on a future scripts/modal_serve_e2e_perf.py firing when GMI credits land. ~290 LoC, 10 tests. Plan ref: features/01_serve/subfeatures/_dx_gaps/e2e-test.md."
+    description: "End-to-end integration test harness for `tether serve`. SHIPPED 2026-04-24. Covers 8 of 10 plan cases without Modal: /health state-machine, single /act, 100 concurrent (asyncio.gather + httpx.AsyncClient), action chunk validity (shape + NaN/Inf), malformed → 4xx, guard violation → proper error, crash recovery → 503 + Retry-After: 60, prewarm-state consistency. Uses the established stub-FastAPI-app pattern (4 test files now share the convention). 2 deferred cases (latency p99, cache hit rate) need real ONNX inference — gated on a future scripts/modal_serve_e2e_perf.py firing when GMI credits land. ~290 LoC, 10 tests. Plan ref: features/01_serve/subfeatures/_dx_gaps/e2e-test.md."
     check: "test -f tests/test_serve_e2e.py && grep -q 'TestCase07CrashRecovery' tests/test_serve_e2e.py 2>/dev/null"
     status: done
     weight: 9
 
   - id: serve-bench-revamp
     description: "`reflex inspect bench --report bench.md` — methodology-rich latency report with reproducibility envelope. SHIPPED 2026-04-24 as the first Phase 1 ship. ISB-1 methodology lifted from EasyInference sibling project (warmup discard, p50/p95/p99/p99.9 + tail, jitter as std/mean, 95% CI normal-approx). Reproducibility envelope: git SHA + dirty flag, GPU name (nvidia-smi), CUDA version, ORT version, per-ONNX-file SHA256, seed, device, inference_mode. Markdown + JSON output (stable schema_version=1; CI-friendly). Backward compat: existing one-shot table UX preserved when --report flags omitted. ~375 LoC bench package + 35 LoC cli wiring + 280 LoC tests (27 tests). Pattern source documented in reflex-vla/reference/NOTES.md sibling-project section. Plan ref: features/01_serve/subfeatures/_dx_gaps/bench-revamp.md."
-    check: "test -d src/reflex/bench && python -c 'from reflex.bench import compute_stats, BenchReport, capture_environment' 2>/dev/null"
+    check: "test -d src/tether/bench && python -c 'from tether.bench import compute_stats, BenchReport, capture_environment' 2>/dev/null"
     status: done
     weight: 8
 
   - id: serve-prometheus-grafana
-    description: "/metrics Prometheus endpoint + Grafana dashboard template (12 metrics: latency histogram, cache hit/miss counters, denoise steps, safety/SLO violations, fallback invocations, model swaps, in-flight gauge, episodes active, server up). SHIPPED 2026-04-24 (commit ad03d4b; +931 lines, 20 tests). Cardinality-bounded (90 series budget; source-grep test enforces no instruction/request_id/user_id/timestamp labels). dashboards/grafana_template.json schemaVersion 39 — 5 panels, templating vars for embodiment + model_id. /metrics route in server.py has no auth (operators network-isolate per plan). Downstream features (webhooks, slo-enforcement, guard, hot-swap) import from reflex.observability instead of defining their own metrics. Plan ref: features/01_serve/subfeatures/_ecosystem/prometheus-grafana_plan.md."
-    check: "test -f src/reflex/observability/prometheus.py && test -f dashboards/grafana_template.json && python -c 'from reflex.observability import render_metrics; assert b\"reflex_act_latency_seconds\" in render_metrics()' 2>/dev/null"
+    description: "/metrics Prometheus endpoint + Grafana dashboard template (12 metrics: latency histogram, cache hit/miss counters, denoise steps, safety/SLO violations, fallback invocations, model swaps, in-flight gauge, episodes active, server up). SHIPPED 2026-04-24 (commit ad03d4b; +931 lines, 20 tests). Cardinality-bounded (90 series budget; source-grep test enforces no instruction/request_id/user_id/timestamp labels). dashboards/grafana_template.json schemaVersion 39 — 5 panels, templating vars for embodiment + model_id. /metrics route in server.py has no auth (operators network-isolate per plan). Downstream features (webhooks, slo-enforcement, guard, hot-swap) import from tether.observability instead of defining their own metrics. Plan ref: features/01_serve/subfeatures/_ecosystem/prometheus-grafana_plan.md."
+    check: "test -f src/tether/observability/prometheus.py && test -f dashboards/grafana_template.json && python -c 'from tether.observability import render_metrics; assert b\"reflex_act_latency_seconds\" in render_metrics()' 2>/dev/null"
     status: done
     weight: 6
 
   - id: serve-slo-enforcement
-    description: "reflex serve --slo p99=Xms rejects requests exceeding user-set latency threshold; returns 503 SLO_VIOLATED with structured error. Reliability §3 metric in METRICS.md. Bet-your-business credibility for Pro tier."
-    check: "grep -q 'slo.*enforcement\\|SloViolated\\|--slo' src/reflex/runtime/server.py 2>/dev/null"
+    description: "tether serve --slo p99=Xms rejects requests exceeding user-set latency threshold; returns 503 SLO_VIOLATED with structured error. Reliability §3 metric in METRICS.md. Bet-your-business credibility for Pro tier."
+    check: "grep -q 'slo.*enforcement\\|SloViolated\\|--slo' src/tether/runtime/server.py 2>/dev/null"
     weight: 9
 
   - id: serve-mttr-under-1hr

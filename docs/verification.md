@@ -40,7 +40,7 @@ Until you run `tether validate`, the parity section will say _"Not yet verified.
 | **ONNX opset** | ONNX operator set version. Higher = more ops available. Standard: 19 |
 | **Denoising steps** | Number of flow-matching denoise iterations baked into the ONNX graph. More steps = higher quality but slower inference |
 | **Action chunk size** | How many future actions the model predicts per inference call |
-| **Tether version** | The `tether-vla` package version used for export (auto-filled from `tether.__version__`) |
+| **Tether version** | The `tether` package version used for export (auto-filled from `tether.__version__`) |
 | **Platform** | `platform.platform()` output where the export was run |
 
 > **For drones:** The action chunk size is typically smaller (20 vs 50) because flight dynamics require faster replanning. The denoising steps may also be lower for latency-sensitive aerial deployments.
@@ -139,7 +139,7 @@ The number of random test inputs used. Each fixture is a synthetic (image, instr
 
 **`Seed`**
 
-The random seed used to generate fixtures. Same seed + same model + same export settings = identical results. This is what makes the verification **reproducible** by anyone with the same `tether-vla` version.
+The random seed used to generate fixtures. Same seed + same model + same export settings = identical results. This is what makes the verification **reproducible** by anyone with the same `tether` version.
 
 ---
 

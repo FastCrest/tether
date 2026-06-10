@@ -2,16 +2,16 @@
 
 > by [FastCrest](https://fastcrest.com) — deployment infrastructure for vision-language-action models.
 
-[![PyPI](https://img.shields.io/pypi/v/tether-vla.svg)](https://pypi.org/project/tether-vla/)
-[![Python](https://img.shields.io/pypi/pyversions/tether-vla.svg)](https://pypi.org/project/tether-vla/)
-[![License](https://img.shields.io/pypi/l/tether-vla.svg)](https://github.com/FastCrest/tether/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/pypi/dm/tether-vla.svg)](https://pypi.org/project/tether-vla/)
+[![PyPI](https://img.shields.io/pypi/v/tether.svg)](https://pypi.org/project/tether/)
+[![Python](https://img.shields.io/pypi/pyversions/tether.svg)](https://pypi.org/project/tether/)
+[![License](https://img.shields.io/pypi/l/tether.svg)](https://github.com/FastCrest/tether/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/pypi/dm/tether.svg)](https://pypi.org/project/tether/)
 
 ![Tether — pip install + tether doctor + tether --help on Modal A10G with TRT EP active](assets/tether-tweet.gif)
 
 **The deployment layer for VLAs** — take a Vision-Language-Action model off the training cluster and onto a robot. Now with **`tether chat`** — talk to your robot fleet in plain English.
 
-**Verified parity across ALL four major open VLAs.** Reflex's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
+**Verified parity across ALL four major open VLAs.** Tether's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
 
 One CLI, eleven verbs, plus a chat agent.
 
@@ -65,8 +65,8 @@ Breaking: module renames — `tether.exporters.{pi0,smolvla,gr00t}_exporter` →
 We ship patches frequently — make sure you're on the latest:
 
 ```bash
-pip install --upgrade tether-vla              # pip
-uv add --refresh tether-vla                   # uv (the --refresh flag is required;
+pip install --upgrade tether              # pip
+uv add --refresh tether                   # uv (the --refresh flag is required;
                                               # uv caches the package index aggressively
                                               # and won't see new releases without it)
 ```
@@ -286,21 +286,21 @@ Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alia
 
 ```bash
 # x86_64 CUDA runtime (cloud GPUs, dev workstations)
-docker pull ghcr.io/fastcrest/tether-vla:latest
+docker pull ghcr.io/fastcrest/tether:latest
 docker run --gpus all \
   -v $(pwd)/p0:/exports \
   -p 8000:8000 \
-  ghcr.io/fastcrest/tether-vla:latest
+  ghcr.io/fastcrest/tether:latest
 
 # Jetson Orin / Orin Nano / Thor (arm64 + nvidia container runtime)
-docker pull ghcr.io/fastcrest/tether-vla:latest-arm64
+docker pull ghcr.io/fastcrest/tether:latest-arm64
 docker run --runtime=nvidia \
   -v $(pwd)/p0:/exports \
   -p 8000:8000 \
-  ghcr.io/fastcrest/tether-vla:latest-arm64
+  ghcr.io/fastcrest/tether:latest-arm64
 ```
 
-The container's default command is `tether serve /exports --host 0.0.0.0 --port 8000`. Override with any `tether` subcommand: `docker run ... ghcr.io/fastcrest/tether-vla:latest export <hf_id>` etc.
+The container's default command is `tether serve /exports --host 0.0.0.0 --port 8000`. Override with any `tether` subcommand: `docker run ... ghcr.io/fastcrest/tether:latest export <hf_id>` etc.
 
 Jetson arm64 image: built via QEMU cross-compile on tag push (`v*`). Bring-your-own-CUDA — the image deliberately doesn't bundle CUDA/cuDNN/TensorRT (those live on the Jetson under `/usr/local/cuda` and are ABI-locked to the host's JetPack version; the nvidia container runtime exposes them into the container).
 

@@ -1,7 +1,7 @@
 """Customer first-run dogfood test.
 
 Pretends to be a first-time user who has only read the README.md of
-tether-vla. Uses NVIDIA's TRT container (as the README recommends for
+tether. Uses NVIDIA's TRT container (as the README recommends for
 GPU) and follows the quickstart verbatim:
 
   1. Install (pip install 'tether[serve,gpu] @ git+...')
@@ -61,7 +61,7 @@ image = (
         # SHA-pinning the install URL is what forces Modal to rebuild the image
         # when we commit — without this, the cached image from the previous dogfood
         # run is reused and the new fixes aren't actually tested.
-        f'pip install "tether[serve,gpu,monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether[serve,gpu,monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
     )
 )
 

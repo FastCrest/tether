@@ -43,15 +43,15 @@ def generate_sbom(
     components: list[dict[str, Any]] = [
         {
             "type": "application",
-            "bom-ref": f"pkg:pypi/tether-vla@{__version__}",
-            "name": "tether-vla",
+            "bom-ref": f"pkg:pypi/tether@{__version__}",
+            "name": "tether",
             "version": __version__,
-            "purl": f"pkg:pypi/tether-vla@{__version__}",
+            "purl": f"pkg:pypi/tether@{__version__}",
         }
     ]
 
     if include_environment:
-        seen = {"tether-vla"}
+        seen = {"tether"}
         for dist in sorted(metadata.distributions(), key=lambda d: (d.metadata.get("Name") or "").lower()):
             comp = _component_from_distribution(dist)
             if comp is None:

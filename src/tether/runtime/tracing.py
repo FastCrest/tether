@@ -7,7 +7,7 @@ unchanged in either case.
 
 Wire-up:
     from tether.runtime.tracing import setup_tracing, get_tracer
-    setup_tracing(service_name="tether-vla", endpoint="localhost:4317")
+    setup_tracing(service_name="tether", endpoint="localhost:4317")
     tracer = get_tracer(__name__)
     with tracer.start_as_current_span("act") as span:
         span.set_attribute("gen_ai.operation.name", "act")
@@ -44,7 +44,7 @@ def _check_otel_available() -> bool:
 
 
 def setup_tracing(
-    service_name: str = "tether-vla",
+    service_name: str = "tether",
     endpoint: str | None = None,
     sample_rate: float = 1.0,
 ) -> bool:

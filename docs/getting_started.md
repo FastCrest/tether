@@ -20,7 +20,7 @@ Or for development from source:
 
 ```bash
 git clone https://github.com/FastCrest/tether
-cd tether-vla
+cd tether
 pip install -e '.[serve,gpu,dev]'  # or [serve,onnx,dev] for CPU
 ```
 

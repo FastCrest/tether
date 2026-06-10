@@ -166,7 +166,7 @@ def build_adapter_class():
 
     Deferred-import pattern: vla-eval's base class is only imported when the
     adapter is actually built, so importing this module (for the pure helpers
-    or for introspection) does not require ``tether-vla[eval]``.
+    or for introspection) does not require ``tether[eval]``.
     """
     try:
         from vla_eval.model_servers.predict import PredictModelServer

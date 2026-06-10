@@ -111,7 +111,7 @@ image = (
     .run_commands(
         "mkdir -p /tmp/libero_data",
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
