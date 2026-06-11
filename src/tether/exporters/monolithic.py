@@ -1543,6 +1543,21 @@ def export_monolithic(
         except Exception as e:
             logger.warning("Weight fusion pass failed (non-fatal): %s", e)
 
+        # Re-write VERIFICATION.md now that weight fusion may have replaced
+        # model.onnx (and/or model.onnx.data) with structurally different bytes.
+        # The first write happens inside _write_tether_config (called by the
+        # family exporter above) and hashes the PRE-fusion file; this second
+        # call overwrites that stale report with hashes of the POST-fusion
+        # files so that `tether validate` agrees with what is actually on disk.
+        try:
+            from tether.verification_report import write_verification_report
+            write_verification_report(Path(output_dir), parity=None)
+            logger.debug("VERIFICATION.md refreshed after weight fusion")
+        except Exception as e:
+            logger.warning(
+                "Post-fusion VERIFICATION.md refresh failed (non-fatal): %s", e
+            )
+
     return result
 
 
