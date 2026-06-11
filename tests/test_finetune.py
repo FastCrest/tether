@@ -13,10 +13,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tether.finetune import FinetuneConfig, FinetuneResult, run_finetune
+from tether.finetune import FinetuneConfig, run_finetune
 from tether.finetune.run import (
     _build_lerobot_command,
     _locate_checkpoint,
+    _run_lerobot_training,
     _validate_config,
 )
 
@@ -132,6 +133,7 @@ class TestLerobotCommandBuild:
         assert "--steps=5000" in joined
         assert "--batch_size=16" in joined
         assert "--optimizer.lr=0.0002" in joined
+        assert "--seed=42" in joined
         assert "--peft.method_type=lora" in joined
         assert "--peft.r=32" in joined
         # precision is NOT a top-level lerobot 0.5.1 flag — should not appear
@@ -225,6 +227,48 @@ class TestRunFinetuneOrchestration:
         mock_train.assert_not_called()
         assert "base is required" in (result.error or "")
 
+    def test_run_finetune_seeds_before_training(self, tmp_path):
+        cfg = self._cfg(tmp_path, skip_export=True, seed=123)
+        events = []
+
+        def _fake_seed(seed):
+            events.append(("seed", seed))
+            return {"torch": True, "cuda": False}
+
+        def _fake_train(cfg, log_path, **kwargs):
+            events.append(("train", cfg.seed))
+            self._setup_fake_checkpoint(cfg.output)
+            return 0
+
+        with patch("tether.finetune.run.seed_everything", side_effect=_fake_seed), \
+             patch("tether.finetune.run._run_lerobot_training", side_effect=_fake_train):
+            result = run_finetune(cfg)
+
+        assert result.status == "ok"
+        assert events[:2] == [("seed", 123), ("train", 123)]
+
+    def test_lerobot_subprocess_sets_pythonhashseed(self, tmp_path):
+        cfg = self._cfg(tmp_path, seed=987)
+
+        class _Proc:
+            stdout = iter(["training\n"])
+            returncode = 0
+
+            def wait(self):
+                return None
+
+        with patch("subprocess.Popen", return_value=_Proc()) as popen:
+            rc = _run_lerobot_training(
+                cfg,
+                tmp_path / "training_log.jsonl",
+                env={"EXISTING": "1"},
+            )
+
+        assert rc == 0
+        proc_env = popen.call_args.kwargs["env"]
+        assert proc_env["PYTHONHASHSEED"] == "987"
+        assert proc_env["EXISTING"] == "1"
+
     def test_training_failure_surfaces_rc(self, tmp_path):
         cfg = self._cfg(tmp_path)
         with patch("tether.finetune.run._run_lerobot_training", return_value=42):
@@ -239,7 +283,7 @@ class TestRunFinetuneOrchestration:
 
         def _fake_train(cfg, log_path, **kwargs):
             # Simulate a successful training run that wrote a checkpoint.
-            ckpt = self._setup_fake_checkpoint(cfg.output, step=1000)
+            self._setup_fake_checkpoint(cfg.output, step=1000)
             return 0
 
         with patch("tether.finetune.run._run_lerobot_training", side_effect=_fake_train), \
