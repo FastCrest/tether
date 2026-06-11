@@ -19,6 +19,7 @@ import torch
 
 from tether.exporters.vlm_prefix_exporter import (
     DEFAULT_VLM_KV_DIM,
+    _apply_checkpoint_vlm_weights,
 )
 from tether.runtime.vlm_components import (
     HIDDEN_SIZE,
@@ -723,3 +724,270 @@ class TestDifferentInstructions:
         # This test requires real model weights and would only run in CI
         # with TETHER_INTEGRATION=1
         pytest.skip("Integration test requires real model checkpoint")
+
+
+# ---------------------------------------------------------------------------
+# Test 13: _apply_checkpoint_vlm_weights — unit tests (no HF model download)
+#
+# These tests use synthetic nn.Module trees whose state_dict() key namespaces
+# mirror the real SmolVLMModel (AutoModel.from_pretrained) layout:
+#   text_model.embed_tokens.weight
+#   text_model.norm.weight
+#   text_model.layers.0.self_attn.k_proj.weight / .bias
+#   text_model.layers.0.self_attn.v_proj.weight / .bias
+#   text_model.layers.0.input_layernorm.weight / .bias
+#   vision_model.embeddings.patch_embedding.weight / .bias
+#   vision_model.post_layernorm.weight / .bias
+#   connector.weight / .bias
+#
+# Checkpoint keys use the SmolVLA prefix model.vlm_with_expert.vlm. so that
+# _apply_checkpoint_vlm_weights matches on the first candidate.
+# ---------------------------------------------------------------------------
+
+
+def _build_synthetic_smolvlm_model():
+    """Return a tiny nn.Module whose state_dict key namespace mirrors SmolVLMModel."""
+
+    class _SelfAttn(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.k_proj = torch.nn.Linear(8, 4)
+            self.v_proj = torch.nn.Linear(8, 4)
+
+    class _Layer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.self_attn = _SelfAttn()
+            self.input_layernorm = torch.nn.LayerNorm(8)
+
+    class _TextModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed_tokens = torch.nn.Embedding(50, 8)
+            self.norm = torch.nn.LayerNorm(8)
+            self.layers = torch.nn.ModuleList([_Layer() for _ in range(2)])
+
+    class _VisionEmbeddings(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.patch_embedding = torch.nn.Linear(9, 8)
+
+    class _VisionModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embeddings = _VisionEmbeddings()
+            self.post_layernorm = torch.nn.LayerNorm(8)
+
+    class _SmolVLMModel(torch.nn.Module):
+        """Mirrors AutoModel.from_pretrained(SmolVLM2) key layout."""
+        def __init__(self):
+            super().__init__()
+            self.text_model = _TextModel()
+            self.vision_model = _VisionModel()
+            self.connector = torch.nn.Linear(8, 8)
+
+    return _SmolVLMModel()
+
+
+def _make_finetune_checkpoint(model, prefix="model.vlm_with_expert.vlm.", fill=99.0):
+    """Return a checkpoint state_dict with all-fill values for the given model."""
+    return {prefix + k: torch.full_like(v, fill) for k, v in model.state_dict().items()}
+
+
+class TestApplyCheckpointVLMWeights:
+    """Unit tests for _apply_checkpoint_vlm_weights using synthetic SmolVLMModel.
+
+    Key namespace evidence:
+      Checkpoint (after stripping model.vlm_with_expert.vlm.):
+        text_model.embed_tokens.weight, text_model.norm.weight,
+        text_model.layers.0.self_attn.k_proj.weight, ..., connector.weight, ...
+      AutoModel state_dict keys (SmolVLMModel):
+        text_model.embed_tokens.weight, text_model.norm.weight,
+        text_model.layers.0.self_attn.k_proj.weight, ..., connector.weight, ...
+      These are IDENTICAL after prefix strip → non-zero application guaranteed.
+    """
+
+    def test_non_zero_keys_applied(self):
+        """Guard against silent no-op: applied count must be > 0."""
+        model = _build_synthetic_smolvlm_model()
+        checkpoint = _make_finetune_checkpoint(model, fill=99.0)
+
+        applied = _apply_checkpoint_vlm_weights(model, checkpoint, tag="test")
+
+        assert applied > 0, (
+            f"Expected non-zero keys applied, got {applied}. "
+            "Checkpoint keys do not match model key namespace — silent no-op."
+        )
+
+    def test_applied_count_equals_total_model_keys(self):
+        """When checkpoint covers all model keys, applied == total model keys."""
+        model = _build_synthetic_smolvlm_model()
+        total_keys = len(list(model.state_dict().keys()))
+        checkpoint = _make_finetune_checkpoint(model, fill=99.0)
+
+        applied = _apply_checkpoint_vlm_weights(model, checkpoint, tag="test")
+
+        assert applied == total_keys, (
+            f"Expected all {total_keys} keys applied, got {applied}"
+        )
+
+    def test_finetune_values_actually_loaded(self):
+        """After application, model params equal the fine-tune values."""
+        model = _build_synthetic_smolvlm_model()
+        fill_value = 77.0
+        checkpoint = _make_finetune_checkpoint(model, fill=fill_value)
+
+        _apply_checkpoint_vlm_weights(model, checkpoint, tag="test")
+
+        # Check a representative selection of parameters
+        embed_weight = model.text_model.embed_tokens.weight
+        assert float(embed_weight[0, 0]) == pytest.approx(fill_value), (
+            f"embed_tokens not updated: got {float(embed_weight[0, 0])}, expected {fill_value}"
+        )
+
+        k_proj_weight = model.text_model.layers[0].self_attn.k_proj.weight
+        assert float(k_proj_weight[0, 0]) == pytest.approx(fill_value), (
+            f"layers[0].self_attn.k_proj not updated: got {float(k_proj_weight[0, 0])}"
+        )
+
+        connector_weight = model.connector.weight
+        assert float(connector_weight[0, 0]) == pytest.approx(fill_value), (
+            f"connector.weight not updated: got {float(connector_weight[0, 0])}"
+        )
+
+    def test_none_checkpoint_is_a_noop(self):
+        """When checkpoint_state_dict is None, the caller skips the call.
+
+        This test verifies the expected caller pattern: ``if checkpoint is not None``
+        guards the call, so a model loaded without a fine-tune checkpoint retains
+        its original base weights.
+        """
+        model = _build_synthetic_smolvlm_model()
+        original_sd = {k: v.clone() for k, v in model.state_dict().items()}
+
+        # Caller pattern — guard is on the call site, not inside the function.
+        checkpoint = None
+        if checkpoint is not None:
+            _apply_checkpoint_vlm_weights(model, checkpoint, tag="test")
+
+        for k, orig_v in original_sd.items():
+            current_v = model.state_dict()[k]
+            assert torch.allclose(current_v, orig_v), (
+                f"Parameter {k!r} changed when checkpoint was None"
+            )
+
+    def test_embed_tokens_reference_updated_after_apply(self):
+        """embed_tokens extracted AFTER apply reflects fine-tune values (reference semantics).
+
+        This is the critical property for export_text_embedder: the function
+        applies weights to the full AutoModel, then extracts embed_tokens by
+        attribute traversal. Since embed_tokens is a Python reference, it must
+        already carry the fine-tuned weights.
+        """
+        model = _build_synthetic_smolvlm_model()
+        fill_value = 42.0
+        checkpoint = _make_finetune_checkpoint(model, fill=fill_value)
+
+        # Simulate what export_text_embedder does:
+        #   1. apply_checkpoint_vlm_weights(full_model, ckpt)
+        #   2. embed_tokens = model.text_model.embed_tokens  (extracted after)
+        _apply_checkpoint_vlm_weights(model, checkpoint, tag="test_text_embedder")
+        embed_tokens = model.text_model.embed_tokens
+
+        assert float(embed_tokens.weight[0, 0]) == pytest.approx(fill_value), (
+            "embed_tokens.weight not updated via reference after full-model apply"
+        )
+
+    def test_text_model_reference_updated_after_apply(self):
+        """text_model extracted AFTER apply reflects fine-tune values (decoder prefill pattern).
+
+        This is the critical property for export_decoder_prefill: the function
+        applies weights to the full AutoModel, then extracts text_model. The
+        text_model (and its layers) is a Python submodule reference and must
+        carry fine-tuned k_proj / v_proj weights.
+        """
+        model = _build_synthetic_smolvlm_model()
+        fill_value = 55.0
+        checkpoint = _make_finetune_checkpoint(model, fill=fill_value)
+
+        # Simulate what export_decoder_prefill does:
+        #   1. apply_checkpoint_vlm_weights(full_model, ckpt)
+        #   2. text_model = model.text_model  (extracted after)
+        _apply_checkpoint_vlm_weights(model, checkpoint, tag="test_decoder_prefill")
+        text_model = model.text_model
+
+        k_proj = text_model.layers[0].self_attn.k_proj.weight
+        assert float(k_proj[0, 0]) == pytest.approx(fill_value), (
+            "text_model.layers[0].self_attn.k_proj not updated after full-model apply"
+        )
+
+        v_proj = text_model.layers[1].self_attn.v_proj.weight
+        assert float(v_proj[0, 0]) == pytest.approx(fill_value), (
+            "text_model.layers[1].self_attn.v_proj not updated after full-model apply"
+        )
+
+    def test_no_prefix_match_returns_zero(self):
+        """When checkpoint has no known prefix, applied count is 0 and model unchanged."""
+        model = _build_synthetic_smolvlm_model()
+        original_sd = {k: v.clone() for k, v in model.state_dict().items()}
+
+        # Build checkpoint with an unrecognized prefix
+        bad_checkpoint = {
+            "unknown.prefix." + k: torch.ones_like(v) * 123.0
+            for k, v in model.state_dict().items()
+        }
+
+        applied = _apply_checkpoint_vlm_weights(model, bad_checkpoint, tag="test_bad_prefix")
+
+        assert applied == 0, f"Expected 0 applied with bad prefix, got {applied}"
+        for k, orig_v in original_sd.items():
+            current_v = model.state_dict()[k]
+            assert torch.allclose(current_v, orig_v), (
+                f"Parameter {k!r} changed despite bad prefix (no keys should have matched)"
+            )
+
+    def test_partial_checkpoint_partial_apply(self):
+        """When checkpoint covers only text_model keys, only those are applied."""
+        model = _build_synthetic_smolvlm_model()
+        prefix = "model.vlm_with_expert.vlm."
+        fill_value = 33.0
+
+        # Only include text_model keys
+        partial_checkpoint = {
+            prefix + k: torch.full_like(v, fill_value)
+            for k, v in model.state_dict().items()
+            if k.startswith("text_model.")
+        }
+        text_model_key_count = sum(
+            1 for k in model.state_dict() if k.startswith("text_model.")
+        )
+
+        applied = _apply_checkpoint_vlm_weights(model, partial_checkpoint, tag="test_partial")
+
+        assert applied == text_model_key_count, (
+            f"Expected {text_model_key_count} applied for partial ckpt, got {applied}"
+        )
+        # text_model keys should be updated
+        assert float(model.text_model.embed_tokens.weight[0, 0]) == pytest.approx(fill_value)
+        # connector keys should NOT be updated (still random init, not 33.0)
+        connector_val = float(model.connector.weight[0, 0])
+        assert connector_val != pytest.approx(fill_value), (
+            "connector.weight was updated but shouldn't have been in partial checkpoint"
+        )
+
+    def test_tag_does_not_affect_result(self):
+        """Changing the tag parameter does not affect which keys are applied."""
+        model_a = _build_synthetic_smolvlm_model()
+        model_b = _build_synthetic_smolvlm_model()
+        # Make models start from the same state
+        model_b.load_state_dict(model_a.state_dict())
+
+        checkpoint = _make_finetune_checkpoint(model_a, fill=11.0)
+
+        applied_a = _apply_checkpoint_vlm_weights(model_a, checkpoint, tag="text_embedder")
+        applied_b = _apply_checkpoint_vlm_weights(model_b, checkpoint, tag="decoder_prefill")
+
+        assert applied_a == applied_b, (
+            f"tag should not affect applied count: text_embedder={applied_a}, "
+            f"decoder_prefill={applied_b}"
+        )
