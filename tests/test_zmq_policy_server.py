@@ -9,27 +9,39 @@ import threading
 import time
 
 import msgpack
-import pytest
 import zmq
+import zmq.auth
 
 from tether.runtime.transports.zmq.policy_server import (
     SCHEMA_VERSION,
     PolicyServer,
-    WireSchemaMismatchError,
 )
 
 
-def _start_server(port: int = 0) -> tuple[PolicyServer, threading.Thread]:
-    server = PolicyServer(port=port)
+def _start_server(port: int = 0, **kwargs) -> tuple[PolicyServer, threading.Thread]:
+    server = PolicyServer(port=port, **kwargs)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     time.sleep(0.1)  # let the socket bind
     return server, thread
 
 
-def _client_socket(port: int) -> zmq.Socket:
+def _client_socket(
+    port: int,
+    *,
+    curve_client_cert: str | None = None,
+    curve_server_public_key: str | None = None,
+) -> zmq.Socket:
     ctx = zmq.Context()
     sock = ctx.socket(zmq.REQ)
+    if curve_client_cert is not None or curve_server_public_key is not None:
+        assert curve_client_cert is not None
+        assert curve_server_public_key is not None
+        client_public_key, client_secret_key = zmq.auth.load_certificate(curve_client_cert)
+        server_public_key, _ = zmq.auth.load_certificate(curve_server_public_key)
+        sock.curve_publickey = client_public_key
+        sock.curve_secretkey = client_secret_key
+        sock.curve_serverkey = server_public_key
     sock.connect(f"tcp://127.0.0.1:{port}")
     return sock
 
@@ -65,6 +77,52 @@ def test_kill_shuts_down():
     assert result["status"] == "ok"
     thread.join(timeout=2)
     assert not server.running
+
+
+def test_control_token_required_for_ping_and_kill():
+    server, thread = _start_server(control_token="secret")
+    port = server.bound_port
+    sock = _client_socket(port)
+
+    result = _send_recv(sock, {"endpoint": "ping"})
+    assert "error" in result
+    assert "auth token" in result["error"]
+
+    result = _send_recv(sock, {"endpoint": "ping", "auth_token": "secret"})
+    assert result["status"] == "ok"
+
+    result = _send_recv(sock, {"endpoint": "kill", "auth_token": "wrong"})
+    assert "error" in result
+    assert server.running
+
+    result = _send_recv(sock, {"endpoint": "kill", "auth_token": "secret"})
+    assert result["status"] == "ok"
+    thread.join(timeout=2)
+    assert not server.running
+
+
+def test_curve_client_can_connect_with_allowed_certificate(tmp_path):
+    server_public, server_secret = zmq.auth.create_certificates(tmp_path, "server")
+    client_cert_dir = tmp_path / "clients"
+    client_cert_dir.mkdir()
+    _client_public, client_secret = zmq.auth.create_certificates(client_cert_dir, "robot")
+
+    server, thread = _start_server(
+        curve_server_cert=server_secret,
+        curve_client_cert_dir=client_cert_dir,
+    )
+    port = server.bound_port
+    sock = _client_socket(
+        port,
+        curve_client_cert=client_secret,
+        curve_server_public_key=server_public,
+    )
+
+    result = _send_recv(sock, {"endpoint": "ping"})
+    assert result["status"] == "ok"
+
+    server.close()
+    thread.join(timeout=2)
 
 
 # ── Custom endpoint ──────────────────────────────────────────────────

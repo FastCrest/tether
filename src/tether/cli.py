@@ -1730,6 +1730,24 @@ def serve(
              "3-camera setups via JPEG-on-wire and 40%+ lower tail jitter. "
              "ROS2 reserved for v1.0.",
     ),
+    zmq_server_cert: str = typer.Option(
+        "",
+        "--zmq-server-cert",
+        help="Path to a pyzmq CURVE server secret certificate (.key_secret). "
+             "Requires --transport zmq and --zmq-client-cert-dir.",
+    ),
+    zmq_client_cert_dir: str = typer.Option(
+        "",
+        "--zmq-client-cert-dir",
+        help="Directory of allowed pyzmq CURVE client public certificates. "
+             "Requires --transport zmq and --zmq-server-cert.",
+    ),
+    zmq_control_token: str = typer.Option(
+        "",
+        "--zmq-control-token",
+        help="Token required for ZMQ control endpoints such as ping and kill. "
+             "Pass the same value to ZmqRuntimeClient(auth_token=...).",
+    ),
     device: str = typer.Option("cuda", help="Device: cuda or cpu"),
     providers: str = typer.Option(
         "",
@@ -2653,8 +2671,19 @@ def serve(
     if transport == "zmq":
         console.print("[bold green]Starting ZMQ server...[/bold green]")
         from tether.runtime.transports.zmq.factory import create_zmq_server
-        zmq_server = create_zmq_server(app_instance, host=host, port=port)
+        zmq_server = create_zmq_server(
+            app_instance,
+            host=host,
+            port=port,
+            curve_server_cert=zmq_server_cert or None,
+            curve_client_cert_dir=zmq_client_cert_dir or None,
+            control_token=zmq_control_token or None,
+        )
         composed.append("[cyan]transport=zmq[/cyan]")
+        if zmq_server_cert:
+            composed.append("[cyan]curve=on[/cyan]")
+        if zmq_control_token:
+            composed.append("[cyan]control-auth=on[/cyan]")
         console.print(f"[dim]Features: {' + '.join(composed)}[/dim]")
         zmq_server.run()
     elif transport == "http":

@@ -48,6 +48,51 @@ actions = client.predict_action(obs)
 robot.execute(actions[0])  # first action in the chunk
 ```
 
+### Secure ZMQ
+
+Production ZMQ deployments should use CURVE authentication/encryption and a
+control token for operational endpoints such as `ping` and `kill`.
+
+Generate one server keypair and one client keypair:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import zmq.auth
+
+out = Path("zmq-certs")
+(out / "clients").mkdir(parents=True, exist_ok=True)
+zmq.auth.create_certificates(out, "server")
+zmq.auth.create_certificates(out / "clients", "robot-1")
+PY
+```
+
+Start the server with the server secret certificate and the directory of
+allowed client public certificates:
+
+```bash
+tether serve ./my_export/ \
+  --transport zmq \
+  --port 5555 \
+  --zmq-server-cert ./zmq-certs/server.key_secret \
+  --zmq-client-cert-dir ./zmq-certs/clients \
+  --zmq-control-token "$TETHER_ZMQ_CONTROL_TOKEN"
+```
+
+Configure the robot-side client with its secret certificate, the server public
+certificate, and the same control token:
+
+```python
+import os
+
+client = ZmqRuntimeClient(
+    "tcp://gpu-server:5555",
+    curve_client_cert="./zmq-certs/clients/robot-1.key_secret",
+    curve_server_public_key="./zmq-certs/server.key",
+    auth_token=os.environ["TETHER_ZMQ_CONTROL_TOKEN"],
+)
+```
+
 ## ZMQ Performance
 
 | Metric | HTTP | ZMQ | ZMQ + JPEG |
