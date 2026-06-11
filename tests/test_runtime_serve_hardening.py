@@ -8,7 +8,10 @@ Bug #3: TypeError from `image_wrist_b64=` kwarg passed to predict_from_base64_as
 from __future__ import annotations
 
 import inspect
+import importlib.util
 import json
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +35,10 @@ def _build_minimal_export_dir(tmp_path):
     return tmp_path
 
 
+def _server_py_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "src" / "tether" / "runtime" / "server.py"
+
+
 # ---------------------------------------------------------------------------
 # Bug #1 — /guard/reset must require api-key auth
 # ---------------------------------------------------------------------------
@@ -41,16 +48,13 @@ class TestGuardResetAuth:
 
     def _get_guard_reset_route(self):
         """Build the app and find the /guard/reset route object."""
-        try:
-            from fastapi import FastAPI
-        except ImportError:
+        if importlib.util.find_spec("fastapi") is None:
             pytest.skip("fastapi not installed")
 
         from tether.runtime.server import create_app
-        import tempfile, json as _json, pathlib
 
         with tempfile.TemporaryDirectory() as d:
-            p = pathlib.Path(d)
+            p = Path(d)
             cfg = {
                 "model_id": "lerobot/smolvla_base",
                 "model_type": "smolvla",
@@ -59,7 +63,7 @@ class TestGuardResetAuth:
                 "action_dim": 32,
                 "expert": {"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
             }
-            (p / "tether_config.json").write_text(_json.dumps(cfg))
+            (p / "tether_config.json").write_text(json.dumps(cfg))
             (p / "model.onnx").write_bytes(b"\x00")
             app = create_app(str(p), device="cpu", api_key="test-key")
 
@@ -76,9 +80,7 @@ class TestGuardResetAuth:
 
     def test_guard_reset_has_api_key_dependency(self):
         """The /guard/reset endpoint's dependant should include _require_api_key."""
-        try:
-            from fastapi import FastAPI
-        except ImportError:
+        if importlib.util.find_spec("fastapi") is None:
             pytest.skip("fastapi not installed")
 
         route = self._get_guard_reset_route()
@@ -141,12 +143,8 @@ class TestOsNameInLifespan:
 
     def test_no_bare_os_dot_in_server_py(self):
         import re
-        from pathlib import Path
 
-        src = Path(
-            "/Users/romirjain/Desktop/building projects/fastcrest/tether/"
-            "src/tether/runtime/server.py"
-        ).read_text()
+        src = _server_py_path().read_text()
 
         # Match `os.` NOT preceded by underscore (i.e. not `_os.`).
         # Exclude comment lines.
@@ -166,13 +164,8 @@ class TestOsNameInLifespan:
     def test_py_compile_server(self):
         """server.py must compile without errors."""
         import py_compile
-        from pathlib import Path
-        path = str(
-            Path(
-                "/Users/romirjain/Desktop/building projects/fastcrest/tether/"
-                "src/tether/runtime/server.py"
-            )
-        )
+
+        path = str(_server_py_path())
         # raises py_compile.PyCompileError on failure
         py_compile.compile(path, doraise=True)
 
