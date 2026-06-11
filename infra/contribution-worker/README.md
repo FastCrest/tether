@@ -6,7 +6,7 @@ stats, and revoke-cascade requests for the data contribution program.
 Sibling workers (each in its own folder under `infra/`):
 - `license-worker` — Pro license issuance + revocation (deployed)
 - `telemetry-worker` — opt-in telemetry (built, not yet deployed)
-- `contribution-worker` — this one (deployed at `https://reflex-contributions.fastcrest.workers.dev`)
+- `contribution-worker` — this one (deployed at `https://tether-contributions.fastcrest.workers.dev`)
 
 ## Endpoints
 
@@ -74,7 +74,7 @@ wrangler secret put SLACK_WEBHOOK_URL    # optional
 wrangler deploy
 
 # 6. Smoke test
-curl https://reflex-contributions.<account>.workers.dev/healthz
+curl https://tether-contributions.<account>.workers.dev/healthz
 
 # 7. Bind a custom domain (optional)
 # Edit wrangler.toml routes section, then redeploy.
