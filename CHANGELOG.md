@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.12.0 — 2026-06-03
+
+**Project renamed Reflex → Tether.** The package, CLI, and import surface have been renamed; a backwards-compat shim keeps the old names working through v0.13.x.
+
+### Package rename
+
+- **PyPI distribution is now `fastcrest-tether`.** Install with `pip install fastcrest-tether`. The old `reflex-vla` distribution is no longer updated.
+- **CLI command is now `tether`** (`tether serve`, `tether export`, `tether doctor`, etc.).
+- **Python import package is now `tether`** (`from tether import ...`).
+- **`TETHER_*` environment variables** are the canonical names going forward (e.g. `TETHER_LICENSE_KEY`). `REFLEX_*` names still mirror to `TETHER_*` for now.
+
+### Backwards compatibility shim (through v0.13.x, removed in v0.14.0)
+
+- The `reflex` Python package remains importable and re-exports the full `tether` namespace. A `DeprecationWarning` is emitted on first use.
+- The `reflex` CLI entry point continues to work and delegates to `tether`. A deprecation notice prints on each invocation.
+- Shims are removed in v0.14.0. Migrate by replacing `reflex` → `tether` in imports, CLI calls, and env vars.
+
 ## v0.11.2 — 2026-05-29
 
 **Hardening patch for the v0.11 lift program + the formal N=100/task L3 LIBERO parity gate clears `--fast-kernels`.** v0.11.1 shipped the FluxVLA lift program (fast-kernels, inference-only weights, ZMQ transport, two new families, `reflex connect`). This patch lands the post-tag hardening of those paths — a refactored monolithic serve/bench path with first-class external-data ONNX, `reflex connect`'s missing core dependency, and clean stderr/stdout separation — and records the formal N=100/task L3 parity verdict that keeps the opt-in `--fast-kernels` Triton runtime on. It also resets the version string to lockstep after a `__version__`/`pyproject` drift in v0.11.1.
