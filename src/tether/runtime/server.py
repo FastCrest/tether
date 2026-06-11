@@ -866,6 +866,7 @@ class TetherServer:
         image_b64: str | None = None,
         instruction: str = "",
         state: list[float] | None = None,
+        image_wrist_b64: str | None = None,
     ) -> dict[str, Any]:
         """Predict from base64-encoded image (for HTTP API)."""
         image = None
@@ -879,6 +880,16 @@ class TetherServer:
             except Exception as e:
                 return {"error": f"Failed to decode image: {e}"}
 
+        # image_wrist_b64 is accepted for API compat: multi-camera VLAs route to
+        # Pi05DecomposedServer (which consumes it). TetherServer is single-camera
+        # and cannot, so the wrist image is dropped here — logged so the drop is
+        # visible, not silent.
+        if image_wrist_b64:
+            logger.debug(
+                "wrist image ignored: %s is single-camera (use a multi-camera "
+                "VLA / decomposed export to consume image_wrist).",
+                type(self).__name__,
+            )
         return self.predict(image=image, instruction=instruction, state=state)
 
     # ---------------------------------------------------------------
@@ -1063,6 +1074,7 @@ class TetherServer:
         image_b64: str | None = None,
         instruction: str = "",
         state: list[float] | None = None,
+        image_wrist_b64: str | None = None,
     ) -> dict[str, Any]:
         """Async base64 entrypoint — decodes image, then routes through batching."""
         image = None
@@ -1075,6 +1087,14 @@ class TetherServer:
             except Exception as e:
                 return {"error": f"Failed to decode image: {e}"}
 
+        # image_wrist_b64 accepted for API compat; single-camera base drops it
+        # (see predict_from_base64). Logged so the drop is visible, not silent.
+        if image_wrist_b64:
+            logger.debug(
+                "wrist image ignored: %s is single-camera (use a multi-camera "
+                "VLA / decomposed export to consume image_wrist).",
+                type(self).__name__,
+            )
         return await self.predict_async(image=image, instruction=instruction, state=state)
 
     async def run_batch(self, requests: list) -> list[dict[str, Any]]:
@@ -2115,7 +2135,7 @@ def create_app(
             if _curate_consent.is_opted_in():
                 from tether.curate.uploader import Uploader as _CurateUploader
                 _curate_receipt = _curate_consent.load()
-                _curate_dry_run = os.environ.get("TETHER_CURATE_DRY_RUN", "").lower() in ("1", "true", "yes")
+                _curate_dry_run = _os.environ.get("TETHER_CURATE_DRY_RUN", "").lower() in ("1", "true", "yes")
                 _curate_uploader = _CurateUploader(
                     contributor_id=_curate_receipt.contributor_id,
                     tier=_curate_receipt.tier,
@@ -2686,7 +2706,7 @@ def create_app(
         })
 
     @app.post("/guard/reset")
-    async def guard_reset():
+    async def guard_reset(_auth: None = Depends(_require_api_key)):
         g = getattr(server, "_action_guard", None)
         if g is None:
             return JSONResponse(
