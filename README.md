@@ -426,7 +426,7 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | Ampere (RTX 30-series, A10G, A100) | sm_8.0–8.6 | ✅ Supported | Tested on Modal A10G + A100, RTX 4090 |
 | Ada Lovelace (RTX 40-series, L4) | sm_8.9 | ✅ Supported | |
 | Hopper (H100, H200) | sm_9.0 | ✅ Supported | |
-| Jetson Orin (Orin Nano / NX / AGX) | sm_8.7 | ✅ Supported | JetPack 5.x or 6.x |
+| Jetson Orin (Orin Nano / NX / AGX) | sm_8.7 | ✅ Supported | JetPack 6.x |
 | Jetson Thor | sm_10.x | ⚠️ Untested | Should work — same Blackwell silicon as desktop, but ORT-bundled CUDA EP needs Blackwell support (see below) |
 | **Blackwell desktop (RTX 5090, RTX PRO 6000, B200, GB200)** | **sm_10.0** | **❌ Not yet supported** | ORT's bundled cuBLAS/cuDNN don't ship sm_100 kernels. Server segfaults at `InferenceSession` init. **Workaround:** use `tether chat` (no GPU needed), or `/act` testing on Modal cloud or non-Blackwell GPU until ORT updates ship. Tracking: [microsoft/onnxruntime#blackwell](https://github.com/microsoft/onnxruntime/issues) |
 | Older NVIDIA (Turing RTX 20, GTX 16) | sm_7.5 | ⚠️ Best-effort | Should work but not in CI matrix |

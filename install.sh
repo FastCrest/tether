@@ -301,8 +301,10 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
   echo "  tether go --preset franka    # one-command deploy (after ONNX export)"
   echo "  tether serve /path/to/export  # serve a pre-exported model"
   echo
-  note "For a fully-bundled JetPack Docker image:"
-  note "  docker pull ghcr.io/fastcrest/tether:latest-jetpack"
+  note "For the published Jetson/arm64 Docker image:"
+  note "  docker pull ghcr.io/fastcrest/tether:latest-arm64"
+  note "  # Bring-your-own JetPack CUDA/cuDNN/TensorRT via nvidia-container-runtime."
+  note "  # For fully-bundled local experiments, build Dockerfile.jetpack yourself."
 fi
 
 note "Source: https://github.com/FastCrest/tether"
