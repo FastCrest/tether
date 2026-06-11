@@ -22,14 +22,13 @@ import base64
 import io
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from .record import (
     RecordWriter,
@@ -201,6 +200,7 @@ class TetherServer:
         self._vlm = None
         self._vlm_loaded = False
         self._expert_input_names: list[str] = []
+        self._ort_iobinding_enabled = self.device.type == "cuda"
 
         # Composed wedges (Phase I.2)
         self._safety_config_path = Path(safety_config) if safety_config else None
@@ -594,6 +594,75 @@ class TetherServer:
     def ready(self) -> bool:
         return self._ready
 
+    def _prepare_ort_iobinding(
+        self,
+        constant_inputs: dict[str, np.ndarray],
+    ) -> tuple[Any, str, list[Any]] | None:
+        """Bind denoise-loop constant inputs once for ORT I/O Binding."""
+        if (
+            not self._ort_iobinding_enabled
+            or getattr(self, "_ort_session", None) is None
+            or not hasattr(self._ort_session, "io_binding")
+        ):
+            return None
+
+        try:
+            output_name = self._ort_session.get_outputs()[0].name
+            binding = self._ort_session.io_binding()
+            kept_alive: list[Any] = []
+            for name, array in constant_inputs.items():
+                self._bind_ort_input(binding, name, array, kept_alive)
+            return binding, output_name, kept_alive
+        except Exception as e:
+            logger.debug("ORT I/O Binding unavailable; falling back to session.run: %s", e)
+            return None
+
+    def _bind_ort_input(
+        self,
+        binding: Any,
+        name: str,
+        array: np.ndarray,
+        kept_alive: list[Any],
+    ) -> None:
+        if self.device.type == "cuda":
+            import onnxruntime as ort
+
+            ort_value = ort.OrtValue.ortvalue_from_numpy(array, "cuda", 0)
+            binding.bind_ortvalue_input(name, ort_value)
+            kept_alive.append(ort_value)
+        else:
+            binding.bind_cpu_input(name, array)
+
+    def _run_ort_velocity(
+        self,
+        dynamic_inputs: dict[str, np.ndarray],
+        constant_inputs: dict[str, np.ndarray],
+        iobinding: tuple[Any, str, list[Any]] | None,
+    ) -> np.ndarray:
+        if iobinding is None:
+            return self._ort_session.run(
+                None,
+                {**dynamic_inputs, **constant_inputs},
+            )[0]
+
+        binding, output_name, kept_alive = iobinding
+        dynamic_kept_alive: list[Any] = []
+        try:
+            if hasattr(binding, "clear_binding_outputs"):
+                binding.clear_binding_outputs()
+            for name, array in dynamic_inputs.items():
+                self._bind_ort_input(binding, name, array, dynamic_kept_alive)
+            if self.device.type == "cuda":
+                binding.bind_output(output_name, "cuda", 0)
+            else:
+                binding.bind_output(output_name, "cpu")
+            self._ort_session.run_with_iobinding(binding)
+            return binding.get_outputs()[0].numpy()
+        finally:
+            # Keep OrtValues alive until ORT has finished the call.
+            kept_alive.extend(dynamic_kept_alive)
+            del kept_alive[len(kept_alive) - len(dynamic_kept_alive):]
+
     def _run_denoise(
         self,
         noisy_actions: np.ndarray,
@@ -648,35 +717,35 @@ class TetherServer:
                 # v0.3/v0.4 single-tensor fallback
                 vlm_kv_single = zeros_4d
 
+        constant_feed: dict[str, np.ndarray] = {"position_ids": position_ids}
+        if expert_has_split_kv and vlm_k is not None and vlm_v is not None:
+            constant_feed["vlm_k"] = vlm_k
+            constant_feed["vlm_v"] = vlm_v
+            prefix_len = int(vlm_k.shape[2])  # [L, B, seq, kv]
+            batch = noisy_actions.shape[0]
+            if "prefix_offset" in self._expert_input_names:
+                constant_feed["prefix_offset"] = np.full(
+                    (batch, 1), prefix_len, dtype=np.int64
+                )
+            if "kv_mask" in self._expert_input_names:
+                # All-valid mask when we don't have the prefix pad mask handy.
+                # TODO: plumb the real padded-token mask through from the
+                # VLM orchestrator.
+                constant_feed["kv_mask"] = np.ones((batch, prefix_len), dtype=bool)
+        elif expert_has_single_kv and vlm_kv_single is not None:
+            constant_feed["vlm_kv"] = vlm_kv_single
+
+        iobinding = self._prepare_ort_iobinding(constant_feed)
+
         for step in range(self.num_denoising_steps):
             t = 1.0 + step * dt
             timestep = np.array([t], dtype=np.float32)
 
-            feed_dict = {
+            dynamic_feed = {
                 "noisy_actions": noisy_actions,
                 "timestep": timestep,
-                "position_ids": position_ids,
             }
-            if expert_has_split_kv and vlm_k is not None and vlm_v is not None:
-                feed_dict["vlm_k"] = vlm_k
-                feed_dict["vlm_v"] = vlm_v
-                prefix_len = int(vlm_k.shape[2])  # [L, B, seq, kv]
-                batch = noisy_actions.shape[0]
-                if "prefix_offset" in self._expert_input_names:
-                    feed_dict["prefix_offset"] = np.full(
-                        (batch, 1), prefix_len, dtype=np.int64
-                    )
-                if "kv_mask" in self._expert_input_names:
-                    # All-valid mask when we don't have the prefix pad mask handy.
-                    # TODO: plumb the real padded-token mask through from the
-                    # VLM orchestrator.
-                    feed_dict["kv_mask"] = np.ones(
-                        (batch, prefix_len), dtype=bool
-                    )
-            elif expert_has_single_kv and vlm_kv_single is not None:
-                feed_dict["vlm_kv"] = vlm_kv_single
-
-            velocity = self._ort_session.run(None, feed_dict)[0]
+            velocity = self._run_ort_velocity(dynamic_feed, constant_feed, iobinding)
 
             noisy_actions = noisy_actions + velocity * dt
 
@@ -924,14 +993,21 @@ class TetherServer:
     ) -> dict[str, Any]:
         """Async front-door used by the HTTP /act handler.
 
-        - If max_batch <= 1: runs `self.predict()` synchronously in this task.
+        - If max_batch <= 1: runs `self.predict()` in the default executor.
         - If max_batch > 1: enqueues the request onto a batch queue. A worker
           coroutine drains the queue every `batch_timeout_ms` ms (or when the
           queue hits max_batch) and runs ONE batched ONNX inference, then
           splits the results back to each waiter.
         """
         if self._max_batch <= 1 or self._batch_queue is None:
-            return self.predict(image=image, instruction=instruction, state=state)
+            import asyncio
+
+            return await asyncio.to_thread(
+                self.predict,
+                image=image,
+                instruction=instruction,
+                state=state,
+            )
 
         import asyncio
         loop = asyncio.get_event_loop()
@@ -969,10 +1045,8 @@ class TetherServer:
                             fut.set_exception(asyncio.CancelledError())
                     return
 
-            # Run batched inference (sync — we're holding the event loop, but
-            # the actual ORT call is the bottleneck and yields the GIL).
             try:
-                results = self._predict_batch_sync(batch)
+                results = await asyncio.to_thread(self._predict_batch_sync, batch)
                 for (fut, *_), result in zip(batch, results):
                     if not fut.done():
                         fut.set_result(result)
@@ -1005,17 +1079,19 @@ class TetherServer:
         )
 
         dt = -1.0 / self.num_denoising_steps
+        constant_feed = {"position_ids": position_ids_batched}
+        iobinding = self._prepare_ort_iobinding(constant_feed)
         for step in range(self.num_denoising_steps):
             t = 1.0 + step * dt
             timestep = np.full((b,), t, dtype=np.float32)
-            velocity = self._ort_session.run(
-                None,
+            velocity = self._run_ort_velocity(
                 {
                     "noisy_actions": noisy_batched,
                     "timestep": timestep,
-                    "position_ids": position_ids_batched,
                 },
-            )[0]
+                constant_feed,
+                iobinding,
+            )
             noisy_batched = noisy_batched + velocity * dt
 
         elapsed_ms = (time.perf_counter() - start) * 1000

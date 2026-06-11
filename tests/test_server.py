@@ -1,8 +1,7 @@
 """Tests for the VLA inference server."""
 
 import json
-import tempfile
-from pathlib import Path
+import time
 from unittest.mock import patch, MagicMock
 
 import numpy as np
@@ -51,6 +50,141 @@ class TestTetherServer:
 
 
 class TestTetherServerWithMockORT:
+    def test_predict_async_offloads_non_batched_predict(self, mock_export_dir):
+        import asyncio
+
+        server = TetherServer(mock_export_dir, device="cpu", max_batch=1)
+
+        def slow_predict(**kwargs):
+            time.sleep(0.15)
+            return {"ok": True, "kwargs": kwargs}
+
+        server.predict = slow_predict
+
+        async def run_check():
+            start = time.perf_counter()
+            task = asyncio.create_task(
+                server.predict_async(instruction="pick", state=[0.0])
+            )
+            await asyncio.sleep(0.01)
+            elapsed = time.perf_counter() - start
+            result = await task
+            return elapsed, result
+
+        elapsed, result = asyncio.run(run_check())
+
+        assert elapsed < 0.08
+        assert result["ok"] is True
+        assert result["kwargs"]["instruction"] == "pick"
+
+    def test_batch_worker_offloads_sync_batch_predict(self, mock_export_dir):
+        import asyncio
+
+        server = TetherServer(
+            mock_export_dir,
+            device="cpu",
+            max_batch=2,
+            batch_timeout_ms=1,
+        )
+
+        def slow_batch(batch):
+            time.sleep(0.15)
+            return [{"ok": True, "batch_size": len(batch)} for _ in batch]
+
+        server._predict_batch_sync = slow_batch
+
+        async def run_check():
+            await server.start_batch_worker()
+            try:
+                start = time.perf_counter()
+                task = asyncio.create_task(
+                    server.predict_async(instruction="pick", state=[0.0])
+                )
+                await asyncio.sleep(0.01)
+                elapsed = time.perf_counter() - start
+                result = await task
+                return elapsed, result
+            finally:
+                await server.stop_batch_worker()
+
+        elapsed, result = asyncio.run(run_check())
+
+        assert elapsed < 0.08
+        assert result["ok"] is True
+        assert result["batch_size"] == 1
+
+    def test_denoise_uses_iobinding_when_enabled(self, mock_export_dir):
+        class _FakeOutput:
+            name = "velocity"
+
+        class _FakeOrtValue:
+            def __init__(self, array):
+                self._array = array
+
+            def numpy(self):
+                return self._array
+
+        class _FakeBinding:
+            def __init__(self, velocity):
+                self.velocity = velocity
+                self.bound_inputs = []
+                self.bound_outputs = []
+                self.clear_outputs_calls = 0
+
+            def bind_cpu_input(self, name, array):
+                self.bound_inputs.append((name, array.shape))
+
+            def bind_output(self, name, *args):
+                self.bound_outputs.append((name, args))
+
+            def clear_binding_outputs(self):
+                self.clear_outputs_calls += 1
+
+            def get_outputs(self):
+                return [_FakeOrtValue(self.velocity)]
+
+        class _FakeSession:
+            def __init__(self, velocity):
+                self.binding = _FakeBinding(velocity)
+                self.run_calls = 0
+                self.run_with_iobinding_calls = 0
+
+            def get_outputs(self):
+                return [_FakeOutput()]
+
+            def io_binding(self):
+                return self.binding
+
+            def run(self, *_args, **_kwargs):
+                self.run_calls += 1
+                raise AssertionError("session.run should not be used")
+
+            def run_with_iobinding(self, _binding):
+                self.run_with_iobinding_calls += 1
+
+        server = TetherServer(mock_export_dir, device="cpu")
+        server.num_denoising_steps = 1
+        server._expert_input_names = []
+        server._ort_iobinding_enabled = True
+
+        noisy = np.zeros((1, 2, 3), dtype=np.float32)
+        velocity = np.ones_like(noisy)
+        fake_session = _FakeSession(velocity)
+        server._ort_session = fake_session
+
+        actions, steps = server._run_denoise(
+            noisy_actions=noisy,
+            position_ids=np.arange(2, dtype=np.int64)[None, :],
+        )
+
+        np.testing.assert_allclose(actions, -np.ones_like(noisy))
+        assert steps == 1
+        assert fake_session.run_calls == 0
+        assert fake_session.run_with_iobinding_calls == 1
+        bound_names = [name for name, _shape in fake_session.binding.bound_inputs]
+        assert bound_names == ["position_ids", "noisy_actions", "timestep"]
+        assert fake_session.binding.bound_outputs == [("velocity", ("cpu",))]
+
     def test_predict_returns_actions(self, mock_export_dir):
         server = TetherServer(mock_export_dir, device="cpu")
         server.action_dim = 32
