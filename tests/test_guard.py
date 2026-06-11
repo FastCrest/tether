@@ -1,13 +1,10 @@
 """Tests for safety guardrails."""
 
 import json
-import tempfile
-from pathlib import Path
 
 import numpy as np
-import pytest
 
-from tether.safety.guard import ActionGuard, SafetyLimits, SafetyCheckResult
+from tether.safety.guard import ActionGuard, SafetyLimits
 
 
 class TestSafetyLimits:
@@ -32,9 +29,11 @@ class TestSafetyLimits:
             position_max=[1.0, 2.0],
             velocity_max=[1.5, 1.5],
             effort_max=[50.0, 50.0],
+            workspace_indices=[0, 1],
         )
         assert limits.position_min[0] == -1.0
         assert limits.position_max[1] == 2.0
+        assert limits.workspace_indices == [0, 1]
 
 
 class TestActionGuard:
@@ -75,6 +74,86 @@ class TestActionGuard:
         result = guard.check_single(action)
         assert not result.safe
         assert result.safe_action[0] == 0.0
+
+    def test_effort_limit_clamps_single_action(self):
+        limits = SafetyLimits(
+            joint_names=["j1", "j2"],
+            position_min=[-10.0, -10.0],
+            position_max=[10.0, 10.0],
+            velocity_max=[10.0, 10.0],
+            effort_max=[2.0, 4.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(np.array([3.0, -6.0]))
+
+        assert not result.safe
+        assert result.clamped
+        assert result.safe_action == [2.0, -4.0]
+        assert any("effort limit" in v for v in result.violations)
+
+    def test_velocity_limit_clamps_between_chunk_actions(self):
+        limits = SafetyLimits(
+            joint_names=["j1", "j2"],
+            position_min=[-10.0, -10.0],
+            position_max=[10.0, 10.0],
+            velocity_max=[1.0, 0.5],
+            effort_max=[50.0, 50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+        actions = np.array([
+            [0.0, 0.0],
+            [5.0, -5.0],
+            [2.0, -1.0],
+        ])
+
+        safe_actions, results = guard.check(actions)
+
+        np.testing.assert_allclose(safe_actions[0], [0.0, 0.0])
+        np.testing.assert_allclose(safe_actions[1], [1.0, -0.5])
+        np.testing.assert_allclose(safe_actions[2], [2.0, -1.0])
+        assert any("velocity limit" in v for v in results[1].violations)
+        assert results[1].clamped
+        assert results[2].safe
+
+    def test_workspace_limit_clamps_explicit_indices(self):
+        limits = SafetyLimits(
+            joint_names=["x", "unused", "z"],
+            position_min=[-10.0, -10.0, -10.0],
+            position_max=[10.0, 10.0, 10.0],
+            velocity_max=[10.0, 10.0, 10.0],
+            effort_max=[50.0, 50.0, 50.0],
+            workspace_min=[-1.0, 0.0],
+            workspace_max=[1.0, 2.0],
+            workspace_indices=[0, 2],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(np.array([3.0, 9.0, -5.0]))
+
+        assert not result.safe
+        assert result.clamped
+        assert result.safe_action == [1.0, 9.0, 0.0]
+        assert any("workspace_axis_0 above max" in v for v in result.violations)
+        assert any("workspace_axis_1 below min" in v for v in result.violations)
+
+    def test_workspace_limits_are_opt_in_for_joint_actions(self):
+        limits = SafetyLimits(
+            joint_names=["j1", "j2", "j3"],
+            position_min=[-10.0, -10.0, -10.0],
+            position_max=[10.0, 10.0, 10.0],
+            velocity_max=[10.0, 10.0, 10.0],
+            effort_max=[50.0, 50.0, 50.0],
+            workspace_min=[-1.0, -1.0, 0.0],
+            workspace_max=[1.0, 1.0, 1.5],
+            workspace_indices=[],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(np.array([3.0, -3.0, -3.0]))
+
+        assert result.safe
+        assert result.safe_action == [3.0, -3.0, -3.0]
 
     def test_batch_check(self):
         guard = ActionGuard.default(num_joints=3)
