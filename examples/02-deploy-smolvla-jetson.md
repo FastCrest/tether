@@ -62,7 +62,7 @@ Since monolithic export requires Python 3.12+ (for `lerobot`), the typical Jetso
 ```bash
 # On your desktop / cloud GPU (Python 3.12+)
 pip install 'fastcrest-tether[serve,monolithic]'
-tether export --model smolvla-base --out ./smolvla-export/
+tether export smolvla-base --output ./smolvla-export/
 ```
 
 Then copy the export directory to the Jetson:
