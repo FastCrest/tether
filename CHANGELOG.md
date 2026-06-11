@@ -9,7 +9,7 @@
 - **PyPI distribution is now `fastcrest-tether`.** Install with `pip install fastcrest-tether`. The old `reflex-vla` distribution is no longer updated.
 - **CLI command is now `tether`** (`tether serve`, `tether export`, `tether doctor`, etc.).
 - **Python import package is now `tether`** (`from tether import ...`).
-- **`TETHER_*` environment variables** are the canonical names going forward (e.g. `TETHER_LICENSE_KEY`). `REFLEX_*` names still mirror to `TETHER_*` for now.
+- **`TETHER_*` environment variables** are the canonical names going forward (e.g. `TETHER_NO_TELEMETRY`, `TETHER_PRO_LICENSE`). `REFLEX_*` names still mirror to `TETHER_*` for now.
 
 ### Backwards compatibility shim (through v0.13.x, removed in v0.14.0)
 

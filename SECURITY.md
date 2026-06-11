@@ -4,7 +4,7 @@
 
 **Do not open a public issue for security vulnerabilities.**
 
-Email **playindus@gmail.com** with:
+Email **hello@fastcrest.com** with:
 
 - A description of the vulnerability and its potential impact
 - Steps to reproduce or proof-of-concept (as detailed as possible)
