@@ -1745,8 +1745,16 @@ def serve(
     zmq_control_token: str = typer.Option(
         "",
         "--zmq-control-token",
+        envvar="TETHER_ZMQ_CONTROL_TOKEN",
         help="Token required for ZMQ control endpoints such as ping and kill. "
-             "Pass the same value to ZmqRuntimeClient(auth_token=...).",
+             "Pass the same value to ZmqRuntimeClient(auth_token=...). "
+             "Can also be supplied via TETHER_ZMQ_CONTROL_TOKEN.",
+    ),
+    zmq_insecure_ok: bool = typer.Option(
+        False,
+        "--zmq-insecure-ok",
+        help="Allow ZMQ to bind to a non-loopback host without CURVE and control "
+             "auth. Use only on isolated lab networks.",
     ),
     device: str = typer.Option("cuda", help="Device: cuda or cpu"),
     providers: str = typer.Option(
@@ -2763,6 +2771,19 @@ def serve(
     if transport == "zmq":
         console.print("[bold green]Starting ZMQ server...[/bold green]")
         from tether.runtime.transports.zmq.factory import create_zmq_server
+        from tether.runtime.transports.zmq.security import validate_zmq_bind_security
+
+        try:
+            validate_zmq_bind_security(
+                host=host,
+                curve_enabled=bool(zmq_server_cert and zmq_client_cert_dir),
+                control_auth_enabled=bool(zmq_control_token),
+                allow_insecure=zmq_insecure_ok,
+            )
+        except ValueError as exc:
+            err_console.print(f"[red]{exc}[/red]", markup=False)
+            raise typer.Exit(1) from exc
+
         zmq_server = create_zmq_server(
             app_instance,
             host=host,
@@ -2776,6 +2797,8 @@ def serve(
             composed.append("[cyan]curve=on[/cyan]")
         if zmq_control_token:
             composed.append("[cyan]control-auth=on[/cyan]")
+        if zmq_insecure_ok:
+            composed.append("[yellow]zmq-insecure-ok[/yellow]")
         console.print(f"[dim]Features: {' + '.join(composed)}[/dim]")
         zmq_server.run()
     elif transport == "http":

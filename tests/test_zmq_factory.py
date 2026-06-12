@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import MagicMock
 
 import msgpack
 import numpy as np
-import pytest
 import zmq
 
 from tether.runtime.transports.zmq.factory import create_zmq_server
@@ -119,6 +117,7 @@ def test_cli_transport_flag_exists():
     result = runner.invoke(app, ["serve", "--help"])
     assert "--transport" in result.output
     assert "zmq" in result.output
+    assert "--zmq-insecure-ok" in result.output
 
 
 def test_cli_transport_invalid_rejected():

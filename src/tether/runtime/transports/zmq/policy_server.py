@@ -16,6 +16,7 @@ Usage::
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 from dataclasses import dataclass
@@ -168,7 +169,8 @@ class PolicyServer:
     def _authorize_control_request(self, request: dict[str, Any]) -> None:
         if self._control_token is None:
             return
-        if request.get("auth_token") != self._control_token:
+        token = request.get("auth_token")
+        if not isinstance(token, str) or not hmac.compare_digest(token, self._control_token):
             raise PermissionError("ZMQ control endpoint requires a valid auth token")
 
     def _handle_ping(self) -> dict:

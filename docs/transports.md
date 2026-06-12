@@ -29,8 +29,8 @@ curl -X POST http://localhost:8000/act \
 ### ZMQ
 
 ```bash
-# Server (GPU machine)
-tether serve ./my_export/ --transport zmq --port 5555
+# Local dev server. Non-loopback ZMQ binds require Secure ZMQ below.
+tether serve ./my_export/ --transport zmq --host 127.0.0.1 --port 5555
 ```
 
 ```python
@@ -52,6 +52,9 @@ robot.execute(actions[0])  # first action in the chunk
 
 Production ZMQ deployments should use CURVE authentication/encryption and a
 control token for operational endpoints such as `ping` and `kill`.
+`tether serve --transport zmq` refuses non-loopback binds unless both are
+configured. For isolated lab networks only, operators can pass
+`--zmq-insecure-ok` to make that risk explicit.
 
 Generate one server keypair and one client keypair:
 
