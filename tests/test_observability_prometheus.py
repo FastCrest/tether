@@ -149,6 +149,7 @@ class TestCounters:
             policy_slot="prod",
             decision={
                 "horizon": 4,
+                "applied_horizon": 10,
                 "reason": "guard_margin",
                 "risk_score": 0.8,
                 "replan_threshold_ratio": 0.6,
@@ -164,6 +165,7 @@ class TestCounters:
         assert "tether_rtc_adaptive_decisions_total" in out
         assert 'reason="guard_margin"' in out
         assert "tether_rtc_adaptive_horizon" in out
+        assert "tether_rtc_adaptive_applied_horizon" in out
         assert 'model_id="pi05"' in out
         assert "tether_rtc_adaptive_guard_margin" in out
         assert "tether_rtc_adaptive_action_delta" in out

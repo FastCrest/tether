@@ -158,6 +158,11 @@ def _set_rtc_adaptive_span_attrs(span: Any, rtc_record: dict[str, Any]) -> None:
             span, "tether.rtc.adaptive.horizon", decision.get("horizon")
         )
         _set_span_optional_float(
+            span,
+            "tether.rtc.adaptive.applied_horizon",
+            decision.get("applied_horizon"),
+        )
+        _set_span_optional_float(
             span, "tether.rtc.adaptive.risk_score", decision.get("risk_score")
         )
         _set_span_optional_float(
@@ -165,6 +170,11 @@ def _set_rtc_adaptive_span_attrs(span: Any, rtc_record: dict[str, Any]) -> None:
             "tether.rtc.adaptive.replan_threshold_ratio",
             decision.get("replan_threshold_ratio"),
         )
+        if "canary" in decision:
+            span.set_attribute(
+                "tether.rtc.adaptive.canary",
+                bool(decision.get("canary")),
+            )
 
     signal = rtc_record.get("adaptive_signal")
     if isinstance(signal, dict):

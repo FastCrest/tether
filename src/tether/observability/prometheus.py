@@ -212,6 +212,12 @@ tether_rtc_adaptive_horizon = Gauge(
     labelnames=("embodiment", "model_id", "policy_slot"),
     registry=REGISTRY,
 )
+tether_rtc_adaptive_applied_horizon = Gauge(
+    "tether_rtc_adaptive_applied_horizon",
+    "Latest RTC execution horizon actually applied after canary gating",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
 tether_rtc_adaptive_risk_score = Gauge(
     "tether_rtc_adaptive_risk_score",
     "Latest adaptive RTC risk score used for horizon selection",
@@ -358,6 +364,11 @@ def observe_rtc_adaptive_chunking(
             tether_rtc_adaptive_horizon,
             labels,
             decision.get("horizon"),
+        )
+        _set_gauge_if_float(
+            tether_rtc_adaptive_applied_horizon,
+            labels,
+            decision.get("applied_horizon"),
         )
         _set_gauge_if_float(
             tether_rtc_adaptive_risk_score,
