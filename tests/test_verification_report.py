@@ -121,3 +121,66 @@ def test_overwrites_prior_report(tmp_path):
 def test_missing_export_dir_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         write_verification_report(tmp_path / "does_not_exist")
+
+
+def _extract_sha256_for(report_text: str, filename: str) -> str:
+    """Pull the sha256 hex string from the VERIFICATION.md table row for *filename*."""
+    for line in report_text.splitlines():
+        if filename in line:
+            # Table row format: | `filename` | <size> | `<sha256>` |
+            parts = line.split("|")
+            for part in parts:
+                part = part.strip().strip("`")
+                # sha256 hex is exactly 64 hex chars
+                if len(part) == 64 and all(c in "0123456789abcdef" for c in part):
+                    return part
+    raise AssertionError(f"Could not find sha256 for {filename!r} in report")
+
+
+def test_hash_freshness_after_file_mutation(tmp_path):
+    """A second write_verification_report call after mutating a file records
+    the NEW hash, not the stale pre-mutation one.
+
+    This directly validates that the post-fusion VERIFICATION.md refresh in
+    export_monolithic will produce correct hashes when model.onnx bytes change.
+    """
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+
+    (export_dir / "tether_config.json").write_text(json.dumps({
+        "model_id": "lerobot/smolvla_base",
+        "model_type": "smolvla",
+        "target": "desktop",
+        "opset": 19,
+        "num_denoising_steps": 1,
+        "chunk_size": 50,
+    }))
+    onnx_file = export_dir / "model.onnx"
+    onnx_file.write_bytes(b"pre-fusion onnx bytes -- version 1")
+
+    # First write: hashes the pre-mutation file
+    write_verification_report(export_dir, parity=None)
+    text_before = (export_dir / REPORT_FILENAME).read_text()
+    hash_before = _extract_sha256_for(text_before, "model.onnx")
+
+    # Simulate weight fusion: atomically replace model.onnx with different bytes
+    onnx_file.write_bytes(b"post-fusion onnx bytes -- version 2 structurally different")
+
+    # Second write: should recompute and record the new hash
+    write_verification_report(export_dir, parity=None)
+    text_after = (export_dir / REPORT_FILENAME).read_text()
+    hash_after = _extract_sha256_for(text_after, "model.onnx")
+
+    assert hash_before != hash_after, (
+        "Expected hash to change after mutating model.onnx, "
+        f"but both writes recorded: {hash_before}"
+    )
+    # Confirm the second hash matches what we compute independently
+    import hashlib
+    expected = hashlib.sha256(
+        b"post-fusion onnx bytes -- version 2 structurally different"
+    ).hexdigest()
+    assert hash_after == expected, (
+        f"Post-mutation hash in report ({hash_after!r}) does not match "
+        f"expected sha256 ({expected!r})"
+    )
