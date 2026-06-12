@@ -1,6 +1,6 @@
 # Third-party licenses
 
-Reflex VLA bundles or vendors code from the following projects. Each
+Tether bundles or vendors code from the following projects. Each
 project's full license text is reproduced below in alphabetical order.
 
 ## auto_soarm (MIT)
@@ -10,14 +10,14 @@ Vendored: 2026-05-06 (initial lift)
 Scope: tablet-tap automation rig for SO-ARM 100 + Android tablet.
 
 Lifted into:
-- `src/reflex/embodiments/so100/calibration/` — calibration scripts +
+- `src/tether/embodiments/so100/calibration/` — calibration scripts +
   motion + tapper logic
-- `src/reflex/embodiments/so100/edge_runtime.py` — no-torch arm driver
+- `src/tether/embodiments/so100/edge_runtime.py` — no-torch arm driver
   (`arm_hardware.py`)
-- `src/reflex/bench/games/_base/` — generic game scaffold
+- `src/tether/bench/games/_base/` — generic game scaffold
   (`base_game.py`, `tablet_setup.py`, `circle_runtime.py`,
   `touch_server.py`)
-- `src/reflex/bench/games/circle_lr/` — canonical circle-tap benchmark
+- `src/tether/bench/games/circle_lr/` — canonical circle-tap benchmark
 - `examples/01_circle_tap_so100/` — end-to-end recipe (collect + train + eval)
 
 Per-file headers identify ported files:
@@ -26,7 +26,7 @@ Per-file headers identify ported files:
 # Source: https://github.com/0o8o0-blip/auto_soarm
 ```
 
-Architectural decisions: `reflex_context/01_decisions/2026-05-06-vendor-auto-soarm.md`.
+Architectural decisions: `reflex_context/01_decisions/2026-05-06-vendor-auto-soarm.md` (private vault, not in this repo).
 
 ### MIT License
 

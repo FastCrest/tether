@@ -11,9 +11,9 @@
 
 **The deployment layer for VLAs** — take a Vision-Language-Action model off the training cluster and onto a robot. Now with **`tether chat`** — talk to your robot fleet in plain English.
 
-**Verified parity across ALL four major open VLAs.** Tether's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
+**Verified parity across ALL four major open VLAs.** Tether's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in the private `reflex_context/measured_numbers.md` vault (not in this repo).
 
-One CLI, eleven verbs, plus a chat agent.
+One CLI, a focused set of verbs, plus a chat agent.
 
 ## Install
 
@@ -34,6 +34,10 @@ pip install 'fastcrest-tether[serve,onnx]'              # Mac / CPU runtime
 ```
 
 Requires Python ≥ 3.10.
+
+### What's new in v0.12.0 (2026-06-03)
+
+- **Project renamed Reflex to Tether.** PyPI distribution is now `fastcrest-tether`; CLI command is `tether`; Python import is `from tether import ...`; env vars are `TETHER_*`. A backwards-compat shim keeps the old `reflex` names working through v0.13.x and removes them in v0.14.0.
 
 ### What's new in v0.11.2 (2026-05-29)
 
@@ -113,7 +117,7 @@ modal profile activate <your-profile>
 modal run scripts/modal_v07_runtime_spike.py
 ```
 
-Full reproducer + 9-iteration debug log: [`reflex_context/03_experiments/2026-04-29-v07-runtime-spike.md`](reflex_context/03_experiments/2026-04-29-v07-runtime-spike.md).
+Full reproducer + 9-iteration debug log: `reflex_context/03_experiments/2026-04-29-v07-runtime-spike.md` (private vault, not in this repo).
 
 ### Caveats
 
@@ -268,7 +272,7 @@ tether pro     {activate, status, deactivate}   # Pro tier license
 tether contribute  {opt-in, opt-out, status}    # Curate data contribution
 ```
 
-11 visible verbs. 8 advanced/SO-100/internal commands stay callable directly (config, calibrate, bench-game, status, inspect bench/targets/guard/doctor) but hidden from `--help` to reduce cognitive load. Power-users can still invoke them; they just don't crowd the discovery surface.
+Core user-facing verbs shown above. Additional advanced/SO-100/internal commands stay callable directly (config, calibrate, bench-game, status, inspect bench/targets/guard/doctor) but hidden from `--help` to reduce cognitive load. Power-users can still invoke them; they just don't crowd the discovery surface.
 
 Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alias bridges.
 
@@ -481,7 +485,7 @@ Plus PyTorch-level native-path sanity checks (`SmolVLAPolicy` with DecomposedRMS
 
 **About the production defaults**: flow-matching VLAs (SmolVLA, pi0, pi0.5) canonically integrate the velocity field with 10 Euler steps — the ONNX bakes in the unrolled loop. GR00T is DDPM-style diffusion with 4 canonical steps — the ONNX exports one velocity step, and `tether serve` wraps it in the loop. All four match canonical PyTorch to machine precision. Getting pi0 / pi0.5 there required three interacting patches under `torch.export` (F.pad causal mask, frozen `DynamicLayer.update`, `past_kv.get_seq_length()` for mask assembly); GR00T's simpler DiT graph (no DynamicCache, no PaliGemma masking) traces cleanly via plain `torch.onnx.export(opset=19)` — no patches needed. Details in `reflex_context/01_architecture/pi0_monolithic_wrap_pattern.md`.
 
-Full ledger: [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
+Full ledger: `reflex_context/measured_numbers.md` (private vault, not in this repo).
 
 **Latency numbers are intentionally not in the README yet** — earlier TRT FP16 tables were measured on a now-abandoned decomposed-ONNX path. `tether bench <export_dir>` reproduces on any hardware.
 

@@ -12,8 +12,8 @@ uv pip install -e .
 # sanity check your box
 tether doctor
 
-# run a test policy
-tether serve --policy smolvla --device cuda
+# run a smoke test (one-command deploy: probe -> pull -> export -> serve)
+tether go --model smolvla-base
 ```
 
 full setup details in `examples/01-chat-quickstart.md`.
