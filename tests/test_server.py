@@ -72,10 +72,51 @@ class TestTetherServerWithMockORT:
             return elapsed, result
 
         elapsed, result = asyncio.run(run_check())
+        server.shutdown_inference_executor()
 
         assert elapsed < 0.08
         assert result["ok"] is True
         assert result["kwargs"]["instruction"] == "pick"
+
+    def test_predict_async_rejects_when_executor_is_full(self, mock_export_dir):
+        import asyncio
+        import threading
+
+        server = TetherServer(
+            mock_export_dir,
+            device="cpu",
+            max_batch=1,
+            inference_executor_workers=1,
+            inference_executor_queue=0,
+        )
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_predict(**_kwargs):
+            started.set()
+            release.wait(timeout=2.0)
+            return {"ok": True}
+
+        server.predict = slow_predict
+
+        async def run_check():
+            first = asyncio.create_task(server.predict_async(instruction="first"))
+            try:
+                assert await asyncio.to_thread(started.wait, 1.0)
+                rejected = await server.predict_async(instruction="second")
+            finally:
+                release.set()
+            accepted = await first
+            return accepted, rejected
+
+        accepted, rejected = asyncio.run(run_check())
+        server.shutdown_inference_executor()
+
+        assert rejected["error"] == "inference_executor_full"
+        assert rejected["max_workers"] == 1
+        assert rejected["max_queue"] == 0
+        assert rejected["rejected_total"] >= 1
+        assert accepted["ok"] is True
 
     def test_batch_worker_offloads_sync_batch_predict(self, mock_export_dir):
         import asyncio
@@ -108,6 +149,7 @@ class TestTetherServerWithMockORT:
                 await server.stop_batch_worker()
 
         elapsed, result = asyncio.run(run_check())
+        server.shutdown_inference_executor()
 
         assert elapsed < 0.08
         assert result["ok"] is True

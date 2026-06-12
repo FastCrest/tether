@@ -1785,6 +1785,20 @@ def serve(
              "fires (whichever first). Lower = lower per-request latency; "
              "higher = better batching efficiency under bursty load.",
     ),
+    inference_executor_workers: int = typer.Option(
+        1,
+        "--inference-executor-workers",
+        help="Dedicated worker threads for offloading synchronous inference from "
+             "the async server. Keep 1 for static-shape GPU exports; increase "
+             "only when the backend supports parallel inference safely.",
+    ),
+    inference_executor_queue: int = typer.Option(
+        8,
+        "--inference-executor-queue",
+        help="Accepted-but-not-yet-running inference submissions before the "
+             "server returns inference_executor_full. Set 0 to reject instead "
+             "of queueing behind a busy worker.",
+    ),
     max_batch_cost_ms: float = typer.Option(
         100.0,
         "--max-batch-cost-ms",
@@ -2405,6 +2419,11 @@ def serve(
         composed.append(f"[cyan]deadline[/cyan]={deadline_ms:.0f}ms")
     if max_batch > 1:
         composed.append(f"[cyan]batch[/cyan]={max_batch}@{batch_timeout_ms:.0f}ms")
+    if inference_executor_workers != 1 or inference_executor_queue != 8:
+        composed.append(
+            f"[cyan]inference-executor[/cyan]="
+            f"{inference_executor_workers}w/{inference_executor_queue}q"
+        )
     if embodiment_cfg is not None:
         composed.append(f"[cyan]embodiment[/cyan]={embodiment_cfg.embodiment}")
         if so_arm100_adapter is not None:
@@ -2522,6 +2541,8 @@ def serve(
         deadline_ms=deadline_ms if deadline_ms > 0 else None,
         max_batch=max_batch,
         batch_timeout_ms=batch_timeout_ms,
+        inference_executor_workers=inference_executor_workers,
+        inference_executor_queue=inference_executor_queue,
         api_key=api_key or None,
         replan_hz=replan_hz if replan_hz > 0 else None,
         execute_hz=execute_hz if execute_hz > 0 else None,

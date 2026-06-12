@@ -113,6 +113,13 @@ tether_fallback_invocations_total = Counter(
     registry=REGISTRY,
 )
 
+tether_inference_executor_rejected_total = Counter(
+    "tether_inference_executor_rejected_total",
+    "Inference executor submissions rejected because the bounded queue was full",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
 # Action-similarity fast-path skip counter (action-similarity-fast-path
 # Phase 1.5 — FlashVLA). Increments when the inference path returns a
 # cached action chunk instead of running the expert. Operator visibility
@@ -164,6 +171,27 @@ tether_robot_info = Gauge(
     "tether_robot_info",
     "Static per-process robot identity. Value always 1. Join via `instance`.",
     labelnames=("robot_id", "embodiment", "model_id"),
+    registry=REGISTRY,
+)
+
+tether_inference_executor_in_flight = Gauge(
+    "tether_inference_executor_in_flight",
+    "Synchronous inference calls currently running in executor worker threads",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
+tether_inference_executor_queue_depth = Gauge(
+    "tether_inference_executor_queue_depth",
+    "Synchronous inference calls accepted but not yet running in executor workers",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
+tether_inference_executor_capacity = Gauge(
+    "tether_inference_executor_capacity",
+    "Configured inference executor capacity by kind",
+    labelnames=("embodiment", "model_id", "policy_slot", "kind"),
     registry=REGISTRY,
 )
 
@@ -228,6 +256,18 @@ def inc_fallback_invocation(embodiment: str, target: str) -> None:
     ).inc()
 
 
+def inc_inference_executor_rejected(
+    embodiment: str,
+    model_id: str,
+    policy_slot: str = "prod",
+) -> None:
+    tether_inference_executor_rejected_total.labels(
+        embodiment=embodiment,
+        model_id=model_id,
+        policy_slot=policy_slot,
+    ).inc()
+
+
 def inc_action_skip() -> None:
     tether_action_skip_total.inc()
 
@@ -256,6 +296,30 @@ def set_robot_info(robot_id: str, embodiment: str, model_id: str) -> None:
 
 def set_episodes_active(embodiment: str, value: int) -> None:
     tether_episodes_active.labels(embodiment=embodiment).set(value)
+
+
+def set_inference_executor_state(
+    embodiment: str,
+    model_id: str,
+    policy_slot: str = "prod",
+    *,
+    in_flight: int,
+    queue_depth: int,
+    max_workers: int,
+    max_queue: int,
+) -> None:
+    labels = {
+        "embodiment": embodiment,
+        "model_id": model_id,
+        "policy_slot": policy_slot,
+    }
+    tether_inference_executor_in_flight.labels(**labels).set(in_flight)
+    tether_inference_executor_queue_depth.labels(**labels).set(queue_depth)
+    tether_inference_executor_capacity.labels(**labels, kind="workers").set(max_workers)
+    tether_inference_executor_capacity.labels(**labels, kind="queue").set(max_queue)
+    tether_inference_executor_capacity.labels(**labels, kind="total").set(
+        max_workers + max_queue
+    )
 
 
 @contextmanager

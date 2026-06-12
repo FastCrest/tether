@@ -15,9 +15,9 @@ from tether.observability import prometheus as p
 from tether.observability import (
     METRICS_CONTENT_TYPE,
     inc_cache_hit,
-    inc_cache_miss,
     inc_denoise_steps,
     inc_fallback_invocation,
+    inc_inference_executor_rejected,
     inc_model_swap,
     inc_safety_violation,
     inc_slo_violation,
@@ -25,6 +25,7 @@ from tether.observability import (
     record_act_latency,
     render_metrics,
     set_episodes_active,
+    set_inference_executor_state,
     set_server_up,
     track_in_flight,
 )
@@ -68,8 +69,6 @@ class TestRenderFormat:
 
 class TestRecordActLatency:
     def test_observation_increments_count(self):
-        # Snapshot + record + diff
-        before = list(text_string_to_metric_families(render_metrics().decode()))
         for _ in range(3):
             record_act_latency(0.020, embodiment="ur5", model_id="pi05")
         out = render_metrics().decode()
@@ -132,6 +131,16 @@ class TestCounters:
         inc_fallback_invocation(embodiment="so100", target="hold_position")
         assert "tether_fallback_invocations_total" in render_metrics().decode()
 
+    def test_inference_executor_rejected(self):
+        inc_inference_executor_rejected(
+            embodiment="franka",
+            model_id="pi05",
+            policy_slot="prod",
+        )
+        out = render_metrics().decode()
+        assert "tether_inference_executor_rejected_total" in out
+        assert 'model_id="pi05"' in out
+
     def test_model_swap(self):
         inc_model_swap(embodiment="franka", from_model="pi0", to_model="pi05")
         out = render_metrics().decode()
@@ -192,6 +201,24 @@ class TestGauges:
         set_episodes_active(embodiment="franka", value=5)
         out = render_metrics().decode()
         assert 'tether_episodes_active{embodiment="franka"} 5' in out
+
+    def test_set_inference_executor_state(self):
+        set_inference_executor_state(
+            embodiment="franka",
+            model_id="pi05",
+            policy_slot="prod",
+            in_flight=1,
+            queue_depth=2,
+            max_workers=1,
+            max_queue=8,
+        )
+        out = render_metrics().decode()
+        assert "tether_inference_executor_in_flight" in out
+        assert "tether_inference_executor_queue_depth" in out
+        assert "tether_inference_executor_capacity" in out
+        assert 'kind="workers"' in out
+        assert 'kind="queue"' in out
+        assert 'kind="total"' in out
 
 
 # ---------------------------------------------------------------------------

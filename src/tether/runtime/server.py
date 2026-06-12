@@ -30,6 +30,11 @@ from typing import Any
 import numpy as np
 import torch
 
+from .inference_executor import (
+    BoundedInferenceExecutor,
+    InferenceExecutorFull,
+    InferenceExecutorSnapshot,
+)
 from .record import (
     RecordWriter,
     compute_config_hash,
@@ -42,8 +47,10 @@ from .tracing import get_tracer, setup_tracing, shutdown_tracing
 try:
     from tether.observability import (
         METRICS_CONTENT_TYPE,
+        inc_inference_executor_rejected,
         record_act_latency,
         render_metrics,
+        set_inference_executor_state,
         set_robot_info,
         set_server_up,
         track_in_flight,
@@ -52,8 +59,10 @@ try:
 except ImportError:  # pragma: no cover
     _METRICS_AVAILABLE = False
     METRICS_CONTENT_TYPE = "text/plain"
+    def inc_inference_executor_rejected(*args, **kwargs): pass
     def record_act_latency(*args, **kwargs): pass
     def render_metrics() -> bytes: return b"# prometheus_client not installed\n"
+    def set_inference_executor_state(*args, **kwargs): pass
     def set_server_up(*args): pass
     def set_robot_info(*args, **kwargs): pass
 
@@ -160,6 +169,8 @@ class TetherServer:
         deadline_ms: float | None = None,
         max_batch: int = 1,
         batch_timeout_ms: float = 5.0,
+        inference_executor_workers: int = 1,
+        inference_executor_queue: int = 8,
     ):
         """Create the server.
 
@@ -187,6 +198,10 @@ class TetherServer:
             deadline_ms: soft deadline per `predict()` call. If the denoise
                 loop + safety check exceeds this, the server returns the last
                 known good action (or a zero vector) and logs a deadline miss.
+            inference_executor_workers: worker threads used by async entrypoints
+                to offload synchronous predict calls.
+            inference_executor_queue: accepted-but-not-yet-running inference
+                submissions before async entrypoints reject overload.
         """
         self.export_dir = Path(export_dir)
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -220,6 +235,15 @@ class TetherServer:
         self._batch_worker_task = None
         self._batches_run = 0
         self._batched_requests = 0
+
+        # Async inference offload: bounded, dedicated executor so sync predict()
+        # work cannot build an unbounded queue behind the event loop.
+        self._inference_policy_slot = "prod"
+        self._inference_executor = BoundedInferenceExecutor(
+            max_workers=inference_executor_workers,
+            max_queue=inference_executor_queue,
+            on_state_change=self._record_inference_executor_state,
+        )
 
         # Rolling latency history for p50/p95/p99 reporting (goal:
         # latency-histograms). Capped at 1024 samples — a ring buffer in
@@ -985,6 +1009,57 @@ class TetherServer:
         self._batch_worker_task = None
         self._batch_queue = None
 
+    def shutdown_inference_executor(self) -> None:
+        """Stop the dedicated inference offload pool."""
+        self._inference_executor.shutdown(wait=False)
+
+    def _inference_executor_metric_labels(self) -> tuple[str, str, str]:
+        ec = getattr(self, "embodiment_config", None)
+        embodiment = getattr(ec, "embodiment", None) or "custom"
+        model_id = Path(self.export_dir).name or "unknown"
+        policy_slot = getattr(self, "_inference_policy_slot", "prod") or "prod"
+        return embodiment, model_id, policy_slot
+
+    def _record_inference_executor_state(
+        self,
+        snapshot: InferenceExecutorSnapshot | None = None,
+    ) -> None:
+        snapshot = snapshot or self._inference_executor.snapshot()
+        embodiment, model_id, policy_slot = self._inference_executor_metric_labels()
+        set_inference_executor_state(
+            embodiment=embodiment,
+            model_id=model_id,
+            policy_slot=policy_slot,
+            in_flight=snapshot.running,
+            queue_depth=snapshot.queue_depth,
+            max_workers=snapshot.max_workers,
+            max_queue=snapshot.max_queue,
+        )
+
+    def _record_inference_executor_rejected(self) -> None:
+        embodiment, model_id, policy_slot = self._inference_executor_metric_labels()
+        inc_inference_executor_rejected(
+            embodiment=embodiment,
+            model_id=model_id,
+            policy_slot=policy_slot,
+        )
+
+    def _inference_executor_full_result(
+        self,
+        exc: InferenceExecutorFull,
+    ) -> dict[str, Any]:
+        snapshot = self._inference_executor.snapshot()
+        return {
+            "error": "inference_executor_full",
+            "message": str(exc),
+            "max_workers": snapshot.max_workers,
+            "max_queue": snapshot.max_queue,
+            "queue_depth": snapshot.queue_depth,
+            "in_flight": snapshot.running,
+            "pending": snapshot.pending,
+            "rejected_total": snapshot.rejected,
+        }
+
     async def predict_async(
         self,
         image: np.ndarray | None = None,
@@ -993,21 +1068,24 @@ class TetherServer:
     ) -> dict[str, Any]:
         """Async front-door used by the HTTP /act handler.
 
-        - If max_batch <= 1: runs `self.predict()` in the default executor.
+        - If max_batch <= 1: runs `self.predict()` in the bounded inference
+          executor.
         - If max_batch > 1: enqueues the request onto a batch queue. A worker
           coroutine drains the queue every `batch_timeout_ms` ms (or when the
           queue hits max_batch) and runs ONE batched ONNX inference, then
           splits the results back to each waiter.
         """
         if self._max_batch <= 1 or self._batch_queue is None:
-            import asyncio
-
-            return await asyncio.to_thread(
-                self.predict,
-                image=image,
-                instruction=instruction,
-                state=state,
-            )
+            try:
+                return await self._inference_executor.submit(
+                    self.predict,
+                    image=image,
+                    instruction=instruction,
+                    state=state,
+                )
+            except InferenceExecutorFull as exc:
+                self._record_inference_executor_rejected()
+                return self._inference_executor_full_result(exc)
 
         import asyncio
         loop = asyncio.get_event_loop()
@@ -1046,10 +1124,18 @@ class TetherServer:
                     return
 
             try:
-                results = await asyncio.to_thread(self._predict_batch_sync, batch)
+                results = await self._inference_executor.submit(
+                    self._predict_batch_sync, batch,
+                )
                 for (fut, *_), result in zip(batch, results):
                     if not fut.done():
                         fut.set_result(result)
+            except InferenceExecutorFull as exc:
+                self._record_inference_executor_rejected()
+                result = self._inference_executor_full_result(exc)
+                for fut, *_ in batch:
+                    if not fut.done():
+                        fut.set_result(dict(result))
             except Exception as e:
                 for fut, *_ in batch:
                     if not fut.done():
@@ -1212,6 +1298,8 @@ def create_app(
     deadline_ms: float | None = None,
     max_batch: int = 1,
     batch_timeout_ms: float = 5.0,
+    inference_executor_workers: int = 1,
+    inference_executor_queue: int = 8,
     max_batch_cost_ms: float = 100.0,  # PolicyRuntime budget per chunk-budget-batching ADR
     api_key: str | None = None,
     replan_hz: float | None = None,
@@ -1297,6 +1385,11 @@ def create_app(
     server.health_state flips to "degraded" — /health returns 503 and
     /act returns 503 with Retry-After: 60. Successful /act resets the
     counter. Default 5. Set to 0 to disable.
+
+    inference_executor_workers / inference_executor_queue: bounded async
+    offload capacity for synchronous predict work. Saturation returns an
+    `inference_executor_full` error result instead of growing an unbounded
+    default-executor queue.
     """
     try:
         from contextlib import asynccontextmanager
@@ -1402,6 +1495,8 @@ def create_app(
                 deadline_ms=deadline_ms,
                 max_batch=max_batch,
                 batch_timeout_ms=batch_timeout_ms,
+                inference_executor_workers=inference_executor_workers,
+                inference_executor_queue=inference_executor_queue,
             )
         else:
             raise ValueError(
@@ -1420,6 +1515,8 @@ def create_app(
             deadline_ms=deadline_ms,
             max_batch=max_batch,
             batch_timeout_ms=batch_timeout_ms,
+            inference_executor_workers=inference_executor_workers,
+            inference_executor_queue=inference_executor_queue,
         )
 
     # Attach embodiment config (B.1) — optional, downstream consumers
@@ -1947,6 +2044,7 @@ def create_app(
             # Build server B via setup_two_policy_serving's server_factory,
             # which mirrors the same load() path. We pass server A in via a
             # closure to avoid re-loading it.
+            server._inference_policy_slot = "a"  # type: ignore[attr-defined]
             servers_pair = {"a": server}
 
             def _two_policy_server_factory(*, export_dir, **kwargs):
@@ -1971,7 +2069,10 @@ def create_app(
                     deadline_ms=deadline_ms,
                     max_batch=max_batch,
                     batch_timeout_ms=batch_timeout_ms,
+                    inference_executor_workers=inference_executor_workers,
+                    inference_executor_queue=inference_executor_queue,
                 )
+                srv_b._inference_policy_slot = "b"
                 srv_b.load()
                 servers_pair["b"] = srv_b
                 return srv_b
@@ -2072,6 +2173,7 @@ def create_app(
                 # documented. Operator sees the error in logs + the
                 # banner the CLI prints.
                 server.two_policy_state = None  # type: ignore[attr-defined]
+                server._inference_policy_slot = "prod"  # type: ignore[attr-defined]
 
         # PolicyRuntime — per-policy queue + cost-weighted scheduler (Phase 1
         # chunk-budget-batching). Single-policy default key "prod"; multi-policy
@@ -2247,6 +2349,25 @@ def create_app(
                     _rec.write_footer({"total_requests": _rec.seq})
                 finally:
                     _rec.close()
+            _servers_to_shutdown = [server]
+            _two_state_shutdown = getattr(server, "two_policy_state", None)
+            if _two_state_shutdown is not None:
+                _servers_to_shutdown.extend(
+                    [
+                        getattr(_two_state_shutdown, "server_a", None),
+                        getattr(_two_state_shutdown, "server_b", None),
+                    ]
+                )
+            for _srv_shutdown in {
+                id(_srv): _srv for _srv in _servers_to_shutdown if _srv is not None
+            }.values():
+                _shutdown = getattr(_srv_shutdown, "shutdown_inference_executor", None)
+                if _shutdown is None:
+                    continue
+                try:
+                    _shutdown()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("inference_executor.shutdown failed: %s", exc)
             shutdown_tracing()
 
     app = FastAPI(
