@@ -56,8 +56,17 @@ export default {
       });
     }
 
+    // Accept tether_version (current clients) OR reflex_version (legacy
+    // reflex-vla clients) and normalize to tether_version. Without this the
+    // renamed client (which sends tether_version) hit "missing_field" 400 on
+    // every heartbeat — 100% telemetry loss. The D1 column stays reflex_version
+    // for data continuity.
+    if (payload.tether_version == null && payload.reflex_version != null) {
+      payload.tether_version = payload.reflex_version;
+    }
+
     // Schema validation. v1 fields are LOCKED — additive-only Phase 2.
-    const required = ["schema_version", "license_id", "org_hash", "workload", "reflex_version", "timestamp"];
+    const required = ["schema_version", "license_id", "org_hash", "workload", "tether_version", "timestamp"];
     for (const field of required) {
       if (!(field in payload)) {
         return new Response(
@@ -83,7 +92,7 @@ export default {
     if (
       typeof payload.license_id !== "string" || payload.license_id.length > 256 ||
       typeof payload.org_hash !== "string" || payload.org_hash.length !== 16 ||
-      typeof payload.reflex_version !== "string" || payload.reflex_version.length > 64 ||
+      typeof payload.tether_version !== "string" || payload.tether_version.length > 64 ||
       typeof payload.timestamp !== "string" || payload.timestamp.length > 64 ||
       typeof payload.workload !== "object" || payload.workload === null
     ) {
@@ -125,7 +134,7 @@ export default {
             payload.org_hash,
             vlaFamily,
             hardwareTier,
-            payload.reflex_version,
+            payload.tether_version,  // D1 column stays `reflex_version` (continuity)
             payload.timestamp,
             new Date().toISOString(),
             modelName,
