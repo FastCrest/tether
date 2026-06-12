@@ -173,6 +173,37 @@ class TestMultiCycleIntegration:
         stats = adapter.get_stats()
         assert stats["adaptive_chunking"]["reason"] == "stable_high_latency"
 
+    def test_adaptive_chunking_canary_keeps_base_execution_horizon(self):
+        from tether.runtime.rtc_adapter import _RTC_AVAILABLE
+        if not _RTC_AVAILABLE:
+            pytest.skip("lerobot not installed")
+        policy = _SyntheticPolicy()
+        cfg = RtcAdapterConfig(
+            enabled=True,
+            execute_hz=100.0,
+            cold_start_discard=0,
+            rtc_execution_horizon=5,
+            adaptive_chunking_canary=True,
+            adaptive_high_latency_ms=50.0,
+        )
+        adapter = RtcAdapter(
+            policy=policy,
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=cfg,
+        )
+        adapter.latency.record(0.10)
+        adapter.latency.record(0.10)
+        adapter.latency.record(0.10)
+
+        adapter.predict_chunk_with_rtc({"image": "x"})
+
+        assert policy.calls[-1]["execution_horizon"] == 5
+        stats = adapter.get_stats()
+        assert stats["adaptive_chunking"]["horizon"] == 10
+        assert stats["adaptive_chunking"]["applied_horizon"] == 5
+        assert stats["adaptive_chunking"]["canary"] is True
+        assert stats["adaptive_chunking"]["reason"] == "stable_high_latency"
+
     def test_adaptive_chunking_uses_guard_margin_signal(self):
         policy = _SyntheticPolicy()
         cfg = RtcAdapterConfig(
@@ -195,6 +226,28 @@ class TestMultiCycleIntegration:
         assert decision.reason == "guard_margin"
         stats = adapter.get_stats()
         assert stats["adaptive_signal"]["guard_margin"] == pytest.approx(0.01)
+
+    def test_adaptive_chunking_uses_configured_correction_threshold(self):
+        policy = _SyntheticPolicy()
+        cfg = RtcAdapterConfig(
+            enabled=False,
+            cold_start_discard=0,
+            rtc_execution_horizon=5,
+            adaptive_chunking_enabled=True,
+            adaptive_high_correction_magnitude=0.50,
+        )
+        adapter = RtcAdapter(
+            policy=policy,
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=cfg,
+        )
+
+        adapter.record_adaptive_signal(correction_magnitude=0.30)
+        decision = adapter._decide_adaptive_horizon(0.01)
+
+        assert decision is not None
+        assert decision.reason == "correction"
+        assert 1 < decision.horizon < 10
 
     def test_adaptive_chunking_uses_a2c2_correction_signal(self):
         policy = _SyntheticPolicy()

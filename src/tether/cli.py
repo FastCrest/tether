@@ -1889,6 +1889,51 @@ def serve(
              "Stable/high-latency chunks execute longer before replanning; "
              "uncertain or discontinuous chunks replan sooner.",
     ),
+    adaptive_action_chunking_canary: bool = typer.Option(
+        False,
+        "--adaptive-action-chunking-canary",
+        help="With --rtc: compute AAC decisions and telemetry but keep applying "
+             "the base --rtc-execution-horizon. Use before enabling AAC control.",
+    ),
+    aac_min_horizon: int = typer.Option(
+        1,
+        "--aac-min-horizon",
+        help="With --adaptive-action-chunking: minimum execution horizon in actions.",
+    ),
+    aac_low_uncertainty: float = typer.Option(
+        0.20,
+        "--aac-low-uncertainty",
+        help="With --adaptive-action-chunking: uncertainty below this is low risk.",
+    ),
+    aac_high_uncertainty: float = typer.Option(
+        0.65,
+        "--aac-high-uncertainty",
+        help="With --adaptive-action-chunking: uncertainty at/above this is high risk.",
+    ),
+    aac_low_guard_margin: float = typer.Option(
+        0.05,
+        "--aac-low-guard-margin",
+        help="With --adaptive-action-chunking: guard margin at/below this shortens "
+             "the horizon.",
+    ),
+    aac_high_correction_magnitude: float = typer.Option(
+        0.20,
+        "--aac-high-correction-magnitude",
+        help="With --adaptive-action-chunking: A2C2 correction magnitude at/above "
+             "this shortens the horizon.",
+    ),
+    aac_high_action_delta: float = typer.Option(
+        0.25,
+        "--aac-high-action-delta",
+        help="With --adaptive-action-chunking: chunk-boundary action delta at/above "
+             "this shortens the horizon.",
+    ),
+    aac_high_latency_ms: float = typer.Option(
+        120.0,
+        "--aac-high-latency-ms",
+        help="With --adaptive-action-chunking: stable scenes at/above this latency "
+             "can lengthen the horizon.",
+    ),
     record: str = typer.Option(
         "",
         help="If set, write every /act request+response to a JSONL trace in "
@@ -2370,7 +2415,19 @@ def serve(
                 prefix_attention_schedule=rtc_schedule,
                 max_guidance_weight=rtc_max_guidance_weight,
                 debug=rtc_debug,
-                adaptive_chunking_enabled=adaptive_action_chunking,
+                adaptive_chunking_enabled=(
+                    adaptive_action_chunking or adaptive_action_chunking_canary
+                ),
+                adaptive_chunking_canary=adaptive_action_chunking_canary,
+                adaptive_min_horizon=aac_min_horizon,
+                adaptive_low_uncertainty=aac_low_uncertainty,
+                adaptive_high_uncertainty=aac_high_uncertainty,
+                adaptive_low_guard_margin=aac_low_guard_margin,
+                adaptive_high_correction_magnitude=(
+                    aac_high_correction_magnitude
+                ),
+                adaptive_high_action_delta=aac_high_action_delta,
+                adaptive_high_latency_ms=aac_high_latency_ms,
             )
         except ValueError as exc:
             err_console.print(f"[red]Invalid RTC config: {exc}[/red]")
@@ -2463,9 +2520,14 @@ def serve(
             f"{', no-gzip' if record_no_gzip else ''})"
         )
     if rtc:
+        aac_suffix = ""
+        if adaptive_action_chunking_canary:
+            aac_suffix = "/aac-canary"
+        elif adaptive_action_chunking:
+            aac_suffix = "/aac"
         composed.append(
             f"[cyan]rtc[/cyan]=horizon{rtc_execution_horizon}/{rtc_schedule}"
-            f"{'/aac' if adaptive_action_chunking else ''}"
+            f"{aac_suffix}"
         )
     if composed:
         console.print(f"  Wedges:  {' · '.join(composed)}")

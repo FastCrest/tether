@@ -29,7 +29,16 @@ def _record(
     action_delta: float,
     horizon: int,
     reason: str,
+    applied_horizon: int | None = None,
 ) -> dict:
+    decision = {
+        "horizon": horizon,
+        "reason": reason,
+        "risk_score": 0.5,
+        "replan_threshold_ratio": 0.4,
+    }
+    if applied_horizon is not None:
+        decision["applied_horizon"] = applied_horizon
     return {
         "kind": "request",
         "latency": {"total_ms": latency_ms},
@@ -39,12 +48,7 @@ def _record(
                 "correction_magnitude": correction_magnitude,
                 "uncertainty": uncertainty,
             },
-            "adaptive_chunking": {
-                "horizon": horizon,
-                "reason": reason,
-                "risk_score": 0.5,
-                "replan_threshold_ratio": 0.4,
-            },
+            "adaptive_chunking": decision,
             "last_action_delta": action_delta,
         },
     }
@@ -60,6 +64,7 @@ def test_iter_adaptive_records_reads_plain_and_gzip_jsonl(tmp_path):
             uncertainty=0.2,
             action_delta=0.03,
             horizon=8,
+            applied_horizon=5,
             reason="stable",
         ),
         {"kind": "request", "latency": {"total_ms": 60}},
@@ -86,6 +91,7 @@ def test_summarize_adaptive_records_counts_reasons_and_percentiles():
             uncertainty=0.2,
             action_delta=0.03,
             horizon=8,
+            applied_horizon=8,
             reason="stable",
         ),
         _record(
@@ -95,6 +101,7 @@ def test_summarize_adaptive_records_counts_reasons_and_percentiles():
             uncertainty=0.5,
             action_delta=0.08,
             horizon=5,
+            applied_horizon=5,
             reason="correction",
         ),
         _record(
@@ -104,6 +111,7 @@ def test_summarize_adaptive_records_counts_reasons_and_percentiles():
             uncertainty=0.9,
             action_delta=0.16,
             horizon=2,
+            applied_horizon=5,
             reason="correction",
         ),
     ]
@@ -115,6 +123,7 @@ def test_summarize_adaptive_records_counts_reasons_and_percentiles():
     assert summary["reasons"] == {"correction": 2, "stable": 1}
     assert summary["observed"]["latency_ms"]["p50"] == pytest.approx(100)
     assert summary["observed"]["guard_margin"]["p10"] == pytest.approx(0.024)
+    assert summary["observed"]["applied_horizon"]["p50"] == pytest.approx(5)
 
 
 def test_recommend_adaptive_chunk_thresholds_uses_recorded_distribution():

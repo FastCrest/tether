@@ -24,6 +24,7 @@ _METRICS = (
     "action_delta",
     "latency_ms",
     "horizon",
+    "applied_horizon",
     "risk_score",
 )
 
@@ -97,6 +98,7 @@ def summarize_adaptive_records(
             reason = str(decision.get("reason") or "unknown")
             reasons[reason] += 1
             _append_float(values["horizon"], decision.get("horizon"))
+            _append_float(values["applied_horizon"], decision.get("applied_horizon"))
             _append_float(values["risk_score"], decision.get("risk_score"))
 
         latency = record.get("latency")
