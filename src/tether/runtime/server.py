@@ -80,6 +80,48 @@ except ImportError:
     _TETHER_VERSION = ""
 
 
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(out):
+        return None
+    return out
+
+
+def _record_rtc_adaptive_signal(
+    rtc_adapter: Any,
+    result: dict[str, Any],
+    *,
+    guard_margin: float | None = None,
+) -> None:
+    """Feed latest guard/A2C2/uncertainty telemetry into RTC AAC state."""
+    if rtc_adapter is None or not hasattr(rtc_adapter, "record_adaptive_signal"):
+        return
+
+    uncertainty = None
+    for key in ("uncertainty_score", "uncertainty", "model_uncertainty"):
+        uncertainty = _coerce_optional_float(result.get(key))
+        if uncertainty is not None:
+            break
+
+    if guard_margin is None:
+        guard_margin = _coerce_optional_float(result.get("guard_margin"))
+    else:
+        guard_margin = _coerce_optional_float(guard_margin)
+
+    rtc_adapter.record_adaptive_signal(
+        uncertainty=uncertainty,
+        guard_margin=guard_margin,
+        correction_magnitude=_coerce_optional_float(
+            result.get("a2c2_correction_magnitude")
+        ),
+    )
+
+
 # ─── Blackwell auto-detect ──────────────────────────────────────────────────
 # ORT-bundled TensorRT predates Blackwell (RTX 50-series, sm_100). On those
 # GPUs, TRT EP segfaults at session-init because TRT can't register kernels
@@ -2596,6 +2638,7 @@ def create_app(
             # the chunk + reports a violation. No-op when guard absent.
             _eg = getattr(server, "embodiment_guard", None)
             _guard_violations: list[str] = []
+            _guard_margin: float | None = None
             if (
                 _eg is not None
                 and isinstance(result, dict)
@@ -2606,6 +2649,9 @@ def create_app(
                 try:
                     _arr = np.asarray(result["actions"], dtype=np.float32)
                     _safe, _check_results = _eg.check(_arr)
+                    _guard_margin = _eg.safety_margin(_safe)
+                    if _guard_margin is not None:
+                        result["guard_margin"] = round(_guard_margin, 6)
                     _was_modified = not np.array_equal(_arr, _safe)
                     if _was_modified:
                         result["actions"] = _safe.tolist()
@@ -2744,6 +2790,16 @@ def create_app(
                         span.set_attribute("tether.a2c2.reason", decision.reason)
                 except Exception as exc:  # noqa: BLE001 — A2C2 must never break /act
                     logger.warning("a2c2_hook.apply_failed: %s", exc)
+
+            if _rtc is not None and isinstance(result, dict) and "error" not in result:
+                try:
+                    _record_rtc_adaptive_signal(
+                        _rtc,
+                        result,
+                        guard_margin=_guard_margin,
+                    )
+                except Exception as exc:  # noqa: BLE001 — RTC signal must not break /act
+                    logger.warning("RTC adaptive signal update failed: %s", exc)
 
             # JSONL record hook (B.2). Writes inside the OTel span context
             # so the seq attribute below cross-links the two ledgers. Recorder

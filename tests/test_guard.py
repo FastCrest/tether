@@ -3,6 +3,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from tether.safety.guard import ActionGuard, SafetyLimits
 
@@ -154,6 +155,36 @@ class TestActionGuard:
 
         assert result.safe
         assert result.safe_action == [3.0, -3.0, -3.0]
+
+    def test_safety_margin_reports_centered_actions_high(self):
+        guard = ActionGuard.default(num_joints=2)
+
+        margin = guard.safety_margin(np.array([[0.0, 0.0]], dtype=np.float32))
+
+        assert margin == 1.0
+
+    def test_safety_margin_reports_boundary_as_zero(self):
+        guard = ActionGuard.default(num_joints=2)
+
+        margin = guard.safety_margin(np.array([[3.14, 0.0]], dtype=np.float32))
+
+        assert margin == 0.0
+
+    def test_safety_margin_includes_velocity_delta(self):
+        limits = SafetyLimits(
+            joint_names=["j1"],
+            position_min=[-10.0],
+            position_max=[10.0],
+            velocity_max=[1.0],
+            effort_max=[50.0],
+        )
+        guard = ActionGuard(limits=limits)
+
+        margin = guard.safety_margin(
+            np.array([[0.0], [0.8]], dtype=np.float32)
+        )
+
+        assert margin == pytest.approx(0.2)
 
     def test_batch_check(self):
         guard = ActionGuard.default(num_joints=3)

@@ -11,12 +11,9 @@ merge_and_update skipped; coexistence with OTel + JSONL hooks.
 """
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import numpy as np
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
@@ -24,6 +21,7 @@ from pydantic import BaseModel
 
 from tether.runtime.buffer import ActionChunkBuffer
 from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
+from tether.runtime.server import _record_rtc_adaptive_signal
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +323,29 @@ class TestEpisodeResetMergeOrder:
         r = client.post("/act", json={"image": "y", "episode_id": "ep-2"})
         # Chunk count is back to 1 (reset cleared, then merge bumped)
         assert r.json()["_test_chunk_count"] == 1
+
+
+class TestAdaptiveSignalHelper:
+    def test_server_helper_records_guard_a2c2_and_uncertainty(self):
+        adapter = RtcAdapter(
+            policy=_StubServer(GOOD_RESPONSE),
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=RtcAdapterConfig(
+                enabled=False,
+                adaptive_chunking_enabled=True,
+            ),
+        )
+
+        _record_rtc_adaptive_signal(
+            adapter,
+            {
+                "a2c2_correction_magnitude": 0.25,
+                "uncertainty_score": 0.4,
+            },
+            guard_margin=0.03,
+        )
+
+        stats = adapter.get_stats()
+        assert stats["adaptive_signal"]["guard_margin"] == pytest.approx(0.03)
+        assert stats["adaptive_signal"]["correction_magnitude"] == pytest.approx(0.25)
+        assert stats["adaptive_signal"]["uncertainty"] == pytest.approx(0.4)

@@ -228,6 +228,87 @@ class ActionGuard:
     def _clamp_value(value: float, lower: float, upper: float) -> float:
         return float(min(max(value, lower), upper))
 
+    @staticmethod
+    def _interval_margin(value: float, lower: float, upper: float) -> float | None:
+        """Normalized distance to the nearest interval boundary.
+
+        Returns 1.0 at interval center, 0.0 at or outside a boundary, and None
+        for invalid intervals.
+        """
+        if upper <= lower:
+            return None
+        half_span = (upper - lower) / 2.0
+        if half_span <= 0:
+            return None
+        distance = min(value - lower, upper - value)
+        return float(min(max(distance / half_span, 0.0), 1.0))
+
+    def safety_margin(self, actions: np.ndarray) -> float | None:
+        """Return the closest normalized margin to any configured limit.
+
+        The value is in [0, 1], where 0 means at/outside a configured safety
+        boundary and 1 means centered under every applicable bound. It covers
+        position, effort, velocity between consecutive chunk actions, and
+        explicit workspace-index bounds. Returns None when no comparable limits
+        apply.
+        """
+        arr = np.asarray(actions, dtype=np.float32)
+        if arr.size == 0:
+            return None
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2 or not np.isfinite(arr).all():
+            return 0.0
+
+        margins: list[float] = []
+        num_joints = min(arr.shape[1], len(self.limits.position_max))
+        for row in arr:
+            for i in range(num_joints):
+                pos_margin = self._interval_margin(
+                    float(row[i]),
+                    float(self.limits.position_min[i]),
+                    float(self.limits.position_max[i]),
+                )
+                if pos_margin is not None:
+                    margins.append(pos_margin)
+
+                if i < len(self.limits.effort_max):
+                    effort_limit = float(self.limits.effort_max[i])
+                    if effort_limit > 0:
+                        effort_margin = (effort_limit - abs(float(row[i]))) / effort_limit
+                        margins.append(float(min(max(effort_margin, 0.0), 1.0)))
+
+            for workspace_axis, action_idx in enumerate(self.limits.workspace_indices):
+                if action_idx < 0 or action_idx >= arr.shape[1]:
+                    continue
+                if (
+                    workspace_axis >= len(self.limits.workspace_min)
+                    or workspace_axis >= len(self.limits.workspace_max)
+                ):
+                    continue
+                workspace_margin = self._interval_margin(
+                    float(row[action_idx]),
+                    float(self.limits.workspace_min[workspace_axis]),
+                    float(self.limits.workspace_max[workspace_axis]),
+                )
+                if workspace_margin is not None:
+                    margins.append(workspace_margin)
+
+        if arr.shape[0] >= 2:
+            num_velocity = min(arr.shape[1], len(self.limits.velocity_max))
+            for prev, cur in zip(arr[:-1], arr[1:]):
+                for i in range(num_velocity):
+                    velocity_limit = float(self.limits.velocity_max[i])
+                    if velocity_limit <= 0:
+                        continue
+                    delta = abs(float(cur[i] - prev[i]))
+                    velocity_margin = (velocity_limit - delta) / velocity_limit
+                    margins.append(float(min(max(velocity_margin, 0.0), 1.0)))
+
+        if not margins:
+            return None
+        return min(margins)
+
     def check_single(
         self,
         action: np.ndarray,

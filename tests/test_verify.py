@@ -320,7 +320,7 @@ def test_parity_cert_writes_json_and_optional_signature(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_cli_verify_pass(monkeypatch):
+def test_cli_verify_pass(monkeypatch, tmp_path):
     typer_testing = pytest.importorskip("typer.testing")
     from tether.cli import app
     import tether.verify as verify_mod
@@ -336,20 +336,20 @@ def test_cli_verify_pass(monkeypatch):
     monkeypatch.setattr(verify_mod, "gather_paired_samples", gather)
 
     runner = typer_testing.CliRunner()
-    with runner.isolated_filesystem():
-        result = runner.invoke(
-            app,
-            [
-                "verify",
-                "/fake/export",
-                "--target",
-                "orin",
-                "--num-episodes",
-                str(_EPS),
-                "--output",
-                "verify_out",
-            ],
-        )
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "/fake/export",
+            "--target",
+            "orin",
+            "--num-episodes",
+            str(_EPS),
+            "--output",
+            "verify_out",
+        ],
+    )
     assert result.exit_code == 0, result.output
     assert "PASS" in result.output
 

@@ -70,6 +70,15 @@ class TestRtcAdapterConfigValidation:
         cfg = RtcAdapterConfig(latency_percentile=99)
         assert cfg.latency_percentile == 99
 
+    def test_adaptive_chunking_config_defaults_off(self):
+        cfg = RtcAdapterConfig()
+        assert cfg.adaptive_chunking_enabled is False
+        assert cfg.adaptive_min_horizon == 1
+
+    def test_invalid_adaptive_min_horizon_rejected(self):
+        with pytest.raises(ValueError, match="adaptive_min_horizon"):
+            RtcAdapterConfig(adaptive_min_horizon=0)
+
 
 # ---------------------------------------------------------------------------
 # LatencyTracker (already shipped in skeleton)
@@ -238,10 +247,6 @@ class TestRtcAdapterReset:
         adapter._prev_chunk_left_over = "fake"
         adapter.latency.record(0.1)
         adapter.latency.record(0.2)
-        # Need at least discard_first+1 records to actually fill the window
-        # (default discard_first=10, so 2 records won't reach the window)
-        n_before_reset = adapter.latency.summary()["n"]
-
         adapter.reset(episode_id="ep-2")
 
         assert adapter._chunk_count == 0

@@ -1882,6 +1882,13 @@ def serve(
         help="With --rtc: enable lerobot's debug Tracker for per-step state "
              "capture. Useful for replay forensics; small per-call overhead.",
     ),
+    adaptive_action_chunking: bool = typer.Option(
+        False,
+        "--adaptive-action-chunking",
+        help="With --rtc: adapt the RTC execution horizon from runtime signals. "
+             "Stable/high-latency chunks execute longer before replanning; "
+             "uncertain or discontinuous chunks replan sooner.",
+    ),
     record: str = typer.Option(
         "",
         help="If set, write every /act request+response to a JSONL trace in "
@@ -2363,6 +2370,7 @@ def serve(
                 prefix_attention_schedule=rtc_schedule,
                 max_guidance_weight=rtc_max_guidance_weight,
                 debug=rtc_debug,
+                adaptive_chunking_enabled=adaptive_action_chunking,
             )
         except ValueError as exc:
             err_console.print(f"[red]Invalid RTC config: {exc}[/red]")
@@ -2457,6 +2465,7 @@ def serve(
     if rtc:
         composed.append(
             f"[cyan]rtc[/cyan]=horizon{rtc_execution_horizon}/{rtc_schedule}"
+            f"{'/aac' if adaptive_action_chunking else ''}"
         )
     if composed:
         console.print(f"  Wedges:  {' · '.join(composed)}")

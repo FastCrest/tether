@@ -147,6 +147,92 @@ class TestMultiCycleIntegration:
         # Allow slack for timer noise: 1-10 actions reasonable for 30ms target
         assert 1 <= last_call["inference_delay"] <= 10
 
+    def test_adaptive_chunking_overrides_execution_horizon(self):
+        from tether.runtime.rtc_adapter import _RTC_AVAILABLE
+        if not _RTC_AVAILABLE:
+            pytest.skip("lerobot not installed")
+        policy = _SyntheticPolicy()
+        cfg = RtcAdapterConfig(
+            enabled=True,
+            execute_hz=100.0,
+            cold_start_discard=0,
+            rtc_execution_horizon=5,
+            adaptive_chunking_enabled=True,
+            adaptive_high_latency_ms=50.0,
+        )
+        adapter = RtcAdapter(
+            policy=policy,
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=cfg,
+        )
+        adapter.latency.record(0.10)
+        adapter.latency.record(0.10)
+        adapter.latency.record(0.10)
+        adapter.predict_chunk_with_rtc({"image": "x"})
+        assert policy.calls[-1]["execution_horizon"] == 10
+        stats = adapter.get_stats()
+        assert stats["adaptive_chunking"]["reason"] == "stable_high_latency"
+
+    def test_adaptive_chunking_uses_guard_margin_signal(self):
+        policy = _SyntheticPolicy()
+        cfg = RtcAdapterConfig(
+            enabled=False,
+            cold_start_discard=0,
+            rtc_execution_horizon=5,
+            adaptive_chunking_enabled=True,
+        )
+        adapter = RtcAdapter(
+            policy=policy,
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=cfg,
+        )
+
+        adapter.record_adaptive_signal(guard_margin=0.01)
+        decision = adapter._decide_adaptive_horizon(0.01)
+
+        assert decision is not None
+        assert decision.horizon == 1
+        assert decision.reason == "guard_margin"
+        stats = adapter.get_stats()
+        assert stats["adaptive_signal"]["guard_margin"] == pytest.approx(0.01)
+
+    def test_adaptive_chunking_uses_a2c2_correction_signal(self):
+        policy = _SyntheticPolicy()
+        cfg = RtcAdapterConfig(
+            enabled=False,
+            cold_start_discard=0,
+            rtc_execution_horizon=5,
+            adaptive_chunking_enabled=True,
+        )
+        adapter = RtcAdapter(
+            policy=policy,
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=cfg,
+        )
+
+        adapter.record_adaptive_signal(correction_magnitude=0.3)
+        decision = adapter._decide_adaptive_horizon(0.01)
+
+        assert decision is not None
+        assert decision.horizon == 1
+        assert decision.reason == "correction"
+
+    def test_reset_clears_adaptive_signal(self):
+        adapter = RtcAdapter(
+            policy=_SyntheticPolicy(),
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=RtcAdapterConfig(
+                enabled=False,
+                adaptive_chunking_enabled=True,
+            ),
+        )
+        adapter.record_adaptive_signal(guard_margin=0.01)
+        assert "adaptive_signal" in adapter.get_stats()
+
+        adapter.reset(episode_id="fresh")
+
+        assert "adaptive_signal" not in adapter.get_stats()
+
 
 # ---------------------------------------------------------------------------
 # Episode lifecycle
@@ -162,8 +248,6 @@ class TestEpisodeLifecycle:
         adapter.reset(episode_id="A")
         for _ in range(5):
             _run_cycle(adapter)
-        latency_after_a = adapter.latency.summary()["n"]
-        carry_after_a = adapter._prev_chunk_left_over
 
         adapter.reset(episode_id="B")
         # Latency window cleared, carry cleared
