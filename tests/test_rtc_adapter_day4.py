@@ -21,7 +21,10 @@ from pydantic import BaseModel
 
 from tether.runtime.buffer import ActionChunkBuffer
 from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
-from tether.runtime.server import _record_rtc_adaptive_signal
+from tether.runtime.server import (
+    _record_rtc_adaptive_signal,
+    _rtc_adaptive_record_from_stats,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -349,3 +352,37 @@ class TestAdaptiveSignalHelper:
         assert stats["adaptive_signal"]["guard_margin"] == pytest.approx(0.03)
         assert stats["adaptive_signal"]["correction_magnitude"] == pytest.approx(0.25)
         assert stats["adaptive_signal"]["uncertainty"] == pytest.approx(0.4)
+
+    def test_rtc_adaptive_record_extracts_only_calibration_fields(self):
+        record = _rtc_adaptive_record_from_stats({
+            "enabled": True,
+            "chunk_count": 5,
+            "adaptive_chunking": {
+                "horizon": 3,
+                "reason": "guard_margin",
+                "risk_score": 0.8,
+                "replan_threshold_ratio": 0.7,
+            },
+            "adaptive_signal": {
+                "guard_margin": 0.02,
+                "correction_magnitude": 0.3,
+            },
+            "last_action_delta": 0.11,
+        })
+
+        assert record == {
+            "adaptive_chunking": {
+                "horizon": 3,
+                "reason": "guard_margin",
+                "risk_score": 0.8,
+                "replan_threshold_ratio": 0.7,
+            },
+            "adaptive_signal": {
+                "guard_margin": 0.02,
+                "correction_magnitude": 0.3,
+            },
+            "last_action_delta": pytest.approx(0.11),
+        }
+
+    def test_rtc_adaptive_record_returns_none_without_adaptive_state(self):
+        assert _rtc_adaptive_record_from_stats({"enabled": True}) is None

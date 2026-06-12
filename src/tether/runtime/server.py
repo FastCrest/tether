@@ -48,6 +48,7 @@ try:
     from tether.observability import (
         METRICS_CONTENT_TYPE,
         inc_inference_executor_rejected,
+        observe_rtc_adaptive_chunking,
         record_act_latency,
         render_metrics,
         set_inference_executor_state,
@@ -60,6 +61,7 @@ except ImportError:  # pragma: no cover
     _METRICS_AVAILABLE = False
     METRICS_CONTENT_TYPE = "text/plain"
     def inc_inference_executor_rejected(*args, **kwargs): pass
+    def observe_rtc_adaptive_chunking(*args, **kwargs): pass
     def record_act_latency(*args, **kwargs): pass
     def render_metrics() -> bytes: return b"# prometheus_client not installed\n"
     def set_inference_executor_state(*args, **kwargs): pass
@@ -119,6 +121,67 @@ def _record_rtc_adaptive_signal(
         correction_magnitude=_coerce_optional_float(
             result.get("a2c2_correction_magnitude")
         ),
+    )
+
+
+def _rtc_adaptive_record_from_stats(stats: Any) -> dict[str, Any] | None:
+    """Extract the additive RTC telemetry block written into JSONL records."""
+    if not isinstance(stats, dict):
+        return None
+
+    out: dict[str, Any] = {}
+    for key in ("adaptive_chunking", "adaptive_signal"):
+        value = stats.get(key)
+        if isinstance(value, dict) and value:
+            out[key] = value
+
+    action_delta = _coerce_optional_float(stats.get("last_action_delta"))
+    if action_delta is not None:
+        out["last_action_delta"] = action_delta
+
+    return out or None
+
+
+def _set_span_optional_float(span: Any, name: str, value: Any) -> None:
+    out = _coerce_optional_float(value)
+    if out is not None:
+        span.set_attribute(name, out)
+
+
+def _set_rtc_adaptive_span_attrs(span: Any, rtc_record: dict[str, Any]) -> None:
+    decision = rtc_record.get("adaptive_chunking")
+    if isinstance(decision, dict):
+        reason = decision.get("reason")
+        if reason is not None:
+            span.set_attribute("tether.rtc.adaptive.reason", str(reason))
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.horizon", decision.get("horizon")
+        )
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.risk_score", decision.get("risk_score")
+        )
+        _set_span_optional_float(
+            span,
+            "tether.rtc.adaptive.replan_threshold_ratio",
+            decision.get("replan_threshold_ratio"),
+        )
+
+    signal = rtc_record.get("adaptive_signal")
+    if isinstance(signal, dict):
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.guard_margin", signal.get("guard_margin")
+        )
+        _set_span_optional_float(
+            span,
+            "tether.rtc.adaptive.correction_magnitude",
+            signal.get("correction_magnitude"),
+        )
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.uncertainty", signal.get("uncertainty")
+        )
+
+    _set_span_optional_float(
+        span, "tether.rtc.adaptive.action_delta", rtc_record.get("last_action_delta")
     )
 
 
@@ -2613,6 +2676,13 @@ def create_app(
                         )
                 raise
 
+            _slot_label = (
+                _two_routing_decision.slot
+                if _two_routing_decision is not None
+                else "prod"
+            )
+            _rtc_for_record: dict[str, Any] | None = None
+
             # Circuit-breaker bookkeeping on returned result. Error-result
             # responses (e.g., NaN guard trips) count as crashes; clean
             # responses reset the counter to 0.
@@ -2691,11 +2761,6 @@ def create_app(
                     # operators can split per-slot p99 in 2-policy mode.
                     # Default "prod" preserves single-policy series.
                     try:
-                        _slot_label = (
-                            _two_routing_decision.slot
-                            if _two_routing_decision is not None
-                            else "prod"
-                        )
                         record_act_latency(
                             float(result["latency_ms"]) / 1000.0,
                             embodiment=_emb_label,
@@ -2798,6 +2863,22 @@ def create_app(
                         result,
                         guard_margin=_guard_margin,
                     )
+                    _rtc_stats = _rtc.get_stats() if hasattr(_rtc, "get_stats") else None
+                    _rtc_for_record = _rtc_adaptive_record_from_stats(_rtc_stats)
+                    if _rtc_for_record is not None:
+                        _set_rtc_adaptive_span_attrs(span, _rtc_for_record)
+                        _decision = _rtc_for_record.get("adaptive_chunking")
+                        _signal = _rtc_for_record.get("adaptive_signal")
+                        observe_rtc_adaptive_chunking(
+                            embodiment=_emb_label,
+                            model_id=_model_label,
+                            policy_slot=_slot_label,
+                            decision=(
+                                _decision if isinstance(_decision, dict) else None
+                            ),
+                            signal=_signal if isinstance(_signal, dict) else None,
+                            last_action_delta=_rtc_for_record.get("last_action_delta"),
+                        )
                 except Exception as exc:  # noqa: BLE001 — RTC signal must not break /act
                     logger.warning("RTC adaptive signal update failed: %s", exc)
 
@@ -2848,6 +2929,7 @@ def create_app(
                     error=err,
                     routing=_routing_for_record,
                     guard=_guard_for_record,
+                    rtc=_rtc_for_record,
                 )
                 if rec_seq >= 0:
                     span.set_attribute("tether.record.seq", rec_seq)

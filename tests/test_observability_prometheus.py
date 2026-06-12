@@ -22,6 +22,7 @@ from tether.observability import (
     inc_safety_violation,
     inc_slo_violation,
     observe_onnx_load_time,
+    observe_rtc_adaptive_chunking,
     record_act_latency,
     render_metrics,
     set_episodes_active,
@@ -140,6 +141,32 @@ class TestCounters:
         out = render_metrics().decode()
         assert "tether_inference_executor_rejected_total" in out
         assert 'model_id="pi05"' in out
+
+    def test_rtc_adaptive_chunking_metrics(self):
+        observe_rtc_adaptive_chunking(
+            embodiment="franka",
+            model_id="pi05",
+            policy_slot="prod",
+            decision={
+                "horizon": 4,
+                "reason": "guard_margin",
+                "risk_score": 0.8,
+                "replan_threshold_ratio": 0.6,
+            },
+            signal={
+                "guard_margin": 0.03,
+                "correction_magnitude": 0.25,
+                "uncertainty": 0.4,
+            },
+            last_action_delta=0.12,
+        )
+        out = render_metrics().decode()
+        assert "tether_rtc_adaptive_decisions_total" in out
+        assert 'reason="guard_margin"' in out
+        assert "tether_rtc_adaptive_horizon" in out
+        assert 'model_id="pi05"' in out
+        assert "tether_rtc_adaptive_guard_margin" in out
+        assert "tether_rtc_adaptive_action_delta" in out
 
     def test_model_swap(self):
         inc_model_swap(embodiment="franka", from_model="pi0", to_model="pi05")

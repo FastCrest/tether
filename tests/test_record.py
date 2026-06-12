@@ -183,6 +183,31 @@ class TestRequestFormat:
         for k in ["cache", "guard", "deadline", "rtc", "error"]:
             assert k not in r, f"optional field '{k}' should be absent when None"
 
+    def test_rtc_field_preserved_when_provided(self, tmp_path):
+        rec = _make_writer(tmp_path)
+        _dummy_request(
+            rec,
+            rtc={
+                "adaptive_chunking": {
+                    "horizon": 4,
+                    "reason": "guard_margin",
+                    "risk_score": 0.75,
+                    "replan_threshold_ratio": 0.6,
+                },
+                "adaptive_signal": {
+                    "guard_margin": 0.03,
+                    "correction_magnitude": 0.2,
+                    "uncertainty": 0.4,
+                },
+                "last_action_delta": 0.12,
+            },
+        )
+        rec.close()
+        r = _read_all(rec.filepath)[1]
+        assert r["rtc"]["adaptive_chunking"]["horizon"] == 4
+        assert r["rtc"]["adaptive_signal"]["guard_margin"] == pytest.approx(0.03)
+        assert r["rtc"]["last_action_delta"] == pytest.approx(0.12)
+
 
 class TestFooterFormat:
     def test_footer_on_close(self, tmp_path):
