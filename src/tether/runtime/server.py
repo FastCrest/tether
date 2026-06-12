@@ -19,11 +19,13 @@ Then from robot:
 from __future__ import annotations
 
 import base64
+import contextvars
 import io
 import json
 import logging
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,7 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
+_request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
 
 try:
     from tether import __version__ as _TETHER_VERSION
@@ -2377,6 +2380,17 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def _request_id_middleware(request, call_next):
+        req_id = str(uuid.uuid4())
+        token = _request_id_var.set(req_id)
+        try:
+            response = await call_next(request)
+        finally:
+            _request_id_var.reset(token)
+        response.headers["X-Reflex-Request-ID"] = req_id
+        return response
+
     # Bearer auth dependency (Phase 1 auth-bearer feature).
     # If api_key is set at app-creation time, every protected route requires
     # the caller to pass `Authorization: Bearer <token>` (preferred) OR the
@@ -2471,6 +2485,9 @@ def create_app(
             # Non-standard attrs under gen_ai.action.* — proposed for upstream
             # OTel GenAI working group contribution (Phase 2 per spec).
             span.set_attribute("gen_ai.action.embodiment", _emb_label)
+            _req_id = _request_id_var.get()
+            if _req_id:
+                span.set_attribute("tether.request_id", _req_id)
             # chunk_size + denoise_steps are set AFTER predict returns (we don't
             # know them until the result is in hand). See ~line 1590 below.
             span.set_attribute(
