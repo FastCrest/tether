@@ -4,6 +4,8 @@
 
 Per ADR `2026-04-25-eval-as-a-service-architecture`. Phase 1 ships LIBERO only on Modal (with Linux x86_64 local fallback); Phase 2 adds SimplerEnv + `customer` suite + HF Hub video upload.
 
+Modal Phase 1 does not upload local export files automatically. For `--runtime modal`, `./my-export/` maps to `/onnx_out/my-export/` in the `pi0-onnx-outputs` Modal volume; if that subdirectory is not prepared, the run fails loudly instead of evaluating a reference export.
+
 ## Quick start
 
 ```bash
