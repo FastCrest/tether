@@ -112,6 +112,19 @@ TOOLS: list[dict[str, Any]] = [
         },
     ),
     _tool(
+        "decide_promotion",
+        "Decide PROMOTE, BLOCK, or ROLLBACK from a deployment proof packet. Use this when the user asks whether a proof packet or rollout should be promoted.",
+        {
+            "properties": {
+                "packet": {"type": "string", "description": "Deployment proof packet directory, or deployment-proof.json path."},
+                "profile": {"type": "string", "description": "Optional JSON/YAML promotion profile with rollout thresholds."},
+                "candidate_active": {"type": "boolean", "description": "Return ROLLBACK instead of BLOCK when gates fail for an active rollout."},
+                "json": {"type": "boolean", "description": "Emit JSON instead of compact human output."},
+            },
+            "required": ["packet"],
+        },
+    ),
+    _tool(
         "benchmark",
         "Measure latency/throughput of an exported model on the local machine.",
         {

@@ -184,6 +184,72 @@ def test_policy_diff_fail_on_any_exits_three(monkeypatch):
     assert "FAIL" in result.output
 
 
+def test_promote_help():
+    result = runner.invoke(app, ["promote", "--help"])
+    assert result.exit_code == 0
+    assert "PROMOTE" in result.output
+    assert "--candidate-active" in result.output
+
+
+def test_promote_json_uses_decision_runner(monkeypatch, tmp_path):
+    import tether.promote as promote_mod
+
+    seen = {}
+
+    def fake_decide_promotion(packet, **kwargs):
+        seen["packet"] = packet
+        seen.update(kwargs)
+        return {
+            "kind": "tether.promotion_decision",
+            "decision": "PROMOTE",
+            "summary": {"pass": 1, "fail": 0},
+            "checks": [{"name": "ok", "status": "pass"}],
+        }
+
+    monkeypatch.setattr(promote_mod, "decide_promotion", fake_decide_promotion)
+
+    result = runner.invoke(
+        app,
+        [
+            "promote",
+            str(tmp_path / "proof"),
+            "--profile",
+            str(tmp_path / "warehouse-safe.yml"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert body["decision"] == "PROMOTE"
+    assert seen["packet"] == str(tmp_path / "proof")
+    assert seen["profile_path"] == str(tmp_path / "warehouse-safe.yml")
+
+
+def test_promote_candidate_active_failure_exits_rollback(monkeypatch, tmp_path):
+    import tether.promote as promote_mod
+
+    monkeypatch.setattr(
+        promote_mod,
+        "decide_promotion",
+        lambda *_args, **_kwargs: {
+            "kind": "tether.promotion_decision",
+            "decision": "ROLLBACK",
+            "summary": {"pass": 1, "fail": 1},
+            "proof": {"passed": False, "check_failures": 1},
+            "policy_diff": {"present": False},
+            "checks": [{"name": "deployment_proof_passed", "status": "fail"}],
+            "packet_dir": str(tmp_path / "proof"),
+            "profile": {"name": "default"},
+        },
+    )
+
+    result = runner.invoke(app, ["promote", str(tmp_path / "proof"), "--candidate-active"])
+
+    assert result.exit_code == 4
+    assert "ROLLBACK" in result.output
+
+
 def test_smoke_json_uses_receipt_runner(tmp_path, monkeypatch):
     import tether.smoke as smoke_mod
 

@@ -1,8 +1,10 @@
 # Deployment proof
 
-`tether prove` proves a specific export can run as a deployment, then writes a
-packet that another engineer or CI job can audit. `tether deploy-proof` is the
-explicit backend command and remains supported for scripts.
+`tether prove` collects evidence for one question: can this policy move forward?
+It proves a specific export can run as a deployment, then writes a packet that
+another engineer or CI job can audit. `tether promote` consumes that packet and
+returns `PROMOTE`, `BLOCK`, or `ROLLBACK`. `tether deploy-proof` is the explicit
+backend command and remains supported for scripts.
 
 ```bash
 tether prove ./export \
@@ -25,6 +27,22 @@ The packet contains:
 - `profile.json` - effective profile after defaults are merged.
 - `server.log` - server log tail from the proof run.
 - `MANIFEST.json` - SHA-256 and size for every packet artifact.
+
+## Promotion decision
+
+Use `tether promote` after the packet is written:
+
+```bash
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe.yml
+```
+
+The command verifies `MANIFEST.json`, reads `deployment-proof.json` and optional
+`policy-diff.json`, applies the promotion profile, and returns one decision:
+
+- `PROMOTE` - proof and policy gates passed.
+- `BLOCK` - do not promote the candidate.
+- `ROLLBACK` - gates failed while the candidate is already active
+  (`--candidate-active`).
 
 ## What it checks
 

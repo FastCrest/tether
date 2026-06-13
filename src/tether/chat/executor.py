@@ -105,6 +105,16 @@ def _build_policy_diff(p: dict[str, Any]) -> list[str]:
     return args
 
 
+def _build_promote(p: dict[str, Any]) -> list[str]:
+    args = ["promote", str(p["packet"])]
+    _flag(args, "profile", p.get("profile"))
+    if p.get("candidate_active") is True:
+        args.append("--candidate-active")
+    if p.get("json") is True:
+        args.append("--json")
+    return args
+
+
 def _build_bench(p: dict[str, Any]) -> list[str]:
     args = ["bench", str(p["export_dir"])]
     _flag(args, "iterations", p.get("iterations"))
@@ -177,6 +187,7 @@ _BUILDERS = {
     "serve_model": _build_serve,
     "prove_deployment": _build_prove,
     "diff_policies": _build_policy_diff,
+    "decide_promotion": _build_promote,
     "benchmark": _build_bench,
     "evaluate": _build_eval,
     "list_models": _build_list_models,

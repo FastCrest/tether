@@ -32,15 +32,18 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-_NOARGS_SUMMARY = """[bold]tether[/bold] — deploy any VLA model to any edge hardware.
+_NOARGS_SUMMARY = """[bold]tether[/bold] — deployment confidence for VLA robot policies.
 
-[bold cyan]Most-used:[/bold cyan]
-  [green]tether chat[/green]                start the natural-language assistant
+[bold cyan]Core workflow:[/bold cyan]
+  [green]tether chat[/green]                ask what to prove, deploy, or fix
   [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
-  [green]tether prove ./export[/green]      prove a real export is deployable
-  [green]tether go --model X[/green]        one-command deploy: probe → pull → export → serve
+  [green]tether prove ./export[/green]      collect a deployment proof packet
+  [green]tether promote ./proof[/green]     decide PROMOTE / BLOCK / ROLLBACK
+
+[bold cyan]Evidence sources:[/bold cyan]
+  [green]tether doctor[/green]              collect install + GPU evidence
+  [green]tether go --model X[/green]        probe → pull → export → serve
   [green]tether smoke[/green]               prove install + local /act roundtrip
-  [green]tether doctor[/green]              diagnose install + GPU issues
   [green]tether models list[/green]         browse the curated model registry
 
 [dim]All commands:[/dim]  tether --help
@@ -79,6 +82,7 @@ def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
         "smoke",
         "deploy-proof",
         "prove",
+        "promote",
         "policy",
     }
 
@@ -3626,6 +3630,79 @@ app.command(
     name="prove",
     help="Friendly alias for `deploy-proof`: prove a real export is ready to deploy.",
 )(deploy_proof)
+
+
+@app.command()
+def promote(
+    packet: str = typer.Argument(
+        ...,
+        help="Deployment proof packet directory, or deployment-proof.json path.",
+    ),
+    profile: str = typer.Option(
+        "",
+        "--profile",
+        help="Optional JSON/YAML promotion profile with rollout thresholds.",
+    ),
+    candidate_active: bool = typer.Option(
+        False,
+        "--candidate-active",
+        help="Return ROLLBACK instead of BLOCK when gates fail for an active rollout.",
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        help="Optional path to write the promotion decision JSON report.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: 'human' or 'json'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+) -> None:
+    """Decide PROMOTE / BLOCK / ROLLBACK from a deployment proof packet."""
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json"):
+        err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
+        raise typer.Exit(2)
+
+    from tether.promote import (
+        PromotionError,
+        decide_promotion,
+        format_promotion_human,
+        write_promotion_report,
+    )
+
+    try:
+        report = decide_promotion(
+            packet,
+            profile_path=profile or None,
+            candidate_active=candidate_active,
+        )
+    except PromotionError as exc:
+        err_console.print(f"[red]Promotion decision failed:[/red] {exc}")
+        raise typer.Exit(2)
+
+    if output:
+        write_promotion_report(report, output)
+    if output_format == "json":
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        console.print(format_promotion_human(report), markup=False)
+        if output:
+            console.print(f"Wrote promotion decision report: {output}")
+
+    decision = report.get("decision")
+    if decision == "PROMOTE":
+        raise typer.Exit(0)
+    if decision == "ROLLBACK":
+        raise typer.Exit(4)
+    raise typer.Exit(1)
 
 
 @app.command()

@@ -9,15 +9,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-WELCOME_CARD = """[bold]tether chat[/bold] — natural language for VLA deployment
+WELCOME_CARD = """[bold]tether chat[/bold] — natural language for VLA deployment decisions
 
 What I can do for you:
-  • Deploy a model       [dim]"deploy smolvla to my mac"[/dim]
   • Prove an export      [dim]"prove ./export is ready for franka"[/dim]
-  • Browse models        [dim]"what models are available?"[/dim]
-  • Diagnose problems    [dim]"why is my install broken?"[/dim]
-  • Inspect traces       [dim]"show my recent traces from this week"[/dim]
-  • Run benchmarks       [dim]"benchmark pi05 on my desktop"[/dim]
+  • Promote or block     [dim]"can I promote ./tether-deploy-proof?"[/dim]
+  • Explain failures     [dim]"why was this proof blocked?"[/dim]
+  • Diagnose runtime     [dim]"why is my install broken?"[/dim]
+  • Compare rollouts     [dim]"diff current and candidate traces"[/dim]
+  • Deploy a model       [dim]"deploy smolvla to my mac"[/dim]
 
 Useful commands:
   [green]/help[/green]    list everything I can do          [green]/tools[/green]   show my tool catalog
@@ -31,10 +31,10 @@ SHORT_BANNER = """[bold]tether chat[/bold] — type a question, [green]/help[/gr
 
 TOUR_PROMPTS = [
     'what version of tether am i on?',
-    'what models can i deploy and which is smallest?',
     'prove ./export is ready for franka without touching hardware',
+    'can i promote ./tether-deploy-proof?',
+    'why was my deployment proof blocked?',
     'check my install for problems',
-    "i'm on a mac with no gpu — what can i actually do?",
 ]
 
 
@@ -50,8 +50,8 @@ SLASH_HELP = """[bold]Slash commands[/bold]
 
 [bold]What chat can do[/bold]
   Natural-language prompts route to tools that wrap the [cyan]tether[/cyan] CLI.
-  Examples: "deploy smolvla to my mac", "prove ./export is ready for franka",
-  "list traces from yesterday", "benchmark pi05 on my desktop".
+  Examples: "prove ./export is ready for franka", "can I promote this proof?",
+  "diff these rollout traces", "deploy smolvla to my mac".
 
 [bold]Conversation persistence[/bold]
   Sessions auto-save to ~/.cache/tether/chat_history/. Resume the most
@@ -61,12 +61,12 @@ SLASH_HELP = """[bold]Slash commands[/bold]
 TOUR_BLOCK = """[bold]Try one of these[/bold] — copy-paste any line:
 
   what version of tether am i on?
-  what models can i deploy and which is smallest?
   prove ./export is ready for franka without touching hardware
+  can i promote ./tether-deploy-proof?
+  why was my deployment proof blocked?
   check my install for problems
-  i'm on a mac with no gpu — what can i actually do?
 
-[dim]Tip: the assistant can also chain operations — try "deploy smolvla to my orin nano".[/dim]
+[dim]Tip: the assistant can chain proof and promotion — try "prove ./export, then tell me if it can ship".[/dim]
 """
 
 
@@ -103,6 +103,7 @@ def tools_listing() -> str:
         "serve_model": "Deploy",
         "prove_deployment": "Deploy",
         "diff_policies": "Deploy",
+        "decide_promotion": "Deploy",
         "list_models": "Models",
         "pull_model": "Models",
         "model_info": "Models",

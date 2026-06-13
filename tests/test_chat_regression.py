@@ -118,6 +118,30 @@ def test_diff_policies_tool_routes_to_policy_diff() -> None:
     assert shadow_argv == ["policy", "diff", "./shadow.jsonl.gz", "--shadow"]
 
 
+def test_decide_promotion_tool_routes_to_promote() -> None:
+    tool = by_name()["decide_promotion"]
+    props = tool["function"]["parameters"]["properties"]
+    assert "packet" in props
+    assert "candidate_active" in props
+
+    argv = _argv_for(
+        "decide_promotion",
+        {
+            "packet": "./proof",
+            "profile": "./warehouse-safe.yml",
+            "candidate_active": True,
+            "json": True,
+        },
+    )
+
+    assert argv == [
+        "promote", "./proof",
+        "--profile", "./warehouse-safe.yml",
+        "--candidate-active",
+        "--json",
+    ]
+
+
 def test_system_prompt_has_registry_grounding_rule() -> None:
     p = SYSTEM_PROMPT
     assert "registry grounding" in p.lower(), (
@@ -143,4 +167,6 @@ def test_system_prompt_prefers_prove_for_deployment_readiness() -> None:
 def test_system_prompt_prefers_policy_diff_for_rollout_questions() -> None:
     p = SYSTEM_PROMPT
     assert "diff_policies" in p
+    assert "decide_promotion" in p
+    assert "promote, block, or roll back" in p
     assert "safe to promote" in p

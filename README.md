@@ -9,11 +9,19 @@
 
 ![Tether — pip install + tether doctor + tether --help on Modal A10G with TRT EP active](assets/tether-tweet.gif)
 
-**The deployment layer for VLAs** — take a Vision-Language-Action model off the training cluster and onto a robot. Now with **`tether chat`** — talk to your robot fleet in plain English.
+**Deployment confidence for VLA robot policies** — Tether answers one production question: can this policy safely move forward?
 
 **Verified parity across ALL four major open VLAs.** Tether's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
 
-One CLI, with chat as the front door and explicit commands underneath.
+The public workflow is intentionally small:
+
+```bash
+tether chat
+tether prove ./export --output-dir ./tether-deploy-proof
+tether promote ./tether-deploy-proof
+```
+
+Everything else in the CLI feeds evidence into that answer.
 
 ## Install
 
@@ -156,7 +164,7 @@ You're running tether 0.2.0. Supported targets:
 Want me to show which models support each target, or run tether doctor?
 ```
 
-Chat wraps the real `tether` CLI tools (go, prove, serve, doctor, models, traces, eval, train, etc.) and runs them as subprocesses on your behalf. Ask for outcomes, not flags: "prove ./export is ready for franka", "deploy smolvla to my mac", or "why did my last /act fail?". Powered by GPT-5 Mini through a proxy hosted at `chat.fastcrest.com` — free tier is 100 calls/day per machine, no signup, no API key.
+Chat wraps the real `tether` CLI tools and runs them as subprocesses on your behalf. Ask for outcomes, not flags: "prove ./export is ready for franka", "can I promote this proof packet?", or "why did my last /act fail?". Powered by GPT-5 Mini through a proxy hosted at `chat.fastcrest.com` — free tier is 100 calls/day per machine, no signup, no API key.
 
 > Bring your own key? `export FASTCREST_PROXY_URL=https://api.openai.com/v1`
 
@@ -252,28 +260,24 @@ with ReflexClient("http://localhost:8000", api_key=os.environ["TETHER_API_KEY"])
 
 `/health` stays unauthenticated so load balancers and orchestrators can probe readiness without credentials.
 
-### The verb surface
+### The product surface
 
-```
-tether chat             # NEW — natural-language interface to every command below
-tether go               # one-command-deploy: probe → resolve → pull → serve
-tether prove            # friendly deployment-proof alias for real export readiness
-tether serve            # explicit-config server (full flag surface)
-tether deploy-proof     # explicit backend command used by tether prove
-tether policy diff      # compare recorded/shadow policy behavior before rollout
-tether doctor           # diagnose env + GPU + per-deploy issues
-tether models {list, pull, info, export}    # curated registry + lifecycle
-tether train  {finetune, distill}           # training operations
-tether validate {dataset, export}           # pre-flight checks
-tether inspect {replay, traces}             # forensic tools (legacy diagnostics: --advanced)
-tether traces {query, summary}              # search + aggregate recorded /act traces
-tether pro     {activate, status, deactivate}   # Pro tier license
-tether contribute  {opt-in, opt-out, status}    # Curate data contribution
+For new users, Tether is three verbs:
+
+```bash
+tether chat             # ask for the outcome in plain English
+tether prove ./export   # collect a deployment proof packet
+tether promote ./proof  # return PROMOTE, BLOCK, or ROLLBACK
 ```
 
-Advanced/SO-100/internal commands stay callable directly (config, calibrate, bench-game, status, inspect bench/targets/guard/doctor) but stay out of the first-run path. Power-users can still invoke them; they just don't crowd the discovery story.
+The rest of the CLI is supporting machinery:
 
-Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alias bridges. For new users, start with `tether chat`; for CI and repeatable evidence, use `tether prove ./export`.
+- Runtime evidence: `go`, `serve`, `doctor`, `smoke`.
+- Rollout evidence: `policy diff`, `traces`, `replay`, `eval`.
+- Model workflow: `models`, `validate`, `train`.
+- Enterprise/admin workflow: `pro`, `contribute`, `curate`, `data`, `comply`.
+
+Advanced/SO-100/internal commands stay callable directly (`config`, `calibrate`, `bench-game`, `status`, `inspect bench/targets/guard/doctor`), but stay out of the first-run path. Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alias bridges.
 
 ### Install notes
 
@@ -381,6 +385,12 @@ tether prove ./p0 \
   --output-dir /tmp/tether-deploy-proof
 ```
 
+Then turn the packet into an operator decision:
+
+```bash
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe.yml
+```
+
 Profiles are JSON/YAML and override default thresholds:
 
 ```yaml
@@ -394,9 +404,9 @@ thresholds:
   max_missed_control_budget: 0
 ```
 
-## Composable wedges
+## Evidence knobs, not extra products
 
-Every wedge is a flag on `tether serve`:
+Advanced teams can enable more runtime evidence with `tether serve` flags:
 
 ```bash
 tether serve ./p0 \
@@ -408,7 +418,7 @@ tether serve ./p0 \
   --max-similar-skips 3                    # cap on consecutive cached returns (anti-drift safety)
 ```
 
-The response JSON surfaces telemetry from each enabled wedge so you can see what's actually happening (`safety_violations`, `deadline_exceeded`, `adaptive_enabled`, etc.). Skip-count from the action-similarity fast path lands on the `reflex_action_skip_total` Prometheus counter at `/metrics`.
+The response JSON surfaces telemetry from each enabled knob so proof packets can show what actually happened (`safety_violations`, `deadline_exceeded`, `adaptive_enabled`, etc.). Skip-count from the action-similarity fast path lands on the `reflex_action_skip_total` Prometheus counter at `/metrics`.
 
 ## Trace archive — search + aggregate recorded `/act` traces
 
