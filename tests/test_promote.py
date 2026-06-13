@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from tether.deploy_proof import write_deploy_proof_packet
-from tether.promote import decide_promotion, format_promotion_human, load_promotion_profile
+from tether.promote import (
+    decide_promotion,
+    format_promotion_human,
+    get_builtin_promotion_profile,
+    list_promotion_profiles,
+    load_promotion_profile,
+)
 
 
 def _receipt(
@@ -143,6 +149,62 @@ thresholds:
     assert load_promotion_profile(profile)["name"] == "warehouse-safe"
     assert report["decision"] == "BLOCK"
     assert "policy_diff_present" in report["summary"]["failed_checks"]
+
+
+def test_builtin_profiles_are_loadable() -> None:
+    names = {profile["name"] for profile in list_promotion_profiles()}
+
+    assert {"ci-default", "lab-shadow", "warehouse-safe", "contact-strict"} <= names
+    assert load_promotion_profile("warehouse-safe")["thresholds"]["require_auth"] is True
+    assert get_builtin_promotion_profile("contact_strict")["name"] == "contact-strict"
+
+
+def test_warehouse_safe_requires_production_evidence(tmp_path: Path) -> None:
+    packet = _write_packet(
+        tmp_path,
+        _receipt(
+            tmp_path,
+            policy_summary={
+                "verdict": "pass",
+                "compared": 3,
+                "action_failures": 0,
+                "latency_regressions": 0,
+                "guard_regressions": 0,
+                "shape_failures": 0,
+                "missing_candidate": 0,
+            },
+        ),
+    )
+
+    report = decide_promotion(packet, profile_path="warehouse-safe")
+
+    assert report["decision"] == "BLOCK"
+    assert "proof_auth_required" in report["summary"]["failed_checks"]
+    assert "proof_trace_required" in report["summary"]["failed_checks"]
+    assert "proof_guard_required" in report["summary"]["failed_checks"]
+
+
+def test_lab_shadow_allows_warn_policy_verdict(tmp_path: Path) -> None:
+    packet = _write_packet(
+        tmp_path,
+        _receipt(
+            tmp_path,
+            policy_summary={
+                "verdict": "warn",
+                "compared": 3,
+                "action_failures": 0,
+                "latency_regressions": 1,
+                "guard_regressions": 0,
+                "shape_failures": 0,
+                "missing_candidate": 0,
+            },
+        ),
+    )
+
+    report = decide_promotion(packet, profile_path="lab-shadow")
+
+    assert report["decision"] == "PROMOTE"
+    assert report["profile"]["name"] == "lab-shadow"
 
 
 def test_manifest_hash_mismatch_blocks_promotion(tmp_path: Path) -> None:

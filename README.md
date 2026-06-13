@@ -18,7 +18,7 @@ The public workflow is intentionally small:
 ```bash
 tether chat
 tether prove ./export --output-dir ./tether-deploy-proof
-tether promote ./tether-deploy-proof
+tether promote ./tether-deploy-proof --profile warehouse-safe
 ```
 
 Everything else in the CLI feeds evidence into that answer.
@@ -268,6 +268,7 @@ For new users, Tether is three verbs:
 tether chat             # ask for the outcome in plain English
 tether prove ./export   # collect a deployment proof packet
 tether promote ./proof  # return PROMOTE, BLOCK, or ROLLBACK
+tether profiles list    # choose a built-in promotion profile
 ```
 
 The rest of the CLI is supporting machinery:
@@ -388,7 +389,16 @@ tether prove ./p0 \
 Then turn the packet into an operator decision:
 
 ```bash
-tether promote /tmp/tether-deploy-proof --profile warehouse-safe.yml
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe
+```
+
+Use a built-in promotion profile directly, or copy one to an editable file:
+
+```bash
+tether profiles list
+tether profiles show warehouse-safe
+tether profiles init warehouse-safe --output warehouse-safe.yml
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe
 ```
 
 Profiles are JSON/YAML and override default thresholds:

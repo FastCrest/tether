@@ -33,7 +33,7 @@ The packet contains:
 Use `tether promote` after the packet is written:
 
 ```bash
-tether promote /tmp/tether-deploy-proof --profile warehouse-safe.yml
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe
 ```
 
 The command verifies `MANIFEST.json`, reads `deployment-proof.json` and optional
@@ -43,6 +43,14 @@ The command verifies `MANIFEST.json`, reads `deployment-proof.json` and optional
 - `BLOCK` - do not promote the candidate.
 - `ROLLBACK` - gates failed while the candidate is already active
   (`--candidate-active`).
+
+Built-in promotion profiles are available without writing YAML first:
+
+```bash
+tether profiles list
+tether profiles show warehouse-safe
+tether profiles init warehouse-safe --output warehouse-safe.yml
+```
 
 ## What it checks
 

@@ -115,6 +115,10 @@ def _build_promote(p: dict[str, Any]) -> list[str]:
     return args
 
 
+def _build_show_profile(p: dict[str, Any]) -> list[str]:
+    return ["profiles", "show", str(p["profile"]), "--json"]
+
+
 def _build_bench(p: dict[str, Any]) -> list[str]:
     args = ["bench", str(p["export_dir"])]
     _flag(args, "iterations", p.get("iterations"))
@@ -175,6 +179,7 @@ def _build_replay(p: dict[str, Any]) -> list[str]:
 # Builders that take no args — just static argv.
 _STATIC = {
     "list_targets": ["inspect", "targets"],
+    "list_promotion_profiles": ["profiles", "list", "--json"],
     "doctor": ["doctor"],
     "show_status": ["status"],
     "show_config": ["config", "show"],
@@ -188,6 +193,7 @@ _BUILDERS = {
     "prove_deployment": _build_prove,
     "diff_policies": _build_policy_diff,
     "decide_promotion": _build_promote,
+    "show_promotion_profile": _build_show_profile,
     "benchmark": _build_bench,
     "evaluate": _build_eval,
     "list_models": _build_list_models,

@@ -113,15 +113,34 @@ TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "decide_promotion",
-        "Decide PROMOTE, BLOCK, or ROLLBACK from a deployment proof packet. Use this when the user asks whether a proof packet or rollout should be promoted.",
+        "Decide PROMOTE, BLOCK, or ROLLBACK from a deployment proof packet. Use this when the user asks whether a proof packet or rollout should be promoted. The profile can be a built-in name like ci-default, lab-shadow, warehouse-safe, or contact-strict.",
         {
             "properties": {
                 "packet": {"type": "string", "description": "Deployment proof packet directory, or deployment-proof.json path."},
-                "profile": {"type": "string", "description": "Optional JSON/YAML promotion profile with rollout thresholds."},
+                "profile": {"type": "string", "description": "Optional built-in promotion profile name or JSON/YAML path."},
                 "candidate_active": {"type": "boolean", "description": "Return ROLLBACK instead of BLOCK when gates fail for an active rollout."},
                 "json": {"type": "boolean", "description": "Emit JSON instead of compact human output."},
             },
             "required": ["packet"],
+        },
+    ),
+    _tool(
+        "list_promotion_profiles",
+        "List built-in promotion profiles and their required evidence. Use this when the user asks which profile to use.",
+        {"properties": {}},
+    ),
+    _tool(
+        "show_promotion_profile",
+        "Show exact thresholds for a built-in promotion profile.",
+        {
+            "properties": {
+                "profile": {
+                    "type": "string",
+                    "enum": ["ci-default", "lab-shadow", "warehouse-safe", "contact-strict"],
+                    "description": "Built-in promotion profile name.",
+                },
+            },
+            "required": ["profile"],
         },
     ),
     _tool(

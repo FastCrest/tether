@@ -19,12 +19,17 @@ Decision = Literal["PROMOTE", "BLOCK", "ROLLBACK"]
 DEFAULT_PROMOTION_PROFILE: dict[str, Any] = {
     "schema_version": 1,
     "name": "default",
+    "description": "Default promotion gate: verify packet integrity and fail on explicit proof or policy regressions.",
     "thresholds": {
         "require_manifest": True,
         "require_manifest_hashes": True,
         "require_deployment_passed": True,
         "require_no_proof_error": True,
         "max_failed_checks": 0,
+        "require_auth": False,
+        "require_metrics": False,
+        "require_record_trace": False,
+        "require_guard": False,
         "require_policy_diff": "auto",
         "allowed_policy_verdicts": ["pass"],
         "max_policy_action_failures": 0,
@@ -36,6 +41,58 @@ DEFAULT_PROMOTION_PROFILE: dict[str, Any] = {
         "max_warm_roundtrip_p95_ms": None,
         "max_deadline_misses": None,
         "max_control_budget_misses": None,
+    },
+}
+
+BUILTIN_PROMOTION_PROFILE_OVERRIDES: dict[str, dict[str, Any]] = {
+    "ci-default": {
+        "name": "ci-default",
+        "description": "CI gate for package/release checks. Requires packet integrity and passing proof checks, but keeps latency hardware-neutral.",
+    },
+    "lab-shadow": {
+        "name": "lab-shadow",
+        "description": "Lab or shadow rollout gate. Requires policy-diff evidence, allows warn verdicts, and keeps runtime latency permissive.",
+        "thresholds": {
+            "require_policy_diff": True,
+            "allowed_policy_verdicts": ["pass", "warn"],
+            "max_policy_action_failures": 0,
+            "max_policy_latency_regressions": 3,
+            "max_policy_guard_regressions": 0,
+            "max_policy_shape_failures": 0,
+            "max_policy_missing_candidate": 0,
+        },
+    },
+    "warehouse-safe": {
+        "name": "warehouse-safe",
+        "description": "Strict warehouse production gate. Requires auth, trace evidence, guard stress, policy diff, and realtime budget checks.",
+        "thresholds": {
+            "require_auth": True,
+            "require_metrics": True,
+            "require_record_trace": True,
+            "require_guard": True,
+            "require_policy_diff": True,
+            "allowed_policy_verdicts": ["pass"],
+            "max_roundtrip_p95_ms": 80,
+            "max_warm_roundtrip_p95_ms": 40,
+            "max_deadline_misses": 0,
+            "max_control_budget_misses": 0,
+        },
+    },
+    "contact-strict": {
+        "name": "contact-strict",
+        "description": "Strictest preset for contact-rich manipulation. Same evidence as warehouse-safe with tighter latency budgets.",
+        "thresholds": {
+            "require_auth": True,
+            "require_metrics": True,
+            "require_record_trace": True,
+            "require_guard": True,
+            "require_policy_diff": True,
+            "allowed_policy_verdicts": ["pass"],
+            "max_roundtrip_p95_ms": 50,
+            "max_warm_roundtrip_p95_ms": 25,
+            "max_deadline_misses": 0,
+            "max_control_budget_misses": 0,
+        },
     },
 }
 
@@ -58,14 +115,70 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def _copy_jsonable(value: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(value))
+
+
+def _normalize_profile_name(value: str | Path) -> str:
+    return str(value).strip().lower().replace("_", "-")
+
+
+def builtin_promotion_profiles() -> dict[str, dict[str, Any]]:
+    """Return built-in promotion profiles, merged with default thresholds."""
+    profiles: dict[str, dict[str, Any]] = {}
+    for name, override in BUILTIN_PROMOTION_PROFILE_OVERRIDES.items():
+        merged = _deep_merge(_copy_jsonable(DEFAULT_PROMOTION_PROFILE), override)
+        merged["profile_source"] = "builtin"
+        profiles[name] = merged
+    return profiles
+
+
+def list_promotion_profiles() -> list[dict[str, Any]]:
+    """Return concise metadata for built-in promotion profiles."""
+    rows = []
+    for name, profile in builtin_promotion_profiles().items():
+        thresholds = profile.get("thresholds") or {}
+        rows.append(
+            {
+                "name": name,
+                "description": profile.get("description", ""),
+                "require_policy_diff": thresholds.get("require_policy_diff"),
+                "require_auth": thresholds.get("require_auth"),
+                "require_metrics": thresholds.get("require_metrics"),
+                "require_guard": thresholds.get("require_guard"),
+                "require_record_trace": thresholds.get("require_record_trace"),
+                "max_roundtrip_p95_ms": thresholds.get("max_roundtrip_p95_ms"),
+                "max_warm_roundtrip_p95_ms": thresholds.get("max_warm_roundtrip_p95_ms"),
+            }
+        )
+    return rows
+
+
+def get_builtin_promotion_profile(name: str | Path) -> dict[str, Any]:
+    normalized = _normalize_profile_name(name)
+    profiles = builtin_promotion_profiles()
+    if normalized not in profiles:
+        raise PromotionError(
+            "unknown built-in promotion profile "
+            f"{name!r}; available: {', '.join(sorted(profiles))}"
+        )
+    return _copy_jsonable(profiles[normalized])
+
+
 def load_promotion_profile(profile_path: str | Path | None = None) -> dict[str, Any]:
-    profile = json.loads(json.dumps(DEFAULT_PROMOTION_PROFILE))
+    profile = _copy_jsonable(DEFAULT_PROMOTION_PROFILE)
     if profile_path is None or str(profile_path) == "":
         return profile
 
     path = Path(profile_path).expanduser()
     if not path.exists():
-        raise PromotionError(f"promotion profile not found: {path}")
+        normalized = _normalize_profile_name(profile_path)
+        if normalized in BUILTIN_PROMOTION_PROFILE_OVERRIDES:
+            return get_builtin_promotion_profile(normalized)
+        raise PromotionError(
+            f"promotion profile not found: {path}; built-ins: "
+            f"{', '.join(sorted(BUILTIN_PROMOTION_PROFILE_OVERRIDES))}"
+        )
 
     raw = (
         yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -79,6 +192,7 @@ def load_promotion_profile(profile_path: str | Path | None = None) -> dict[str, 
 
     loaded = _deep_merge(profile, raw)
     loaded["profile_path"] = str(path.resolve())
+    loaded["profile_source"] = "file"
     if not isinstance(loaded.get("thresholds"), dict):
         raise PromotionError("promotion profile must contain a thresholds mapping")
     return loaded
@@ -248,6 +362,91 @@ def _evaluate_latency_thresholds(
         )
 
 
+def _evaluate_proof_evidence(
+    *,
+    checks: list[dict[str, Any]],
+    profile: dict[str, Any],
+    proof: dict[str, Any],
+) -> None:
+    if _threshold(profile, "require_auth"):
+        security = proof.get("security") or {}
+        security_checks = security.get("checks") or []
+        auth_ok = bool(security.get("enabled")) and all(
+            check.get("status") == "pass" for check in security_checks
+        )
+        _add_check(
+            checks,
+            "proof_auth_required",
+            auth_ok,
+            category="security",
+            expected="API-key proof checks passed",
+            actual={
+                "enabled": bool(security.get("enabled")),
+                "failed_checks": [
+                    check.get("name")
+                    for check in security_checks
+                    if check.get("status") == "fail"
+                ],
+            },
+            remediation="Run `tether prove` with --api-key and keep production endpoints protected.",
+        )
+
+    if _threshold(profile, "require_metrics"):
+        metrics = proof.get("metrics") or {}
+        metrics_ok = int(metrics.get("status_code") or 0) == 200 and bool(
+            metrics.get("metric_names") or []
+        )
+        _add_check(
+            checks,
+            "proof_metrics_required",
+            metrics_ok,
+            category="observability",
+            expected="/metrics scrape with Tether metric families",
+            actual={
+                "status_code": metrics.get("status_code"),
+                "metric_names": metrics.get("metric_names") or [],
+            },
+            remediation="Rerun `tether prove` against a serve runtime with /metrics enabled.",
+        )
+
+    if _threshold(profile, "require_record_trace"):
+        trace = proof.get("trace") or {}
+        trace_files = trace.get("files") or []
+        _add_check(
+            checks,
+            "proof_trace_required",
+            bool(trace_files),
+            category="forensics",
+            expected="recorded /act trace files in the proof packet",
+            actual={"record_dir": trace.get("record_dir"), "files": trace_files},
+            remediation="Run `tether prove` with --record-dir and replayable /act traffic.",
+        )
+
+    if _threshold(profile, "require_guard"):
+        guard = proof.get("safety_stress") or {}
+        guard_checks = guard.get("checks") or []
+        guard_ok = bool(guard.get("enabled")) and all(
+            check.get("status") == "pass" for check in guard_checks
+        )
+        _add_check(
+            checks,
+            "proof_guard_required",
+            guard_ok,
+            category="safety",
+            expected="ActionGuard stress evidence passed",
+            actual={
+                "enabled": bool(guard.get("enabled")),
+                "source": guard.get("source"),
+                "failed_checks": [
+                    check.get("name")
+                    for check in guard_checks
+                    if check.get("status") == "fail"
+                ],
+            },
+            remediation="Run `tether prove` with --safety-config or --embodiment and fix guard stress failures.",
+        )
+
+
 def _evaluate_policy_diff(
     *,
     checks: list[dict[str, Any]],
@@ -370,6 +569,7 @@ def decide_promotion(
             remediation="Address failed checks in deployment-proof.json.",
         )
 
+    _evaluate_proof_evidence(checks=checks, profile=profile, proof=proof)
     _evaluate_latency_thresholds(checks=checks, profile=profile, proof=proof)
     policy_diff = _load_policy_diff(packet_dir, proof)
     _evaluate_policy_diff(
@@ -449,11 +649,15 @@ def format_promotion_human(report: dict[str, Any]) -> str:
 
 
 __all__ = [
+    "BUILTIN_PROMOTION_PROFILE_OVERRIDES",
     "DEFAULT_PROMOTION_PROFILE",
     "PROMOTION_SCHEMA_VERSION",
     "PromotionError",
+    "builtin_promotion_profiles",
     "decide_promotion",
     "format_promotion_human",
+    "get_builtin_promotion_profile",
+    "list_promotion_profiles",
     "load_promotion_profile",
     "write_promotion_report",
 ]

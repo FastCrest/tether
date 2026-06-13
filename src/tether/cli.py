@@ -39,6 +39,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deployment confidence for VLA robot
   [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
   [green]tether prove ./export[/green]      collect a deployment proof packet
   [green]tether promote ./proof[/green]     decide PROMOTE / BLOCK / ROLLBACK
+  [green]tether profiles list[/green]       choose a built-in promotion profile
 
 [bold cyan]Evidence sources:[/bold cyan]
   [green]tether doctor[/green]              collect install + GPU evidence
@@ -83,6 +84,7 @@ def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
         "deploy-proof",
         "prove",
         "promote",
+        "profiles",
         "policy",
     }
 
@@ -3641,7 +3643,7 @@ def promote(
     profile: str = typer.Option(
         "",
         "--profile",
-        help="Optional JSON/YAML promotion profile with rollout thresholds.",
+        help="Built-in promotion profile name, or JSON/YAML path with rollout thresholds.",
     ),
     candidate_active: bool = typer.Option(
         False,
@@ -5047,6 +5049,10 @@ policy_app = typer.Typer(
     help="Policy rollout gates - diff recorded or shadow policy behavior.",
     no_args_is_help=True,
 )
+profiles_app = typer.Typer(
+    help="Built-in promotion profiles for proof-to-promote decisions.",
+    no_args_is_help=True,
+)
 
 # Cross-register existing functions under the new verb-noun paths.
 # Same callable, two surface names: old hidden, new visible.
@@ -5329,6 +5335,145 @@ def comply_gaps(
         console.print(text, markup=False)
 
 
+def _profile_policy_label(value: Any) -> str:
+    if value is True:
+        return "required"
+    if value == "auto":
+        return "auto"
+    return "optional"
+
+
+def _render_profile(profile: dict[str, Any], output_format: str) -> str:
+    if output_format == "json":
+        return json.dumps(profile, indent=2, sort_keys=True) + "\n"
+    if output_format == "yaml":
+        import yaml
+
+        return yaml.safe_dump(profile, sort_keys=False)
+    raise ValueError(output_format)
+
+
+@profiles_app.command("list")
+def profiles_list(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+) -> None:
+    """List built-in promotion profiles."""
+    from tether.promote import list_promotion_profiles
+
+    profiles = list_promotion_profiles()
+    if json_output:
+        typer.echo(json.dumps({"profiles": profiles}, indent=2, sort_keys=True))
+        return
+
+    table = Table(title="Built-in promotion profiles")
+    table.add_column("Profile", style="cyan")
+    table.add_column("Policy diff")
+    table.add_column("Evidence")
+    table.add_column("Latency")
+    table.add_column("Purpose")
+    for profile in profiles:
+        evidence = [
+            label
+            for label, enabled in (
+                ("auth", profile.get("require_auth")),
+                ("metrics", profile.get("require_metrics")),
+                ("trace", profile.get("require_record_trace")),
+                ("guard", profile.get("require_guard")),
+            )
+            if enabled
+        ]
+        latency = []
+        if profile.get("max_roundtrip_p95_ms") is not None:
+            latency.append(f"p95<={profile['max_roundtrip_p95_ms']}ms")
+        if profile.get("max_warm_roundtrip_p95_ms") is not None:
+            latency.append(f"warm<={profile['max_warm_roundtrip_p95_ms']}ms")
+        table.add_row(
+            str(profile["name"]),
+            _profile_policy_label(profile.get("require_policy_diff")),
+            ", ".join(evidence) if evidence else "packet",
+            ", ".join(latency) if latency else "hardware-neutral",
+            str(profile.get("description") or ""),
+        )
+    console.print(table)
+
+
+@profiles_app.command("show")
+def profiles_show(
+    profile: str = typer.Argument(..., help="Built-in promotion profile name."),
+    output_format: str = typer.Option(
+        "yaml",
+        "--format",
+        help="Output format: 'yaml' or 'json'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+) -> None:
+    """Show a built-in promotion profile."""
+    from tether.promote import PromotionError, get_builtin_promotion_profile
+
+    if json_output:
+        output_format = "json"
+    if output_format not in {"yaml", "json"}:
+        err_console.print(f"[red]--format must be 'yaml' or 'json', got {output_format!r}[/red]")
+        raise typer.Exit(2)
+    try:
+        loaded = get_builtin_promotion_profile(profile)
+    except PromotionError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    console.print(_render_profile(loaded, output_format), markup=False)
+
+
+@profiles_app.command("init")
+def profiles_init(
+    profile: str = typer.Argument(..., help="Built-in promotion profile name."),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Output file. Defaults to <profile>.yml or <profile>.json.",
+    ),
+    output_format: str = typer.Option(
+        "yaml",
+        "--format",
+        help="Output format: 'yaml' or 'json'.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing output file.",
+    ),
+) -> None:
+    """Copy a built-in promotion profile to an editable local file."""
+    from tether.promote import PromotionError, get_builtin_promotion_profile
+
+    if output_format not in {"yaml", "json"}:
+        err_console.print(f"[red]--format must be 'yaml' or 'json', got {output_format!r}[/red]")
+        raise typer.Exit(2)
+    try:
+        loaded = get_builtin_promotion_profile(profile)
+    except PromotionError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    suffix = "json" if output_format == "json" else "yml"
+    target = Path(output or f"{loaded['name']}.{suffix}").expanduser()
+    if target.exists() and not force:
+        err_console.print(f"[red]Refusing to overwrite existing file:[/red] {target}")
+        err_console.print("[dim]Pass --force or choose a different --output path.[/dim]")
+        raise typer.Exit(2)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_render_profile(loaded, output_format), encoding="utf-8")
+    console.print(f"Wrote promotion profile: {target}")
+
+
 @policy_app.command("diff")
 def policy_diff_cmd(
     baseline_trace: str = typer.Argument(
@@ -5427,6 +5572,7 @@ app.add_typer(train_app, name="train")
 app.add_typer(validate_app, name="validate")
 app.add_typer(inspect_app, name="inspect")
 app.add_typer(comply_app, name="comply")
+app.add_typer(profiles_app, name="profiles")
 app.add_typer(policy_app, name="policy")
 
 # ─── tether connect {name} / disconnect / list ──────────────────────────────

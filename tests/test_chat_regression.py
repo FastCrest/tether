@@ -142,6 +142,20 @@ def test_decide_promotion_tool_routes_to_promote() -> None:
     ]
 
 
+def test_profile_tools_route_to_profiles_commands() -> None:
+    assert "list_promotion_profiles" in _STATIC
+    assert _argv_for("list_promotion_profiles", {}) == ["profiles", "list", "--json"]
+
+    tool = by_name()["show_promotion_profile"]
+    props = tool["function"]["parameters"]["properties"]
+    assert "warehouse-safe" in props["profile"]["enum"]
+
+    assert _argv_for(
+        "show_promotion_profile",
+        {"profile": "warehouse-safe"},
+    ) == ["profiles", "show", "warehouse-safe", "--json"]
+
+
 def test_system_prompt_has_registry_grounding_rule() -> None:
     p = SYSTEM_PROMPT
     assert "registry grounding" in p.lower(), (
@@ -168,5 +182,6 @@ def test_system_prompt_prefers_policy_diff_for_rollout_questions() -> None:
     p = SYSTEM_PROMPT
     assert "diff_policies" in p
     assert "decide_promotion" in p
+    assert "list_promotion_profiles" in p
     assert "promote, block, or roll back" in p
     assert "safe to promote" in p

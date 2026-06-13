@@ -14,7 +14,7 @@ Tether's product surface is the deployment decision workflow:
 ```bash
 tether chat
 tether prove ./export --output-dir ./tether-deploy-proof
-tether promote ./tether-deploy-proof
+tether promote ./tether-deploy-proof --profile warehouse-safe
 ```
 
 Most users should start with `tether chat` and ask for the outcome they want.
@@ -26,6 +26,7 @@ manual workflows stay stable.
 | [`chat`](#tether-chat) | Natural-language front door for deployment questions |
 | [`prove`](#tether-prove) | Collect a deployment proof packet for a specific export |
 | [`promote`](#tether-promote) | Decide `PROMOTE`, `BLOCK`, or `ROLLBACK` from that packet |
+| [`profiles`](#tether-profiles) | Built-in promotion profiles for common rollout gates |
 
 Everything else is an evidence source behind those decisions:
 
@@ -107,12 +108,37 @@ tether promote ./tether-deploy-proof
 # Active rollout failed gates: recommend rollback instead of block
 tether promote ./tether-deploy-proof --candidate-active
 
-# CI-friendly JSON + stricter profile
-tether promote ./tether-deploy-proof --profile warehouse-safe.yml --json
+# CI-friendly JSON + stricter built-in profile
+tether promote ./tether-deploy-proof --profile warehouse-safe --json
 ```
 
 Exit codes: `0` means `PROMOTE`, `1` means `BLOCK`, `4` means `ROLLBACK`, and
 `2` means the proof packet or profile could not be loaded.
+
+---
+
+## `tether profiles`
+
+Built-in promotion profile discovery. Profiles hide threshold complexity behind
+named rollout gates, while still letting advanced users export/edit the YAML.
+
+```bash
+tether profiles list
+tether profiles show warehouse-safe
+tether profiles init warehouse-safe --output warehouse-safe.yml
+```
+
+Built-ins:
+
+| Profile | Use |
+|---|---|
+| `ci-default` | Package/release CI gate; hardware-neutral latency |
+| `lab-shadow` | Shadow rollout gate that requires policy diff evidence |
+| `warehouse-safe` | Production warehouse gate with auth, trace, guard, policy diff, and latency thresholds |
+| `contact-strict` | Strictest contact-rich manipulation gate |
+
+Use them directly with `tether promote --profile <name>`, or pass a JSON/YAML
+path exported by `tether profiles init`.
 
 ---
 

@@ -189,6 +189,38 @@ def test_promote_help():
     assert result.exit_code == 0
     assert "PROMOTE" in result.output
     assert "--candidate-active" in result.output
+    assert "--profile" in result.output
+
+
+def test_profiles_list_json():
+    result = runner.invoke(app, ["profiles", "list", "--json"])
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    names = {profile["name"] for profile in body["profiles"]}
+    assert {"ci-default", "lab-shadow", "warehouse-safe", "contact-strict"} <= names
+
+
+def test_profiles_show_json():
+    result = runner.invoke(app, ["profiles", "show", "warehouse-safe", "--json"])
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert body["name"] == "warehouse-safe"
+    assert body["thresholds"]["require_policy_diff"] is True
+    assert body["thresholds"]["require_auth"] is True
+
+
+def test_profiles_init_writes_editable_profile(tmp_path):
+    output = tmp_path / "lab-shadow.yml"
+
+    result = runner.invoke(
+        app,
+        ["profiles", "init", "lab-shadow", "--output", str(output)],
+    )
+
+    assert result.exit_code == 0, result.output
+    text = output.read_text(encoding="utf-8")
+    assert "name: lab-shadow" in text
+    assert "require_policy_diff: true" in text
 
 
 def test_promote_json_uses_decision_runner(monkeypatch, tmp_path):

@@ -104,6 +104,8 @@ def tools_listing() -> str:
         "prove_deployment": "Deploy",
         "diff_policies": "Deploy",
         "decide_promotion": "Deploy",
+        "list_promotion_profiles": "Deploy",
+        "show_promotion_profile": "Deploy",
         "list_models": "Models",
         "pull_model": "Models",
         "model_info": "Models",
