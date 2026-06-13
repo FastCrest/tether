@@ -154,6 +154,27 @@ def _shadow_candidate_record(record: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _shadow_skip_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    routing = record.get("routing")
+    if not isinstance(routing, dict):
+        return None
+    if routing.get("shadow_sampled") is False:
+        return {
+            "seq": record.get("seq"),
+            "status": "shadow_skipped",
+            "passed": True,
+            "reason": routing.get("shadow_skip_reason") or "not_sampled",
+        }
+    if routing.get("shadow_error"):
+        return {
+            "seq": record.get("seq"),
+            "status": "shadow_error",
+            "passed": False,
+            "error": str(routing.get("shadow_error"))[:500],
+        }
+    return None
+
+
 def _compare_record_pair(
     baseline: dict[str, Any],
     candidate: dict[str, Any] | None,
@@ -245,7 +266,14 @@ def diff_policy_traces(
 
     per_request: list[dict[str, Any]] = []
     for base in base_requests:
-        candidate = _shadow_candidate_record(base) if shadow else candidate_by_seq.get(base.get("seq"))
+        if shadow:
+            shadow_skip = _shadow_skip_record(base)
+            if shadow_skip is not None:
+                per_request.append(shadow_skip)
+                continue
+            candidate = _shadow_candidate_record(base)
+        else:
+            candidate = candidate_by_seq.get(base.get("seq"))
         per_request.append(
             _compare_record_pair(
                 base,
@@ -285,8 +313,18 @@ def diff_policy_traces(
     ]
     request_mismatches = [row for row in compared if row.get("request_match") is False]
     missing = [row for row in per_request if row.get("status") == "missing_candidate"]
+    shadow_skipped = [row for row in per_request if row.get("status") == "shadow_skipped"]
+    shadow_errors = [row for row in per_request if row.get("status") == "shadow_error"]
     verdict = "pass"
-    if not compared or action_failures or latency_regressions or shape_failures or guard_regressions or missing:
+    if (
+        not compared
+        or action_failures
+        or latency_regressions
+        or shape_failures
+        or guard_regressions
+        or missing
+        or shadow_errors
+    ):
         verdict = "fail"
     elif request_mismatches or _metadata_warnings(base_header, candidate_header):
         verdict = "warn"
@@ -324,6 +362,8 @@ def diff_policy_traces(
             "verdict": verdict,
             "baseline_requests": len(base_requests),
             "compared": len(compared),
+            "shadow_skipped": len(shadow_skipped),
+            "shadow_errors": len(shadow_errors),
             "missing_candidate": len(missing),
             "request_mismatches": len(request_mismatches),
             "action_failures": len(action_failures),

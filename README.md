@@ -374,6 +374,10 @@ packet with `--policy-diff-baseline` plus `--policy-diff-candidate` or
 `--policy-diff-shadow` to gate action deltas, latency regressions, shape
 mismatches, and guard regressions.
 
+Use `tether serve ./current --shadow-policy ./candidate --record ./traces/shadow`
+to collect a single shadow trace where production actions stay live and
+candidate actions are recorded under `routing.shadow_actions`.
+
 ```bash
 tether prove ./p0 \
   --embodiment franka \

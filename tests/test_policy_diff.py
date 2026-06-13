@@ -120,6 +120,52 @@ def test_policy_diff_shadow_actions(tmp_path: Path) -> None:
     assert report["summary"]["compared"] == 1
 
 
+def test_policy_diff_shadow_skips_unsampled_rows(tmp_path: Path) -> None:
+    writer = RecordWriter(
+        record_dir=tmp_path / "mixed",
+        model_hash="deadbeefcafe0000",
+        config_hash="0011223344556677",
+        export_dir=str(tmp_path / "fake_export"),
+        model_type="pi0.5",
+        export_kind="monolithic",
+        providers=["CPUExecutionProvider"],
+        gzip_output=False,
+    )
+    writer.write_request(
+        chunk_id=0,
+        image_b64="aGVsbG8=",
+        instruction="sampled",
+        state=[0.1],
+        actions=[[0.1, 0.2]],
+        action_dim=2,
+        latency_total_ms=100.0,
+        routing={"shadow_sampled": True, "shadow_actions": [[0.11, 0.21]]},
+    )
+    writer.write_request(
+        chunk_id=1,
+        image_b64="aGVsbG8=",
+        instruction="unsampled",
+        state=[0.1],
+        actions=[[0.1, 0.2]],
+        action_dim=2,
+        latency_total_ms=100.0,
+        routing={"shadow_sampled": False, "shadow_sample_rate": 0.5},
+    )
+    writer.write_footer({"total_requests": 2})
+    writer.close()
+
+    report = diff_policy_traces(
+        baseline_trace=writer.filepath,
+        shadow=True,
+        max_action_delta=0.05,
+    )
+
+    assert report["summary"]["verdict"] == "pass"
+    assert report["summary"]["compared"] == 1
+    assert report["summary"]["shadow_skipped"] == 1
+    assert report["summary"]["missing_candidate"] == 0
+
+
 def test_policy_diff_requires_candidate_unless_shadow(tmp_path: Path) -> None:
     baseline = _write_trace(tmp_path / "base", actions=[[0.1, 0.2]])
 

@@ -2283,15 +2283,16 @@ def serve(
     ),
     shadow_policy: str = typer.Option(
         "", "--shadow-policy",
-        help="(Phase 1.5) shadow inference: path to a policy that runs alongside "
-             "the primary on a sample of traffic. Phase 1: shipped INERT (logs "
-             "warning when set, no shadow execution). Mutually exclusive with "
+        help="Shadow inference: path to a policy that runs alongside "
+             "the primary on a sample of traffic. Candidate actions are recorded "
+             "as routing.shadow_actions for `tether policy diff --shadow`; they "
+             "are never returned to the robot client. Mutually exclusive with "
              "--policy-b.",
     ),
     shadow_sample: float = typer.Option(
-        0.0, "--shadow-sample",
-        help="(Phase 1.5) fraction of /act requests to mirror to --shadow-policy "
-             "in [0, 1]. Phase 1: ignored.",
+        1.0, "--shadow-sample",
+        help="Fraction of /act requests to mirror to --shadow-policy in [0, 1]. "
+             "Default 1.0 when a shadow policy is set.",
     ),
     no_rtc: bool = typer.Option(
         False, "--no-rtc",
@@ -2338,6 +2339,9 @@ def serve(
             "comparison.[/dim]"
         )
         raise typer.Exit(1)
+    if shadow_sample < 0.0 or shadow_sample > 1.0:
+        err_console.print("[red]--shadow-sample must be in [0, 1].[/red]")
+        raise typer.Exit(1)
     if two_policy_mode:
         from tether.runtime.policy import validate_split_and_no_rtc
         try:
@@ -2364,11 +2368,18 @@ def serve(
         )
 
     if shadow_policy:
+        shadow_path = Path(shadow_policy)
+        if not shadow_path.exists():
+            err_console.print(f"[red]--shadow-policy export not found: {shadow_policy}[/red]")
+            raise typer.Exit(1)
+        if not list(shadow_path.glob("*.onnx")):
+            err_console.print(f"[red]No ONNX files found in --shadow-policy export: {shadow_policy}[/red]")
+            raise typer.Exit(1)
         console.print(
-            f"\n[yellow]--shadow-policy={shadow_policy} (Phase 1.5; "
-            f"shipped inert in Phase 1).[/yellow] "
-            f"[dim]Shadow execution lands when "
-            f"shadow-inference primitive ships.[/dim]\n"
+            f"\n[bold]Shadow rollout active[/bold] "
+            f"(--shadow-policy={shadow_policy}, --shadow-sample={shadow_sample:g}). "
+            f"[dim]Candidate actions are recorded for policy diff and are not "
+            f"sent to the robot.[/dim]\n"
         )
 
     # Resolve --embodiment / --custom-embodiment-config (B.1). Validate
@@ -2715,6 +2726,8 @@ def serve(
         policy_b_export_dir=policy_b or None,
         policy_split_a_percent=split,
         policy_crash_threshold=max_consecutive_crashes,
+        shadow_policy=shadow_policy or None,
+        shadow_sample=shadow_sample,
     )
     if api_key:
         composed.append("[cyan]api-key-auth[/cyan]")
@@ -2755,6 +2768,8 @@ def serve(
         )
     if a2c2_checkpoint:
         composed.append(f"[cyan]a2c2[/cyan]={Path(a2c2_checkpoint).name}")
+    if shadow_policy:
+        composed.append(f"[cyan]shadow[/cyan]={Path(shadow_policy).name}@{shadow_sample:g}")
     if auto_calibrate:
         composed.append("[cyan]auto-calibrate[/cyan]" + ("[force]" if calibrate_force else ""))
     composed.append(f"[cyan]batch-budget[/cyan]={max_batch_cost_ms:g}ms")

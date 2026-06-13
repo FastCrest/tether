@@ -19,6 +19,8 @@ Then from robot:
 from __future__ import annotations
 
 import base64
+import hashlib
+import inspect
 import io
 import json
 import logging
@@ -92,6 +94,123 @@ def _coerce_optional_float(value: Any) -> float | None:
     if not np.isfinite(out):
         return None
     return out
+
+
+def _call_accepts_keyword(fn: Any, keyword: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return keyword in params or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in params.values()
+    )
+
+
+async def _predict_from_request_async(server: Any, request: Any) -> dict[str, Any]:
+    predict = getattr(server, "predict_from_base64_async")
+    kwargs: dict[str, Any] = {
+        "image_b64": getattr(request, "image", None),
+        "instruction": getattr(request, "instruction", "") or "",
+        "state": getattr(request, "state", None),
+    }
+    image_wrist = getattr(request, "image_wrist", None)
+    if image_wrist is not None and _call_accepts_keyword(predict, "image_wrist_b64"):
+        kwargs["image_wrist_b64"] = image_wrist
+    return await predict(**kwargs)
+
+
+def _shadow_request_key(request: Any) -> str:
+    for attr in ("request_id", "episode_id", "session_id"):
+        value = getattr(request, attr, None)
+        if value:
+            return f"{attr}:{value}"
+    payload = {
+        "instruction": getattr(request, "instruction", "") or "",
+        "state": getattr(request, "state", None),
+        "image_sha256": hashlib.sha256(
+            (getattr(request, "image", None) or "").encode("utf-8")
+        ).hexdigest()[:16],
+    }
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return "body:" + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32]
+
+
+def _shadow_sample_decision(request: Any, sample_rate: float) -> tuple[bool, str, float]:
+    rate = max(0.0, min(1.0, float(sample_rate)))
+    key = _shadow_request_key(request)
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    score = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    return score < rate, key, score
+
+
+def _actions_for_record(value: Any) -> list[list[float]] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(row, list) for row in value):
+        return None
+    return value
+
+
+async def _run_shadow_policy_for_record(
+    server: Any,
+    request: Any,
+    production_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    shadow_server = getattr(server, "_shadow_server", None)
+    if shadow_server is None:
+        return None
+
+    sample_rate = float(getattr(server, "_shadow_sample", 1.0) or 0.0)
+    sampled, routing_key, score = _shadow_sample_decision(request, sample_rate)
+    record: dict[str, Any] = {
+        "shadow_sampled": bool(sampled),
+        "shadow_sample_rate": sample_rate,
+        "shadow_routing_key": routing_key,
+        "shadow_sample_score": round(score, 8),
+        "shadow_policy_export_dir": str(getattr(shadow_server, "export_dir", "")),
+        "shadow_model_hash": str(getattr(server, "_shadow_model_hash", "")),
+        "shadow_config_hash": str(getattr(server, "_shadow_config_hash", "")),
+    }
+    if not sampled:
+        return record
+    if isinstance(production_result, dict) and "error" in production_result:
+        record["shadow_sampled"] = False
+        record["shadow_skip_reason"] = "production_error"
+        return record
+
+    t0 = time.perf_counter()
+    try:
+        shadow_result = await _predict_from_request_async(shadow_server, request)
+    except Exception as exc:  # noqa: BLE001 - shadow must not control the robot
+        record["shadow_latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
+        record["shadow_error"] = f"{type(exc).__name__}: {exc}"[:500]
+        logger.warning("shadow_policy.predict_failed: %s", exc)
+        return record
+
+    record["shadow_latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
+    if not isinstance(shadow_result, dict):
+        record["shadow_error"] = "shadow result was not a JSON object"
+        return record
+    if "error" in shadow_result:
+        record["shadow_error"] = str(shadow_result.get("error", ""))[:500]
+        return record
+
+    shadow_actions = _actions_for_record(shadow_result.get("actions"))
+    if shadow_actions is None:
+        record["shadow_error"] = "shadow result did not include action chunk"
+        return record
+    record["shadow_actions"] = shadow_actions
+    record["shadow_num_actions"] = len(shadow_actions)
+    record["shadow_action_dim"] = (
+        len(shadow_actions[0]) if shadow_actions and isinstance(shadow_actions[0], list) else 0
+    )
+    if "latency_ms" in shadow_result:
+        try:
+            record["shadow_model_latency_ms"] = float(shadow_result["latency_ms"])
+        except (TypeError, ValueError):
+            pass
+    return record
 
 
 def _record_rtc_adaptive_signal(
@@ -1374,11 +1493,7 @@ class TetherServer:
         """
         results: list[dict[str, Any]] = []
         for req in requests:
-            res = await self.predict_from_base64_async(
-                image_b64=getattr(req, "image", None),
-                instruction=getattr(req, "instruction", "") or "",
-                state=getattr(req, "state", None),
-            )
+            res = await _predict_from_request_async(self, req)
             results.append(res)
         return results
 
@@ -1468,6 +1583,8 @@ def create_app(
     policy_b_export_dir: str | None = None,  # 2-policy mode: path to slot B
     policy_split_a_percent: int = 50,  # % traffic to slot A in [0, 100]
     policy_crash_threshold: int = 5,  # per-slot circuit-breaker threshold
+    shadow_policy: str | None = None,  # shadow mode: mirror sampled traffic to this export
+    shadow_sample: float = 1.0,  # fraction of /act traffic mirrored to shadow_policy
 ) -> Any:
     """Create a FastAPI app for serving VLA predictions.
 
@@ -1524,6 +1641,15 @@ def create_app(
     # on the decomposed side). See tether/runtime/smolvla_native.py.
     import os as _os
 
+    if policy_b_export_dir and shadow_policy:
+        raise ValueError("policy_b_export_dir and shadow_policy are mutually exclusive")
+    try:
+        _shadow_sample_rate = float(shadow_sample)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("shadow_sample must be a float in [0, 1]") from exc
+    if _shadow_sample_rate < 0.0 or _shadow_sample_rate > 1.0:
+        raise ValueError("shadow_sample must be in [0, 1]")
+
     # Dispatch order:
     #   1. TETHER_NATIVE=1 — SmolVLANativeServer (PyTorch native path)
     #   2. tether_config.json export_kind == "monolithic" → model-specific
@@ -1537,6 +1663,113 @@ def create_app(
             _monolithic_cfg = json.loads(_config_path.read_text())
         except Exception:
             _monolithic_cfg = {}
+
+    def _build_shadow_server(shadow_export_dir: str | Path) -> Any:
+        shadow_export_dir = Path(shadow_export_dir)
+        shadow_cfg_path = shadow_export_dir / "tether_config.json"
+        shadow_cfg: dict[str, Any] = {}
+        if shadow_cfg_path.exists():
+            try:
+                shadow_cfg = json.loads(shadow_cfg_path.read_text())
+            except Exception:
+                shadow_cfg = {}
+
+        if _os.environ.get("TETHER_NATIVE", "0") == "1":
+            from tether.runtime.smolvla_native import SmolVLANativeServer
+            shadow_srv = SmolVLANativeServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+            )
+        elif shadow_cfg.get("export_kind") == "decomposed":
+            from tether.runtime.decomposed_server import Pi05DecomposedServer
+            shadow_srv = Pi05DecomposedServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+                action_similarity_threshold=action_similarity_threshold,
+                max_similar_skips=max_similar_skips,
+            )
+        elif shadow_cfg.get("export_kind") == "monolithic":
+            model_type = shadow_cfg.get("model_type", "smolvla")
+            if model_type == "pi0":
+                from tether.runtime.pi0_onnx_server import Pi0OnnxServer
+                shadow_srv = Pi0OnnxServer(
+                    shadow_export_dir,
+                    providers=providers,
+                    device=device,
+                    max_batch=max_batch,
+                    strict_providers=strict_providers,
+                )
+            elif model_type == "pi05":
+                from tether.runtime.pi05_onnx_server import Pi05OnnxServer
+                shadow_srv = Pi05OnnxServer(
+                    shadow_export_dir,
+                    providers=providers,
+                    device=device,
+                    max_batch=max_batch,
+                    strict_providers=strict_providers,
+                )
+            elif model_type == "smolvla":
+                from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+                shadow_srv = SmolVLAOnnxServer(
+                    shadow_export_dir,
+                    providers=providers,
+                    device=device,
+                    max_batch=max_batch,
+                    strict_providers=strict_providers,
+                )
+            elif model_type == "gr00t":
+                shadow_srv = TetherServer(
+                    shadow_export_dir,
+                    device=device,
+                    providers=providers,
+                    strict_providers=strict_providers,
+                    safety_config=safety_config,
+                    adaptive_steps=adaptive_steps,
+                    cloud_fallback_url=cloud_fallback_url,
+                    deadline_ms=deadline_ms,
+                    max_batch=max_batch,
+                    batch_timeout_ms=batch_timeout_ms,
+                    inference_executor_workers=inference_executor_workers,
+                    inference_executor_queue=inference_executor_queue,
+                )
+            else:
+                raise ValueError(
+                    f"Shadow runtime for model_type={model_type!r} is not supported"
+                )
+        else:
+            shadow_srv = TetherServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+                inference_executor_workers=inference_executor_workers,
+                inference_executor_queue=inference_executor_queue,
+            )
+        shadow_srv.embodiment_config = embodiment_config
+        shadow_srv._inference_policy_slot = "shadow"  # type: ignore[attr-defined]
+        return shadow_srv
 
     if _os.environ.get("TETHER_NATIVE", "0") == "1":
         from tether.runtime.smolvla_native import SmolVLANativeServer
@@ -1643,6 +1876,13 @@ def create_app(
     # (RTC adapter, action denormalization, tether doctor) read via
     # getattr(server, 'embodiment_config', None).
     server.embodiment_config = embodiment_config
+    server._shadow_server = None  # type: ignore[attr-defined]
+    server._shadow_policy_export_dir = (  # type: ignore[attr-defined]
+        str(Path(shadow_policy).expanduser()) if shadow_policy else ""
+    )
+    server._shadow_sample = _shadow_sample_rate if shadow_policy else 0.0  # type: ignore[attr-defined]
+    server._shadow_model_hash = ""  # type: ignore[attr-defined]
+    server._shadow_config_hash = ""  # type: ignore[attr-defined]
 
     # Synthetic latency injection (B.4). Clamped to [0, 1000] ms. The
     # /act handler sleeps for this long AFTER inference + recording so
@@ -1781,10 +2021,35 @@ def create_app(
                     "curate dual-write disabled: %s", _curate_exc,
                 )
                 _curate_collector = None
+            _prod_model_hash = compute_model_hash(export_dir)
+            _prod_config_hash = compute_config_hash(export_dir)
+            _policies_meta = [
+                {
+                    "slot": "prod",
+                    "export_dir": str(export_dir),
+                    "model_hash": _prod_model_hash,
+                    "config_hash": _prod_config_hash,
+                }
+            ]
+            if shadow_policy:
+                _shadow_export_for_meta = Path(shadow_policy).expanduser()
+                _shadow_model_hash_for_meta = compute_model_hash(_shadow_export_for_meta)
+                _shadow_config_hash_for_meta = compute_config_hash(_shadow_export_for_meta)
+                server._shadow_model_hash = _shadow_model_hash_for_meta  # type: ignore[attr-defined]
+                server._shadow_config_hash = _shadow_config_hash_for_meta  # type: ignore[attr-defined]
+                _policies_meta.append(
+                    {
+                        "slot": "shadow",
+                        "export_dir": str(_shadow_export_for_meta),
+                        "model_hash": _shadow_model_hash_for_meta,
+                        "config_hash": _shadow_config_hash_for_meta,
+                        "sample_rate": _shadow_sample_rate,
+                    }
+                )
             server._recorder = RecordWriter(  # type: ignore[attr-defined]
                 record_dir=record_dir,
-                model_hash=compute_model_hash(export_dir),
-                config_hash=compute_config_hash(export_dir),
+                model_hash=_prod_model_hash,
+                config_hash=_prod_config_hash,
                 export_dir=export_dir,
                 model_type=_model_type,
                 export_kind=_export_kind,
@@ -1796,6 +2061,7 @@ def create_app(
                 image_redaction=record_image_redaction,  # type: ignore[arg-type]
                 gzip_output=record_gzip,
                 tether_version=_TETHER_VERSION,
+                policies=_policies_meta,
                 curate_collector=_curate_collector,
             )
             logger.info(
@@ -2095,6 +2361,43 @@ def create_app(
             logger.error("=" * 70)
             raise
         logger.info("Model loaded successfully.")
+        if shadow_policy:
+            shadow_export_path = Path(shadow_policy).expanduser()
+            if not shadow_export_path.exists():
+                raise FileNotFoundError(
+                    f"Shadow policy export not found: {shadow_export_path}"
+                )
+            if _shadow_sample_rate <= 0:
+                logger.warning(
+                    "shadow_policy configured but shadow_sample=0; no /act "
+                    "requests will be mirrored until --shadow-sample is > 0"
+                )
+            server.health_state = "loading_shadow"  # type: ignore[attr-defined]
+            logger.warning(
+                "Loading shadow policy from %s ... sampled traffic will be "
+                "recorded under routing.shadow_actions and never returned to "
+                "the robot client.",
+                shadow_export_path,
+            )
+            shadow_server = _build_shadow_server(shadow_export_path)
+            shadow_server.load()
+            server._shadow_server = shadow_server  # type: ignore[attr-defined]
+            if not getattr(server, "_shadow_model_hash", ""):
+                server._shadow_model_hash = compute_model_hash(shadow_export_path)  # type: ignore[attr-defined]
+            if not getattr(server, "_shadow_config_hash", ""):
+                server._shadow_config_hash = compute_config_hash(shadow_export_path)  # type: ignore[attr-defined]
+            if server.prewarm_enabled:
+                logger.warning("Shadow policy warmup starting.")
+                shadow_warmup = shadow_server.predict()
+                if isinstance(shadow_warmup, dict) and "error" in shadow_warmup:
+                    raise RuntimeError(
+                        f"Shadow policy warmup failed: {shadow_warmup['error']}"
+                    )
+            logger.info(
+                "Shadow policy loaded: export=%s sample_rate=%.3f",
+                shadow_export_path,
+                _shadow_sample_rate,
+            )
         # Only configure replan buffering after load() so chunk_size is known.
         if replan_hz is not None and execute_hz is not None and hasattr(
             server, "configure_replan"
@@ -2470,6 +2773,9 @@ def create_app(
                 finally:
                     _rec.close()
             _servers_to_shutdown = [server]
+            _shadow_shutdown = getattr(server, "_shadow_server", None)
+            if _shadow_shutdown is not None:
+                _servers_to_shutdown.append(_shadow_shutdown)
             _two_state_shutdown = getattr(server, "two_policy_state", None)
             if _two_state_shutdown is not None:
                 _servers_to_shutdown.extend(
@@ -2652,12 +2958,7 @@ def create_app(
                     if _runtime is None:
                         # Fallback for backends/tests that don't install a runtime —
                         # call the per-request path directly.
-                        result = await server.predict_from_base64_async(
-                            image_b64=request.image,
-                            instruction=request.instruction,
-                            state=request.state,
-                            image_wrist_b64=request.image_wrist,
-                        )
+                        result = await _predict_from_request_async(server, request)
                     else:
                         try:
                             result = await _runtime.submit(request)
@@ -2697,6 +2998,7 @@ def create_app(
                 else "prod"
             )
             _rtc_for_record: dict[str, Any] | None = None
+            _shadow_for_record: dict[str, Any] | None = None
             _raw_actions_for_record: list[list[float]] | None = (
                 result.get("_raw_actions_for_record")
                 if isinstance(result, dict)
@@ -2905,6 +3207,28 @@ def create_app(
                 except Exception as exc:  # noqa: BLE001 — RTC signal must not break /act
                     logger.warning("RTC adaptive signal update failed: %s", exc)
 
+            if isinstance(result, dict):
+                _shadow_for_record = await _run_shadow_policy_for_record(
+                    server,
+                    request,
+                    result,
+                )
+                if _shadow_for_record is not None:
+                    sampled = bool(_shadow_for_record.get("shadow_sampled"))
+                    result["shadow_sampled"] = sampled
+                    if sampled and "shadow_latency_ms" in _shadow_for_record:
+                        result["shadow_latency_ms"] = _shadow_for_record[
+                            "shadow_latency_ms"
+                        ]
+                    if "shadow_error" in _shadow_for_record:
+                        result["shadow_error"] = _shadow_for_record["shadow_error"]
+                    span.set_attribute("tether.shadow.sampled", sampled)
+                    if "shadow_error" in _shadow_for_record:
+                        span.set_attribute(
+                            "tether.shadow.error",
+                            str(_shadow_for_record["shadow_error"])[:200],
+                        )
+
             # JSONL record hook (B.2). Writes inside the OTel span context
             # so the seq attribute below cross-links the two ledgers. Recorder
             # absent or degraded → no-op.
@@ -2933,6 +3257,10 @@ def create_app(
                         "cached": _two_routing_decision.cached,
                         "crash_verdict": _two_routing_decision.crash_verdict,
                     }
+                if _shadow_for_record is not None:
+                    if _routing_for_record is None:
+                        _routing_for_record = {}
+                    _routing_for_record.update(_shadow_for_record)
                 # Failure-classifier substrate (per failure-classifier-v1 research
                 # sidecar Finding 3.1): pass through guard_summary if predict()
                 # populated it. None when ActionGuard wasn't built (no URDF /
