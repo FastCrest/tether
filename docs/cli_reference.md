@@ -26,6 +26,7 @@ manual workflows stay stable.
 | [`chat`](#tether-chat) | Natural-language front door for deployment questions |
 | [`prove`](#tether-prove) | Collect a deployment proof packet for a specific export |
 | [`promote`](#tether-promote) | Decide `PROMOTE`, `BLOCK`, or `ROLLBACK` from that packet |
+| [`rollout`](#tether-rollout) | Decide `PROMOTE`, `HOLD`, or `ROLLBACK` from shadow evidence |
 | [`profiles`](#tether-profiles) | Built-in promotion profiles for common rollout gates |
 
 Everything else is an evidence source behind those decisions:
@@ -144,10 +145,9 @@ path exported by `tether profiles init`.
 
 ## `tether policy`
 
-Policy rollout gates that operate on recorded traces. The common self-serve
-path is `policy shadow-gate`: turn a recorded shadow rollout into a proof
-packet plus one operator decision. Use `policy diff` when you only need the raw
-baseline/candidate or shadow comparison report.
+Policy rollout gates that operate on recorded traces. Use `policy diff` when
+you need the raw baseline/candidate or shadow comparison report. For the
+self-serve operator decision, prefer [`tether rollout gate`](#tether-rollout).
 
 ```bash
 # Offline promotion check: same observations, candidate policy output
@@ -156,7 +156,7 @@ tether policy diff ./traces/v1.jsonl.gz ./traces/v2.jsonl.gz --fail-on any
 # Shadow rollout check: live actions vs shadow actions in one trace
 tether policy diff ./traces/shadow.jsonl.gz --shadow --output policy-diff.json
 
-# Self-serve shadow promotion gate
+# Lower-level equivalent of `tether rollout gate`
 tether policy shadow-gate ./traces/shadow.jsonl.gz \
   --packet-dir ./shadow-rollout-packet \
   --profile lab-shadow \
@@ -173,6 +173,28 @@ The underlying policy-diff report includes action cosine/max-delta, latency
 regressions, shape failures, guard regressions, request mismatches, metadata
 warnings, and a pass/warn/fail verdict. Exit code `3` from `policy diff` means
 the selected `--fail-on` gate tripped.
+
+---
+
+## `tether rollout`
+
+Self-serve rollout decision workflow for candidate policies that were mirrored
+with `tether serve --shadow-policy --record`.
+
+```bash
+tether rollout gate ./traces/shadow.jsonl.gz \
+  --packet-dir ./shadow-rollout-packet \
+  --profile lab-shadow \
+  --min-compared 100 \
+  --wait-timeout-s 5 \
+  --json
+```
+
+`rollout gate` waits for pending `shadow_result` rows, writes
+`deployment-proof.json`, `policy-diff.json`, `promotion-decision.json`, and
+`MANIFEST.json`, then exits with the rollout decision: `0` for `PROMOTE`, `1`
+for `HOLD`, `4` for `ROLLBACK`, and `2` for invalid trace/profile/packet
+inputs.
 
 ---
 

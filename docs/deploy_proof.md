@@ -55,11 +55,11 @@ tether profiles init warehouse-safe --output warehouse-safe.yml
 ## Shadow rollout gate
 
 For a candidate already mirrored with `tether serve --shadow-policy --record`,
-use `policy shadow-gate` to build the rollout packet and promotion decision in
+use `rollout gate` to build the rollout packet and promotion decision in
 one step:
 
 ```bash
-tether policy shadow-gate ./traces/shadow.jsonl.gz \
+tether rollout gate ./traces/shadow.jsonl.gz \
   --packet-dir /tmp/tether-shadow-rollout \
   --profile lab-shadow \
   --min-compared 100 \

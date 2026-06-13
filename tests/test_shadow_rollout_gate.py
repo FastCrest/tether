@@ -124,3 +124,26 @@ def test_shadow_gate_cli_json(tmp_path: Path) -> None:
     body = json.loads(result.output)
     assert body["decision"] == "PROMOTE"
     assert body["policy_diff"]["summary"]["compared"] == 1
+
+
+def test_rollout_gate_cli_json(tmp_path: Path) -> None:
+    trace = _write_shadow_trace(tmp_path)
+    packet_dir = tmp_path / "rollout_packet"
+
+    result = runner.invoke(
+        app,
+        [
+            "rollout",
+            "gate",
+            str(trace),
+            "--packet-dir",
+            str(packet_dir),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert body["decision"] == "PROMOTE"
+    assert body["policy_diff"]["summary"]["compared"] == 1
+    assert (packet_dir / "promotion-decision.json").exists()

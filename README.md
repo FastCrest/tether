@@ -379,10 +379,10 @@ to collect a single shadow trace where production actions stay live and
 candidate actions are appended as `shadow_result` evidence for
 `tether policy diff --shadow`.
 
-For the self-serve rollout decision, run the shadow gate directly:
+For the self-serve rollout decision, run the rollout gate directly:
 
 ```bash
-tether policy shadow-gate ./traces/shadow.jsonl.gz \
+tether rollout gate ./traces/shadow.jsonl.gz \
   --packet-dir /tmp/tether-shadow-rollout \
   --profile lab-shadow \
   --min-compared 100 \

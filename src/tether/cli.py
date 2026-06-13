@@ -39,6 +39,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deployment confidence for VLA robot
   [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
   [green]tether prove ./export[/green]      collect a deployment proof packet
   [green]tether promote ./proof[/green]     decide PROMOTE / BLOCK / ROLLBACK
+  [green]tether rollout gate ./trace[/green] decide PROMOTE / HOLD / ROLLBACK from shadow evidence
   [green]tether profiles list[/green]       choose a built-in promotion profile
 
 [bold cyan]Evidence sources:[/bold cyan]
@@ -86,6 +87,7 @@ def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
         "promote",
         "profiles",
         "policy",
+        "rollout",
     }
 
 
@@ -5077,6 +5079,10 @@ policy_app = typer.Typer(
     help="Policy rollout gates - diff recorded or shadow policy behavior.",
     no_args_is_help=True,
 )
+rollout_app = typer.Typer(
+    help="Self-serve rollout decisions from shadow evidence.",
+    no_args_is_help=True,
+)
 profiles_app = typer.Typer(
     help="Built-in promotion profiles for proof-to-promote decisions.",
     no_args_is_help=True,
@@ -5595,6 +5601,60 @@ def policy_diff_cmd(
         raise typer.Exit(3)
 
 
+def _run_shadow_gate_command(
+    *,
+    trace: str,
+    packet_dir: str,
+    profile: str,
+    candidate_active: bool,
+    min_compared: int,
+    wait_timeout_s: float,
+    poll_s: float,
+    fail_on: str,
+    min_action_cos: float,
+    max_action_delta: float,
+    max_latency_regression_pct: float,
+    use_existing_packet: bool,
+    json_output: bool,
+) -> None:
+    from tether.shadow_rollout import (
+        ShadowRolloutError,
+        format_shadow_rollout_human,
+        run_shadow_rollout_gate,
+    )
+
+    try:
+        report = run_shadow_rollout_gate(
+            trace=trace,
+            packet_dir=packet_dir,
+            profile=profile,
+            candidate_active=candidate_active,
+            min_compared=min_compared,
+            wait_timeout_s=wait_timeout_s,
+            poll_s=poll_s,
+            fail_on=fail_on,
+            min_action_cos=min_action_cos,
+            max_action_delta=max_action_delta,
+            max_latency_regression_pct=max_latency_regression_pct,
+            use_existing_packet=use_existing_packet,
+        )
+    except ShadowRolloutError as exc:
+        err_console.print(f"[red]Shadow rollout gate failed:[/red] {exc}")
+        raise typer.Exit(2)
+
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        console.print(format_shadow_rollout_human(report), markup=False)
+
+    decision = report.get("decision")
+    if decision == "PROMOTE":
+        raise typer.Exit(0)
+    if decision == "ROLLBACK":
+        raise typer.Exit(4)
+    raise typer.Exit(1)
+
+
 @policy_app.command("shadow-gate")
 def policy_shadow_gate_cmd(
     trace: str = typer.Argument(
@@ -5663,42 +5723,106 @@ def policy_shadow_gate_cmd(
     ),
 ) -> None:
     """Turn shadow trace evidence into PROMOTE, HOLD, or ROLLBACK."""
-    from tether.shadow_rollout import (
-        ShadowRolloutError,
-        format_shadow_rollout_human,
-        run_shadow_rollout_gate,
+    _run_shadow_gate_command(
+        trace=trace,
+        packet_dir=packet_dir,
+        profile=profile,
+        candidate_active=candidate_active,
+        min_compared=min_compared,
+        wait_timeout_s=wait_timeout_s,
+        poll_s=poll_s,
+        fail_on=fail_on,
+        min_action_cos=min_action_cos,
+        max_action_delta=max_action_delta,
+        max_latency_regression_pct=max_latency_regression_pct,
+        use_existing_packet=use_existing_packet,
+        json_output=json_output,
     )
 
-    try:
-        report = run_shadow_rollout_gate(
-            trace=trace,
-            packet_dir=packet_dir,
-            profile=profile,
-            candidate_active=candidate_active,
-            min_compared=min_compared,
-            wait_timeout_s=wait_timeout_s,
-            poll_s=poll_s,
-            fail_on=fail_on,
-            min_action_cos=min_action_cos,
-            max_action_delta=max_action_delta,
-            max_latency_regression_pct=max_latency_regression_pct,
-            use_existing_packet=use_existing_packet,
-        )
-    except ShadowRolloutError as exc:
-        err_console.print(f"[red]Shadow rollout gate failed:[/red] {exc}")
-        raise typer.Exit(2)
 
-    if json_output:
-        typer.echo(json.dumps(report, indent=2, sort_keys=True))
-    else:
-        console.print(format_shadow_rollout_human(report), markup=False)
-
-    decision = report.get("decision")
-    if decision == "PROMOTE":
-        raise typer.Exit(0)
-    if decision == "ROLLBACK":
-        raise typer.Exit(4)
-    raise typer.Exit(1)
+@rollout_app.command("gate")
+def rollout_gate_cmd(
+    trace: str = typer.Argument(
+        ...,
+        help="Shadow trace file recorded by `tether serve --shadow-policy --record`.",
+    ),
+    packet_dir: str = typer.Option(
+        "./shadow-rollout-packet",
+        "--packet-dir",
+        help="Output packet directory for deployment-proof, policy-diff, and promotion decision artifacts.",
+    ),
+    profile: str = typer.Option(
+        "lab-shadow",
+        "--profile",
+        help="Promotion profile name or YAML/JSON path. Default: lab-shadow.",
+    ),
+    candidate_active: bool = typer.Option(
+        False,
+        "--candidate-active",
+        help="Return ROLLBACK instead of HOLD when gates fail for an active candidate.",
+    ),
+    min_compared: int = typer.Option(
+        1,
+        "--min-compared",
+        help="Minimum compared shadow requests required before a PROMOTE decision is allowed.",
+    ),
+    wait_timeout_s: float = typer.Option(
+        0.0,
+        "--wait-timeout-s",
+        help="Seconds to wait for pending background shadow_result rows to flush.",
+    ),
+    poll_s: float = typer.Option(
+        0.25,
+        "--poll-s",
+        help="Polling interval while waiting for shadow_result rows.",
+    ),
+    fail_on: str = typer.Option(
+        "any",
+        "--fail-on",
+        help="Policy diff gate: none/actions/latency/guard/shape/any.",
+    ),
+    min_action_cos: float = typer.Option(
+        0.995,
+        "--min-action-cos",
+        help="Minimum cosine similarity before the action diff fails.",
+    ),
+    max_action_delta: float = typer.Option(
+        0.10,
+        "--max-action-delta",
+        help="Max absolute action delta before the action diff fails.",
+    ),
+    max_latency_regression_pct: float = typer.Option(
+        0.10,
+        "--max-latency-regression-pct",
+        help="Max shadow latency regression as a fraction, e.g. 0.10 = 10%.",
+    ),
+    use_existing_packet: bool = typer.Option(
+        False,
+        "--use-existing-packet",
+        help="Use an existing deployment-proof.json in --packet-dir instead of writing a shadow-only proof packet.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print the full JSON report instead of a compact summary.",
+    ),
+) -> None:
+    """Turn shadow trace evidence into a self-serve rollout decision."""
+    _run_shadow_gate_command(
+        trace=trace,
+        packet_dir=packet_dir,
+        profile=profile,
+        candidate_active=candidate_active,
+        min_compared=min_compared,
+        wait_timeout_s=wait_timeout_s,
+        poll_s=poll_s,
+        fail_on=fail_on,
+        min_action_cos=min_action_cos,
+        max_action_delta=max_action_delta,
+        max_latency_regression_pct=max_latency_regression_pct,
+        use_existing_packet=use_existing_packet,
+        json_output=json_output,
+    )
 
 
 app.add_typer(models_app, name="models")
@@ -5708,6 +5832,7 @@ app.add_typer(inspect_app, name="inspect")
 app.add_typer(comply_app, name="comply")
 app.add_typer(profiles_app, name="profiles")
 app.add_typer(policy_app, name="policy")
+app.add_typer(rollout_app, name="rollout")
 
 # ─── tether connect {name} / disconnect / list ──────────────────────────────
 

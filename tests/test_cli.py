@@ -154,6 +154,14 @@ def test_policy_shadow_gate_help():
     assert "--min-compared" in result.output
 
 
+def test_rollout_gate_help():
+    result = runner.invoke(app, ["rollout", "gate", "--help"])
+    assert result.exit_code == 0
+    assert "self-serve rollout decision" in result.output
+    assert "--packet-dir" in result.output
+    assert "--min-compared" in result.output
+
+
 def test_policy_diff_fail_on_any_exits_three(monkeypatch):
     import tether.policy_diff as policy_diff_mod
 
