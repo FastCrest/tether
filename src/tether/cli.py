@@ -38,6 +38,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deploy any VLA model to any edge ha
   [green]tether chat[/green]                start the natural-language assistant
   [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
   [green]tether go --model X[/green]        one-command deploy: probe → pull → export → serve
+  [green]tether smoke[/green]               prove install + local /act roundtrip
   [green]tether doctor[/green]              diagnose install + GPU issues
   [green]tether models list[/green]         browse the curated model registry
 
@@ -54,6 +55,23 @@ def _setup_logging(verbose: bool = False) -> None:
         format="%(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+
+
+def _tether_home() -> Path:
+    """Return the user-overridable Tether cache root."""
+    return Path(os.environ.get("TETHER_HOME", Path.home() / ".cache" / "tether")).expanduser()
+
+
+def _tether_cache_path(*parts: str) -> Path:
+    return _tether_home().joinpath(*parts)
+
+
+def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
+    """Avoid first-run prompts on commands that operators expect to start now."""
+    if os.environ.get("TETHER_SKIP_ONBOARDING", "").lower() in {"1", "true", "yes", "on"}:
+        return True
+    command = ctx.invoked_subcommand or (sys.argv[1] if len(sys.argv) > 1 else "")
+    return command in {"serve", "go", "ros2-serve", "smoke"}
 
 
 def _looks_like_pi05_model_ref(model: str) -> bool:
@@ -94,20 +112,24 @@ def main(
 ):
     # First-run onboarding prompt — fires once, before any command.
     # Shows telemetry (opt-out) and data contribution (opt-in) choices.
-    # Skips in non-interactive contexts (CI, pipes). Ctrl+C safe.
+    # Skips in non-interactive contexts (CI, pipes). Also skips blocking prompts
+    # for deploy commands that must bind ports immediately. Ctrl+C safe.
     try:
         from tether.onboarding import maybe_onboard
-        maybe_onboard()
+        maybe_onboard(interactive=False if _skip_blocking_onboarding(ctx) else None)
     except Exception:  # noqa: BLE001
         pass  # never block the CLI on onboarding issues
 
     # Once-per-day PyPI check for a newer tether; silent if up-to-date.
-    # Honors TETHER_NO_UPGRADE_CHECK=1; skipped on dev installs.
-    try:
-        from tether.upgrade_check import maybe_nag
-        maybe_nag(__version__)
-    except Exception:  # noqa: BLE001
-        pass  # never block the CLI on a network/cache hiccup
+    # Honors TETHER_NO_UPGRADE_CHECK=1; skipped on dev installs. `tether smoke`
+    # must keep stdout receipt-safe, so it opts out here.
+    command = ctx.invoked_subcommand or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if command != "smoke":
+        try:
+            from tether.upgrade_check import maybe_nag
+            maybe_nag(__version__)
+        except Exception:  # noqa: BLE001
+            pass  # never block the CLI on a network/cache hiccup
 
     # No subcommand → show the curated action-first summary (not typer's
     # alphabetical command dump). Beats burying `chat` and `go` for new users.
@@ -2477,9 +2499,10 @@ def serve(
         available = ort.get_available_providers()
     except ImportError:
         err_console.print(
-            "[red]onnxruntime is not installed.[/red]\n"
-            "For GPU: [cyan]pip install onnxruntime-gpu[/cyan]\n"
-            "For CPU: [cyan]pip install onnxruntime[/cyan]"
+            "onnxruntime is not installed.\n"
+            "For CPU serving: pip install 'fastcrest-tether[serve]'\n"
+            "For GPU serving: pip install 'fastcrest-tether[serve,gpu]'",
+            markup=False,
         )
         raise typer.Exit(1)
 
@@ -3272,6 +3295,97 @@ def _check_trt_ep_load_chain(add) -> None:
 
 
 @app.command()
+def smoke(
+    export_dir: str = typer.Option(
+        "",
+        "--export-dir",
+        help=(
+            "Directory for the generated tiny export. Default: "
+            "$TETHER_HOME/smoke/export."
+        ),
+    ),
+    port: int = typer.Option(
+        0,
+        "--port",
+        help="Local server port. 0 picks a free localhost port.",
+    ),
+    offline: bool = typer.Option(
+        True,
+        "--offline/--online",
+        help="Run with TETHER_OFFLINE/HF offline flags enabled.",
+    ),
+    timeout_s: float = typer.Option(
+        30.0,
+        "--timeout-s",
+        help="Seconds to wait for /health and /act responses.",
+    ),
+    act_samples: int = typer.Option(
+        3,
+        "--act-samples",
+        help="Number of /act roundtrips to measure for p50/p95 smoke latency.",
+    ),
+    keep_export: bool = typer.Option(
+        True,
+        "--keep-export/--tmp-export",
+        help="Keep the generated smoke export for inspection.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: 'human', 'json', or 'markdown'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+    markdown_output: str = typer.Option(
+        "",
+        "--markdown-output",
+        help="Write a markdown smoke receipt to this path.",
+    ),
+):
+    """Run a local new-user smoke: tiny export, doctor, serve, /health, /act."""
+
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json", "markdown"):
+        err_console.print(
+            f"[red]--format must be 'human', 'json', or 'markdown', got {output_format!r}[/red]"
+        )
+        raise typer.Exit(2)
+    if act_samples < 1:
+        err_console.print("[red]--act-samples must be >= 1[/red]")
+        raise typer.Exit(2)
+
+    import tether.smoke as smoke_mod
+
+    receipt = smoke_mod.run_smoke(
+        export_dir=export_dir or None,
+        offline=offline,
+        port=port,
+        timeout_s=timeout_s,
+        keep_export=keep_export,
+        act_samples=act_samples,
+    )
+
+    if markdown_output:
+        out_path = Path(markdown_output).expanduser()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(smoke_mod.format_smoke_markdown(receipt))
+
+    if output_format == "json":
+        typer.echo(json.dumps(receipt, indent=2))
+    elif output_format == "markdown":
+        typer.echo(smoke_mod.format_smoke_markdown(receipt))
+    else:
+        console.print(smoke_mod.format_smoke_human(receipt))
+
+    if not receipt.get("passed"):
+        raise typer.Exit(1)
+
+
+@app.command()
 def doctor(
     model: str = typer.Option(
         "",
@@ -3296,8 +3410,13 @@ def doctor(
     output_format: str = typer.Option(
         "human",
         "--format",
-        help="Output format for deploy diagnostics: 'human' (table) or 'json' "
-             "(machine-readable, schema_version=1). System probe is always human-readable.",
+        help="Output format: 'human' (table) or 'json' "
+             "(machine-readable, schema_version=1).",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
     ),
     skip: list[str] = typer.Option(
         [],
@@ -3336,6 +3455,8 @@ def doctor(
     import shutil
     import sys
 
+    if json_output:
+        output_format = "json"
     if output_format not in ("human", "json"):
         err_console.print(
             f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]"
@@ -3411,10 +3532,20 @@ def doctor(
     table.add_column("Check", style="cyan", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     table.add_column("Detail")
+    system_checks: list[dict[str, Any]] = []
 
     def add(name: str, ok: bool, detail: str):
+        check_id = "".join(ch.lower() if ch.isalnum() else "_" for ch in name.strip())
+        check_id = "_".join(part for part in check_id.split("_") if part)
+        system_checks.append({
+            "check_id": check_id,
+            "name": name.strip(),
+            "status": "pass" if ok else "warn",
+            "detail": detail,
+        })
         symbol = "[green]✓[/green]" if ok else "[yellow]⚠[/yellow]"
-        table.add_row(name, symbol, detail)
+        if output_format == "human":
+            table.add_row(name, symbol, detail)
 
     # Python
     py = sys.version_info
@@ -3876,6 +4007,48 @@ def doctor(
     except Exception as _q_exc:  # noqa: BLE001
         add("Contribute queue", False, f"unavailable: {_q_exc}")
 
+    if output_format == "json":
+        from datetime import datetime, timezone
+
+        def _summary(checks: list[dict[str, Any]]) -> dict[str, int]:
+            return {
+                "pass": sum(1 for check in checks if check["status"] == "pass"),
+                "warn": sum(1 for check in checks if check["status"] == "warn"),
+                "fail": sum(1 for check in checks if check["status"] == "fail"),
+                "skip": sum(1 for check in checks if check["status"] == "skip"),
+            }
+
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "system_probe": {
+                "checks": system_checks,
+                "summary": _summary(system_checks),
+            },
+        }
+        exit_status = 0
+        if model:
+            from tether.diagnostics import (
+                exit_code as _exit_code,
+                format_json,
+                run_all_checks,
+            )
+
+            results = run_all_checks(
+                model_path=model,
+                embodiment_name=embodiment,
+                rtc=rtc,
+                skip=skip,
+            )
+            payload["deploy_diagnostics"] = json.loads(format_json(
+                results,
+                model_path=model,
+                embodiment_name=embodiment,
+            ))
+            exit_status = _exit_code(results)
+        typer.echo(json.dumps(payload, indent=2))
+        raise typer.Exit(exit_status)
+
     console.print(table)
     console.print(
         "\n[dim]If something here is unexpected, see "
@@ -4024,6 +4197,7 @@ def models_list(
                                 help="Filter by supported device (orin_nano, agx_orin, thor, a10g, a100, h100, h200)"),
     embodiment: str = typer.Option("", "--embodiment", help="Filter by supported embodiment (franka, so100, ur5)"),
     output_format: str = typer.Option("human", "--format", help="'human' (table) or 'json'"),
+    json_output: bool = typer.Option(False, "--json", help="Alias for --format json."),
 ):
     """List Tether-compatible models from the curated registry.
 
@@ -4035,6 +4209,8 @@ def models_list(
     """
     from tether.registry import REGISTRY, filter_models
 
+    if json_output:
+        output_format = "json"
     if output_format not in ("human", "json"):
         err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
         raise typer.Exit(2)
@@ -4090,7 +4266,7 @@ def models_list(
         )
     console.print(table)
     console.print(
-        "\n[dim]tether models pull <model_id>   # download to ~/.cache/tether/models/<id>[/dim]"
+        "\n[dim]tether models pull <model_id>   # download to $TETHER_HOME/models/<id> or ~/.cache/tether/models/<id>[/dim]"
         "\n[dim]tether models info <model_id>   # see benchmarks + per-device support[/dim]"
     )
 
@@ -4099,7 +4275,7 @@ def models_list(
 def models_pull(
     model_id: str = typer.Argument(help="Registry id from `tether models list`"),
     target_dir: str = typer.Option("", "--target-dir",
-                                    help="Where to write weights. Default: ~/.cache/tether/models/<model_id>/"),
+                                    help="Where to write weights. Default: $TETHER_HOME/models/<model_id>/ or ~/.cache/tether/models/<model_id>/"),
     no_verify: bool = typer.Option(False, "--no-verify",
                                     help="Skip the post-download structure check"),
     revision: str = typer.Option("", "--revision",
@@ -4128,7 +4304,7 @@ def models_pull(
         console.print("Tip: you can also pass the HuggingFace repo id (e.g. lerobot/smolvla_base).")
         raise typer.Exit(2)
 
-    target = Path(target_dir) if target_dir else (Path.home() / ".cache" / "tether" / "models" / entry.model_id)
+    target = Path(target_dir).expanduser() if target_dir else _tether_cache_path("models", entry.model_id)
     target.mkdir(parents=True, exist_ok=True)
 
     rev = revision or entry.hf_revision
@@ -4176,6 +4352,7 @@ def models_pull(
 def models_info(
     model_id: str = typer.Argument(help="Registry id from `tether models list`"),
     output_format: str = typer.Option("human", "--format", help="'human' or 'json'"),
+    json_output: bool = typer.Option(False, "--json", help="Alias for --format json."),
 ):
     """Show benchmarks + per-device support for a single model.
 
@@ -4187,6 +4364,12 @@ def models_info(
     entry = by_id(model_id)
     if entry is None:
         err_console.print(f"[red]Unknown model_id: {model_id!r}[/red]")
+        raise typer.Exit(2)
+
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json"):
+        err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
         raise typer.Exit(2)
 
     if output_format == "json":
@@ -4263,7 +4446,7 @@ def go(
     target_dir: str = typer.Option(
         "",
         "--target-dir",
-        help="Where to cache weights. Default: ~/.cache/tether/models/<id>/",
+        help="Where to cache weights. Default: $TETHER_HOME/models/<id>/ or ~/.cache/tether/models/<id>/",
     ),
     port: int = typer.Option(8000, "--port", help="HTTP port for /act + /health"),
     host: str = typer.Option("0.0.0.0", "--host"),
@@ -4287,8 +4470,9 @@ def go(
       pip install 'fastcrest-tether[monolithic]'
     Without it, `tether go` errors with the install command.
 
-    Exported artifacts cache at ~/.cache/tether/exports/<model_id>/ — re-runs
-    skip the export on cache hit.
+    Exported artifacts cache at $TETHER_HOME/exports/<model_id>/, or
+    ~/.cache/tether/exports/<model_id>/ when TETHER_HOME is unset. Re-runs skip
+    the export on cache hit.
 
     Plan ref: features/01_serve/subfeatures/_dx_gaps/one-command-deploy.md
     """
@@ -4347,7 +4531,7 @@ def go(
         raise typer.Exit(2)
 
     # Step 3: target dir
-    target = Path(target_dir) if target_dir else (Path.home() / ".cache" / "tether" / "models" / entry.model_id)
+    target = Path(target_dir).expanduser() if target_dir else _tether_cache_path("models", entry.model_id)
 
     if dry_run:
         console.print(f"[bold cyan]target:[/bold cyan]   {target}")
@@ -4388,9 +4572,7 @@ def go(
     }
     if entry.requires_export:
         export_target = _DEVICE_CLASS_TO_TARGET.get(probe.device_class, "desktop")
-        # Respect TETHER_HOME for cache root so tests + custom installs can override.
-        tether_home = Path(os.environ.get("TETHER_HOME", Path.home() / ".cache" / "tether"))
-        export_dir = tether_home / "exports" / entry.model_id
+        export_dir = _tether_cache_path("exports", entry.model_id)
         export_marker = export_dir / "VERIFICATION.md"
         meta_marker = export_dir / "_tether_meta.json"
 

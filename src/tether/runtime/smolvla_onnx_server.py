@@ -123,6 +123,12 @@ class SmolVLAOnnxServer:
             self.config = json.loads(cfg_path.read_text())
 
         self._input_names = [i.name for i in self._session.get_inputs()]
+        from tether.runtime.tokenizers import ensure_offline_tokenizer_bundle
+        ensure_offline_tokenizer_bundle(
+            self.export_dir,
+            self.config,
+            default_ref="HuggingFaceTB/SmolLM2-135M",
+        )
         logger.info(
             "SmolVLAOnnxServer ready in %.2fs (inputs: %s, active_providers=%s)",
             elapsed, self._input_names, self._active_providers,

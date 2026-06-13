@@ -148,3 +148,25 @@ def test_guard_status_endpoint(tmp_path, monkeypatch):
         assert resp.status_code == 200
         body = resp.json()
         assert body.get("enabled") is False
+
+
+def test_offline_mode_requires_bundled_tokenizer_at_startup(tmp_path, monkeypatch):
+    """TETHER_OFFLINE=1 should fail before serving an export that needs HF."""
+    import onnxruntime as ort
+
+    from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+    from tether.runtime.tokenizers import OfflineTokenizerMissingError
+
+    stub = _stub_ort_session([
+        "img_cam1", "img_cam2", "img_cam3",
+        "mask_cam1", "mask_cam2", "mask_cam3",
+        "lang_tokens", "lang_masks", "state", "noise",
+    ])
+    monkeypatch.setattr(ort, "InferenceSession", lambda *a, **kw: stub)
+    monkeypatch.setenv("TETHER_OFFLINE", "1")
+    export_dir = _make_export_dir(tmp_path, "smolvla")
+
+    server = SmolVLAOnnxServer(export_dir, device="cpu")
+
+    with pytest.raises(OfflineTokenizerMissingError, match="offline tokenizer assets missing"):
+        server.load()

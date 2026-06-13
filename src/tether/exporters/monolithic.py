@@ -90,7 +90,11 @@ def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
         return meta
     try:
         from transformers import AutoTokenizer
-        tok = AutoTokenizer.from_pretrained(tokenizer_ref)
+        from tether.runtime.tokenizers import tokenizer_offline_enabled
+        tok = AutoTokenizer.from_pretrained(
+            tokenizer_ref,
+            local_files_only=tokenizer_offline_enabled(),
+        )
         if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
             tok.pad_token = tok.eos_token
         tok_dir = output_dir / "tokenizer"

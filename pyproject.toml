@@ -112,6 +112,7 @@ gpu-min = [
 # gives you a working server out of the box. For GPU, use `[serve,gpu]` to pull in
 # onnxruntime-gpu + CUDA libs.
 serve = [
+    "onnxruntime>=1.17.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "Pillow>=10.0.0",
