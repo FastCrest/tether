@@ -146,6 +146,14 @@ def test_policy_diff_help():
     assert "--fail-on" in result.output
 
 
+def test_policy_shadow_gate_help():
+    result = runner.invoke(app, ["policy", "shadow-gate", "--help"])
+    assert result.exit_code == 0
+    assert "PROMOTE, HOLD, or ROLLBACK" in result.output
+    assert "--packet-dir" in result.output
+    assert "--min-compared" in result.output
+
+
 def test_policy_diff_fail_on_any_exits_three(monkeypatch):
     import tether.policy_diff as policy_diff_mod
 

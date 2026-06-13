@@ -37,6 +37,8 @@ DEFAULT_PROMOTION_PROFILE: dict[str, Any] = {
         "max_policy_guard_regressions": 0,
         "max_policy_shape_failures": 0,
         "max_policy_missing_candidate": 0,
+        "max_policy_shadow_pending": 0,
+        "max_policy_shadow_errors": 0,
         "max_roundtrip_p95_ms": None,
         "max_warm_roundtrip_p95_ms": None,
         "max_deadline_misses": None,
@@ -492,6 +494,8 @@ def _evaluate_policy_diff(
         ("max_policy_guard_regressions", "guard_regressions"),
         ("max_policy_shape_failures", "shape_failures"),
         ("max_policy_missing_candidate", "missing_candidate"),
+        ("max_policy_shadow_pending", "shadow_pending"),
+        ("max_policy_shadow_errors", "shadow_errors"),
     )
     for threshold_key, summary_key in threshold_map:
         limit = _threshold(profile, threshold_key)

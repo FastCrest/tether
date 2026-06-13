@@ -52,6 +52,25 @@ tether profiles show warehouse-safe
 tether profiles init warehouse-safe --output warehouse-safe.yml
 ```
 
+## Shadow rollout gate
+
+For a candidate already mirrored with `tether serve --shadow-policy --record`,
+use `policy shadow-gate` to build the rollout packet and promotion decision in
+one step:
+
+```bash
+tether policy shadow-gate ./traces/shadow.jsonl.gz \
+  --packet-dir /tmp/tether-shadow-rollout \
+  --profile lab-shadow \
+  --min-compared 100 \
+  --wait-timeout-s 5
+```
+
+The command waits for pending `shadow_result` rows, writes `policy-diff.json`,
+verifies a hashed packet, and writes `promotion-decision.json`. Its top-level
+decision is `PROMOTE`, `HOLD`, or `ROLLBACK`; the embedded promotion report
+still uses `BLOCK` for a failed inactive candidate.
+
 ## What it checks
 
 - Deploy diagnostics via the same checks as `tether doctor --json --model`.

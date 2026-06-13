@@ -144,10 +144,10 @@ path exported by `tether profiles init`.
 
 ## `tether policy`
 
-Policy rollout gates that operate on recorded traces. Today the main command is
-`policy diff`: compare a baseline trace with a candidate trace, or compare a
-single shadow trace's recorded production actions against shadow evidence
-(`shadow_result` rows, with legacy `routing.shadow_actions` still supported).
+Policy rollout gates that operate on recorded traces. The common self-serve
+path is `policy shadow-gate`: turn a recorded shadow rollout into a proof
+packet plus one operator decision. Use `policy diff` when you only need the raw
+baseline/candidate or shadow comparison report.
 
 ```bash
 # Offline promotion check: same observations, candidate policy output
@@ -155,11 +155,24 @@ tether policy diff ./traces/v1.jsonl.gz ./traces/v2.jsonl.gz --fail-on any
 
 # Shadow rollout check: live actions vs shadow actions in one trace
 tether policy diff ./traces/shadow.jsonl.gz --shadow --output policy-diff.json
+
+# Self-serve shadow promotion gate
+tether policy shadow-gate ./traces/shadow.jsonl.gz \
+  --packet-dir ./shadow-rollout-packet \
+  --profile lab-shadow \
+  --min-compared 100 \
+  --wait-timeout-s 5
 ```
 
-The report includes action cosine/max-delta, latency regressions, shape failures,
-guard regressions, request mismatches, metadata warnings, and a pass/warn/fail
-verdict. Exit code `3` means the selected `--fail-on` gate tripped.
+`policy shadow-gate` writes `deployment-proof.json`, `policy-diff.json`,
+`promotion-decision.json`, and `MANIFEST.json`. Exit codes: `0` means
+`PROMOTE`, `1` means `HOLD`, `4` means `ROLLBACK`, and `2` means the trace,
+packet, or profile could not be loaded.
+
+The underlying policy-diff report includes action cosine/max-delta, latency
+regressions, shape failures, guard regressions, request mismatches, metadata
+warnings, and a pass/warn/fail verdict. Exit code `3` from `policy diff` means
+the selected `--fail-on` gate tripped.
 
 ---
 
