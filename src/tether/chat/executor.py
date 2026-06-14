@@ -131,6 +131,37 @@ def _build_realtime_cert(p: dict[str, Any]) -> list[str]:
     return args
 
 
+def _build_prove_realtime_chain(p: dict[str, Any]) -> list[list[str]]:
+    proof_dir = str(p.get("proof_output_dir") or "./tether-deploy-proof")
+    cert_dir = str(p.get("cert_output_dir") or "./tether-realtime-cert")
+    prove_params = {
+        "export_dir": p["export_dir"],
+        "embodiment": p.get("embodiment"),
+        "profile": p.get("profile"),
+        "output_dir": proof_dir,
+        "record_dir": p.get("record_dir"),
+        "safety_config": p.get("safety_config"),
+        "device": p.get("device"),
+        "samples": p.get("samples"),
+        "timeout_s": p.get("timeout_s"),
+        "control_hz": p.get("control_hz"),
+        "offline": p.get("offline"),
+    }
+    cert_params = {
+        "proof": proof_dir,
+        "target": p.get("target"),
+        "control_hz": p.get("control_hz"),
+        "max_roundtrip_p95_ms": p.get("max_roundtrip_p95_ms"),
+        "max_jitter_p95_minus_p50_ms": p.get("max_jitter_p95_minus_p50_ms"),
+        "max_deadline_misses": p.get("max_deadline_misses"),
+        "max_control_budget_misses": p.get("max_control_budget_misses"),
+        "max_act_errors": p.get("max_act_errors"),
+        "output_dir": cert_dir,
+        "json": p.get("json"),
+    }
+    return [_build_prove(prove_params), _build_realtime_cert(cert_params)]
+
+
 def _build_show_profile(p: dict[str, Any]) -> list[str]:
     return ["profiles", "show", str(p["profile"]), "--json"]
 
@@ -222,8 +253,14 @@ _BUILDERS = {
     "replay_trace": _build_replay,
 }
 
+_CHAIN_BUILDERS = {
+    "prove_realtime_deployment": _build_prove_realtime_chain,
+}
+
 
 def _argv_for(name: str, params: dict[str, Any]) -> list[str]:
+    if name in _CHAIN_BUILDERS:
+        raise ValueError(f"tool {name!r} expands to multiple commands; use _argvs_for")
     if name in _STATIC:
         return list(_STATIC[name])
     builder = _BUILDERS.get(name)
@@ -232,30 +269,80 @@ def _argv_for(name: str, params: dict[str, Any]) -> list[str]:
     return builder(params)
 
 
+def _argvs_for(name: str, params: dict[str, Any]) -> list[list[str]]:
+    chain_builder = _CHAIN_BUILDERS.get(name)
+    if chain_builder is not None:
+        return chain_builder(params)
+    return [_argv_for(name, params)]
+
+
 def execute(name: str, params: dict[str, Any], tether_bin: str | None = None, dry_run: bool = False) -> dict[str, Any]:
     """Run a tool. Returns dict with stdout, stderr, exit_code, command, dry_run."""
     binary = tether_bin or shutil.which("tether") or "tether"
-    argv = [binary] + _argv_for(name, params)
-    cmd_str = " ".join(shlex.quote(a) for a in argv)
+    argv_list = [[binary] + argv for argv in _argvs_for(name, params)]
+    cmd_strs = [" ".join(shlex.quote(a) for a in argv) for argv in argv_list]
+    cmd_str = " && ".join(cmd_strs)
 
     if dry_run:
-        return {"command": cmd_str, "dry_run": True, "stdout": "", "stderr": "", "exit_code": 0}
+        return {
+            "command": cmd_str,
+            "dry_run": True,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": 0,
+            "steps": [{"command": cmd, "exit_code": 0} for cmd in cmd_strs],
+        }
 
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=600)
-    except subprocess.TimeoutExpired:
-        return {"command": cmd_str, "stdout": "", "stderr": "timeout after 600s", "exit_code": 124}
-    except FileNotFoundError as e:
-        return {"command": cmd_str, "stdout": "", "stderr": str(e), "exit_code": 127}
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    steps: list[dict[str, Any]] = []
+    exit_code = 0
+    multi_step = len(argv_list) > 1
 
-    stdout = _smart_truncate(proc.stdout or "")
-    stderr = _smart_truncate(proc.stderr or "")
+    for idx, argv in enumerate(argv_list, start=1):
+        step_cmd = cmd_strs[idx - 1]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            steps.append({"command": step_cmd, "exit_code": 124})
+            return {
+                "command": cmd_str,
+                "stdout": _smart_truncate("\n".join(stdout_parts)),
+                "stderr": _smart_truncate(
+                    "\n".join([*stderr_parts, f"step {idx} timeout after 600s"])
+                ),
+                "exit_code": 124,
+                "steps": steps,
+            }
+        except FileNotFoundError as e:
+            steps.append({"command": step_cmd, "exit_code": 127})
+            return {
+                "command": cmd_str,
+                "stdout": _smart_truncate("\n".join(stdout_parts)),
+                "stderr": _smart_truncate("\n".join([*stderr_parts, str(e)])),
+                "exit_code": 127,
+                "steps": steps,
+            }
+
+        steps.append({"command": step_cmd, "exit_code": proc.returncode})
+        if proc.stdout:
+            stdout_parts.append(
+                f"--- step {idx}: {step_cmd} ---\n{proc.stdout}" if multi_step else proc.stdout
+            )
+        if proc.stderr:
+            stderr_parts.append(
+                f"--- step {idx}: {step_cmd} ---\n{proc.stderr}" if multi_step else proc.stderr
+            )
+        if proc.returncode != 0:
+            exit_code = proc.returncode
+            break
 
     return {
         "command": cmd_str,
-        "stdout": stdout,
-        "stderr": stderr,
-        "exit_code": proc.returncode,
+        "stdout": _smart_truncate("\n".join(stdout_parts)),
+        "stderr": _smart_truncate("\n".join(stderr_parts)),
+        "exit_code": exit_code,
+        "steps": steps,
     }
 
 

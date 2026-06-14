@@ -18,7 +18,7 @@ The full N=135 hallucination spike that produced the recommendation is preserved
 
 from __future__ import annotations
 
-from tether.chat.executor import _BUILDERS, _STATIC, _argv_for
+from tether.chat.executor import _BUILDERS, _STATIC, _argv_for, _argvs_for, execute
 from tether.chat.loop import SYSTEM_PROMPT
 from tether.chat.schema import by_name
 
@@ -182,6 +182,90 @@ def test_certify_realtime_serving_routes_to_bench_realtime() -> None:
     ]
 
 
+def test_prove_realtime_deployment_routes_to_deterministic_chain() -> None:
+    tool = by_name()["prove_realtime_deployment"]
+    props = tool["function"]["parameters"]["properties"]
+    assert "export_dir" in props
+    assert "control_hz" in props
+    assert "proof_output_dir" in props
+    assert "cert_output_dir" in props
+
+    argvs = _argvs_for(
+        "prove_realtime_deployment",
+        {
+            "export_dir": "./export",
+            "control_hz": 20,
+            "target": "agx-orin-cell-a",
+            "profile": "warehouse-safe",
+            "proof_output_dir": "./proof",
+            "cert_output_dir": "./cert",
+            "samples": 100,
+            "max_roundtrip_p95_ms": 45,
+            "json": True,
+        },
+    )
+
+    assert argvs == [
+        [
+            "prove", "./export",
+            "--profile", "warehouse-safe",
+            "--output-dir", "./proof",
+            "--samples", "100",
+            "--control-hz", "20",
+        ],
+        [
+            "bench", "realtime", "./proof",
+            "--target", "agx-orin-cell-a",
+            "--control-hz", "20",
+            "--max-roundtrip-p95-ms", "45",
+            "--output-dir", "./cert",
+            "--json",
+        ],
+    ]
+
+
+def test_prove_realtime_deployment_defaults_artifact_dirs() -> None:
+    argvs = _argvs_for(
+        "prove_realtime_deployment",
+        {"export_dir": "./export", "control_hz": 50},
+    )
+
+    assert "--output-dir" in argvs[0]
+    assert argvs[0][argvs[0].index("--output-dir") + 1] == "./tether-deploy-proof"
+    assert argvs[1][2] == "./tether-deploy-proof"
+    assert "--output-dir" in argvs[1]
+    assert argvs[1][argvs[1].index("--output-dir") + 1] == "./tether-realtime-cert"
+
+
+def test_prove_realtime_deployment_execute_dry_run_shows_chain() -> None:
+    result = execute(
+        "prove_realtime_deployment",
+        {
+            "export_dir": "./export",
+            "control_hz": 20,
+            "target": "agx-orin",
+            "proof_output_dir": "./proof",
+            "cert_output_dir": "./cert",
+            "json": True,
+        },
+        tether_bin="tether",
+        dry_run=True,
+    )
+
+    assert result["exit_code"] == 0
+    assert result["steps"] == [
+        {
+            "command": "tether prove ./export --output-dir ./proof --control-hz 20",
+            "exit_code": 0,
+        },
+        {
+            "command": "tether bench realtime ./proof --target agx-orin --control-hz 20 --output-dir ./cert --json",
+            "exit_code": 0,
+        },
+    ]
+    assert " && " in result["command"]
+
+
 def test_profile_tools_route_to_profiles_commands() -> None:
     assert "list_promotion_profiles" in _STATIC
     assert _argv_for("list_promotion_profiles", {}) == ["profiles", "list", "--json"]
@@ -222,9 +306,10 @@ def test_system_prompt_prefers_prove_for_deployment_readiness() -> None:
 def test_system_prompt_prefers_realtime_cert_for_control_budget() -> None:
     p = SYSTEM_PROMPT
     assert "certify_realtime_serving" in p
+    assert "prove_realtime_deployment" in p
     assert "20 Hz" in p
     assert "control-loop budget" in p
-    assert "run prove_deployment first" in p
+    assert "Use certify_realtime_serving only when the user gives an existing proof packet" in p
 
 
 def test_system_prompt_prefers_policy_diff_for_rollout_questions() -> None:
