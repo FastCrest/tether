@@ -1049,6 +1049,16 @@ def run_deploy_proof(
                     else None
                 ),
             }
+            if isinstance(body.get("actions"), list):
+                sample["actions"] = body["actions"]
+            for key in (
+                "action_execution",
+                "execution",
+                "adaptive_action_chunking",
+                "rtc",
+            ):
+                if isinstance(body.get(key), dict):
+                    sample[key] = body[key]
             receipt["act_samples"].append(sample)
             receipt["act"] = sample
 

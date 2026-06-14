@@ -86,6 +86,56 @@ def test_build_realtime_certificate_recomputes_misses_from_act_samples(tmp_path)
     assert report["control_budget"]["missed_samples_source"] == "act_samples"
 
 
+def test_build_realtime_certificate_embeds_execution_certificate(tmp_path):
+    receipt = _receipt(tmp_path)
+    receipt["act_samples"] = [
+        {
+            "roundtrip_ms": 40.0,
+            "actions": [[0.0, 0.0], [0.04, 0.02], [0.08, 0.04]],
+            "action_execution": {
+                "executed_horizon": 3,
+                "adaptive_reason": "low_speed_transition",
+                "phase_transition_indices": [2],
+                "cache_status": "hit",
+            },
+        },
+        {
+            "roundtrip_ms": 40.0,
+            "actions": [[0.09, 0.04], [0.13, 0.06], [0.17, 0.08]],
+            "action_execution": {
+                "executed_horizon": 3,
+                "adaptive_reason": "low_speed_transition",
+                "phase_transition_indices": [2],
+                "cache_status": "hit",
+            },
+        },
+    ]
+
+    report = build_realtime_certificate(
+        receipt,
+        control_hz=20.0,
+        execution_cert=True,
+        require_phase_aware_horizon=True,
+    )
+
+    assert report["decision"] == "PASS"
+    assert report["execution_certificate"]["decision"] == "PASS"
+    assert "Action Execution" in format_realtime_certificate_markdown(report)
+    assert "execution: PASS" in format_realtime_certificate_human(report)
+
+
+def test_build_realtime_certificate_fails_when_execution_certificate_fails(tmp_path):
+    report = build_realtime_certificate(
+        _receipt(tmp_path),
+        control_hz=20.0,
+        execution_cert=True,
+    )
+
+    assert report["decision"] == "FAIL"
+    assert report["execution_certificate"]["decision"] == "FAIL"
+    assert "action_execution_certificate" in report["summary"]["failed_checks"]
+
+
 def test_load_and_write_realtime_certificate_packet(tmp_path):
     proof_dir = tmp_path / "proof"
     proof_dir.mkdir()

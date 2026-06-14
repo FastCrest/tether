@@ -166,6 +166,17 @@ def _pass_fail(condition: bool) -> str:
     return "pass" if condition else "fail"
 
 
+def _summarize_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "pass": sum(1 for check in checks if check["status"] == "pass"),
+        "fail": sum(1 for check in checks if check["status"] == "fail"),
+        "skip": sum(1 for check in checks if check["status"] == "skip"),
+        "failed_checks": [
+            check["name"] for check in checks if check["status"] == "fail"
+        ],
+    }
+
+
 def build_realtime_certificate(
     receipt: dict[str, Any],
     *,
@@ -176,6 +187,12 @@ def build_realtime_certificate(
     max_deadline_misses: int = 0,
     max_control_budget_misses: int = 0,
     max_act_errors: int = 0,
+    execution_cert: bool = False,
+    max_stale_action_window_ms: float = 100.0,
+    max_chunk_boundary_delta: float = 0.15,
+    max_velocity_discontinuity: float = 0.2,
+    require_phase_aware_horizon: bool = False,
+    require_runtime_attribution: bool = True,
 ) -> dict[str, Any]:
     """Build a pass/fail realtime-serving certificate from proof latency evidence."""
 
@@ -350,17 +367,10 @@ def build_realtime_certificate(
             remediation="Fix /act errors before certifying realtime serving.",
         )
 
-    summary = {
-        "pass": sum(1 for check in checks if check["status"] == "pass"),
-        "fail": sum(1 for check in checks if check["status"] == "fail"),
-        "skip": sum(1 for check in checks if check["status"] == "skip"),
-        "failed_checks": [
-            check["name"] for check in checks if check["status"] == "fail"
-        ],
-    }
+    summary = _summarize_checks(checks)
     decision = "PASS" if summary["fail"] == 0 else "FAIL"
 
-    return {
+    report = {
         "schema_version": 1,
         "kind": "tether.realtime_serving_certificate",
         "generated_at": _now_iso(),
@@ -402,6 +412,36 @@ def build_realtime_certificate(
         "checks": checks,
         "summary": summary,
     }
+
+    if execution_cert:
+        from tether.action_execution_cert import build_action_execution_certificate
+
+        execution_report = build_action_execution_certificate(
+            receipt,
+            control_hz=effective_hz,
+            max_stale_action_window_ms=max_stale_action_window_ms,
+            max_chunk_boundary_delta=max_chunk_boundary_delta,
+            max_velocity_discontinuity=max_velocity_discontinuity,
+            require_phase_aware_horizon=require_phase_aware_horizon,
+            require_runtime_attribution=require_runtime_attribution,
+        )
+        report["execution_certificate"] = execution_report
+        _add_check(
+            checks,
+            "action_execution_certificate",
+            "pass" if execution_report.get("decision") == "PASS" else "fail",
+            metric="execution_certificate.decision",
+            actual=execution_report.get("decision"),
+            expected="PASS",
+            remediation="Fix failed action-execution checks before promoting the policy.",
+        )
+        summary = _summarize_checks(checks)
+        decision = "PASS" if summary["fail"] == 0 else "FAIL"
+        report["summary"] = summary
+        report["decision"] = decision
+        report["passed"] = decision == "PASS"
+
+    return report
 
 
 def format_realtime_certificate_human(report: dict[str, Any]) -> str:
@@ -445,6 +485,22 @@ def format_realtime_certificate_human(report: dict[str, Any]) -> str:
     failed = summary.get("failed_checks") or []
     if failed:
         lines.append("failed:  " + ", ".join(failed))
+    execution = report.get("execution_certificate")
+    if isinstance(execution, dict):
+        metrics = execution.get("metrics") or {}
+        stale = metrics.get("stale_action_window_ms") or {}
+        boundary = metrics.get("chunk_boundary_delta") or {}
+        velocity = metrics.get("velocity_discontinuity") or {}
+        lines.append(
+            "execution: "
+            f"{execution.get('decision', 'FAIL')} "
+            f"stale_max={stale.get('max_ms')}ms "
+            f"boundary_delta={boundary.get('max_abs')} "
+            f"velocity_jump={velocity.get('max_abs')}"
+        )
+        failed_execution = (execution.get("summary") or {}).get("failed_checks") or []
+        if failed_execution:
+            lines.append("execution_failed: " + ", ".join(failed_execution))
     return "\n".join(lines)
 
 
@@ -492,6 +548,11 @@ def format_realtime_certificate_markdown(report: dict[str, Any]) -> str:
             f"| `{check.get('name')}` | {check.get('status')} | "
             f"{check.get('actual')} | {check.get('expected')} |"
         )
+    execution = report.get("execution_certificate")
+    if isinstance(execution, dict):
+        from tether.action_execution_cert import format_action_execution_markdown
+
+        lines.extend(["", format_action_execution_markdown(execution).rstrip()])
     return "\n".join(lines) + "\n"
 
 

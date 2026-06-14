@@ -125,6 +125,15 @@ def _build_realtime_cert(p: dict[str, Any]) -> list[str]:
     _flag(args, "max-deadline-misses", p.get("max_deadline_misses"))
     _flag(args, "max-control-budget-misses", p.get("max_control_budget_misses"))
     _flag(args, "max-act-errors", p.get("max_act_errors"))
+    if p.get("execution_cert") is True:
+        args.append("--execution-cert")
+    _flag(args, "max-stale-action-window-ms", p.get("max_stale_action_window_ms"))
+    _flag(args, "max-chunk-boundary-delta", p.get("max_chunk_boundary_delta"))
+    _flag(args, "max-velocity-discontinuity", p.get("max_velocity_discontinuity"))
+    if p.get("require_phase_aware_horizon") is True:
+        args.append("--require-phase-aware-horizon")
+    if p.get("require_runtime_attribution") is False:
+        args.append("--no-require-runtime-attribution")
     _flag(args, "output-dir", p.get("output_dir"))
     if p.get("json") is True:
         args.append("--json")
@@ -156,6 +165,12 @@ def _build_prove_realtime_chain(p: dict[str, Any]) -> list[list[str]]:
         "max_deadline_misses": p.get("max_deadline_misses"),
         "max_control_budget_misses": p.get("max_control_budget_misses"),
         "max_act_errors": p.get("max_act_errors"),
+        "execution_cert": p.get("execution_cert"),
+        "max_stale_action_window_ms": p.get("max_stale_action_window_ms"),
+        "max_chunk_boundary_delta": p.get("max_chunk_boundary_delta"),
+        "max_velocity_discontinuity": p.get("max_velocity_discontinuity"),
+        "require_phase_aware_horizon": p.get("require_phase_aware_horizon"),
+        "require_runtime_attribution": p.get("require_runtime_attribution"),
         "output_dir": cert_dir,
         "json": p.get("json"),
     }

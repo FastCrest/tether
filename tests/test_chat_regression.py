@@ -182,6 +182,37 @@ def test_certify_realtime_serving_routes_to_bench_realtime() -> None:
     ]
 
 
+def test_certify_realtime_serving_routes_execution_cert_flags() -> None:
+    props = by_name()["certify_realtime_serving"]["function"]["parameters"]["properties"]
+    assert "execution_cert" in props
+    assert "max_stale_action_window_ms" in props
+
+    argv = _argv_for(
+        "certify_realtime_serving",
+        {
+            "proof": "./proof",
+            "control_hz": 20,
+            "execution_cert": True,
+            "max_stale_action_window_ms": 80,
+            "max_chunk_boundary_delta": 0.1,
+            "max_velocity_discontinuity": 0.15,
+            "require_phase_aware_horizon": True,
+            "require_runtime_attribution": False,
+        },
+    )
+
+    assert argv == [
+        "bench", "realtime", "./proof",
+        "--control-hz", "20",
+        "--execution-cert",
+        "--max-stale-action-window-ms", "80",
+        "--max-chunk-boundary-delta", "0.1",
+        "--max-velocity-discontinuity", "0.15",
+        "--require-phase-aware-horizon",
+        "--no-require-runtime-attribution",
+    ]
+
+
 def test_prove_realtime_deployment_routes_to_deterministic_chain() -> None:
     tool = by_name()["prove_realtime_deployment"]
     props = tool["function"]["parameters"]["properties"]

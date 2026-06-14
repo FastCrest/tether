@@ -406,12 +406,17 @@ tether prove ./p0 \
 
 tether bench realtime /tmp/tether-deploy-proof \
   --target agx-orin-cell-a \
+  --execution-cert \
   --output-dir /tmp/tether-realtime-cert
 ```
 
 The certificate gates roundtrip p95 against the control period, deadline
 misses, `/act` errors, and control-budget misses, then writes
 `realtime-serving-cert.json`, Markdown, and a hashed `MANIFEST.json`.
+Add `--execution-cert` when the proof packet carries action chunks plus
+`action_execution` telemetry; it also gates stale-action window, chunk-boundary
+continuity, boundary velocity jump, and scheduler/cache/adaptive-horizon
+attribution.
 
 ```bash
 tether prove ./p0 \

@@ -864,6 +864,12 @@ def _bench_realtime_cmd(
     max_deadline_misses: int = 0,
     max_control_budget_misses: int = 0,
     max_act_errors: int = 0,
+    execution_cert: bool = False,
+    max_stale_action_window_ms: float = 0.0,
+    max_chunk_boundary_delta: float = 0.0,
+    max_velocity_discontinuity: float = 0.0,
+    require_phase_aware_horizon: bool = False,
+    require_runtime_attribution: bool = True,
     output_dir: str = "",
     output_format: str = "human",
     json_output: bool = False,
@@ -885,6 +891,15 @@ def _bench_realtime_cmd(
         raise typer.Exit(2)
     if max_jitter_p95_minus_p50_ms < 0:
         err_console.print("[red]--max-jitter-p95-minus-p50-ms must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_stale_action_window_ms < 0:
+        err_console.print("[red]--max-stale-action-window-ms must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_chunk_boundary_delta < 0:
+        err_console.print("[red]--max-chunk-boundary-delta must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_velocity_discontinuity < 0:
+        err_console.print("[red]--max-velocity-discontinuity must be >= 0[/red]")
         raise typer.Exit(2)
     if max_deadline_misses < 0 or max_control_budget_misses < 0 or max_act_errors < 0:
         err_console.print("[red]miss/error budgets must be >= 0[/red]")
@@ -909,6 +924,24 @@ def _bench_realtime_cmd(
             max_deadline_misses=max_deadline_misses,
             max_control_budget_misses=max_control_budget_misses,
             max_act_errors=max_act_errors,
+            execution_cert=execution_cert,
+            max_stale_action_window_ms=(
+                max_stale_action_window_ms
+                if max_stale_action_window_ms > 0
+                else 100.0
+            ),
+            max_chunk_boundary_delta=(
+                max_chunk_boundary_delta
+                if max_chunk_boundary_delta > 0
+                else 0.15
+            ),
+            max_velocity_discontinuity=(
+                max_velocity_discontinuity
+                if max_velocity_discontinuity > 0
+                else 0.2
+            ),
+            require_phase_aware_horizon=require_phase_aware_horizon,
+            require_runtime_attribution=require_runtime_attribution,
         )
         if output_dir:
             realtime_mod.write_realtime_certificate(report, output_dir)
@@ -1006,6 +1039,36 @@ def benchmark_cmd(
         "--max-act-errors",
         help="For `bench realtime`: allowed /act errors.",
     ),
+    execution_cert: bool = typer.Option(
+        False,
+        "--execution-cert",
+        help="For `bench realtime`: also certify action chunk execution evidence.",
+    ),
+    max_stale_action_window_ms: float = typer.Option(
+        0.0,
+        "--max-stale-action-window-ms",
+        help="For `bench realtime --execution-cert`: stale-action window budget. 0 uses 100 ms.",
+    ),
+    max_chunk_boundary_delta: float = typer.Option(
+        0.0,
+        "--max-chunk-boundary-delta",
+        help="For `bench realtime --execution-cert`: max allowed chunk-boundary action delta. 0 uses 0.15.",
+    ),
+    max_velocity_discontinuity: float = typer.Option(
+        0.0,
+        "--max-velocity-discontinuity",
+        help="For `bench realtime --execution-cert`: max allowed boundary velocity jump. 0 uses 0.2.",
+    ),
+    require_phase_aware_horizon: bool = typer.Option(
+        False,
+        "--require-phase-aware-horizon",
+        help="For `bench realtime --execution-cert`: require phase/low-speed transition evidence.",
+    ),
+    require_runtime_attribution: bool = typer.Option(
+        True,
+        "--require-runtime-attribution/--no-require-runtime-attribution",
+        help="For `bench realtime --execution-cert`: require scheduler/cache/adaptive-horizon attribution.",
+    ),
     realtime_output_dir: str = typer.Option(
         "",
         "--output-dir",
@@ -1050,6 +1113,12 @@ def benchmark_cmd(
             max_deadline_misses=max_deadline_misses,
             max_control_budget_misses=max_control_budget_misses,
             max_act_errors=max_act_errors,
+            execution_cert=execution_cert,
+            max_stale_action_window_ms=max_stale_action_window_ms,
+            max_chunk_boundary_delta=max_chunk_boundary_delta,
+            max_velocity_discontinuity=max_velocity_discontinuity,
+            require_phase_aware_horizon=require_phase_aware_horizon,
+            require_runtime_attribution=require_runtime_attribution,
             output_dir=realtime_output_dir,
             output_format=output_format,
             json_output=json_output,
@@ -1067,6 +1136,11 @@ def benchmark_cmd(
         or control_hz > 0
         or max_roundtrip_p95_ms > 0
         or max_jitter_p95_minus_p50_ms > 0
+        or execution_cert
+        or max_stale_action_window_ms > 0
+        or max_chunk_boundary_delta > 0
+        or max_velocity_discontinuity > 0
+        or require_phase_aware_horizon
         or realtime_output_dir
         or output_format != "human"
         or json_output

@@ -223,6 +223,19 @@ that with `--max-roundtrip-p95-ms` when the robot cell has a separate serving
 SLO. The certificate also gates deadline misses, control-budget misses, and
 `/act` errors; use `--max-jitter-p95-minus-p50-ms` to make jitter a hard gate.
 
+Add `--execution-cert` when the proof packet includes action chunks plus
+`action_execution` telemetry. This embeds an Action Execution Certificate that
+checks stale-action window, chunk-boundary delta, boundary velocity
+discontinuity, optional phase-aware horizon evidence, and runtime attribution:
+
+```bash
+tether bench realtime ./tether-deploy-proof \
+  --control-hz 20 \
+  --execution-cert \
+  --require-phase-aware-horizon \
+  --max-stale-action-window-ms 80
+```
+
 Artifacts written with `--output-dir`: `realtime-serving-cert.json`,
 `realtime-serving-cert.md`, and `MANIFEST.json`. Exit codes: `0` means `PASS`,
 `1` means realtime serving failed, and `2` means the proof packet or arguments

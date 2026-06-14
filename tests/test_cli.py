@@ -173,6 +173,73 @@ def test_bench_realtime_json_from_proof_packet(tmp_path):
     assert body["control_budget"]["missed_samples"] == 0
 
 
+def test_bench_realtime_execution_cert_json_from_proof_packet(tmp_path):
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    receipt = {
+        "schema_version": 1,
+        "kind": "tether.deployment_proof",
+        "passed": True,
+        "export_dir": str(tmp_path / "export"),
+        "profile": {"name": "ci", "thresholds": {}},
+        "act_samples": [
+            {
+                "roundtrip_ms": 40.0,
+                "actions": [[0.0, 0.0], [0.04, 0.02], [0.08, 0.04]],
+                "action_execution": {
+                    "executed_horizon": 3,
+                    "adaptive_reason": "low_speed_transition",
+                    "phase_transition_indices": [2],
+                    "cache_status": "hit",
+                },
+            },
+            {
+                "roundtrip_ms": 40.0,
+                "actions": [[0.09, 0.04], [0.13, 0.06], [0.17, 0.08]],
+                "action_execution": {
+                    "executed_horizon": 3,
+                    "adaptive_reason": "low_speed_transition",
+                    "phase_transition_indices": [2],
+                    "cache_status": "hit",
+                },
+            },
+        ],
+        "latency": {
+            "samples": 2,
+            "roundtrip_ms": {
+                "p50_ms": 40.0,
+                "p95_ms": 40.0,
+                "p99_ms": 40.0,
+                "max_ms": 40.0,
+            },
+            "jitter": {"p95_minus_p50_ms": 0.0},
+            "deadline_misses": 0,
+            "act_errors": 0,
+        },
+    }
+    (proof_dir / "deployment-proof.json").write_text(json.dumps(receipt) + "\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "bench",
+            "realtime",
+            str(proof_dir),
+            "--control-hz",
+            "20",
+            "--execution-cert",
+            "--require-phase-aware-horizon",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert body["decision"] == "PASS"
+    assert body["execution_certificate"]["decision"] == "PASS"
+    assert body["execution_certificate"]["metrics"]["action_chunk_count"] == 2
+
+
 def test_prove_help_alias():
     result = runner.invoke(app, ["prove", "--help"])
     assert result.exit_code == 0

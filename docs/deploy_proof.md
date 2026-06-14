@@ -90,6 +90,11 @@ an explicit `tether bench realtime --control-hz` override. The output directory
 contains `realtime-serving-cert.json`, `realtime-serving-cert.md`, and a hashed
 `MANIFEST.json`.
 
+For adaptive-action-chunking or RTC reviews, add `--execution-cert`. That
+requires proof evidence with action chunks and `action_execution` telemetry, then
+checks stale-action window, chunk-boundary continuity, boundary velocity jump,
+phase-aware horizon evidence when requested, and runtime attribution.
+
 ## What it checks
 
 - Deploy diagnostics via the same checks as `tether doctor --json --model`.
