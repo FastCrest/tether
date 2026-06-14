@@ -51,6 +51,24 @@ def test_action_execution_certificate_passes_smooth_chunks() -> None:
     assert report["summary"]["fail"] == 0
 
 
+def test_action_execution_certificate_accepts_live_fixed_rtc_telemetry() -> None:
+    receipt = _receipt(roundtrip_ms=90.0)
+    for sample in receipt["act_samples"]:
+        sample["action_execution"] = {
+            "scheduler": "rtc",
+            "execution_mode": "rtc_fixed",
+            "executed_horizon": 3,
+            "adaptive_reason": "fixed_rtc_horizon",
+            "cache_status": "rtc_carry_hit",
+        }
+
+    report = build_action_execution_certificate(receipt, control_hz=20.0)
+
+    assert report["decision"] == "PASS"
+    assert report["metrics"]["runtime_attribution_samples"] == 2
+    assert report["metrics"]["adaptive_reasons"] == {"fixed_rtc_horizon": 2}
+
+
 def test_action_execution_certificate_fails_stale_and_jumpy_chunks() -> None:
     receipt = _receipt(roundtrip_ms=250.0)
     receipt["act_samples"][1]["actions"] = [[1.0, 1.0], [1.8, 1.8], [2.6, 2.6]]

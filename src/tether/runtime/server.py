@@ -375,6 +375,78 @@ def _rtc_adaptive_record_from_stats(stats: Any) -> dict[str, Any] | None:
     return out or None
 
 
+def _coerce_optional_int(value: Any) -> int | None:
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        out = int(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out > 0 else None
+
+
+def _action_execution_from_rtc_stats(
+    stats: Any,
+    result: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Translate RTC/AAC runtime stats into response-level execution evidence."""
+    if not isinstance(stats, dict):
+        return None
+    if stats.get("enabled") is not True:
+        return None
+
+    adaptive = stats.get("adaptive_chunking")
+    adaptive = adaptive if isinstance(adaptive, dict) else {}
+    signal = stats.get("adaptive_signal")
+    signal = signal if isinstance(signal, dict) else {}
+
+    horizon = (
+        _coerce_optional_int(adaptive.get("applied_horizon"))
+        or _coerce_optional_int(adaptive.get("horizon"))
+        or _coerce_optional_int(stats.get("execution_horizon"))
+        or _coerce_optional_int(stats.get("configured_execution_horizon"))
+    )
+    out: dict[str, Any] = {
+        "scheduler": "rtc",
+        "execution_mode": "rtc_adaptive" if adaptive else "rtc_fixed",
+    }
+    if horizon is not None:
+        out["executed_horizon"] = horizon
+        out["execution_horizon"] = horizon
+
+    reason = adaptive.get("reason")
+    if reason not in (None, "", [], {}):
+        out["adaptive_reason"] = str(reason)
+        out["horizon_reason"] = str(reason)
+    elif horizon is not None:
+        out["adaptive_reason"] = "fixed_rtc_horizon"
+        out["horizon_reason"] = "fixed_rtc_horizon"
+
+    chunk_count = _coerce_optional_int(stats.get("chunk_count"))
+    if chunk_count is not None:
+        out["chunk_count"] = chunk_count
+        out["cache_status"] = "rtc_carry_hit" if chunk_count > 1 else "rtc_carry_cold"
+
+    actions_consumed = _coerce_optional_int(stats.get("actions_consumed"))
+    if actions_consumed is not None:
+        out["actions_consumed"] = actions_consumed
+
+    action_delta = _coerce_optional_float(stats.get("last_action_delta"))
+    if action_delta is not None:
+        out["last_action_delta"] = action_delta
+
+    if adaptive:
+        out["adaptive_chunking"] = adaptive
+    if signal:
+        out["adaptive_signal"] = signal
+
+    if result and result.get("deadline_exceeded") is True:
+        out["deadline_exceeded"] = True
+        out["deadline_cause"] = "inference_latency_over_deadline"
+
+    return out if len(out) > 2 else None
+
+
 def _set_span_optional_float(span: Any, name: str, value: Any) -> None:
     out = _coerce_optional_float(value)
     if out is not None:
@@ -3327,6 +3399,18 @@ def create_app(
                     )
                     _rtc_stats = _rtc.get_stats() if hasattr(_rtc, "get_stats") else None
                     _rtc_for_record = _rtc_adaptive_record_from_stats(_rtc_stats)
+                    _action_execution = _action_execution_from_rtc_stats(
+                        _rtc_stats,
+                        result,
+                    )
+                    if _action_execution is not None:
+                        _existing_execution = result.get("action_execution")
+                        if isinstance(_existing_execution, dict):
+                            _merged_execution = dict(_action_execution)
+                            _merged_execution.update(_existing_execution)
+                            result["action_execution"] = _merged_execution
+                        else:
+                            result["action_execution"] = _action_execution
                     if _rtc_for_record is not None:
                         _set_rtc_adaptive_span_attrs(span, _rtc_for_record)
                         _decision = _rtc_for_record.get("adaptive_chunking")

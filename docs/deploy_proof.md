@@ -94,6 +94,9 @@ For adaptive-action-chunking or RTC reviews, add `--execution-cert`. That
 requires proof evidence with action chunks and `action_execution` telemetry, then
 checks stale-action window, chunk-boundary continuity, boundary velocity jump,
 phase-aware horizon evidence when requested, and runtime attribution.
+Servers started with `tether serve --rtc` emit `action_execution` in `/act`
+responses, so `tether prove` preserves the execution horizon, RTC carry status,
+adaptive horizon reason, and deadline cause in the proof packet automatically.
 
 ## What it checks
 

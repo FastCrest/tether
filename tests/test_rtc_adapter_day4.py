@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from tether.runtime.buffer import ActionChunkBuffer
 from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
 from tether.runtime.server import (
+    _action_execution_from_rtc_stats,
     _record_rtc_adaptive_signal,
     _rtc_adaptive_record_from_stats,
 )
@@ -386,3 +387,60 @@ class TestAdaptiveSignalHelper:
 
     def test_rtc_adaptive_record_returns_none_without_adaptive_state(self):
         assert _rtc_adaptive_record_from_stats({"enabled": True}) is None
+
+    def test_action_execution_omitted_when_rtc_disabled(self):
+        assert (
+            _action_execution_from_rtc_stats({
+                "enabled": False,
+                "configured_execution_horizon": 5,
+                "chunk_count": 1,
+            })
+            is None
+        )
+
+    def test_action_execution_from_fixed_rtc_stats(self):
+        execution = _action_execution_from_rtc_stats({
+            "enabled": True,
+            "chunk_count": 2,
+            "configured_execution_horizon": 5,
+            "execution_horizon": 5,
+            "actions_consumed": 3,
+            "last_action_delta": 0.08,
+        })
+
+        assert execution == {
+            "scheduler": "rtc",
+            "execution_mode": "rtc_fixed",
+            "executed_horizon": 5,
+            "execution_horizon": 5,
+            "adaptive_reason": "fixed_rtc_horizon",
+            "horizon_reason": "fixed_rtc_horizon",
+            "chunk_count": 2,
+            "cache_status": "rtc_carry_hit",
+            "actions_consumed": 3,
+            "last_action_delta": pytest.approx(0.08),
+        }
+
+    def test_action_execution_from_adaptive_rtc_stats(self):
+        execution = _action_execution_from_rtc_stats(
+            {
+                "enabled": True,
+                "chunk_count": 1,
+                "configured_execution_horizon": 10,
+                "adaptive_chunking": {
+                    "horizon": 3,
+                    "applied_horizon": 3,
+                    "reason": "guard_margin",
+                    "risk_score": 0.8,
+                },
+                "adaptive_signal": {"guard_margin": 0.02},
+            },
+            {"deadline_exceeded": True},
+        )
+
+        assert execution["execution_mode"] == "rtc_adaptive"
+        assert execution["executed_horizon"] == 3
+        assert execution["adaptive_reason"] == "guard_margin"
+        assert execution["cache_status"] == "rtc_carry_cold"
+        assert execution["adaptive_signal"]["guard_margin"] == pytest.approx(0.02)
+        assert execution["deadline_cause"] == "inference_latency_over_deadline"

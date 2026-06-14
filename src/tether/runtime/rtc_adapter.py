@@ -332,6 +332,7 @@ class RtcAdapter:
         self._last_adaptive_signal = AdaptiveChunkSignal()
         self._last_adaptive_decision: AdaptiveChunkDecision | None = None
         self._last_execution_horizon: int | None = None
+        self._last_actions_consumed: int | None = None
         self._adaptive_chunker: AdaptiveChunkController | None = None
         if config.adaptive_chunking_enabled:
             self._adaptive_chunker = AdaptiveChunkController(
@@ -378,6 +379,7 @@ class RtcAdapter:
         # Step 1+2: latency → actions_consumed
         latency_s = self.latency.estimate()
         actions_consumed = int(latency_s * self.config.execute_hz)
+        self._last_actions_consumed = actions_consumed
         adaptive_decision = self._decide_adaptive_horizon(latency_s)
         logger.debug(
             "[rtc] predict — latency p%d=%.3fs → %d actions consumed",
@@ -500,6 +502,8 @@ class RtcAdapter:
         # 4. Record latency + bump chunk count
         self.latency.record(elapsed_time)
         self._chunk_count += 1
+        if self.config.enabled and self._last_execution_horizon is None:
+            self._last_execution_horizon = self.config.rtc_execution_horizon
 
     def reset(self, episode_id: str | None = None) -> None:
         """Reset RTC state at episode boundary.
@@ -514,6 +518,7 @@ class RtcAdapter:
         self._last_adaptive_signal = AdaptiveChunkSignal()
         self._last_adaptive_decision = None
         self._last_execution_horizon = None
+        self._last_actions_consumed = None
         # Clear the latency window — old samples are stale on a fresh episode
         self.latency = LatencyTracker(
             percentile=self.config.latency_percentile,
@@ -534,7 +539,12 @@ class RtcAdapter:
             "active_episode_id": self._active_episode_id,
             "latency": self.latency.summary(),
             "rtc_available": _RTC_AVAILABLE,
+            "configured_execution_horizon": self.config.rtc_execution_horizon,
         }
+        if self._last_execution_horizon is not None:
+            stats["execution_horizon"] = self._last_execution_horizon
+        if self._last_actions_consumed is not None:
+            stats["actions_consumed"] = self._last_actions_consumed
         if self._last_action_delta is not None:
             stats["last_action_delta"] = self._last_action_delta
         if self._last_adaptive_signal.has_values():
