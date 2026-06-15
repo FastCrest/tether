@@ -137,6 +137,95 @@ def _chain_hash(prev_hash: str, record: dict[str, Any]) -> str:
     return hashlib.sha256(prev_hash.encode("ascii") + canonical).hexdigest()
 
 
+def _stable_payload_hash(payload: Any) -> str:
+    """SHA-256[:16] over canonical JSON for compact evidence correlation."""
+    try:
+        data = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    except TypeError:
+        data = json.dumps(str(payload), separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
+
+
+def _guard_violation_count(guard: dict[str, Any] | None) -> int:
+    if not guard:
+        return 0
+    violations = guard.get("violations")
+    if isinstance(violations, list):
+        return len(violations)
+    count = guard.get("violation_count")
+    if isinstance(count, int | float):
+        return int(count)
+    return 0
+
+
+def _build_deployment_evidence(
+    *,
+    header_meta: dict[str, Any],
+    request_obj: dict[str, Any],
+    actions: list[list[float]],
+    raw_actions: list[list[float]] | None,
+    action_dim: int,
+    latency: dict[str, Any],
+    cache: dict[str, Any] | None,
+    guard: dict[str, Any] | None,
+    routing: dict[str, Any] | None,
+    error: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compact v1 evidence block for deployment proof, diff, and retraining loops.
+
+    This is deliberately additive to the JSONL record schema: old readers ignore
+    the block, while new tools can depend on stable hashes and summary fields
+    without reparsing the entire response.
+    """
+    guarded_hash = _stable_payload_hash(actions)
+    raw_hash = _stable_payload_hash(raw_actions) if raw_actions is not None else None
+    return {
+        "kind": "tether.rollout_evidence",
+        "schema_version": 1,
+        "policy": {
+            "model_hash": header_meta.get("model_hash") or "",
+            "config_hash": header_meta.get("config_hash") or "",
+            "model_type": header_meta.get("model_type") or "",
+            "export_kind": header_meta.get("export_kind") or "",
+            "embodiment": header_meta.get("embodiment"),
+            "routing_slot": (routing or {}).get("slot"),
+        },
+        "request": {
+            "episode_id": request_obj.get("episode_id"),
+            "request_id": request_obj.get("request_id"),
+            "image_sha256": request_obj.get("image_sha256"),
+            "instruction_sha256": _stable_payload_hash(request_obj.get("instruction") or ""),
+            "state_dim": len(request_obj.get("state") or []),
+        },
+        "action": {
+            "num_actions": len(actions),
+            "action_dim": action_dim,
+            "raw_present": raw_actions is not None,
+            "raw_sha256": raw_hash,
+            "guarded_sha256": guarded_hash,
+            "modified_by_guard": raw_hash is not None and raw_hash != guarded_hash,
+        },
+        "safety": {
+            "guard_present": guard is not None,
+            "clamped": bool((guard or {}).get("clamped")),
+            "clamp_count": int((guard or {}).get("clamp_count") or 0),
+            "violation_count": _guard_violation_count(guard),
+        },
+        "latency": {
+            "total_ms": latency.get("total_ms"),
+            "rolling_p95_ms": latency.get("rolling_p95_ms"),
+            "rolling_p99_ms": latency.get("rolling_p99_ms"),
+        },
+        "cache": {
+            "status": (cache or {}).get("status", "n/a"),
+        },
+        "outcome": {
+            "status": "failed" if error is not None else "success",
+            "error_slug": (error or {}).get("slug"),
+        },
+    }
+
+
 def verify_record_chain(records: list[dict[str, Any]]) -> tuple[bool, int | None]:
     """Verify a recorded trace's tamper-evident chain.
 
@@ -339,6 +428,9 @@ class RecordWriter:
         actions: list[list[float]],
         action_dim: int,
         latency_total_ms: float,
+        episode_id: str | None = None,
+        request_id: str | None = None,
+        raw_actions: list[list[float]] | None = None,
         latency_stages: dict[str, float | None] | None = None,
         rolling_p50_ms: float | None = None,
         rolling_p95_ms: float | None = None,
@@ -373,6 +465,10 @@ class RecordWriter:
             "instruction": instruction,
             "state": state,
         }
+        if episode_id is not None:
+            request_obj["episode_id"] = episode_id
+        if request_id is not None:
+            request_obj["request_id"] = request_id
         request_obj.update(_redact_image(image_b64, self.image_redaction))
 
         latency_obj: dict[str, Any] = {"total_ms": latency_total_ms}
@@ -424,6 +520,27 @@ class RecordWriter:
         if routing is not None:
             record["routing"] = routing
 
+        record["evidence"] = _build_deployment_evidence(
+            header_meta=self._header_meta,
+            request_obj=request_obj,
+            actions=actions,
+            raw_actions=raw_actions,
+            action_dim=action_dim,
+            latency=latency_obj,
+            cache=cache,
+            guard=guard,
+            routing=routing,
+            error=error,
+        )
+        if raw_actions is not None:
+            record["action_trace"] = {
+                "raw_actions": raw_actions,
+                "guarded_actions": actions,
+                "raw_sha256": record["evidence"]["action"]["raw_sha256"],
+                "guarded_sha256": record["evidence"]["action"]["guarded_sha256"],
+                "modified_by_guard": record["evidence"]["action"]["modified_by_guard"],
+            }
+
         self._emit(record)
         # Curate dual-write: feed the same event into the contribution queue.
         # Failures here NEVER affect the JSONL trace — collector is best-effort.
@@ -452,6 +569,48 @@ class RecordWriter:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("curate dual-write skipped: %s", exc)
         return seq
+
+    def write_shadow_result(
+        self,
+        *,
+        seq: int,
+        routing: dict[str, Any],
+        actions: list[list[float]] | None = None,
+        action_dim: int = 0,
+        latency_total_ms: float | None = None,
+        episode_id: str | None = None,
+        request_id: str | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit append-only shadow policy evidence for an existing request seq."""
+        if self.degraded:
+            return
+        self._write_header()
+        record: dict[str, Any] = {
+            "kind": "shadow_result",
+            "schema_version": SCHEMA_VERSION,
+            "seq": seq,
+            "timestamp": _utc_now_iso(),
+            "routing": routing,
+        }
+        request_obj: dict[str, Any] = {}
+        if episode_id is not None:
+            request_obj["episode_id"] = episode_id
+        if request_id is not None:
+            request_obj["request_id"] = request_id
+        if request_obj:
+            record["request"] = request_obj
+        if actions is not None:
+            record["response"] = {
+                "actions": actions,
+                "num_actions": len(actions),
+                "action_dim": action_dim,
+            }
+        if latency_total_ms is not None:
+            record["latency"] = {"total_ms": latency_total_ms}
+        if error is not None:
+            record["error"] = error
+        self._emit(record)
 
     def write_footer(self, totals: dict[str, int]) -> None:
         """Emit footer on clean shutdown. Optional per D.1.6 — readers

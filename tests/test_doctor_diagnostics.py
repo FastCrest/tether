@@ -192,6 +192,36 @@ class TestCheckVlmTokenization:
         check = next(r for r in results if r.check_id == "check_vlm_tokenization")
         assert check.status == "skip"
 
+    def test_warn_when_tokenizer_required_but_not_bundled(self, tmp_path):
+        (tmp_path / "model.onnx").write_bytes(b"\x00")
+        (tmp_path / "tether_config.json").write_text(json.dumps({
+            "model_type": "smolvla",
+            "export_kind": "monolithic",
+        }))
+
+        results = run_all_checks(str(tmp_path), "custom")
+
+        check = next(r for r in results if r.check_id == "check_vlm_tokenization")
+        assert check.status == "warn"
+        assert "offline" in check.expected.lower()
+        assert "tether export" in check.remediation
+
+    def test_fail_when_offline_and_tokenizer_required_but_not_bundled(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("TETHER_OFFLINE", "1")
+        (tmp_path / "model.onnx").write_bytes(b"\x00")
+        (tmp_path / "tether_config.json").write_text(json.dumps({
+            "model_type": "smolvla",
+            "export_kind": "monolithic",
+        }))
+
+        results = run_all_checks(str(tmp_path), "custom")
+
+        check = next(r for r in results if r.check_id == "check_vlm_tokenization")
+        assert check.status == "fail"
+        assert check.remediation
+
 
 # ---------------------------------------------------------------------------
 # Output formatters

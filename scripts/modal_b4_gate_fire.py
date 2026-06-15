@@ -68,8 +68,8 @@ image = (
     .pip_install("Pillow>=10.0.0")  # for synthetic input image generation
     .run_commands(
         # SHA-pinned so the image rebuilds on every commit (avoids stale-image cache).
-        f'pip install "tether[serve,gpu] @ '
-        f'git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[serve,gpu] @ '
+        f'git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[_gh_secret()],
     )
     .env({
@@ -377,7 +377,7 @@ def fire_gate(
     n_train_rows = base_l.shape[0] - max(1, int(base_l.shape[0] * 0.1))
     n_val_rows = max(1, int(base_l.shape[0] * 0.1))
     notes = [
-        f"B.4 MSE-arm fire on Modal A10G; tether-vla SHA={_HEAD}",
+        f"B.4 MSE-arm fire on Modal A10G; tether SHA={_HEAD}",
         f"low={low_latency_ms}ms vs high={high_latency_ms}ms",
         f"head: action_dim={action_dim} obs_dim={obs_dim} params={n_params}",
         f"train rows={n_train_rows} val rows={n_val_rows} held-out rows={base_h.shape[0]}",

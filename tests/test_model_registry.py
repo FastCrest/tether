@@ -191,6 +191,13 @@ class TestCliList:
         ids = {m["model_id"] for m in body["models"]}
         assert "pi05-base" in ids
 
+    def test_models_list_json_alias(self, runner, cli_app):
+        result = runner.invoke(cli_app, ["models", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["n"] == len(REGISTRY)
+        assert any(m["model_id"] == "smolvla-base" for m in body["models"])
+
     def test_models_list_no_match_message(self, runner, cli_app):
         # Use a family that's genuinely not in the registry. openvla was
         # added in v0.9.6 so it now matches; pick a sentinel name that
@@ -219,6 +226,12 @@ class TestCliInfo:
         assert body["family"] == "smolvla"
         assert body["action_dim"] == 7
 
+    def test_info_json_alias(self, runner, cli_app):
+        result = runner.invoke(cli_app, ["models", "info", "smolvla-base", "--json"])
+        assert result.exit_code == 0
+        body = json.loads(result.output)
+        assert body["model_id"] == "smolvla-base"
+
     def test_info_unknown_id_exit_2(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "info", "nope-xyz"])
         assert result.exit_code == 2
@@ -246,6 +259,22 @@ class TestCliPull:
         kwargs = mock_dl.call_args.kwargs
         assert kwargs["repo_id"] == "lerobot/smolvla_base"
         assert kwargs["local_dir"] == str(tmp_path / "fake")
+
+    def test_pull_default_target_honors_tether_home(self, runner, cli_app, tmp_path, monkeypatch):
+        tether_home = tmp_path / "tether-home"
+        monkeypatch.setenv("TETHER_HOME", str(tether_home))
+
+        def fake_download(**kwargs):
+            local_dir = Path(kwargs["local_dir"])
+            local_dir.mkdir(parents=True, exist_ok=True)
+            (local_dir / "config.json").write_text("{}")
+            return str(local_dir)
+
+        with patch("huggingface_hub.snapshot_download", side_effect=fake_download) as mock_dl:
+            result = runner.invoke(cli_app, ["models", "pull", "smolvla-base"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_dl.call_args.kwargs["local_dir"] == str(tether_home / "models" / "smolvla-base")
 
     def test_pull_handles_download_failure_with_exit_1(self, runner, cli_app, tmp_path):
         with patch("huggingface_hub.snapshot_download", side_effect=RuntimeError("403 forbidden")):

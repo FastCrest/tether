@@ -72,7 +72,7 @@ def encode_frames_to_mp4(
     except ImportError as exc:
         raise VideoEncoderUnavailable(
             "video encoding requires imageio-ffmpeg + Pillow + numpy: "
-            "pip install 'tether[curate-video]'"
+            "pip install 'fastcrest-tether[curate-video]'"
         ) from exc
 
     # Decode first frame to learn the size + sanity-check.

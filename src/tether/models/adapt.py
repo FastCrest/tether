@@ -131,7 +131,7 @@ class EmbodimentAdapter:
             return cls(config)
 
         except ImportError:
-            logger.warning("yourdfpy not installed. Install with: pip install 'tether[safety]'")
+            logger.warning("yourdfpy not installed. Install with: pip install 'fastcrest-tether[safety]'")
             raise
 
     @classmethod

@@ -114,7 +114,7 @@ class SOArmHardware:
             raise ImportError(
                 "SOArmHardware requires the scservo_sdk Python package, which "
                 "is the Pi-side motor SDK for SO-ARM 100. Install via the "
-                "`[so100]` extra: `pip install 'tether[so100]'`. "
+                "`[so100]` extra: `pip install 'fastcrest-tether[so100]'`. "
                 "(scservo_sdk is hardware-bundled; you typically only need it "
                 "on the machine that's wired to the arm.)"
             )

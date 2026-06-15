@@ -63,7 +63,7 @@ def _run(**kwargs) -> CheckResult:
             status="fail",
             expected="onnxruntime importable for version check",
             actual="onnxruntime not installed",
-            remediation="pip install tether[serve] (CPU) or [gpu] (GPU)",
+            remediation="pip install fastcrest-tether[serve] (CPU) or [gpu] (GPU)",
             duration_ms=0.0,
             github_issue=GH_ISSUE,
         )

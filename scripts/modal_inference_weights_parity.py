@@ -55,8 +55,8 @@ image = (
         "typer", "rich",
     )
     .run_commands(
-        # tether-vla first (may pull plain onnxruntime as transitive)
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        # tether first (may pull plain onnxruntime as transitive)
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         # Force GPU build (uninstall plain ORT first to avoid the silent
         # CUDAExecutionProvider-unavailable failure we hit on first fire).
         "pip uninstall -y onnxruntime || true",

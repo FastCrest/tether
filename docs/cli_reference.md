@@ -1,33 +1,45 @@
 # Tether CLI Command Reference
 
-Complete reference for every visible `tether` command in v0.9.x. The exhaustive flag list for any command is always one keystroke away — run `tether <command> --help` for the live, source-of-truth list. This document covers the surface most users actually touch plus worked examples per vertical.
+Complete reference for the main `tether` command surface. The exhaustive flag
+list for any command is always one keystroke away — run `tether <command>
+--help` for the live, source-of-truth list. This document covers the surface
+most users actually touch plus worked examples per vertical.
 
 ---
 
-## Quick orientation — 16 visible verbs
+## Quick orientation - one workflow
 
-After the verify and comply promotions, `tether --help` shows these 16 top-level verbs. Each is described in its own section below.
+Tether's product surface is the deployment decision workflow:
 
-| Verb | Purpose |
+```bash
+tether chat
+tether prove ./export --output-dir ./tether-deploy-proof
+tether promote ./tether-deploy-proof --profile warehouse-safe
+```
+
+Most users should start with `tether chat` and ask for the outcome they want.
+The assistant routes to the same CLI commands listed here, so scripted and
+manual workflows stay stable.
+
+| Core verb | Purpose |
 |---|---|
-| [`go`](#tether-go) | One-command deploy: probe hardware → pick model → pull → export → serve |
-| [`serve`](#tether-serve) | Start an inference server from an exported model directory |
-| [`doctor`](#tether-doctor) | Diagnose install + GPU issues + per-deploy traps |
-| [`eval`](#tether-eval) | Task-success eval (LIBERO success rate + per-task numbers + optional video) |
-| [`verify`](#tether-verify) | Action-parity gate that writes `PARITY.md` + `parity.cert.json` |
-| [`comply`](#tether-comply) | Export EU conformity evidence bundles, SBOMs, gap reports, and trust docs |
-| [`chat`](#tether-chat) | Natural-language agent that runs tether commands for you |
-| [`models`](#tether-models) | Browse + download Tether-compatible VLA models from HuggingFace |
-| [`train`](#tether-train) | Finetune checkpoints, distill teachers into 1-NFE students |
-| [`validate`](#tether-validate) | Pre-flight validation — datasets before training, exports before serving |
-| [`inspect`](#tether-inspect) | Diagnostic + forensic tools — bench, replay, targets, guard state |
-| [`traces`](#tether-traces) | Searchable + summarizable view over recorded `/act` traces |
-| [`pro`](#tether-pro) | Tether Pro — activate, check, or deactivate your license |
-| [`contribute`](#tether-contribute) | Tether Data Contribution — opt in / out / check / revoke |
-| [`curate`](#tether-curate) | Convert recorded traces to published dataset formats |
-| [`data`](#tether-data) | Manage episode data uploads and contributions |
+| [`chat`](#tether-chat) | Natural-language front door for deployment questions |
+| [`prove`](#tether-prove) | Collect a deployment proof packet for a specific export |
+| [`promote`](#tether-promote) | Decide `PROMOTE`, `BLOCK`, or `ROLLBACK` from that packet |
+| [`rollout`](#tether-rollout) | Decide `PROMOTE`, `HOLD`, or `ROLLBACK` from shadow evidence |
+| [`profiles`](#tether-profiles) | Built-in promotion profiles for common rollout gates |
 
-Less-used + power-user verbs (hidden from `tether --help` but fully supported) live in [Advanced commands](#advanced-commands).
+Everything else is an evidence source behind those decisions:
+
+| Evidence area | Commands |
+|---|---|
+| Runtime and hardware | [`go`](#tether-go), [`serve`](#tether-serve), [`doctor`](#tether-doctor), [`bench realtime`](#tether-bench-realtime), `smoke` |
+| Rollout behavior | [`policy`](#tether-policy), [`traces`](#tether-traces), `replay`, [`eval`](#tether-eval) |
+| Model lifecycle | [`models`](#tether-models), [`validate`](#tether-validate), [`train`](#tether-train), [`verify`](#tether-verify) |
+| Enterprise/admin | [`comply`](#tether-comply), [`pro`](#tether-pro), [`contribute`](#tether-contribute), [`curate`](#tether-curate), [`data`](#tether-data) |
+
+Less-used + power-user verbs (hidden from `tether --help` but fully supported)
+live in [Advanced commands](#advanced-commands).
 
 ---
 
@@ -58,7 +70,176 @@ tether go --model pi05-libero --dry-run
 | `--api-key` | _(none)_ | If set, `/act` requires `X-Tether-Key` header (or `Authorization: Bearer`) |
 | `--dry-run` | `false` | Probe + resolve + print plan; do not pull or serve |
 
-Full flag list: `tether go --help`. Note: models that ship as raw PyTorch require the `[monolithic]` extra (`pip install 'tether[monolithic]'`) for the inline export step.
+Full flag list: `tether go --help`. Note: models that ship as raw PyTorch require the `[monolithic]` extra (`pip install 'fastcrest-tether[monolithic]'`) for the inline export step.
+
+---
+
+## `tether prove`
+
+Friendly deployment-readiness command. It runs the `deploy-proof` backend to
+start a local server, probe health/config/act/metrics, optionally record traces,
+stress safety config, hash export artifacts, and write a proof packet.
+
+```bash
+tether prove ./tether_export --embodiment franka --record-dir ./traces
+
+# Include rollout evidence in the same proof packet
+tether prove ./tether_export \
+  --policy-diff-baseline ./traces/current.jsonl.gz \
+  --policy-diff-candidate ./traces/candidate.jsonl.gz \
+  --policy-diff-fail-on any
+```
+
+Use `tether deploy-proof` directly in older scripts; both commands are
+supported. When policy-diff flags are supplied, the packet includes
+`policy-diff.json` and the proof can fail on action, latency, guard, shape, or
+any policy-diff regression. Full flag list: `tether prove --help`.
+
+---
+
+## `tether promote`
+
+Promotion decision command. It consumes a proof packet generated by
+`tether prove`, verifies packet hashes, applies a promotion profile, and emits
+one operator decision: `PROMOTE`, `BLOCK`, or `ROLLBACK`.
+
+```bash
+tether promote ./tether-deploy-proof
+
+# Active rollout failed gates: recommend rollback instead of block
+tether promote ./tether-deploy-proof --candidate-active
+
+# CI-friendly JSON + stricter built-in profile
+tether promote ./tether-deploy-proof --profile warehouse-safe --json
+```
+
+Exit codes: `0` means `PROMOTE`, `1` means `BLOCK`, `4` means `ROLLBACK`, and
+`2` means the proof packet or profile could not be loaded.
+
+---
+
+## `tether profiles`
+
+Built-in promotion profile discovery. Profiles hide threshold complexity behind
+named rollout gates, while still letting advanced users export/edit the YAML.
+
+```bash
+tether profiles list
+tether profiles show warehouse-safe
+tether profiles init warehouse-safe --output warehouse-safe.yml
+```
+
+Built-ins:
+
+| Profile | Use |
+|---|---|
+| `ci-default` | Package/release CI gate; hardware-neutral latency |
+| `lab-shadow` | Shadow rollout gate that requires policy diff evidence |
+| `warehouse-safe` | Production warehouse gate with auth, trace, guard, policy diff, and latency thresholds |
+| `contact-strict` | Strictest contact-rich manipulation gate |
+
+Use them directly with `tether promote --profile <name>`, or pass a JSON/YAML
+path exported by `tether profiles init`.
+
+---
+
+## `tether policy`
+
+Policy rollout gates that operate on recorded traces. Use `policy diff` when
+you need the raw baseline/candidate or shadow comparison report. For the
+self-serve operator decision, prefer [`tether rollout gate`](#tether-rollout).
+
+```bash
+# Offline promotion check: same observations, candidate policy output
+tether policy diff ./traces/v1.jsonl.gz ./traces/v2.jsonl.gz --fail-on any
+
+# Shadow rollout check: live actions vs shadow actions in one trace
+tether policy diff ./traces/shadow.jsonl.gz --shadow --output policy-diff.json
+
+# Lower-level equivalent of `tether rollout gate`
+tether policy shadow-gate ./traces/shadow.jsonl.gz \
+  --packet-dir ./shadow-rollout-packet \
+  --profile lab-shadow \
+  --min-compared 100 \
+  --wait-timeout-s 5
+```
+
+`policy shadow-gate` writes `deployment-proof.json`, `policy-diff.json`,
+`promotion-decision.json`, and `MANIFEST.json`. Exit codes: `0` means
+`PROMOTE`, `1` means `HOLD`, `4` means `ROLLBACK`, and `2` means the trace,
+packet, or profile could not be loaded.
+
+The underlying policy-diff report includes action cosine/max-delta, latency
+regressions, shape failures, guard regressions, request mismatches, metadata
+warnings, and a pass/warn/fail verdict. Exit code `3` from `policy diff` means
+the selected `--fail-on` gate tripped.
+
+---
+
+## `tether rollout`
+
+Self-serve rollout decision workflow for candidate policies that were mirrored
+with `tether serve --shadow-policy --record`.
+
+```bash
+tether rollout gate ./traces/shadow.jsonl.gz \
+  --packet-dir ./shadow-rollout-packet \
+  --profile lab-shadow \
+  --min-compared 100 \
+  --wait-timeout-s 5 \
+  --json
+```
+
+`rollout gate` waits for pending `shadow_result` rows, writes
+`deployment-proof.json`, `policy-diff.json`, `promotion-decision.json`, and
+`MANIFEST.json`, then exits with the rollout decision: `0` for `PROMOTE`, `1`
+for `HOLD`, `4` for `ROLLBACK`, and `2` for invalid trace/profile/packet
+inputs.
+
+---
+
+## `tether bench realtime`
+
+Realtime serving certificate. It consumes an existing proof packet and returns
+one serving decision for a target robot control loop. Use it after `tether prove`
+when the buyer question is "can this exact export/server path stay inside our
+20 Hz or 50 Hz control budget?"
+
+```bash
+tether prove ./tether_export \
+  --profile warehouse-safe \
+  --control-hz 20 \
+  --samples 100 \
+  --output-dir ./tether-deploy-proof
+
+tether bench realtime ./tether-deploy-proof \
+  --target agx-orin-cell-a \
+  --output-dir ./tether-realtime-cert \
+  --json
+```
+
+By default, p95 roundtrip latency must fit inside the control period. Override
+that with `--max-roundtrip-p95-ms` when the robot cell has a separate serving
+SLO. The certificate also gates deadline misses, control-budget misses, and
+`/act` errors; use `--max-jitter-p95-minus-p50-ms` to make jitter a hard gate.
+
+Add `--execution-cert` when the proof packet includes action chunks plus
+`action_execution` telemetry. This embeds an Action Execution Certificate that
+checks stale-action window, chunk-boundary delta, boundary velocity
+discontinuity, optional phase-aware horizon evidence, and runtime attribution:
+
+```bash
+tether bench realtime ./tether-deploy-proof \
+  --control-hz 20 \
+  --execution-cert \
+  --require-phase-aware-horizon \
+  --max-stale-action-window-ms 80
+```
+
+Artifacts written with `--output-dir`: `realtime-serving-cert.json`,
+`realtime-serving-cert.md`, and `MANIFEST.json`. Exit codes: `0` means `PASS`,
+`1` means realtime serving failed, and `2` means the proof packet or arguments
+could not be loaded.
 
 ---
 
@@ -76,6 +257,13 @@ tether serve ./tether_export/ --safety-config safety_limits.json
 # With API auth (X-Tether-Key or Authorization: Bearer)
 tether serve ./tether_export/ --api-key "$TETHER_API_KEY"
 
+# Shadow a candidate policy without blocking live robot responses
+tether serve ./current_export/ \
+  --shadow-policy ./candidate_export/ \
+  --record ./traces/shadow \
+  --shadow-sample 1.0 \
+  --shadow-queue-size 32
+
 # Adaptive denoising for lower latency
 tether serve ./tether_export/ --adaptive-steps
 ```
@@ -91,6 +279,9 @@ tether serve ./tether_export/ --adaptive-steps
 | `--adaptive-steps` | `false` | Early-stop denoising when velocity norm converges (`tether turbo` heritage) |
 | `--api-key` | _(none)_ | Require auth header on `/act` and `/config` |
 | `--cloud-fallback` | _(none)_ | URL of a remote `tether serve` for cloud-edge split-execution |
+| `--shadow-policy` | _(none)_ | Mirror sampled `/act` requests to a candidate export and record shadow evidence |
+| `--shadow-sample` | `1.0` | Fraction of traffic mirrored when `--shadow-policy` is set |
+| `--shadow-queue-size` | `32` | Bounded background shadow queue; overload records `shadow_queue_full` instead of blocking `/act` |
 | `--ros2` | `false` | Short-circuit HTTP and run the [ROS2 bridge](#advanced-commands) instead |
 
 Full flag list: `tether serve --help`.
@@ -227,10 +418,22 @@ redaction/deletion mapping, and explicit customer-owned gaps.
 
 ## `tether chat`
 
-Natural-language agent that wraps the rest of the CLI. Talk to your robot fleet in plain English; the agent calls `models list`, `doctor`, `serve`, etc. on your behalf. Hosted via the FastCrest proxy at `chat.fastcrest.com` (GPT-5-mini). 100 calls/day free, no signup, no API key.
+Natural-language agent that wraps the rest of the CLI. Ask deployment questions
+in plain English; the agent calls proof, promotion, rollout, runtime, and model
+tools on your behalf. Hosted via the FastCrest proxy at `chat.fastcrest.com`
+(GPT-5-mini). 100 calls/day free, no signup, no API key.
 
 ```bash
 tether chat
+```
+
+Example prompts:
+
+```text
+prove ./export is ready for franka without touching hardware
+can i promote ./tether-deploy-proof?
+deploy smolvla to my mac
+why did my last /act fail?
 ```
 
 Full flag list: `tether chat --help`.

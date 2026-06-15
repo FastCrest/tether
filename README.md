@@ -2,18 +2,26 @@
 
 > by [FastCrest](https://fastcrest.com) — deployment infrastructure for vision-language-action models.
 
-[![PyPI](https://img.shields.io/pypi/v/tether-vla.svg)](https://pypi.org/project/tether-vla/)
-[![Python](https://img.shields.io/pypi/pyversions/tether-vla.svg)](https://pypi.org/project/tether-vla/)
-[![License](https://img.shields.io/pypi/l/tether-vla.svg)](https://github.com/FastCrest/tether/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/pypi/dm/tether-vla.svg)](https://pypi.org/project/tether-vla/)
+[![PyPI](https://img.shields.io/pypi/v/fastcrest-tether.svg)](https://pypi.org/project/fastcrest-tether/)
+[![Python](https://img.shields.io/pypi/pyversions/fastcrest-tether.svg)](https://pypi.org/project/fastcrest-tether/)
+[![License](https://img.shields.io/pypi/l/fastcrest-tether.svg)](https://github.com/FastCrest/tether/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/pypi/dm/fastcrest-tether.svg)](https://pypi.org/project/fastcrest-tether/)
 
 ![Tether — pip install + tether doctor + tether --help on Modal A10G with TRT EP active](assets/tether-tweet.gif)
 
-**The deployment layer for VLAs** — take a Vision-Language-Action model off the training cluster and onto a robot. Now with **`tether chat`** — talk to your robot fleet in plain English.
+**Deployment confidence for VLA robot policies** — Tether answers one production question: can this policy safely move forward?
 
-**Verified parity across ALL four major open VLAs.** Reflex's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
+**Verified parity across ALL four major open VLAs.** Tether's monolithic ONNX export matches the reference PyTorch policy to **cos = +1.000000** end-to-end on SmolVLA, pi0, pi0.5 (canonical 10-step flow-matching unrolled) and GR00T N1.6 (canonical 4-step DDIM loop external to the ONNX). Per-model first-action max_abs: SmolVLA 5.96e-07, pi0 2.09e-07, pi0.5 2.38e-07, GR00T 8.34e-07 — all at machine precision, shared seeded inputs. Full claim ledger in [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
 
-One CLI, eleven verbs, plus a chat agent.
+The public workflow is intentionally small:
+
+```bash
+tether chat
+tether prove ./export --output-dir ./tether-deploy-proof
+tether promote ./tether-deploy-proof --profile warehouse-safe
+```
+
+Everything else in the CLI feeds evidence into that answer.
 
 ## Install
 
@@ -28,16 +36,16 @@ The bootstrap installer detects your platform (Mac / Jetson Orin / NVIDIA GPU / 
 **Manual install** if you know what you want:
 
 ```bash
-pip install tether                            # core
-pip install 'tether[serve,gpu,monolithic]'    # GPU production path
-pip install 'tether[serve,onnx]'              # Mac / CPU runtime
+pip install fastcrest-tether                            # core
+pip install 'fastcrest-tether[serve,gpu,monolithic]'    # GPU production path
+pip install 'fastcrest-tether[serve,onnx]'              # Mac / CPU runtime
 ```
 
 Requires Python ≥ 3.10.
 
 ### What's new in v0.11.2 (2026-05-29)
 
-- **`tether connect` works on a clean install** — `requests` is now a core dependency, so `tether connect status` no longer raises `ModuleNotFoundError` on `pip install tether` without extras (it had been an undeclared import that only resolved transitively).
+- **`tether connect` works on a clean install** — `requests` is now a core dependency, so `tether connect status` no longer raises `ModuleNotFoundError` on `pip install fastcrest-tether` without extras (it had been an undeclared import that only resolved transitively).
 - **`--fast-kernels` cleared the formal N=100/task L3 LIBERO parity gate** — on Pi0.5 LIBERO-10 tasks 0-2 (600 episodes), Triton fast kernels scored 91.3% (274/300) vs native ORT 85.3% (256/300) — 6.0pp *ahead* of native, so kill-trigger 3 stays clear and the opt-in Triton runtime stays on.
 - **Hardened monolithic serve/bench path, with external-data ONNX** — dedicated ORT provider-options + tokenizer-loading modules are extracted from the request hot path; ONNX models with external weight data (`.onnx` + `.onnx_data`, required once a graph exceeds the 2 GB protobuf limit) now load in both serve and the weight-fusion export pass.
 - **Cleaner streams** — integration-command errors route to stderr, so `--json` consumers and shell pipelines get a clean stdout.
@@ -65,8 +73,8 @@ Breaking: module renames — `tether.exporters.{pi0,smolvla,gr00t}_exporter` →
 We ship patches frequently — make sure you're on the latest:
 
 ```bash
-pip install --upgrade tether-vla              # pip
-uv add --refresh tether-vla                   # uv (the --refresh flag is required;
+pip install --upgrade fastcrest-tether              # pip
+uv add --refresh fastcrest-tether                   # uv (the --refresh flag is required;
                                               # uv caches the package index aggressively
                                               # and won't see new releases without it)
 ```
@@ -83,7 +91,7 @@ only needed for caches built by v0.5.3 or earlier.
 
 ## Performance
 
-`tether[serve,gpu]` uses ONNX Runtime's TensorRT execution provider out of the box. Measured on Modal A10G (Ampere, sm_8.6) on 2026-04-29 against SmolVLA monolithic (5 warmup + 20 measured forward passes, batch=1):
+`fastcrest-tether[serve,gpu]` uses ONNX Runtime's TensorRT execution provider out of the box. Measured on Modal A10G (Ampere, sm_8.6) on 2026-04-29 against SmolVLA monolithic (5 warmup + 20 measured forward passes, batch=1):
 
 | Provider | Mean latency | p95 |
 |---|---|---|
@@ -125,7 +133,7 @@ Full reproducer + 9-iteration debug log: [`reflex_context/03_experiments/2026-04
 Adds ~2 GB to `[serve,gpu]` install (the `tensorrt` package + bundled libs). If you don't want it:
 
 ```bash
-pip install 'tether[serve,gpu-min]'   # ORT-CUDA only, ~5x slower on transformers
+pip install 'fastcrest-tether[serve,gpu-min]'   # ORT-CUDA only, ~5x slower on transformers
 ```
 
 Or disable the `LD_LIBRARY_PATH` patch (e.g. if it conflicts with another env-aware tool):
@@ -156,7 +164,7 @@ You're running tether 0.2.0. Supported targets:
 Want me to show which models support each target, or run tether doctor?
 ```
 
-Chat understands 16 tether commands (export, serve, bench, eval, distill, finetune, traces, doctor, etc.) and runs them as subprocess on your behalf. Powered by GPT-5 Mini through a proxy hosted at `chat.fastcrest.com` — free tier is 100 calls/day per machine, no signup, no API key.
+Chat wraps the real `tether` CLI tools and runs them as subprocesses on your behalf. Ask for outcomes, not flags: "prove ./export is ready for franka", "can I promote this proof packet?", or "why did my last /act fail?". Powered by GPT-5 Mini through a proxy hosted at `chat.fastcrest.com` — free tier is 100 calls/day per machine, no signup, no API key.
 
 > Bring your own key? `export FASTCREST_PROXY_URL=https://api.openai.com/v1`
 
@@ -252,30 +260,30 @@ with ReflexClient("http://localhost:8000", api_key=os.environ["TETHER_API_KEY"])
 
 `/health` stays unauthenticated so load balancers and orchestrators can probe readiness without credentials.
 
-### The verb surface
+### The product surface
 
-```
-tether chat             # NEW — natural-language interface to every command below
-tether go               # one-command-deploy: probe → resolve → pull → serve
-tether serve            # explicit-config server (full flag surface)
-tether doctor           # diagnose env + GPU + per-deploy issues
-tether models {list, pull, info, export}    # curated registry + lifecycle
-tether train  {finetune, distill}           # training operations
-tether validate {dataset, export}           # pre-flight checks
-tether inspect {replay, traces}             # forensic tools (legacy diagnostics: --advanced)
-tether traces {query, summary}              # search + aggregate recorded /act traces
-tether pro     {activate, status, deactivate}   # Pro tier license
-tether contribute  {opt-in, opt-out, status}    # Curate data contribution
+For new users, Tether is three verbs:
+
+```bash
+tether chat             # ask for the outcome in plain English
+tether prove ./export   # collect a deployment proof packet
+tether promote ./proof  # return PROMOTE, BLOCK, or ROLLBACK
+tether profiles list    # choose a built-in promotion profile
 ```
 
-11 visible verbs. 8 advanced/SO-100/internal commands stay callable directly (config, calibrate, bench-game, status, inspect bench/targets/guard/doctor) but hidden from `--help` to reduce cognitive load. Power-users can still invoke them; they just don't crowd the discovery surface.
+The rest of the CLI is supporting machinery:
 
-Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alias bridges.
+- Runtime evidence: `go`, `serve`, `doctor`, `smoke`.
+- Rollout evidence: `policy diff`, `traces`, `replay`, `eval`.
+- Model workflow: `models`, `validate`, `train`.
+- Enterprise/admin workflow: `pro`, `contribute`, `curate`, `data`, `comply`.
+
+Advanced/SO-100/internal commands stay callable directly (`config`, `calibrate`, `bench-game`, `status`, `inspect bench/targets/guard/doctor`), but stay out of the first-run path. Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alias bridges.
 
 ### Install notes
 
 - `[monolithic]` extra is required for the cos=+1.000000 verified export path (pins transformers==5.3.0)
-- CPU-only: `pip install 'tether[serve,onnx,monolithic]'`
+- CPU-only: `pip install 'fastcrest-tether[serve,onnx,monolithic]'`
 - GPU install needs the FULL cuDNN 9 system library (not just the pip wheel). Easiest path: NVIDIA's container `docker run --gpus all -it nvcr.io/nvidia/tensorrt:24.10-py3`, then `apt-get install -y clang` (for lerobot→evdev), then the pip install
 - `tether serve` errors loudly if cuDNN can't load — no silent CPU fallback
 - First `tether go` downloads weights (~1-14 GB depending on model) — cached on subsequent runs
@@ -286,21 +294,21 @@ Hidden legacy commands (`export`, `bench`, `replay`, etc.) stay callable as alia
 
 ```bash
 # x86_64 CUDA runtime (cloud GPUs, dev workstations)
-docker pull ghcr.io/fastcrest/tether-vla:latest
+docker pull ghcr.io/fastcrest/tether:latest
 docker run --gpus all \
   -v $(pwd)/p0:/exports \
   -p 8000:8000 \
-  ghcr.io/fastcrest/tether-vla:latest
+  ghcr.io/fastcrest/tether:latest
 
 # Jetson Orin / Orin Nano / Thor (arm64 + nvidia container runtime)
-docker pull ghcr.io/fastcrest/tether-vla:latest-arm64
+docker pull ghcr.io/fastcrest/tether:latest-arm64
 docker run --runtime=nvidia \
   -v $(pwd)/p0:/exports \
   -p 8000:8000 \
-  ghcr.io/fastcrest/tether-vla:latest-arm64
+  ghcr.io/fastcrest/tether:latest-arm64
 ```
 
-The container's default command is `tether serve /exports --host 0.0.0.0 --port 8000`. Override with any `tether` subcommand: `docker run ... ghcr.io/fastcrest/tether-vla:latest export <hf_id>` etc.
+The container's default command is `tether serve /exports --host 0.0.0.0 --port 8000`. Override with any `tether` subcommand: `docker run ... ghcr.io/fastcrest/tether:latest export <hf_id>` etc.
 
 Jetson arm64 image: built via QEMU cross-compile on tag push (`v*`). Bring-your-own-CUDA — the image deliberately doesn't bundle CUDA/cuDNN/TensorRT (those live on the Jetson under `/usr/local/cuda` and are ABI-locked to the host's JetPack version; the nvidia container runtime exposes them into the container).
 
@@ -353,9 +361,106 @@ passed                   PASS
 
 Exit codes: `0` pass, `1` fail (any fixture above threshold), `2` error (missing ONNX, bad config). Pipe `--output-json` for CI consumption, or run `tether validate --init-ci` to scaffold a GitHub Actions workflow at `.github/workflows/tether-validate.yml`.
 
-## Composable wedges
+### Deployment proof packet
 
-Every wedge is a flag on `tether serve`:
+`tether prove ./p0` turns a real export into a local acceptance packet. `tether deploy-proof` is the explicit backend command and remains supported for scripts:
+doctor diagnostics, `/health`, authenticated `/act` samples, TTFA, p50/p95/p99,
+jitter, control-budget misses, API-key boundary checks, `/metrics` scrape,
+optional trace recording, ActionGuard stress checks, export file hashes, and a
+hashed `MANIFEST.json`.
+
+Before promoting a new or shadow policy, include a policy diff in the proof
+packet with `--policy-diff-baseline` plus `--policy-diff-candidate` or
+`--policy-diff-shadow` to gate action deltas, latency regressions, shape
+mismatches, and guard regressions.
+
+Use `tether serve ./current --shadow-policy ./candidate --record ./traces/shadow`
+to collect a single shadow trace where production actions stay live and
+candidate actions are appended as `shadow_result` evidence for
+`tether policy diff --shadow`.
+
+For the self-serve rollout decision, run the rollout gate directly:
+
+```bash
+tether rollout gate ./traces/shadow.jsonl.gz \
+  --packet-dir /tmp/tether-shadow-rollout \
+  --profile lab-shadow \
+  --min-compared 100 \
+  --wait-timeout-s 5
+```
+
+It writes a hashed packet with `policy-diff.json` and
+`promotion-decision.json`, then exits `0` for `PROMOTE`, `1` for `HOLD`, and
+`4` for `ROLLBACK`.
+
+For serving-specific deployment confidence, turn the same proof packet into a
+realtime certificate. This answers whether the measured `/act` path fits the
+robot control loop on the target hardware/cell:
+
+```bash
+tether prove ./p0 \
+  --profile production.yml \
+  --control-hz 20 \
+  --samples 100 \
+  --output-dir /tmp/tether-deploy-proof
+
+tether bench realtime /tmp/tether-deploy-proof \
+  --target agx-orin-cell-a \
+  --execution-cert \
+  --output-dir /tmp/tether-realtime-cert
+```
+
+The certificate gates roundtrip p95 against the control period, deadline
+misses, `/act` errors, and control-budget misses, then writes
+`realtime-serving-cert.json`, Markdown, and a hashed `MANIFEST.json`.
+Add `--execution-cert` when the proof packet carries action chunks plus
+`action_execution` telemetry; it also gates stale-action window, chunk-boundary
+continuity, boundary velocity jump, and scheduler/cache/adaptive-horizon
+attribution.
+
+```bash
+tether prove ./p0 \
+  --embodiment franka \
+  --api-key "$TETHER_API_KEY" \
+  --record-dir /tmp/tether-proof-traces \
+  --policy-diff-baseline ./traces/current.jsonl.gz \
+  --policy-diff-candidate ./traces/candidate.jsonl.gz \
+  --profile production.yml \
+  --samples 100 \
+  --output-dir /tmp/tether-deploy-proof
+```
+
+Then turn the packet into an operator decision:
+
+```bash
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe
+```
+
+Use a built-in promotion profile directly, or copy one to an editable file:
+
+```bash
+tether profiles list
+tether profiles show warehouse-safe
+tether profiles init warehouse-safe --output warehouse-safe.yml
+tether promote /tmp/tether-deploy-proof --profile warehouse-safe
+```
+
+Profiles are JSON/YAML and override default thresholds:
+
+```yaml
+name: production
+thresholds:
+  require_auth: true
+  require_record_trace: true
+  require_guard: true
+  control_hz: 20
+  max_warm_roundtrip_p95_ms: 40
+  max_missed_control_budget: 0
+```
+
+## Evidence knobs, not extra products
+
+Advanced teams can enable more runtime evidence with `tether serve` flags:
 
 ```bash
 tether serve ./p0 \
@@ -367,7 +472,7 @@ tether serve ./p0 \
   --max-similar-skips 3                    # cap on consecutive cached returns (anti-drift safety)
 ```
 
-The response JSON surfaces telemetry from each enabled wedge so you can see what's actually happening (`safety_violations`, `deadline_exceeded`, `adaptive_enabled`, etc.). Skip-count from the action-similarity fast path lands on the `reflex_action_skip_total` Prometheus counter at `/metrics`.
+The response JSON surfaces telemetry from each enabled knob so proof packets can show what actually happened (`safety_violations`, `deadline_exceeded`, `adaptive_enabled`, etc.). Skip-count from the action-similarity fast path lands on the `reflex_action_skip_total` Prometheus counter at `/metrics`.
 
 ## Trace archive — search + aggregate recorded `/act` traces
 
@@ -426,7 +531,7 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | Ampere (RTX 30-series, A10G, A100) | sm_8.0–8.6 | ✅ Supported | Tested on Modal A10G + A100, RTX 4090 |
 | Ada Lovelace (RTX 40-series, L4) | sm_8.9 | ✅ Supported | |
 | Hopper (H100, H200) | sm_9.0 | ✅ Supported | |
-| Jetson Orin (Orin Nano / NX / AGX) | sm_8.7 | ✅ Supported | JetPack 5.x or 6.x |
+| Jetson Orin (Orin Nano / NX / AGX) | sm_8.7 | ✅ Supported | JetPack 6.x |
 | Jetson Thor | sm_10.x | ⚠️ Untested | Should work — same Blackwell silicon as desktop, but ORT-bundled CUDA EP needs Blackwell support (see below) |
 | **Blackwell desktop (RTX 5090, RTX PRO 6000, B200, GB200)** | **sm_10.0** | **❌ Not yet supported** | ORT's bundled cuBLAS/cuDNN don't ship sm_100 kernels. Server segfaults at `InferenceSession` init. **Workaround:** use `tether chat` (no GPU needed), or `/act` testing on Modal cloud or non-Blackwell GPU until ORT updates ship. Tracking: [microsoft/onnxruntime#blackwell](https://github.com/microsoft/onnxruntime/issues) |
 | Older NVIDIA (Turing RTX 20, GTX 16) | sm_7.5 | ⚠️ Best-effort | Should work but not in CI matrix |

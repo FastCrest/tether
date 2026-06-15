@@ -20,7 +20,7 @@ def collect_hardware_profile() -> JsonDict:
         "platform": platform.platform(),
         "python": sys.version.split()[0],
         "agent_version": _agent_version(),
-        "tether_version": _package_version("tether"),
+        "tether_version": _package_version("fastcrest-tether"),
         "gpu_name": None,
         "cuda": None,
         "jetpack": None,

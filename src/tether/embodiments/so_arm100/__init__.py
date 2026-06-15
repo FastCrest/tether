@@ -2,12 +2,12 @@
 
 The SO-ARM100 (TheRobotStudio + HuggingFace LeRobot, ~$150-250 BOM, 6-DOF,
 3D-printable) is the reference real-robot for the LeRobot ecosystem. This
-module is Reflex's first-class adapter so users with a SO-ARM100 can run:
+module is Tether's first-class adapter so users with a SO-ARM100 can run:
 
-    pip install reflex-vla[lerobot]
-    reflex export lerobot/smolvla_base --embodiment so_arm100 --output bundle/
-    reflex verify bundle/ --embodiment so_arm100 --num-episodes 30
-    reflex serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
+    pip install fastcrest-tether[lerobot]
+    tether export lerobot/smolvla_base --embodiment so_arm100 --output bundle/
+    tether verify bundle/ --embodiment so_arm100 --num-episodes 30
+    tether serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
 
 …against any LeRobot-format SmolVLA / pi0 / pi0.5 checkpoint.
 
@@ -17,7 +17,7 @@ Three submodules:
     lerobot_bridge    radians ↔ servo-units + chunk → wire stream
     adapter           SOARM100Adapter (the user-facing class)
 
-The existing `reflex.embodiments.so100` package (vendored from `auto_soarm`)
+The existing `tether.embodiments.so100` package (vendored from `auto_soarm`)
 stays put — it covers the legacy tablet-tap calibration rig that some pilot
 users depend on. `so_arm100` is the supported, LeRobot-aligned interface
 going forward.

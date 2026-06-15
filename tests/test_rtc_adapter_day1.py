@@ -70,6 +70,50 @@ class TestRtcAdapterConfigValidation:
         cfg = RtcAdapterConfig(latency_percentile=99)
         assert cfg.latency_percentile == 99
 
+    def test_adaptive_chunking_config_defaults_off(self):
+        cfg = RtcAdapterConfig()
+        assert cfg.adaptive_chunking_enabled is False
+        assert cfg.adaptive_chunking_canary is False
+        assert cfg.adaptive_min_horizon == 1
+        assert cfg.adaptive_low_uncertainty == pytest.approx(0.20)
+        assert cfg.adaptive_high_uncertainty == pytest.approx(0.65)
+        assert cfg.adaptive_low_guard_margin == pytest.approx(0.05)
+        assert cfg.adaptive_high_correction_magnitude == pytest.approx(0.20)
+        assert cfg.adaptive_high_action_delta == pytest.approx(0.25)
+
+    def test_invalid_adaptive_min_horizon_rejected(self):
+        with pytest.raises(ValueError, match="adaptive_min_horizon"):
+            RtcAdapterConfig(adaptive_min_horizon=0)
+
+    def test_adaptive_canary_implies_adaptive_chunking_enabled(self):
+        cfg = RtcAdapterConfig(adaptive_chunking_canary=True)
+        assert cfg.adaptive_chunking_canary is True
+        assert cfg.adaptive_chunking_enabled is True
+
+    def test_adaptive_uncertainty_thresholds_must_be_ordered(self):
+        with pytest.raises(ValueError, match="adaptive_high_uncertainty"):
+            RtcAdapterConfig(
+                adaptive_low_uncertainty=0.7,
+                adaptive_high_uncertainty=0.6,
+            )
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "adaptive_low_uncertainty",
+            "adaptive_low_guard_margin",
+            "adaptive_high_correction_magnitude",
+            "adaptive_high_action_delta",
+        ],
+    )
+    def test_negative_adaptive_threshold_rejected(self, field):
+        with pytest.raises(ValueError, match=field):
+            RtcAdapterConfig(**{field: -0.01})
+
+    def test_adaptive_high_latency_must_be_positive(self):
+        with pytest.raises(ValueError, match="adaptive_high_latency_ms"):
+            RtcAdapterConfig(adaptive_high_latency_ms=0.0)
+
 
 # ---------------------------------------------------------------------------
 # LatencyTracker (already shipped in skeleton)
@@ -238,10 +282,6 @@ class TestRtcAdapterReset:
         adapter._prev_chunk_left_over = "fake"
         adapter.latency.record(0.1)
         adapter.latency.record(0.2)
-        # Need at least discard_first+1 records to actually fill the window
-        # (default discard_first=10, so 2 records won't reach the window)
-        n_before_reset = adapter.latency.summary()["n"]
-
         adapter.reset(episode_id="ep-2")
 
         assert adapter._chunk_count == 0

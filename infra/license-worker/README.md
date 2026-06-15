@@ -53,12 +53,12 @@ curl -X POST https://reflex-licenses.<subdomain>.workers.dev/admin/init \
 # IMMEDIATELY:
 #   a. Copy the private_key_b64 and set it as a Worker Secret:
 #        echo '<private_key_b64>' | wrangler secret put PRIVATE_KEY
-#   b. Copy the public_key_b64 into src/reflex/pro/_public_key.py
+#   b. Copy the public_key_b64 into src/tether/pro/_public_key.py
 #      (replace the BUNDLED_PUBLIC_KEY_B64 constant)
 #   c. Discard the private_key_b64 from your terminal scrollback (it never
 #      needs to leave wrangler again)
 #
-# 9. Update src/reflex/pro/license.py:DEFAULT_LICENSE_ENDPOINT to your worker URL
+# 9. Update src/tether/pro/license.py:DEFAULT_LICENSE_ENDPOINT to your worker URL
 # 10. Commit + push the public-key + endpoint changes
 
 # Test the live worker
@@ -70,10 +70,10 @@ curl https://reflex-licenses.<subdomain>.workers.dev/v1/pubkey
 
 ```bash
 # From your laptop (admin CLI talks to the worker)
-export REFLEX_LICENSE_ENDPOINT=https://reflex-licenses.<subdomain>.workers.dev
+export TETHER_LICENSE_ENDPOINT=https://reflex-licenses.<subdomain>.workers.dev
 export REFLEX_ADMIN_TOKEN=<your_admin_token>
 
-python -m reflex.admin.issue_license \
+python -m tether.admin.issue_license \
     --customer-id alice@bigco.com \
     --tier pro \
     --expires-in 30 \
@@ -90,18 +90,18 @@ python -m reflex.admin.issue_license \
 
 ```bash
 # On the customer's machine
-pip install --upgrade reflex-vla
-reflex pro activate REFLEX-XXXX-XXXX-XXXX
+pip install --upgrade fastcrest-tether
+tether pro activate REFLEX-XXXX-XXXX-XXXX
 # ✓ License fetched, signature verified, written to ~/.reflex/pro.license
 # ✓ Hardware bound
 
-reflex serve --pro <export_dir>  # works
+tether serve --pro <export_dir>  # works
 ```
 
 ## Revoke a license
 
 ```bash
-python -m reflex.admin.revoke_license \
+python -m tether.admin.revoke_license \
     --license-id lic_xxx \
     --reason "Refund processed"
 ```

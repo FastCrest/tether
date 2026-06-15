@@ -6,14 +6,14 @@
 
 ## Why distill?
 
-A pi0.5 model evaluates a 10-step Euler flow-matching loop on every `/act` call. The student we're about to train collapses that into **1 step** — the policy still produces a valid action chunk, but inference latency drops ~10× with minimal task-success regression (often *zero* on smooth-trajectory tasks; see [our 2026-04-26 LIBERO experiment](https://github.com/FastCrest/reflex-vla/blob/main/reflex_context/03_experiments/2026-04-26-self-distilling-serve-libero-regression-student-beats-teacher.md) where a 1-NFE student *beat* the 10-step teacher 32/50 vs 28/50).
+A pi0.5 model evaluates a 10-step Euler flow-matching loop on every `/act` call. The student we're about to train collapses that into **1 step** — the policy still produces a valid action chunk, but inference latency drops ~10× with minimal task-success regression (often *zero* on smooth-trajectory tasks; see [our 2026-04-26 LIBERO experiment](https://github.com/FastCrest/tether/blob/main/reflex_context/03_experiments/2026-04-26-self-distilling-serve-libero-regression-student-beats-teacher.md) where a 1-NFE student *beat* the 10-step teacher 32/50 vs 28/50).
 
 SnapFlow ([arxiv 2604.05656](https://arxiv.org/abs/2604.05656)) is the canonical training-free self-distillation method. Tether was the first open-source reproduction.
 
 ## Install
 
 ```bash
-pip install 'tether[monolithic]'
+pip install 'fastcrest-tether[monolithic]'
 ```
 
 ## The command

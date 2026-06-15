@@ -38,6 +38,7 @@ class SafetyLimits:
     effort_max: list[float] = field(default_factory=list)
     workspace_min: list[float] = field(default_factory=lambda: [-1.0, -1.0, 0.0])
     workspace_max: list[float] = field(default_factory=lambda: [1.0, 1.0, 1.5])
+    workspace_indices: list[int] = field(default_factory=list)
 
     @classmethod
     def from_urdf(cls, urdf_path: str | Path) -> SafetyLimits:
@@ -70,7 +71,7 @@ class SafetyLimits:
                 effort_max=eff_max,
             )
         except ImportError:
-            logger.warning("yourdfpy not installed. Install with: pip install 'tether[safety]'")
+            logger.warning("yourdfpy not installed. Install with: pip install 'fastcrest-tether[safety]'")
             return cls()
 
     @classmethod
@@ -223,8 +224,103 @@ class ActionGuard:
         limits = SafetyLimits.from_embodiment_config(cfg)
         return cls(limits=limits, **kwargs)
 
-    def check_single(self, action: np.ndarray) -> SafetyCheckResult:
-        """Check a single action vector against safety limits."""
+    @staticmethod
+    def _clamp_value(value: float, lower: float, upper: float) -> float:
+        return float(min(max(value, lower), upper))
+
+    @staticmethod
+    def _interval_margin(value: float, lower: float, upper: float) -> float | None:
+        """Normalized distance to the nearest interval boundary.
+
+        Returns 1.0 at interval center, 0.0 at or outside a boundary, and None
+        for invalid intervals.
+        """
+        if upper <= lower:
+            return None
+        half_span = (upper - lower) / 2.0
+        if half_span <= 0:
+            return None
+        distance = min(value - lower, upper - value)
+        return float(min(max(distance / half_span, 0.0), 1.0))
+
+    def safety_margin(self, actions: np.ndarray) -> float | None:
+        """Return the closest normalized margin to any configured limit.
+
+        The value is in [0, 1], where 0 means at/outside a configured safety
+        boundary and 1 means centered under every applicable bound. It covers
+        position, effort, velocity between consecutive chunk actions, and
+        explicit workspace-index bounds. Returns None when no comparable limits
+        apply.
+        """
+        arr = np.asarray(actions, dtype=np.float32)
+        if arr.size == 0:
+            return None
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2 or not np.isfinite(arr).all():
+            return 0.0
+
+        margins: list[float] = []
+        num_joints = min(arr.shape[1], len(self.limits.position_max))
+        for row in arr:
+            for i in range(num_joints):
+                pos_margin = self._interval_margin(
+                    float(row[i]),
+                    float(self.limits.position_min[i]),
+                    float(self.limits.position_max[i]),
+                )
+                if pos_margin is not None:
+                    margins.append(pos_margin)
+
+                if i < len(self.limits.effort_max):
+                    effort_limit = float(self.limits.effort_max[i])
+                    if effort_limit > 0:
+                        effort_margin = (effort_limit - abs(float(row[i]))) / effort_limit
+                        margins.append(float(min(max(effort_margin, 0.0), 1.0)))
+
+            for workspace_axis, action_idx in enumerate(self.limits.workspace_indices):
+                if action_idx < 0 or action_idx >= arr.shape[1]:
+                    continue
+                if (
+                    workspace_axis >= len(self.limits.workspace_min)
+                    or workspace_axis >= len(self.limits.workspace_max)
+                ):
+                    continue
+                workspace_margin = self._interval_margin(
+                    float(row[action_idx]),
+                    float(self.limits.workspace_min[workspace_axis]),
+                    float(self.limits.workspace_max[workspace_axis]),
+                )
+                if workspace_margin is not None:
+                    margins.append(workspace_margin)
+
+        if arr.shape[0] >= 2:
+            num_velocity = min(arr.shape[1], len(self.limits.velocity_max))
+            for prev, cur in zip(arr[:-1], arr[1:]):
+                for i in range(num_velocity):
+                    velocity_limit = float(self.limits.velocity_max[i])
+                    if velocity_limit <= 0:
+                        continue
+                    delta = abs(float(cur[i] - prev[i]))
+                    velocity_margin = (velocity_limit - delta) / velocity_limit
+                    margins.append(float(min(max(velocity_margin, 0.0), 1.0)))
+
+        if not margins:
+            return None
+        return min(margins)
+
+    def check_single(
+        self,
+        action: np.ndarray,
+        *,
+        previous_action: np.ndarray | None = None,
+    ) -> SafetyCheckResult:
+        """Check a single action vector against safety limits.
+
+        Position, effort, and explicit workspace bounds are single-action
+        checks. Velocity is a chunk-level delta check and only runs when the
+        caller provides ``previous_action``.
+        """
         start = time.perf_counter()
         violations = []
         clamped = False
@@ -233,15 +329,79 @@ class ActionGuard:
 
         for i in range(num_joints):
             # Position bounds
-            if action[i] < self.limits.position_min[i]:
-                violations.append(f"joint_{i} below min: {action[i]:.3f} < {self.limits.position_min[i]:.3f}")
+            if safe_action[i] < self.limits.position_min[i]:
+                violations.append(
+                    f"joint_{i} below min: "
+                    f"{safe_action[i]:.3f} < {self.limits.position_min[i]:.3f}"
+                )
                 if self.mode == "clamp":
                     safe_action[i] = self.limits.position_min[i]
                     clamped = True
-            elif action[i] > self.limits.position_max[i]:
-                violations.append(f"joint_{i} above max: {action[i]:.3f} > {self.limits.position_max[i]:.3f}")
+            elif safe_action[i] > self.limits.position_max[i]:
+                violations.append(
+                    f"joint_{i} above max: "
+                    f"{safe_action[i]:.3f} > {self.limits.position_max[i]:.3f}"
+                )
                 if self.mode == "clamp":
                     safe_action[i] = self.limits.position_max[i]
+                    clamped = True
+
+            if i < len(self.limits.effort_max):
+                effort_limit = self.limits.effort_max[i]
+                if effort_limit > 0 and abs(float(safe_action[i])) > effort_limit:
+                    violations.append(
+                        f"joint_{i} effort limit: "
+                        f"|{safe_action[i]:.3f}| > {effort_limit:.3f}"
+                    )
+                    if self.mode == "clamp":
+                        safe_action[i] = self._clamp_value(
+                            float(safe_action[i]), -effort_limit, effort_limit
+                        )
+                        clamped = True
+
+            if (
+                previous_action is not None
+                and not any("velocity limit" not in v for v in violations)
+                and i < len(self.limits.velocity_max)
+            ):
+                velocity_limit = self.limits.velocity_max[i]
+                delta = float(safe_action[i] - previous_action[i])
+                if velocity_limit > 0 and abs(delta) > velocity_limit:
+                    violations.append(
+                        f"joint_{i} velocity limit: "
+                        f"|delta {delta:.3f}| > {velocity_limit:.3f}"
+                    )
+                    if self.mode == "clamp":
+                        safe_action[i] = float(previous_action[i]) + self._clamp_value(
+                            delta, -velocity_limit, velocity_limit
+                        )
+                        clamped = True
+
+        for workspace_axis, action_idx in enumerate(self.limits.workspace_indices):
+            if action_idx < 0 or action_idx >= len(safe_action):
+                continue
+            if (
+                workspace_axis >= len(self.limits.workspace_min)
+                or workspace_axis >= len(self.limits.workspace_max)
+            ):
+                continue
+            lower = self.limits.workspace_min[workspace_axis]
+            upper = self.limits.workspace_max[workspace_axis]
+            if safe_action[action_idx] < lower:
+                violations.append(
+                    f"workspace_axis_{workspace_axis} below min: "
+                    f"action[{action_idx}]={safe_action[action_idx]:.3f} < {lower:.3f}"
+                )
+                if self.mode == "clamp":
+                    safe_action[action_idx] = lower
+                    clamped = True
+            elif safe_action[action_idx] > upper:
+                violations.append(
+                    f"workspace_axis_{workspace_axis} above max: "
+                    f"action[{action_idx}]={safe_action[action_idx]:.3f} > {upper:.3f}"
+                )
+                if self.mode == "clamp":
+                    safe_action[action_idx] = upper
                     clamped = True
 
         if self.mode == "reject" and violations:
@@ -296,10 +456,21 @@ class ActionGuard:
             chunk_clamped = True
         else:
             safe_actions = actions.copy()
+            previous_safe: np.ndarray | None = None
             for i in range(len(actions)):
-                result = self.check_single(actions[i])
+                result = self.check_single(
+                    actions[i],
+                    previous_action=previous_safe,
+                )
                 results.append(result)
                 safe_actions[i] = np.array(result.safe_action)
+                if result.safe or (
+                    result.violations
+                    and all("velocity limit" in v for v in result.violations)
+                ):
+                    previous_safe = safe_actions[i]
+                else:
+                    previous_safe = None
             all_violations = [v for r in results for v in r.violations]
             chunk_clamped = any(r.clamped for r in results)
 

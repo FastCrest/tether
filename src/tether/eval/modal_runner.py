@@ -14,7 +14,7 @@ image + osmesa/MuJoCo recipe + per-suite eval loop). The wrapper:
 4. Builds EpisodeResult per (suite-task, episode) entry
 
 Customer prerequisites:
-- `pip install modal` (or `pip install 'tether[modal]'` once we
+- `pip install modal` (or `pip install 'fastcrest-tether[modal]'` once we
   add that extra)
 - `modal token new` (Modal auth)
 - The repo cloned (so scripts/modal_libero_monolithic_onnx.py is
@@ -137,7 +137,7 @@ def run_libero_on_modal(
     if not abs_script.exists():
         raise FileNotFoundError(
             f"Modal script not found at {abs_script}. Customers running "
-            f"`tether eval --runtime modal` need the tether-vla repo "
+            f"`tether eval --runtime modal` need the tether repo "
             f"cloned (Phase 2 will package this as a deployable Modal "
             f"app)."
         )

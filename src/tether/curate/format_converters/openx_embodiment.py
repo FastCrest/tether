@@ -84,7 +84,7 @@ class OpenXEmbodimentConverter(FormatConverter):
         except ImportError as exc:
             raise ImportError(
                 "Open X-Embodiment conversion requires tensorflow + tensorflow_datasets: "
-                "pip install 'tether[curate-rlds]'"
+                "pip install 'fastcrest-tether[curate-rlds]'"
             ) from exc
 
         # Reuse RLDSConverter for the bulk of the work; we'll patch the

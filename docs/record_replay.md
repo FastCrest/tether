@@ -4,6 +4,7 @@ Every `/act` request + response from `tether serve` can be captured to a JSONL t
 
 - **Replayed** against the same model to verify determinism (`cos ≈ 1.0`)
 - **Diffed** against a different model to spot regression (e.g. did v0.5 regress vs v0.4?)
+- **Compared** with `tether policy diff` before promotion, including shadow-policy action deltas, latency regressions, and guard regressions
 - **Fed to A2C2** as a training corpus for the asynchronous action correction head
 - **Handed to Tether support** as a reproduction artifact for a bug
 
@@ -140,6 +141,37 @@ Short version:
 ```
 
 All records carry `schema_version` so readers can dispatch across versions. Additive fields don't bump the version; readers must ignore unknown fields.
+
+### Additive rollout evidence
+
+New request records may include an `evidence` block with stable, compact fields
+for deployment proof and rollout gates:
+
+```json
+{
+  "kind": "tether.rollout_evidence",
+  "schema_version": 1,
+  "policy": {"model_hash": "...", "config_hash": "...", "routing_slot": "prod"},
+  "request": {"episode_id": "ep-1", "request_id": "req-1", "image_sha256": "..."},
+  "action": {
+    "num_actions": 50,
+    "action_dim": 7,
+    "raw_present": true,
+    "raw_sha256": "...",
+    "guarded_sha256": "...",
+    "modified_by_guard": true
+  },
+  "safety": {"guard_present": true, "clamped": true, "clamp_count": 1, "violation_count": 1},
+  "latency": {"total_ms": 31.2, "rolling_p95_ms": 38.4, "rolling_p99_ms": 42.0},
+  "cache": {"status": "hit"},
+  "outcome": {"status": "success", "error_slug": null}
+}
+```
+
+When a runtime guard modifies the action chunk, records may also include
+`action_trace` with `raw_actions`, `guarded_actions`, and their hashes. This is
+what lets `tether policy diff` and deployment-proof packets distinguish "policy
+changed" from "safety layer clamped it."
 
 ## Adding a new schema version
 

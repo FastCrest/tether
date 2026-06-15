@@ -10,12 +10,12 @@ Two layers:
                          serial protocol, control rate
 
 Design choices:
-    - Frozen dataclasses (matches reflex.embodiments.EmbodimentConfig style):
+    - Frozen dataclasses (matches tether.embodiments.EmbodimentConfig style):
       load once at startup, pass around safely.
     - LeRobot-compatible field names (shoulder_pan / shoulder_lift / elbow_flex
       / wrist_flex / wrist_roll / gripper) so calibrations round-trip cleanly.
     - Action space + normalization stats reuse the bundled `so100.json` preset
-      under `reflex.embodiments.presets/`, so the same arm has ONE source of
+      under `tether.embodiments.presets/`, so the same arm has ONE source of
       truth for both the `--embodiment so_arm100` flag (preset lookup) and the
       programmatic `SOARM100Adapter` API (this module).
 
@@ -281,7 +281,7 @@ class SOARM100Config:
             raise FileNotFoundError(
                 f"LeRobot calibration not found: {p}\n"
                 f"  Run `lerobot-calibrate --robot so_follower` to produce one, "
-                f"or `reflex calibrate so_arm100 --port /dev/ttyUSB0`."
+                f"or `tether calibrate so_arm100 --port /dev/ttyUSB0`."
             )
         with p.open() as f:
             raw = json.load(f)

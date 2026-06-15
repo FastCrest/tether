@@ -13,8 +13,8 @@ Output: ~/Downloads/tether-tweet.gif
 
 Approach justified per CLAUDE.md no-band-aid: real CLI output captured
 live in container, not faked. Typing animation is synthesized but every
-character of output is verbatim from `tether --version`, `tether doctor`,
-`tether --help` running in the container with TRT EP active.
+character of output is verbatim from `tether --version`,
+`tether inspect targets`, `tether --help` running in the container.
 """
 import modal
 
@@ -26,7 +26,9 @@ image = (
     .apt_install("git", "wget", "curl", "fontconfig", "fonts-jetbrains-mono")
     .pip_install("uv")
     .run_commands(
-        "uv pip install --system 'tether-vla[serve,gpu]==0.8.0'",
+        # Install the published artifact users actually get (dist name is
+        # 'fastcrest-tether'; the bare 'tether' name is reserved on PyPI).
+        "uv pip install --system 'fastcrest-tether[serve,gpu]==0.12.0'",
         "uv pip install --system 'tensorrt>=10.0,<11'",
         # agg = official asciinema gif renderer (Rust binary)
         "wget -qO /usr/local/bin/agg https://github.com/asciinema/agg/releases/download/v1.5.0/agg-x86_64-unknown-linux-gnu",
@@ -64,11 +66,16 @@ def record() -> bytes:
 
     print("=== capturing real CLI output ===")
     out_version = run("tether --version")
-    out_doctor = run("tether doctor")
+    # `tether inspect targets` — static supported-hardware registry. Replaces
+    # the old `tether doctor` panel: doctor's deploy-diagnostic checks crash on
+    # a GPU box with no exported model (Path(ModelProto) TypeError), which is
+    # both a real bug (tracked separately) and a bad look in a marketing gif.
+    # `inspect targets` is GPU-free, narrow, and on-brand (Jetson/RTX/Thor).
+    out_targets = run("tether inspect targets")
     out_help = run("tether --help")
     print(f"version: {out_version!r}")
-    print(f"doctor first line: {out_doctor.splitlines()[0] if out_doctor else 'EMPTY'!r}")
-    print(f"doctor lines: {len(out_doctor.splitlines())}")
+    print(f"targets first line: {out_targets.splitlines()[0] if out_targets else 'EMPTY'!r}")
+    print(f"targets lines: {len(out_targets.splitlines())}")
     print(f"help lines: {len(out_help.splitlines())}")
 
     # ----- build asciinema cast programmatically -----
@@ -105,8 +112,8 @@ def record() -> bytes:
     type_command("tether --version")
     show_output(out_version, post_pause=1.0)
 
-    type_command("tether doctor")
-    show_output(out_doctor, post_pause=2.5)
+    type_command("tether inspect targets")
+    show_output(out_targets, post_pause=2.5)
 
     type_command("tether --help")
     show_output(out_help, post_pause=2.0)

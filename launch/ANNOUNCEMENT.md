@@ -1,11 +1,11 @@
-# Reflex VLA v0.2 — the deployment layer for Vision-Language-Action models
+# Tether VLA v0.2 — the deployment layer for Vision-Language-Action models
 
 *Draft announcement. Master post; channel-specific variants live in
 `launch/{lerobot_3146,show_hn,reddit_robotics}_draft.md`.*
 
 ## TL;DR
 
-Reflex takes a trained VLA checkpoint and produces a monolithic ONNX
+Tether takes a trained VLA checkpoint and produces a monolithic ONNX
 that **matches the reference PyTorch policy to machine precision** —
 verified on all four major open VLAs (SmolVLA, pi0, pi0.5, GR00T N1.6)
 at cos=+1.0000000. Plus a FastAPI server, Docker image, ROS2 bridge,
@@ -14,9 +14,9 @@ Apache 2.0, works today on x86 CUDA + desktop GPUs, Jetson support
 coming in v0.3.
 
 ```bash
-pip install 'reflex-vla[serve,gpu] @ git+https://github.com/FastCrest/reflex-vla'
-reflex export --monolithic lerobot/smolvla_base --output ./smol
-reflex serve ./smol
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+tether export --monolithic lerobot/smolvla_base --output ./smol
+tether serve ./smol
 # POST http://localhost:8000/act → 50-step action chunks
 ```
 
@@ -42,7 +42,7 @@ Every release is held against these; `tests/test_*.py` has receipt-based markers
 3. num_steps=1 vs num_steps=10 quality gap characterized
 4. docker-run smoke via GH Actions workflow
 5. ros2-bridge-live (real rclpy, ros:humble container, not mocked)
-6. `reflex export --monolithic` CLI produces a working export
+6. `tether export --monolithic` CLI produces a working export
 7. FastAPI `POST /act` returns valid action chunks end-to-end
 8. Runtime correctly serves num_steps=10 artifacts (new `SmolVLAOnnxServer`)
 9. ActionGuard kill-switch propagates to `/act` 503 + `/guard/reset` clears
@@ -63,9 +63,9 @@ Every release is held against these; `tests/test_*.py` has receipt-based markers
 
 ## Try it + feedback
 
-- Repo: https://github.com/FastCrest/reflex-vla
-- Docker: `ghcr.io/fastcrest/reflex-vla:0.2.0`
-- Verified numbers: [`reflex_context/measured_numbers.md`](https://github.com/FastCrest/reflex-vla/blob/main/reflex_context/measured_numbers.md)
+- Repo: https://github.com/FastCrest/tether
+- Docker: `ghcr.io/fastcrest/tether:0.2.0`
+- Verified numbers: [`reflex_context/measured_numbers.md`](https://github.com/FastCrest/tether/blob/main/reflex_context/measured_numbers.md)
 - Issues: respond within 24h
 
 Apache 2.0. Single maintainer. Looking especially for:

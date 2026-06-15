@@ -1,7 +1,7 @@
 # ROS2 Robot Adapter Starter Kits
 
 **Fork-and-customize** adapters for running Reflex VLA on real robots via ROS2.
-These are NOT part of the core `pip install reflex-vla` — they live in `contrib/`
+These are NOT part of the core `pip install fastcrest-tether` — they live in `contrib/`
 and you're expected to adapt them to your specific robot setup.
 
 ## Available Adapters
@@ -14,8 +14,8 @@ and you're expected to adapt them to your specific robot setup.
 ## Quick Start
 
 ```bash
-# 1. Start reflex serve on a GPU machine
-reflex serve ./my_export/ --transport zmq --port 5555
+# 1. Start tether serve on a GPU machine
+tether serve ./my_export/ --transport zmq --port 5555
 
 # 2. On the robot (ROS2 machine), run the adapter
 cd contrib/ros2/aloha/
@@ -29,14 +29,14 @@ ros2 run reflex_aloha_adapter adapter_node \
 ```
 ┌─────────────┐     HTTP/ZMQ      ┌──────────────┐
 │ Robot (ROS2) │ ────────────────> │ GPU Server   │
-│              │                   │ reflex serve │
+│              │                   │ tether serve │
 │ adapter_node │ <──────────────── │ --transport  │
 │ (this code)  │     actions       │   zmq/http   │
 └─────────────┘                   └──────────────┘
 ```
 
 The adapter subscribes to ROS2 sensor topics, constructs the observation dict,
-calls `reflex serve`'s `/act` endpoint, and publishes actions to actuator topics.
+calls `tether serve`'s `/act` endpoint, and publishes actions to actuator topics.
 
 ## Attribution
 
@@ -51,4 +51,4 @@ Tron2 adapter KILLED per Lift #8 decision K2 (vendor-specific, LimX only).
 `contrib/ros2/_common/` contains shared code used by both adapters:
 - `observation_builder.py` — sensor sync + observation dict construction
 - `action_publisher.py` — action chunk → joint command publishing
-- `reflex_client.py` — HTTP/ZMQ client wrapper for calling reflex serve
+- `tether_client.py` — HTTP/ZMQ client wrapper for calling tether serve

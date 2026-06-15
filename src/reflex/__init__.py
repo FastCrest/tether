@@ -21,7 +21,7 @@ Migration:
     reflex --help
 
     # New
-    pip install tether
+    pip install fastcrest-tether
     from tether import VLAExport
     tether --help
 

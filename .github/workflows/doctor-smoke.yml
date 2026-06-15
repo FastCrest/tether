@@ -83,7 +83,7 @@ jobs:
           # exercises the LD_LIBRARY_PATH patch path without pulling tensorrt
           # (which has no Mac wheel and is huge on Linux). Doctor should still
           # exit 0 with TRT libs ⚠ NOT installed warnings.
-          /tmp/tether-doctor-venv/bin/python -m pip install "$(ls dist/tether-*.whl)[onnx]"
+          /tmp/tether-doctor-venv/bin/python -m pip install "$(ls dist/fastcrest_tether-*.whl)[onnx]"
 
       - name: Verify tether --version matches pyproject.toml
         shell: bash

@@ -11,12 +11,9 @@ merge_and_update skipped; coexistence with OTel + JSONL hooks.
 """
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import numpy as np
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
@@ -24,6 +21,11 @@ from pydantic import BaseModel
 
 from tether.runtime.buffer import ActionChunkBuffer
 from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
+from tether.runtime.server import (
+    _action_execution_from_rtc_stats,
+    _record_rtc_adaptive_signal,
+    _rtc_adaptive_record_from_stats,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +327,120 @@ class TestEpisodeResetMergeOrder:
         r = client.post("/act", json={"image": "y", "episode_id": "ep-2"})
         # Chunk count is back to 1 (reset cleared, then merge bumped)
         assert r.json()["_test_chunk_count"] == 1
+
+
+class TestAdaptiveSignalHelper:
+    def test_server_helper_records_guard_a2c2_and_uncertainty(self):
+        adapter = RtcAdapter(
+            policy=_StubServer(GOOD_RESPONSE),
+            action_buffer=ActionChunkBuffer(capacity=10),
+            config=RtcAdapterConfig(
+                enabled=False,
+                adaptive_chunking_enabled=True,
+            ),
+        )
+
+        _record_rtc_adaptive_signal(
+            adapter,
+            {
+                "a2c2_correction_magnitude": 0.25,
+                "uncertainty_score": 0.4,
+            },
+            guard_margin=0.03,
+        )
+
+        stats = adapter.get_stats()
+        assert stats["adaptive_signal"]["guard_margin"] == pytest.approx(0.03)
+        assert stats["adaptive_signal"]["correction_magnitude"] == pytest.approx(0.25)
+        assert stats["adaptive_signal"]["uncertainty"] == pytest.approx(0.4)
+
+    def test_rtc_adaptive_record_extracts_only_calibration_fields(self):
+        record = _rtc_adaptive_record_from_stats({
+            "enabled": True,
+            "chunk_count": 5,
+            "adaptive_chunking": {
+                "horizon": 3,
+                "reason": "guard_margin",
+                "risk_score": 0.8,
+                "replan_threshold_ratio": 0.7,
+            },
+            "adaptive_signal": {
+                "guard_margin": 0.02,
+                "correction_magnitude": 0.3,
+            },
+            "last_action_delta": 0.11,
+        })
+
+        assert record == {
+            "adaptive_chunking": {
+                "horizon": 3,
+                "reason": "guard_margin",
+                "risk_score": 0.8,
+                "replan_threshold_ratio": 0.7,
+            },
+            "adaptive_signal": {
+                "guard_margin": 0.02,
+                "correction_magnitude": 0.3,
+            },
+            "last_action_delta": pytest.approx(0.11),
+        }
+
+    def test_rtc_adaptive_record_returns_none_without_adaptive_state(self):
+        assert _rtc_adaptive_record_from_stats({"enabled": True}) is None
+
+    def test_action_execution_omitted_when_rtc_disabled(self):
+        assert (
+            _action_execution_from_rtc_stats({
+                "enabled": False,
+                "configured_execution_horizon": 5,
+                "chunk_count": 1,
+            })
+            is None
+        )
+
+    def test_action_execution_from_fixed_rtc_stats(self):
+        execution = _action_execution_from_rtc_stats({
+            "enabled": True,
+            "chunk_count": 2,
+            "configured_execution_horizon": 5,
+            "execution_horizon": 5,
+            "actions_consumed": 3,
+            "last_action_delta": 0.08,
+        })
+
+        assert execution == {
+            "scheduler": "rtc",
+            "execution_mode": "rtc_fixed",
+            "executed_horizon": 5,
+            "execution_horizon": 5,
+            "adaptive_reason": "fixed_rtc_horizon",
+            "horizon_reason": "fixed_rtc_horizon",
+            "chunk_count": 2,
+            "cache_status": "rtc_carry_hit",
+            "actions_consumed": 3,
+            "last_action_delta": pytest.approx(0.08),
+        }
+
+    def test_action_execution_from_adaptive_rtc_stats(self):
+        execution = _action_execution_from_rtc_stats(
+            {
+                "enabled": True,
+                "chunk_count": 1,
+                "configured_execution_horizon": 10,
+                "adaptive_chunking": {
+                    "horizon": 3,
+                    "applied_horizon": 3,
+                    "reason": "guard_margin",
+                    "risk_score": 0.8,
+                },
+                "adaptive_signal": {"guard_margin": 0.02},
+            },
+            {"deadline_exceeded": True},
+        )
+
+        assert execution["execution_mode"] == "rtc_adaptive"
+        assert execution["executed_horizon"] == 3
+        assert execution["adaptive_reason"] == "guard_margin"
+        assert execution["cache_status"] == "rtc_carry_cold"
+        assert execution["adaptive_signal"]["guard_margin"] == pytest.approx(0.02)
+        assert execution["deadline_cause"] == "inference_latency_over_deadline"

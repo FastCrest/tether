@@ -112,11 +112,11 @@ image = (
     )
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
-    # Pull tether-vla so `tether.distill.snapflow_pi0_model` is importable
+    # Pull tether so `tether.distill.snapflow_pi0_model` is importable
     # when --snapflow-student is used. Uses the github-token secret to
     # clone the private repo. Cheap — this only pulls the Python package.
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({

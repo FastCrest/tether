@@ -9,7 +9,7 @@ Critical: pi0 uses GemmaRMSNorm (PaliGemma backbone) with (1+weight)
 parameterization. A naive Llama-style swap produces wrong output. This
 script uses `swap_rmsnorm_variants` which dispatches correctly.
 
-Fast local iteration. Does NOT need Modal. Requires `pip install 'tether[native]'`.
+Fast local iteration. Does NOT need Modal. Requires `pip install 'fastcrest-tether[native]'`.
 """
 import sys
 import types

@@ -1,0 +1,187 @@
+name: Package install smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  package-smoke:
+    name: wheel install smoke (ubuntu py3.12)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --upgrade pip build
+          rm -rf dist
+          python -m build --sdist --wheel
+          ls -la dist/
+
+      - name: Base wheel smoke
+        shell: bash
+        run: |
+          set -euxo pipefail
+          WHEEL="$(ls dist/fastcrest_tether-*.whl)"
+          python -m venv /tmp/tether-base-smoke
+          /tmp/tether-base-smoke/bin/python -m pip install --upgrade pip
+          /tmp/tether-base-smoke/bin/python -m pip install "$WHEEL"
+          TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
+            /tmp/tether-base-smoke/bin/tether --help >/tmp/tether-help.txt
+          TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
+            /tmp/tether-base-smoke/bin/tether doctor --json \
+            | /tmp/tether-base-smoke/bin/python -m json.tool >/tmp/tether-doctor.json
+          TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
+            /tmp/tether-base-smoke/bin/tether models list --json \
+            | /tmp/tether-base-smoke/bin/python -m json.tool >/tmp/tether-models.json
+          TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
+            /tmp/tether-base-smoke/bin/tether go --model smolvla-base \
+              --device-class cpu --dry-run \
+            | tee /tmp/tether-go-dry-run.txt
+          grep -q "/tmp/tether-base-home/models/smolvla-base" /tmp/tether-go-dry-run.txt
+          set +e
+          TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
+            /tmp/tether-base-smoke/bin/tether serve /tmp/missing-export \
+            > /tmp/tether-base-serve.txt 2>&1
+          EXIT_CODE=$?
+          set -e
+          test "$EXIT_CODE" -ne 0
+
+      - name: Serve wheel smoke with offline tokenizer bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          WHEEL="$(ls dist/fastcrest_tether-*.whl)"
+          python -m venv /tmp/tether-serve-smoke
+          /tmp/tether-serve-smoke/bin/python -m pip install --upgrade pip
+          /tmp/tether-serve-smoke/bin/python -m pip install "${WHEEL}[serve]"
+          TETHER_SKIP_ONBOARDING=1 TETHER_NO_UPGRADE_CHECK=1 TETHER_OFFLINE=1 \
+          TETHER_HOME=/tmp/tether-serve-home \
+            /tmp/tether-serve-smoke/bin/tether smoke --offline --json \
+              --export-dir /tmp/tether-package-smoke-export \
+              --timeout-s 45 \
+              --act-samples 3 \
+              --markdown-output /tmp/tether-smoke.md \
+            | tee /tmp/tether-smoke.json
+
+          /tmp/tether-serve-smoke/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          body = json.loads(Path("/tmp/tether-smoke.json").read_text())
+          assert body["passed"] is True, body
+          assert body["doctor"]["summary"]["fail"] == 0, body
+          assert body["act"]["num_actions"] == 50, body
+          assert body["act"]["action_dim"] == 32, body
+          assert body["act"]["active_providers"], body
+          assert body["latency"]["samples"] == 3, body
+          assert body["latency"]["roundtrip_ms"]["p95_ms"] > 0, body
+          assert body["latency"]["warm_roundtrip_ms"]["p95_ms"] > 0, body
+          PY
+
+          TETHER_SKIP_ONBOARDING=1 TETHER_NO_UPGRADE_CHECK=1 TETHER_OFFLINE=1 \
+          TETHER_HOME=/tmp/tether-serve-home \
+            /tmp/tether-serve-smoke/bin/tether deploy-proof /tmp/tether-package-smoke-export \
+              --offline \
+              --json \
+              --device cpu \
+              --api-key ci-secret \
+              --record-dir /tmp/tether-deploy-proof-traces \
+              --samples 3 \
+              --timeout-s 45 \
+              --output-dir /tmp/tether-deploy-proof-run \
+            | tee /tmp/tether-deploy-proof.json
+
+          /tmp/tether-serve-smoke/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          body = json.loads(Path("/tmp/tether-deploy-proof.json").read_text())
+          assert body["passed"] is True, body
+          assert body["security"]["enabled"] is True, body
+          assert body["latency"]["samples"] == 3, body
+          assert body["metrics"]["metric_names"], body
+          assert body["trace"]["files"], body
+          assert Path("/tmp/tether-deploy-proof-run/MANIFEST.json").exists(), body
+          PY
+
+      - name: Assemble deploy proof packet
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROOF_DIR=/tmp/tether-deploy-proof
+          rm -rf "$PROOF_DIR"
+          mkdir -p "$PROOF_DIR"
+
+          for file in \
+            /tmp/tether-help.txt \
+            /tmp/tether-doctor.json \
+            /tmp/tether-models.json \
+            /tmp/tether-go-dry-run.txt \
+            /tmp/tether-base-serve.txt \
+            /tmp/tether-smoke.json \
+            /tmp/tether-smoke.md \
+            /tmp/tether-deploy-proof.json
+          do
+            if [ -f "$file" ]; then
+              cp "$file" "$PROOF_DIR/"
+            fi
+          done
+          if [ -d /tmp/tether-deploy-proof-run ]; then
+            mkdir -p "$PROOF_DIR/deployment-proof"
+            cp -R /tmp/tether-deploy-proof-run/. "$PROOF_DIR/deployment-proof/"
+          fi
+          cp dist/fastcrest_tether-* "$PROOF_DIR/" 2>/dev/null || true
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("/tmp/tether-deploy-proof")
+          files = []
+          for path in sorted(p for p in root.rglob("*") if p.is_file()):
+              if path.name == "MANIFEST.json":
+                  continue
+              data = path.read_bytes()
+              files.append({
+                  "name": path.relative_to(root).as_posix(),
+                  "size_bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+          (root / "MANIFEST.json").write_text(json.dumps({
+              "schema_version": 1,
+              "files": files,
+          }, indent=2) + "\n")
+          PY
+
+          {
+            echo "### Tether package install smoke proof"
+            echo ""
+            if [ -f "$PROOF_DIR/tether-smoke.md" ]; then
+              cat "$PROOF_DIR/tether-smoke.md"
+            else
+              echo "_No smoke markdown receipt was produced._"
+            fi
+            echo ""
+            echo "Proof artifact: \`tether-package-install-smoke-proof\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deploy proof packet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tether-package-install-smoke-proof
+          path: /tmp/tether-deploy-proof/
+          if-no-files-found: error
+          retention-days: 30

@@ -3,7 +3,7 @@
 Ported from FluxVLA ``aloha_operator.py`` (682 LOC, Apache-2.0, LimX Dynamics).
 ROS1 (``rospy``) → ROS2 (``rclpy``) port with these changes per R-1..R-4:
 
-- Uses HTTP or ZMQ to call ``reflex serve`` (R-1: no ROS2 transport dependency)
+- Uses HTTP or ZMQ to call ``tether serve`` (R-1: no ROS2 transport dependency)
 - 3-camera setup: ``cam_high``, ``cam_left_wrist``, ``cam_right_wrist`` (R-3)
 - Bimanual joint state: 14 DOF (7 left + 7 right including grippers)
 - Replan every 5 steps by default
@@ -11,7 +11,7 @@ ROS1 (``rospy``) → ROS2 (``rclpy``) port with these changes per R-1..R-4:
 Usage::
 
     # Terminal 1: GPU machine
-    reflex serve ./my_export/ --transport zmq --port 5555
+    tether serve ./my_export/ --transport zmq --port 5555
 
     # Terminal 2: Robot (ROS2)
     python3 contrib/ros2/aloha/adapter.py \
@@ -45,7 +45,7 @@ except ImportError:
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from _common.observation_builder import ObservationBuilder
 from _common.action_publisher import ActionPublisher
-from _common.reflex_client import ReflexClient
+from _common.tether_client import TetherClient
 
 
 # Default Aloha topic names (Trossen ALOHA 2 convention)
@@ -69,7 +69,7 @@ class AlohaAdapterNode(Node if HAS_ROS2 else object):
     """ROS2 node that bridges Aloha sensors → Reflex VLA → Aloha actuators.
 
     Subscribes to 3 cameras + 2 joint state topics, constructs observation,
-    calls reflex serve, publishes joint commands.
+    calls tether serve, publishes joint commands.
     """
 
     def __init__(
@@ -86,7 +86,7 @@ class AlohaAdapterNode(Node if HAS_ROS2 else object):
         self.image_size = image_size
 
         # Reflex client
-        self.client = ReflexClient(server_url)
+        self.client = TetherClient(server_url)
 
         # Observation builder (3 cameras)
         self.obs_builder = ObservationBuilder(
