@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import time
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -45,6 +44,7 @@ from .record import (
     compute_config_hash,
     compute_model_hash,
 )
+from .auth import generate_request_id
 from .tracing import get_tracer, setup_tracing, shutdown_tracing
 
 # Optional Prometheus metrics — gated on the [serve] extra (prometheus-client).
@@ -80,7 +80,12 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
-_request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
+REQUEST_ID_HEADER = "X-Tether-Request-ID"
+REQUEST_ID_ALIASES = (REQUEST_ID_HEADER, "X-Request-ID")
+_request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "tether_request_id",
+    default="",
+)
 
 try:
     from tether import __version__ as _TETHER_VERSION
@@ -98,6 +103,16 @@ def _coerce_optional_float(value: Any) -> float | None:
     if not np.isfinite(out):
         return None
     return out
+
+
+def _resolve_http_request_id(request: Any) -> str:
+    for header in REQUEST_ID_ALIASES:
+        value = request.headers.get(header)
+        if value:
+            value = value.strip()
+            if value:
+                return value[:128]
+    return generate_request_id()
 
 
 def _call_accepts_keyword(fn: Any, keyword: str) -> bool:
@@ -3017,13 +3032,14 @@ def create_app(
 
     @app.middleware("http")
     async def _request_id_middleware(request, call_next):
-        req_id = str(uuid.uuid4())
+        req_id = _resolve_http_request_id(request)
+        request.state.request_id = req_id
         token = _request_id_var.set(req_id)
         try:
             response = await call_next(request)
         finally:
             _request_id_var.reset(token)
-        response.headers["X-Reflex-Request-ID"] = req_id
+        response.headers[REQUEST_ID_HEADER] = req_id
         return response
 
     # Bearer auth dependency (Phase 1 auth-bearer feature).

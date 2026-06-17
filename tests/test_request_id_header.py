@@ -1,86 +1,100 @@
-"""Tests for the X-Reflex-Request-ID response header middleware.
-
-Verifies that every HTTP response carries a unique UUID4 in the
-X-Reflex-Request-ID header, and that the value is available to the
-OTel span via the _request_id_var context variable.
-
-Uses FastAPI's TestClient — no model loading, no ONNX runtime.
-"""
+"""Request-id middleware coverage for the real Tether FastAPI app."""
 from __future__ import annotations
 
-import contextvars
-import uuid
+from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 
-def _build_app() -> tuple[FastAPI, contextvars.ContextVar[str]]:
-    """Minimal FastAPI app with only the request-ID middleware wired in."""
-    request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
-        "request_id", default=""
-    )
+class _StubServer:
+    def __init__(self, export_dir, *args, **kwargs):
+        self.export_dir = Path(export_dir)
+        self._ready = True
+        self.health_state = "ready"
+        self._inference_mode = "stub"
+        self._vlm_loaded = False
+        self.consecutive_crash_count = 0
+        self.max_consecutive_crashes = 5
+        self.robot_id = ""
 
-    app = FastAPI()
+    @property
+    def ready(self):
+        return self._ready
 
-    @app.middleware("http")
-    async def _request_id_middleware(request, call_next):
-        req_id = str(uuid.uuid4())
-        token = request_id_var.set(req_id)
-        try:
-            response = await call_next(request)
-        finally:
-            request_id_var.reset(token)
-        response.headers["X-Reflex-Request-ID"] = req_id
-        return response
-
-    @app.get("/health")
-    async def health():
-        return JSONResponse({"status": "ok"})
-
-    @app.post("/act")
-    async def act():
-        return JSONResponse({"actions": []})
-
-    return app, request_id_var
+    async def load(self):
+        self._ready = True
+        self.health_state = "ready"
 
 
 @pytest.fixture
-def client():
-    app, _ = _build_app()
+def app(tmp_path, monkeypatch):
+    from tether.runtime import server as runtime_server
+
+    monkeypatch.setattr(runtime_server, "TetherServer", _StubServer)
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    app = runtime_server.create_app(str(export_dir), device="cpu")
+
+    @app.get("/_test/request-id")
+    async def request_id_probe():
+        return {"request_id": runtime_server._request_id_var.get()}
+
+    return app
+
+
+@pytest.fixture
+def client(app):
     return TestClient(app)
 
 
-class TestRequestIDHeader:
-    def test_health_response_has_header(self, client):
-        assert "X-Reflex-Request-ID" in client.get("/health").headers
+def test_health_response_has_tether_request_id_header(client):
+    response = client.get("/health")
 
-    def test_act_response_has_header(self, client):
-        assert "X-Reflex-Request-ID" in client.post("/act").headers
+    assert response.headers["X-Tether-Request-ID"].startswith("req-")
+    assert "X-Reflex-Request-ID" not in response.headers
 
-    def test_header_value_is_valid_uuid(self, client):
-        value = client.get("/health").headers["X-Reflex-Request-ID"]
-        assert str(uuid.UUID(value)) == value  # raises ValueError if malformed
 
-    def test_each_request_gets_a_unique_id(self, client):
-        ids = {client.get("/health").headers["X-Reflex-Request-ID"] for _ in range(5)}
-        assert len(ids) == 5
+def test_each_request_gets_a_unique_generated_id(client):
+    ids = {client.get("/health").headers["X-Tether-Request-ID"] for _ in range(5)}
 
-    def test_request_id_is_accessible_inside_route(self):
-        """Context var holds the same ID that ends up in the response header."""
-        app, request_id_var = _build_app()
+    assert len(ids) == 5
 
-        captured: dict[str, str] = {}
 
-        @app.post("/act_span")
-        async def act_span():
-            captured["id"] = request_id_var.get()
-            return JSONResponse({"actions": []})
+def test_tether_request_id_header_is_echoed(client):
+    response = client.get(
+        "/health",
+        headers={"X-Tether-Request-ID": "  req-user-supplied  "},
+    )
 
-        c = TestClient(app)
-        response = c.post("/act_span")
+    assert response.headers["X-Tether-Request-ID"] == "req-user-supplied"
 
-        assert captured["id"] != ""
-        assert response.headers["X-Reflex-Request-ID"] == captured["id"]
+
+def test_generic_request_id_header_is_accepted_when_tether_header_missing(client):
+    response = client.get("/health", headers={"X-Request-ID": "edge-proxy-123"})
+
+    assert response.headers["X-Tether-Request-ID"] == "edge-proxy-123"
+
+
+def test_tether_header_wins_over_generic_request_id(client):
+    response = client.get(
+        "/health",
+        headers={
+            "X-Tether-Request-ID": "req-tether",
+            "X-Request-ID": "proxy-request",
+        },
+    )
+
+    assert response.headers["X-Tether-Request-ID"] == "req-tether"
+
+
+def test_request_id_is_available_inside_route_context(app):
+    client = TestClient(app)
+
+    response = client.get(
+        "/_test/request-id",
+        headers={"X-Tether-Request-ID": "req-route-context"},
+    )
+
+    assert response.json()["request_id"] == "req-route-context"
+    assert response.headers["X-Tether-Request-ID"] == "req-route-context"
