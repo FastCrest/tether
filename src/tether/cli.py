@@ -2636,7 +2636,8 @@ def serve(
             f"\n[bold]Shadow rollout active[/bold] "
             f"(--shadow-policy={shadow_policy}, --shadow-sample={shadow_sample:g}). "
             f"[dim]Candidate actions are recorded for policy diff and are not "
-            f"sent to the robot.[/dim]\n"
+            f"sent to the robot.[/dim]\n",
+            soft_wrap=True,
         )
 
     # Resolve --embodiment / --custom-embodiment-config (B.1). Validate
