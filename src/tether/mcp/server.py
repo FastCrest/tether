@@ -1,6 +1,6 @@
 """FastMCP server factory bound to a live TetherServer.
 
-Exposes 6 tools + 1 resource to MCP-compatible agents (Phase 1 + Phase 1.5):
+Exposes 6 tools + 2 resources to MCP-compatible agents (Phase 1 + Phase 1.5):
 
 Phase 1 (consumer-side):
 - tool: `act(instruction, image_b64, state, episode_id?)` → action chunk +
@@ -8,6 +8,7 @@ Phase 1 (consumer-side):
 - tool: `health()` → {state, model_version, uptime_seconds, cuda_graphs_active}
 - tool: `models_list()` → [{id, hf_id, size_gb_fp16, hardware_fit}, ...]
 - tool: `validate_dataset(dataset_path)` → {summary, checks: [...]}
+- resource: `version://current` → current package/runtime version
 - resource: `metrics://prometheus` → current Prometheus exposition text
 
 Phase 1.5 (producer-side, agents-can-plan-without-executing):
@@ -57,6 +58,7 @@ Available tools:
 - validate_dataset: pre-flight check a LeRobot v3.0 training dataset
 
 Available resources:
+- version://current: fastcrest-tether package version (for client compatibility checks)
 - metrics://prometheus: current Prometheus metrics in text exposition format
 
 Safety note: tool `act` returns actions but does NOT actuate them. The caller is
@@ -500,6 +502,21 @@ def create_mcp_server(
             "registry_hit": entry is not None,
             "notes": notes,
         }
+
+    @mcp.resource("version://current")
+    async def version_resource() -> str:
+        """Current fastcrest-tether package version.
+
+        Clients can read this resource to check compatibility before issuing
+        tool calls. Returns a JSON string with ``version`` and ``package`` keys.
+        """
+        import json
+        from tether import __version__
+        return json.dumps({
+            "version": __version__,
+            "package": "fastcrest-tether",
+            "service": "tether",
+        })
 
     @mcp.resource("metrics://prometheus")
     async def prometheus_metrics() -> str:
