@@ -2636,7 +2636,8 @@ def serve(
             f"\n[bold]Shadow rollout active[/bold] "
             f"(--shadow-policy={shadow_policy}, --shadow-sample={shadow_sample:g}). "
             f"[dim]Candidate actions are recorded for policy diff and are not "
-            f"sent to the robot.[/dim]\n"
+            f"sent to the robot.[/dim]\n",
+            soft_wrap=True,
         )
 
     # Resolve --embodiment / --custom-embodiment-config (B.1). Validate
@@ -5193,12 +5194,28 @@ def go(
                 from tether import __version__ as _current_tether_version
             except Exception:  # noqa: BLE001
                 _current_tether_version = "unknown"
+            try:
+                import torch as _torch_cache
+                _current_torch_version = str(
+                    getattr(_torch_cache, "__version__", "unknown") or "unknown"
+                )
+            except Exception:  # noqa: BLE001
+                _current_torch_version = "unknown"
+            try:
+                import onnxruntime as _ort_cache
+                _current_ort_version = str(
+                    getattr(_ort_cache, "__version__", "unknown") or "unknown"
+                )
+            except Exception:  # noqa: BLE001
+                _current_ort_version = "unknown"
             if meta_marker.exists():
                 try:
                     import json as _json_cache
                     meta = _json_cache.loads(meta_marker.read_text())
                     cached_version = meta.get("tether_version", "?")
                     cached_target = meta.get("export_target", "?")
+                    cached_torch_version = meta.get("torch_version", "unknown")
+                    cached_ort_version = meta.get("ort_version", "unknown")
                     if cached_version != _current_tether_version:
                         console.print(
                             f"[yellow]⚠ Cache stale[/yellow]: built by tether {cached_version}, "
@@ -5208,6 +5225,18 @@ def go(
                         console.print(
                             f"[yellow]⚠ Cache target mismatch[/yellow]: built for "
                             f"{cached_target}, you need {export_target}. Rebuilding."
+                        )
+                    elif cached_torch_version != _current_torch_version:
+                        console.print(
+                            f"[yellow]⚠ Cache torch version mismatch[/yellow]: built with "
+                            f"torch {cached_torch_version}, you're on "
+                            f"{_current_torch_version}. Rebuilding."
+                        )
+                    elif cached_ort_version != _current_ort_version:
+                        console.print(
+                            f"[yellow]⚠ Cache ORT version mismatch[/yellow]: built with "
+                            f"onnxruntime {cached_ort_version}, you're on "
+                            f"{_current_ort_version}. Rebuilding."
                         )
                     else:
                         cache_valid = True
@@ -5271,8 +5300,24 @@ def go(
                 import json as _json_meta
                 from tether import __version__ as _current_tether_version
                 from datetime import datetime as _dt
+                try:
+                    import torch as _torch_meta
+                    _torch_version = str(
+                        getattr(_torch_meta, "__version__", "unknown") or "unknown"
+                    )
+                except Exception:  # noqa: BLE001
+                    _torch_version = "unknown"
+                try:
+                    import onnxruntime as _ort_meta
+                    _ort_version = str(
+                        getattr(_ort_meta, "__version__", "unknown") or "unknown"
+                    )
+                except Exception:  # noqa: BLE001
+                    _ort_version = "unknown"
                 meta = {
                     "tether_version": _current_tether_version,
+                    "torch_version": _torch_version,
+                    "ort_version": _ort_version,
                     "model_id": entry.model_id,
                     "export_target": export_target,
                     "export_mode": "monolithic",
