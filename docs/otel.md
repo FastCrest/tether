@@ -5,7 +5,7 @@
 ## Install
 
 ```bash
-pip install 'tether[tracing]'
+pip install 'fastcrest-tether[tracing]'
 ```
 
 Without the `[tracing]` extra, tracing no-ops silently; the server emits nothing and costs nothing. Your serve behavior is unchanged.
@@ -34,7 +34,7 @@ tether serve ./my-export/ \
     --otel-sample 0.1
 ```
 
-Spans land under `service:tether-vla` in APM.
+Spans land under `service:tether` in APM.
 
 ## Flags
 
@@ -102,8 +102,8 @@ File a GitHub issue if either is blocking an integration.
 
 ## Troubleshooting
 
-**"Tracing skipped — pip install tether[tracing] to enable"**
-The `[tracing]` extra isn't installed. Run `pip install 'tether[tracing]'` and restart serve.
+**"Tracing skipped — pip install fastcrest-tether[tracing] to enable"**
+The `[tracing]` extra isn't installed. Run `pip install 'fastcrest-tether[tracing]'` and restart serve.
 
 **Spans appear in Phoenix but not in Datadog**
 Your Datadog Agent probably has `receivers.otlp` disabled. Enable OTLP gRPC on :4317 in `datadog.yaml`, or point `--otel-endpoint` at an OTel Collector that forwards to Datadog.

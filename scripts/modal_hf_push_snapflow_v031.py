@@ -71,10 +71,10 @@ Net: **+3.4 percentage points over teacher at ~10× fewer denoising steps.**
 - 10k training steps on Modal A100-80GB, batch=4, bf16
 - No reward signal; pure self-distillation from the teacher's flow
 
-Full reproduction via [Tether VLA](https://github.com/FastCrest/tether-vla):
+Full reproduction via [Tether VLA](https://github.com/FastCrest/tether):
 
 ```bash
-pip install tether
+pip install fastcrest-tether
 tether distill \\
     --teacher lerobot/pi05_libero_finetuned_v044 \\
     --steps 10000 \\
@@ -123,11 +123,11 @@ the work of the paper authors (arxiv 2604.05656).
 ```
 
 If you use this checkpoint or the Tether deployment toolchain, please cite both the
-SnapFlow paper and link to https://github.com/FastCrest/tether-vla.
+SnapFlow paper and link to https://github.com/FastCrest/tether.
 
 ## Tether
 
-[Tether VLA](https://github.com/FastCrest/tether-vla) is the open-source deployment
+[Tether VLA](https://github.com/FastCrest/tether) is the open-source deployment
 toolchain that produced this checkpoint and runs it ~9× faster on cheap edge hardware
 via decomposed VLM/expert ONNX export. Cross-family support: pi0, pi0.5, SmolVLA, GR00T,
 OpenVLA in one binary.

@@ -11,8 +11,6 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
-
 from tether.runtime.record import RecordWriter
 
 
@@ -142,8 +140,7 @@ def test_request_emits_routing_when_passed(tmp_path):
 
 
 def test_routing_block_supports_shadow_actions(tmp_path):
-    """Phase 1.5 shadow inference: routing.shadow_actions field carries
-    the parallel shadow policy's chunk for offline comparison."""
+    """Legacy inline shadow inference can still carry routing.shadow_actions."""
     writer = _make_writer(tmp_path)
     routing = {
         "slot": "prod",

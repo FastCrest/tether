@@ -137,6 +137,12 @@ class Pi0OnnxServer:
 
         # Extract expected inputs from the ONNX graph for validation
         self._input_names = [i.name for i in self._session.get_inputs()]
+        from tether.runtime.tokenizers import ensure_offline_tokenizer_bundle
+        ensure_offline_tokenizer_bundle(
+            self.export_dir,
+            self.config,
+            default_ref="google/paligemma-3b-pt-224",
+        )
         logger.info(
             "Pi0OnnxServer ready in %.2fs (inputs: %s, active_providers=%s)",
             elapsed, self._input_names, self._active_providers,

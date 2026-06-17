@@ -34,7 +34,7 @@ pip install onnxruntime-gpu \
   --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
 
 # 3. Install tether with [serve] only (NOT [gpu], NOT [monolithic])
-pip install 'tether[serve]'
+pip install 'fastcrest-tether[serve]'
 ```
 
 > **Why not `[monolithic]`?** The monolithic export extra depends on `lerobot==0.5.1`, which requires **Python ≥ 3.12**. JetPack 6 ships Python 3.10. Export your model on a desktop/cloud machine with Python 3.12+, then copy the ONNX to the Jetson and serve it.
@@ -49,7 +49,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ### What each piece provides:
 - `numpy<2` — ABI compatibility with Jetson AI Lab pre-built wheels
 - `torch` / `onnxruntime-gpu` (from Jetson AI Lab) — GPU-accelerated inference, compiled for `aarch64` + JetPack CUDA
-- `tether[serve]` — FastAPI + uvicorn HTTP inference server + embodiment validation
+- `fastcrest-tether[serve]` — FastAPI + uvicorn HTTP inference server + embodiment validation
 
 This pulls ~2 GB of dependencies. Takes 5-10 minutes on the Jetson.
 
@@ -61,7 +61,7 @@ Since monolithic export requires Python 3.12+ (for `lerobot`), the typical Jetso
 
 ```bash
 # On your desktop / cloud GPU (Python 3.12+)
-pip install 'tether[serve,monolithic]'
+pip install 'fastcrest-tether[serve,monolithic]'
 tether export --model smolvla-base --out ./smolvla-export/
 ```
 

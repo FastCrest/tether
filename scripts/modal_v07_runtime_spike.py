@@ -33,7 +33,7 @@ image = (
     .apt_install("git", "wget", "linux-libc-dev", "build-essential", "python3-dev", "clang")
     .pip_install("uv")
     .run_commands(
-        "uv pip install --system 'tether-vla[serve,gpu,monolithic]==0.6.0'",
+        "uv pip install --system 'reflex-vla[serve,gpu,monolithic]==0.6.0'  # historical pin: v0.6.0 shipped under the pre-rename PyPI name",
         # ORT-TRT EP needs libnvinfer.so.10 at runtime. cuDNN-devel image
         # doesn't ship TensorRT itself. Install via pip + use the bundled libs.
         "uv pip install --system 'tensorrt>=10.0,<11'",
@@ -79,7 +79,7 @@ def spike():
     results["gpu"] = nvsmi.stdout.strip()
 
     # Verify tether + onnxruntime versions (tensorrt bundled inside ORT)
-    for pkg in ["tether-vla", "onnxruntime-gpu"]:
+    for pkg in ["reflex-vla", "onnxruntime-gpu"]:
         proc = subprocess.run(["pip", "show", pkg], capture_output=True, text=True)
         if proc.returncode == 0:
             for line in proc.stdout.split("\n"):

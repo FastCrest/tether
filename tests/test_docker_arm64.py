@@ -29,7 +29,7 @@ class TestDockerfileArm64:
 
     def test_installs_reflex(self):
         content = (REPO_ROOT / "Dockerfile.arm64").read_text()
-        # The pip install line should pull tether-vla with [serve] extras.
+        # The pip install line should pull tether with [serve] extras.
         assert "pip install" in content
         assert "serve" in content
 
@@ -78,6 +78,7 @@ class TestPublishWorkflow:
         Multi-arch manifest merging is a separate future workflow."""
         content = self.WORKFLOW_PATH.read_text()
         assert "-arm64" in content
+        assert "latest-arm64" in content
 
     def test_uses_dockerfile_arm64(self):
         """The workflow must point at Dockerfile.arm64, not the default
@@ -99,3 +100,15 @@ class TestPublishWorkflow:
         # PyYAML maps the 'on:' key to Python True (bool) because `on`
         # is a YAML 1.1 boolean. Accept either spelling.
         assert "on" in parsed or True in parsed
+
+
+class TestJetsonPublishedTagDocs:
+    def test_installer_points_to_published_arm64_tag(self):
+        content = (REPO_ROOT / "install.sh").read_text()
+        assert "ghcr.io/fastcrest/tether:latest-arm64" in content
+        assert "latest-jetpack" not in content
+
+    def test_readme_points_to_published_arm64_tag(self):
+        content = (REPO_ROOT / "README.md").read_text()
+        assert "ghcr.io/fastcrest/tether:latest-arm64" in content
+        assert "latest-jetpack" not in content

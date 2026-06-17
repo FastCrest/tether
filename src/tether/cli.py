@@ -32,18 +32,26 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-_NOARGS_SUMMARY = """[bold]tether[/bold] — deploy any VLA model to any edge hardware.
+_NOARGS_SUMMARY = """[bold]tether[/bold] — deployment confidence for VLA robot policies.
 
-[bold cyan]Most-used:[/bold cyan]
-  [green]tether chat[/green]                start the natural-language assistant
+[bold cyan]Core workflow:[/bold cyan]
+  [green]tether chat[/green]                ask what to prove, deploy, or fix
   [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
-  [green]tether go --model X[/green]        one-command deploy: probe → pull → export → serve
-  [green]tether doctor[/green]              diagnose install + GPU issues
+  [green]tether prove ./export[/green]      collect a deployment proof packet
+  [green]tether promote ./proof[/green]     decide PROMOTE / BLOCK / ROLLBACK
+  [green]tether rollout gate ./trace[/green] decide PROMOTE / HOLD / ROLLBACK from shadow evidence
+  [green]tether profiles list[/green]       choose a built-in promotion profile
+
+[bold cyan]Evidence sources:[/bold cyan]
+  [green]tether doctor[/green]              collect install + GPU evidence
+  [green]tether bench realtime ./proof[/green] certify p95/control-loop serving budget
+  [green]tether go --model X[/green]        probe → pull → export → serve
+  [green]tether smoke[/green]               prove install + local /act roundtrip
   [green]tether models list[/green]         browse the curated model registry
 
 [dim]All commands:[/dim]  tether --help
-[dim]Examples:[/dim]      https://github.com/FastCrest/tether-vla/tree/main/examples
-[dim]Docs:[/dim]          https://fastcrest.com  ·  https://pypi.org/project/tether/
+[dim]Examples:[/dim]      https://github.com/FastCrest/tether/tree/main/examples
+[dim]Docs:[/dim]          https://fastcrest.com  ·  https://pypi.org/project/fastcrest-tether/
 """
 
 
@@ -54,6 +62,35 @@ def _setup_logging(verbose: bool = False) -> None:
         format="%(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+
+
+def _tether_home() -> Path:
+    """Return the user-overridable Tether cache root."""
+    return Path(os.environ.get("TETHER_HOME", Path.home() / ".cache" / "tether")).expanduser()
+
+
+def _tether_cache_path(*parts: str) -> Path:
+    return _tether_home().joinpath(*parts)
+
+
+def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
+    """Avoid first-run prompts on commands that operators expect to start now."""
+    if os.environ.get("TETHER_SKIP_ONBOARDING", "").lower() in {"1", "true", "yes", "on"}:
+        return True
+    command = ctx.invoked_subcommand or (sys.argv[1] if len(sys.argv) > 1 else "")
+    return command in {
+        "serve",
+        "bench",
+        "go",
+        "ros2-serve",
+        "smoke",
+        "deploy-proof",
+        "prove",
+        "promote",
+        "profiles",
+        "policy",
+        "rollout",
+    }
 
 
 def _looks_like_pi05_model_ref(model: str) -> bool:
@@ -79,7 +116,7 @@ def _version_callback(value: bool) -> None:
             f"tether {__version__}\n"
             f"Tether VLA — Copyright (c) 2026 FastCrest. "
             f"Source-available under BSL 1.1 (auto-converts to Apache 2.0 on 2030-04-28).\n"
-            f"https://github.com/FastCrest/tether-vla"
+            f"https://github.com/FastCrest/tether"
         )
         raise typer.Exit()
 
@@ -94,20 +131,24 @@ def main(
 ):
     # First-run onboarding prompt — fires once, before any command.
     # Shows telemetry (opt-out) and data contribution (opt-in) choices.
-    # Skips in non-interactive contexts (CI, pipes). Ctrl+C safe.
+    # Skips in non-interactive contexts (CI, pipes). Also skips blocking prompts
+    # for deploy commands that must bind ports immediately. Ctrl+C safe.
     try:
         from tether.onboarding import maybe_onboard
-        maybe_onboard()
+        maybe_onboard(interactive=False if _skip_blocking_onboarding(ctx) else None)
     except Exception:  # noqa: BLE001
         pass  # never block the CLI on onboarding issues
 
-    # Once-per-day PyPI check for a newer tether-vla; silent if up-to-date.
-    # Honors TETHER_NO_UPGRADE_CHECK=1; skipped on dev installs.
-    try:
-        from tether.upgrade_check import maybe_nag
-        maybe_nag(__version__)
-    except Exception:  # noqa: BLE001
-        pass  # never block the CLI on a network/cache hiccup
+    # Once-per-day PyPI check for a newer tether; silent if up-to-date.
+    # Honors TETHER_NO_UPGRADE_CHECK=1; skipped on dev installs. `tether smoke`
+    # must keep stdout receipt-safe, so it opts out here.
+    command = ctx.invoked_subcommand or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if command != "smoke":
+        try:
+            from tether.upgrade_check import maybe_nag
+            maybe_nag(__version__)
+        except Exception:  # noqa: BLE001
+            pass  # never block the CLI on a network/cache hiccup
 
     # No subcommand → show the curated action-first summary (not typer's
     # alphabetical command dump). Beats burying `chat` and `go` for new users.
@@ -134,12 +175,12 @@ def _maybe_write_embodiment_bundle(
         err_console.print(
             f"[red]--embodiment {embodiment!r} not recognized. "
             f"Supported: so_arm100. (For the runtime preset-config "
-            f"flag used by `reflex serve`, see --embodiment on serve "
+            f"flag used by `tether serve`, see --embodiment on serve "
             f"— that supports more presets like franka/so100/ur5.)[/red]"
         )
         raise typer.Exit(2)
     try:
-        from reflex.embodiments.so_arm100 import SOARM100Adapter
+        from tether.embodiments.so_arm100 import SOARM100Adapter
     except Exception as exc:  # noqa: BLE001
         err_console.print(
             f"[red]Failed to import SOARM100Adapter: {exc}[/red]"
@@ -159,7 +200,7 @@ def _maybe_write_embodiment_bundle(
         adapter = SOARM100Adapter.default()
         console.print(
             "  [yellow]No --calibration; embedding factory-default config. "
-            "Run `reflex calibrate so_arm100 --port /dev/ttyUSB0` or pass "
+            "Run `tether calibrate so_arm100 --port /dev/ttyUSB0` or pass "
             "--calibration to use your physical arm's homing offsets.[/yellow]"
         )
 
@@ -188,7 +229,7 @@ def export(
              "path, one ONNX file). Opt into --decomposed only if you specifically need "
              "the 5-stage export for debugging; --decomposed is the older path with "
              "known correctness gaps. Monolithic requires `pip install "
-             "'tether-vla[monolithic]'` (pins transformers==5.3.0).",
+             "'fastcrest-tether[monolithic]'` (pins transformers==5.3.0).",
     ),
     export_mode: str = typer.Option(
         "auto",
@@ -220,7 +261,7 @@ def export(
         help="Embed an embodiment adapter + calibration into the export bundle. "
              "Supported: 'so_arm100' (SO-ARM100 + LeRobot interop). When set, "
              "the export writes embodiment/<name>/calibration.json into OUTPUT "
-             "so `reflex serve --embodiment <name>` can load it back. Pair "
+             "so `tether serve --embodiment <name>` can load it back. Pair "
              "with --calibration to import an existing LeRobot calibration.",
     ),
     calibration: str = typer.Option(
@@ -271,7 +312,7 @@ def export(
         except ImportError as exc:
             err_console.print(f"[red]{exc}[/red]", markup=False)
             err_console.print(
-                "\nFix: pip install 'tether[monolithic]' "
+                "\nFix: pip install 'fastcrest-tether[monolithic]' "
                 "(pins transformers==5.3.0; use a clean venv to avoid "
                 "the base transformers<5.0 conflict)",
                 style="cyan", markup=False,
@@ -288,7 +329,7 @@ def export(
         except ImportError as exc:
             err_console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
             err_console.print(
-                "\nFix: pip install 'tether[monolithic]'",
+                "\nFix: pip install 'fastcrest-tether[monolithic]'",
                 style="cyan", markup=False,
             )
             raise typer.Exit(2)
@@ -356,7 +397,7 @@ def export(
         except ImportError as exc:
             err_console.print(f"[red]{exc}[/red]", markup=False)
             err_console.print(
-                "\nFix: pip install 'tether[monolithic]' "
+                "\nFix: pip install 'fastcrest-tether[monolithic]' "
                 "(pins transformers==5.3.0; use a clean venv to avoid "
                 "the base transformers<5.0 conflict)",
                 style="cyan", markup=False,
@@ -813,16 +854,130 @@ def validate(
     raise typer.Exit(0 if passed else 1)
 
 
+def _bench_realtime_cmd(
+    proof: str,
+    *,
+    target: str = "",
+    control_hz: float = 0.0,
+    max_roundtrip_p95_ms: float = 0.0,
+    max_jitter_p95_minus_p50_ms: float = 0.0,
+    max_deadline_misses: int = 0,
+    max_control_budget_misses: int = 0,
+    max_act_errors: int = 0,
+    execution_cert: bool = False,
+    max_stale_action_window_ms: float = 0.0,
+    max_chunk_boundary_delta: float = 0.0,
+    max_velocity_discontinuity: float = 0.0,
+    require_phase_aware_horizon: bool = False,
+    require_runtime_attribution: bool = True,
+    output_dir: str = "",
+    output_format: str = "human",
+    json_output: bool = False,
+) -> None:
+    """Build a realtime-serving certificate from a deployment proof packet."""
+
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json", "markdown"):
+        err_console.print(
+            f"[red]--format must be 'human', 'json', or 'markdown', got {output_format!r}[/red]"
+        )
+        raise typer.Exit(2)
+    if control_hz < 0:
+        err_console.print("[red]--control-hz must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_roundtrip_p95_ms < 0:
+        err_console.print("[red]--max-roundtrip-p95-ms must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_jitter_p95_minus_p50_ms < 0:
+        err_console.print("[red]--max-jitter-p95-minus-p50-ms must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_stale_action_window_ms < 0:
+        err_console.print("[red]--max-stale-action-window-ms must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_chunk_boundary_delta < 0:
+        err_console.print("[red]--max-chunk-boundary-delta must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_velocity_discontinuity < 0:
+        err_console.print("[red]--max-velocity-discontinuity must be >= 0[/red]")
+        raise typer.Exit(2)
+    if max_deadline_misses < 0 or max_control_budget_misses < 0 or max_act_errors < 0:
+        err_console.print("[red]miss/error budgets must be >= 0[/red]")
+        raise typer.Exit(2)
+
+    import tether.realtime_cert as realtime_mod
+
+    try:
+        receipt = realtime_mod.load_deploy_proof(proof)
+        report = realtime_mod.build_realtime_certificate(
+            receipt,
+            target=target,
+            control_hz=control_hz if control_hz > 0 else None,
+            max_roundtrip_p95_ms=(
+                max_roundtrip_p95_ms if max_roundtrip_p95_ms > 0 else None
+            ),
+            max_jitter_p95_minus_p50_ms=(
+                max_jitter_p95_minus_p50_ms
+                if max_jitter_p95_minus_p50_ms > 0
+                else None
+            ),
+            max_deadline_misses=max_deadline_misses,
+            max_control_budget_misses=max_control_budget_misses,
+            max_act_errors=max_act_errors,
+            execution_cert=execution_cert,
+            max_stale_action_window_ms=(
+                max_stale_action_window_ms
+                if max_stale_action_window_ms > 0
+                else 100.0
+            ),
+            max_chunk_boundary_delta=(
+                max_chunk_boundary_delta
+                if max_chunk_boundary_delta > 0
+                else 0.15
+            ),
+            max_velocity_discontinuity=(
+                max_velocity_discontinuity
+                if max_velocity_discontinuity > 0
+                else 0.2
+            ),
+            require_phase_aware_horizon=require_phase_aware_horizon,
+            require_runtime_attribution=require_runtime_attribution,
+        )
+        if output_dir:
+            realtime_mod.write_realtime_certificate(report, output_dir)
+    except realtime_mod.RealtimeCertificateError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    if output_format == "json":
+        typer.echo(json.dumps(report, indent=2))
+    elif output_format == "markdown":
+        typer.echo(realtime_mod.format_realtime_certificate_markdown(report))
+    else:
+        console.print(realtime_mod.format_realtime_certificate_human(report), markup=False)
+        if output_dir:
+            console.print(f"\n  [dim]Realtime cert packet:[/dim] {output_dir}")
+
+    if report.get("decision") != "PASS":
+        raise typer.Exit(1)
+
+
 @app.command(name="bench", hidden=True)
 def benchmark_cmd(
-    export_dir: str = typer.Argument(help="Path to exported model directory"),
+    export_dir: str = typer.Argument(
+        help="Path to exported model directory, or 'realtime' for a proof certificate"
+    ),
+    realtime_proof: Optional[str] = typer.Argument(
+        None,
+        help="For `bench realtime`: deployment proof packet directory or JSON path.",
+    ),
     iterations: int = typer.Option(100, help="Number of benchmark iterations"),
     warmup: int = typer.Option(20, help="Warmup iterations (excluded from stats)"),
     device: str = typer.Option("cuda", help="Device: cuda or cpu"),
     benchmark: str = typer.Option(
         "",
         "--benchmark",
-        help="Also run task-success eval: simpler, maniskill (requires pip install 'tether[eval]'). LIBERO archived 2026-04-17 — see archive/scripts/.",
+        help="Also run task-success eval: simpler, maniskill (requires pip install 'fastcrest-tether[eval]'). LIBERO archived 2026-04-17 — see archive/scripts/.",
     ),
     episodes_per_task: int = typer.Option(
         10, help="Episodes per task for --benchmark (full suites use 50)"
@@ -849,6 +1004,86 @@ def benchmark_cmd(
              "you cite a number that re-runs identically.",
     ),
     verbose: bool = typer.Option(False, help="Verbose logging"),
+    realtime_target: str = typer.Option(
+        "",
+        "--target",
+        help="For `bench realtime`: hardware/cell label written into the certificate.",
+    ),
+    control_hz: float = typer.Option(
+        0.0,
+        "--control-hz",
+        help="For `bench realtime`: robot control rate. 0 uses proof/profile evidence.",
+    ),
+    max_roundtrip_p95_ms: float = typer.Option(
+        0.0,
+        "--max-roundtrip-p95-ms",
+        help="For `bench realtime`: p95 budget. 0 uses the control period.",
+    ),
+    max_jitter_p95_minus_p50_ms: float = typer.Option(
+        0.0,
+        "--max-jitter-p95-minus-p50-ms",
+        help="For `bench realtime`: optional jitter budget. 0 uses proof profile or skips.",
+    ),
+    max_deadline_misses: int = typer.Option(
+        0,
+        "--max-deadline-misses",
+        help="For `bench realtime`: allowed deadline misses.",
+    ),
+    max_control_budget_misses: int = typer.Option(
+        0,
+        "--max-control-budget-misses",
+        help="For `bench realtime`: allowed samples slower than the control period.",
+    ),
+    max_act_errors: int = typer.Option(
+        0,
+        "--max-act-errors",
+        help="For `bench realtime`: allowed /act errors.",
+    ),
+    execution_cert: bool = typer.Option(
+        False,
+        "--execution-cert",
+        help="For `bench realtime`: also certify action chunk execution evidence.",
+    ),
+    max_stale_action_window_ms: float = typer.Option(
+        0.0,
+        "--max-stale-action-window-ms",
+        help="For `bench realtime --execution-cert`: stale-action window budget. 0 uses 100 ms.",
+    ),
+    max_chunk_boundary_delta: float = typer.Option(
+        0.0,
+        "--max-chunk-boundary-delta",
+        help="For `bench realtime --execution-cert`: max allowed chunk-boundary action delta. 0 uses 0.15.",
+    ),
+    max_velocity_discontinuity: float = typer.Option(
+        0.0,
+        "--max-velocity-discontinuity",
+        help="For `bench realtime --execution-cert`: max allowed boundary velocity jump. 0 uses 0.2.",
+    ),
+    require_phase_aware_horizon: bool = typer.Option(
+        False,
+        "--require-phase-aware-horizon",
+        help="For `bench realtime --execution-cert`: require phase/low-speed transition evidence.",
+    ),
+    require_runtime_attribution: bool = typer.Option(
+        True,
+        "--require-runtime-attribution/--no-require-runtime-attribution",
+        help="For `bench realtime --execution-cert`: require scheduler/cache/adaptive-horizon attribution.",
+    ),
+    realtime_output_dir: str = typer.Option(
+        "",
+        "--output-dir",
+        help="For `bench realtime`: write realtime-serving-cert artifacts here.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="For `bench realtime`: output format: human, json, or markdown.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="For `bench realtime`: alias for --format json.",
+    ),
 ):
     """Benchmark exported model — latency (default) and optional task success.
 
@@ -863,6 +1098,56 @@ def benchmark_cmd(
     parity + latency, not sim benchmarking. Archived scripts live at
     archive/scripts/ if you want to resurrect them.
     """
+    if export_dir == "realtime":
+        if not realtime_proof:
+            err_console.print(
+                "[red]Usage: tether bench realtime <proof-dir-or-deployment-proof.json>[/red]"
+            )
+            raise typer.Exit(2)
+        _bench_realtime_cmd(
+            realtime_proof,
+            target=realtime_target,
+            control_hz=control_hz,
+            max_roundtrip_p95_ms=max_roundtrip_p95_ms,
+            max_jitter_p95_minus_p50_ms=max_jitter_p95_minus_p50_ms,
+            max_deadline_misses=max_deadline_misses,
+            max_control_budget_misses=max_control_budget_misses,
+            max_act_errors=max_act_errors,
+            execution_cert=execution_cert,
+            max_stale_action_window_ms=max_stale_action_window_ms,
+            max_chunk_boundary_delta=max_chunk_boundary_delta,
+            max_velocity_discontinuity=max_velocity_discontinuity,
+            require_phase_aware_horizon=require_phase_aware_horizon,
+            require_runtime_attribution=require_runtime_attribution,
+            output_dir=realtime_output_dir,
+            output_format=output_format,
+            json_output=json_output,
+        )
+        return
+
+    if realtime_proof is not None:
+        err_console.print(
+            "[red]Unexpected extra argument. Did you mean `tether bench realtime "
+            f"{realtime_proof}`?[/red]"
+        )
+        raise typer.Exit(2)
+    if (
+        realtime_target
+        or control_hz > 0
+        or max_roundtrip_p95_ms > 0
+        or max_jitter_p95_minus_p50_ms > 0
+        or execution_cert
+        or max_stale_action_window_ms > 0
+        or max_chunk_boundary_delta > 0
+        or max_velocity_discontinuity > 0
+        or require_phase_aware_horizon
+        or realtime_output_dir
+        or output_format != "human"
+        or json_output
+    ):
+        err_console.print("[red]Realtime options require `tether bench realtime <proof>`[/red]")
+        raise typer.Exit(2)
+
     _setup_logging(verbose)
     import time as _t
     import numpy as np
@@ -884,7 +1169,7 @@ def benchmark_cmd(
         except ImportError:
             console.print(
                 f"--benchmark {benchmark} requires the eval extra.\n"
-                f"  Install with: pip install 'tether[eval]'\n"
+                f"  Install with: pip install 'fastcrest-tether[eval]'\n"
                 f"  Or run without --benchmark for latency-only.",
                 style="red", markup=False,
             )
@@ -1730,6 +2015,32 @@ def serve(
              "3-camera setups via JPEG-on-wire and 40%+ lower tail jitter. "
              "ROS2 reserved for v1.0.",
     ),
+    zmq_server_cert: str = typer.Option(
+        "",
+        "--zmq-server-cert",
+        help="Path to a pyzmq CURVE server secret certificate (.key_secret). "
+             "Requires --transport zmq and --zmq-client-cert-dir.",
+    ),
+    zmq_client_cert_dir: str = typer.Option(
+        "",
+        "--zmq-client-cert-dir",
+        help="Directory of allowed pyzmq CURVE client public certificates. "
+             "Requires --transport zmq and --zmq-server-cert.",
+    ),
+    zmq_control_token: str = typer.Option(
+        "",
+        "--zmq-control-token",
+        envvar="TETHER_ZMQ_CONTROL_TOKEN",
+        help="Token required for ZMQ control endpoints such as ping and kill. "
+             "Pass the same value to ZmqRuntimeClient(auth_token=...). "
+             "Can also be supplied via TETHER_ZMQ_CONTROL_TOKEN.",
+    ),
+    zmq_insecure_ok: bool = typer.Option(
+        False,
+        "--zmq-insecure-ok",
+        help="Allow ZMQ to bind to a non-loopback host without CURVE and control "
+             "auth. Use only on isolated lab networks.",
+    ),
     device: str = typer.Option("cuda", help="Device: cuda or cpu"),
     providers: str = typer.Option(
         "",
@@ -1785,6 +2096,20 @@ def serve(
              "fires (whichever first). Lower = lower per-request latency; "
              "higher = better batching efficiency under bursty load.",
     ),
+    inference_executor_workers: int = typer.Option(
+        1,
+        "--inference-executor-workers",
+        help="Dedicated worker threads for offloading synchronous inference from "
+             "the async server. Keep 1 for static-shape GPU exports; increase "
+             "only when the backend supports parallel inference safely.",
+    ),
+    inference_executor_queue: int = typer.Option(
+        8,
+        "--inference-executor-queue",
+        help="Accepted-but-not-yet-running inference submissions before the "
+             "server returns inference_executor_full. Set 0 to reject instead "
+             "of queueing behind a busy worker.",
+    ),
     max_batch_cost_ms: float = typer.Option(
         100.0,
         "--max-batch-cost-ms",
@@ -1823,7 +2148,7 @@ def serve(
              "lerobot's RTCProcessor so the robot keeps executing the tail "
              "of one chunk while the next chunk is being computed. 2-3× "
              "effective throughput on Jetson-class latency. Requires "
-             "`pip install tether[rtc]` (pulls lerobot==0.5.1).",
+             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.5.1).",
     ),
     rtc_execution_horizon: int = typer.Option(
         10,
@@ -1849,6 +2174,58 @@ def serve(
         "--rtc-debug",
         help="With --rtc: enable lerobot's debug Tracker for per-step state "
              "capture. Useful for replay forensics; small per-call overhead.",
+    ),
+    adaptive_action_chunking: bool = typer.Option(
+        False,
+        "--adaptive-action-chunking",
+        help="With --rtc: adapt the RTC execution horizon from runtime signals. "
+             "Stable/high-latency chunks execute longer before replanning; "
+             "uncertain or discontinuous chunks replan sooner.",
+    ),
+    adaptive_action_chunking_canary: bool = typer.Option(
+        False,
+        "--adaptive-action-chunking-canary",
+        help="With --rtc: compute AAC decisions and telemetry but keep applying "
+             "the base --rtc-execution-horizon. Use before enabling AAC control.",
+    ),
+    aac_min_horizon: int = typer.Option(
+        1,
+        "--aac-min-horizon",
+        help="With --adaptive-action-chunking: minimum execution horizon in actions.",
+    ),
+    aac_low_uncertainty: float = typer.Option(
+        0.20,
+        "--aac-low-uncertainty",
+        help="With --adaptive-action-chunking: uncertainty below this is low risk.",
+    ),
+    aac_high_uncertainty: float = typer.Option(
+        0.65,
+        "--aac-high-uncertainty",
+        help="With --adaptive-action-chunking: uncertainty at/above this is high risk.",
+    ),
+    aac_low_guard_margin: float = typer.Option(
+        0.05,
+        "--aac-low-guard-margin",
+        help="With --adaptive-action-chunking: guard margin at/below this shortens "
+             "the horizon.",
+    ),
+    aac_high_correction_magnitude: float = typer.Option(
+        0.20,
+        "--aac-high-correction-magnitude",
+        help="With --adaptive-action-chunking: A2C2 correction magnitude at/above "
+             "this shortens the horizon.",
+    ),
+    aac_high_action_delta: float = typer.Option(
+        0.25,
+        "--aac-high-action-delta",
+        help="With --adaptive-action-chunking: chunk-boundary action delta at/above "
+             "this shortens the horizon.",
+    ),
+    aac_high_latency_ms: float = typer.Option(
+        120.0,
+        "--aac-high-latency-ms",
+        help="With --adaptive-action-chunking: stable scenes at/above this latency "
+             "can lengthen the horizon.",
     ),
     record: str = typer.Option(
         "",
@@ -1965,7 +2342,7 @@ def serve(
              "stdio (default), the MCP server owns stdin/stdout and FastAPI "
              "is NOT started (use for Claude Desktop / Cursor integration). "
              "With --mcp-transport http, both MCP (on --mcp-port) and FastAPI "
-             "(on --port) run concurrently. Requires `pip install tether[mcp]`.",
+             "(on --port) run concurrently. Requires `pip install fastcrest-tether[mcp]`.",
     ),
     mcp_transport: str = typer.Option(
         "stdio",
@@ -1983,7 +2360,7 @@ def serve(
         "",
         "--otel-endpoint",
         help="OTLP gRPC endpoint for trace export (e.g. 'localhost:4317' for "
-             "Phoenix, or an OTel Collector). Requires `pip install tether"
+             "Phoenix, or an OTel Collector). Requires `pip install fastcrest-tether"
              "[tracing]`. When unset, falls back to $OTEL_EXPORTER_OTLP_ENDPOINT "
              "and then 'localhost:4317'. Traces include gen_ai.operation.name, "
              "gen_ai.request.model, gen_ai.action.embodiment, gen_ai.action."
@@ -2154,15 +2531,22 @@ def serve(
     ),
     shadow_policy: str = typer.Option(
         "", "--shadow-policy",
-        help="(Phase 1.5) shadow inference: path to a policy that runs alongside "
-             "the primary on a sample of traffic. Phase 1: shipped INERT (logs "
-             "warning when set, no shadow execution). Mutually exclusive with "
+        help="Shadow inference: path to a policy that runs alongside "
+             "the primary on a sample of traffic. Candidate actions are recorded "
+             "as shadow evidence for `tether policy diff --shadow`; they are "
+             "never returned to the robot client. Mutually exclusive with "
              "--policy-b.",
     ),
     shadow_sample: float = typer.Option(
-        0.0, "--shadow-sample",
-        help="(Phase 1.5) fraction of /act requests to mirror to --shadow-policy "
-             "in [0, 1]. Phase 1: ignored.",
+        1.0, "--shadow-sample",
+        help="Fraction of /act requests to mirror to --shadow-policy in [0, 1]. "
+             "Default 1.0 when a shadow policy is set.",
+    ),
+    shadow_queue_size: int = typer.Option(
+        32, "--shadow-queue-size",
+        help="Bounded queue for background shadow inference. 0 disables shadow "
+             "queueing. Overload records a shadow_queue_full result instead of "
+             "blocking live /act responses.",
     ),
     no_rtc: bool = typer.Option(
         False, "--no-rtc",
@@ -2209,6 +2593,12 @@ def serve(
             "comparison.[/dim]"
         )
         raise typer.Exit(1)
+    if shadow_sample < 0.0 or shadow_sample > 1.0:
+        err_console.print("[red]--shadow-sample must be in [0, 1].[/red]")
+        raise typer.Exit(1)
+    if shadow_queue_size < 0:
+        err_console.print("[red]--shadow-queue-size must be >= 0.[/red]")
+        raise typer.Exit(1)
     if two_policy_mode:
         from tether.runtime.policy import validate_split_and_no_rtc
         try:
@@ -2235,11 +2625,18 @@ def serve(
         )
 
     if shadow_policy:
+        shadow_path = Path(shadow_policy)
+        if not shadow_path.exists():
+            err_console.print(f"[red]--shadow-policy export not found: {shadow_policy}[/red]")
+            raise typer.Exit(1)
+        if not list(shadow_path.glob("*.onnx")):
+            err_console.print(f"[red]No ONNX files found in --shadow-policy export: {shadow_policy}[/red]")
+            raise typer.Exit(1)
         console.print(
-            f"\n[yellow]--shadow-policy={shadow_policy} (Phase 1.5; "
-            f"shipped inert in Phase 1).[/yellow] "
-            f"[dim]Shadow execution lands when "
-            f"shadow-inference primitive ships.[/dim]\n"
+            f"\n[bold]Shadow rollout active[/bold] "
+            f"(--shadow-policy={shadow_policy}, --shadow-sample={shadow_sample:g}). "
+            f"[dim]Candidate actions are recorded for policy diff and are not "
+            f"sent to the robot.[/dim]\n"
         )
 
     # Resolve --embodiment / --custom-embodiment-config (B.1). Validate
@@ -2262,7 +2659,7 @@ def serve(
         if embodiment.strip().lower() in ("so_arm100", "so-arm100"):
             preset_lookup = "so100"
             try:
-                from reflex.embodiments.so_arm100 import SOARM100Adapter
+                from tether.embodiments.so_arm100 import SOARM100Adapter
                 try:
                     so_arm100_adapter = SOARM100Adapter.from_bundle(export_dir)
                     console.print(
@@ -2274,7 +2671,7 @@ def serve(
                     console.print(
                         "  [yellow]Bundle has no embedded so_arm100 calibration; "
                         "using factory defaults. Re-export with "
-                        "`reflex export ... --embodiment so_arm100 "
+                        "`tether export ... --embodiment so_arm100 "
                         "--calibration <cal.json>` to embed your physical arm's "
                         "homing offsets.[/yellow]"
                     )
@@ -2331,6 +2728,19 @@ def serve(
                 prefix_attention_schedule=rtc_schedule,
                 max_guidance_weight=rtc_max_guidance_weight,
                 debug=rtc_debug,
+                adaptive_chunking_enabled=(
+                    adaptive_action_chunking or adaptive_action_chunking_canary
+                ),
+                adaptive_chunking_canary=adaptive_action_chunking_canary,
+                adaptive_min_horizon=aac_min_horizon,
+                adaptive_low_uncertainty=aac_low_uncertainty,
+                adaptive_high_uncertainty=aac_high_uncertainty,
+                adaptive_low_guard_margin=aac_low_guard_margin,
+                adaptive_high_correction_magnitude=(
+                    aac_high_correction_magnitude
+                ),
+                adaptive_high_action_delta=aac_high_action_delta,
+                adaptive_high_latency_ms=aac_high_latency_ms,
             )
         except ValueError as exc:
             err_console.print(f"[red]Invalid RTC config: {exc}[/red]")
@@ -2372,9 +2782,10 @@ def serve(
         available = ort.get_available_providers()
     except ImportError:
         err_console.print(
-            "[red]onnxruntime is not installed.[/red]\n"
-            "For GPU: [cyan]pip install onnxruntime-gpu[/cyan]\n"
-            "For CPU: [cyan]pip install onnxruntime[/cyan]"
+            "onnxruntime is not installed.\n"
+            "For CPU serving: pip install 'fastcrest-tether[serve]'\n"
+            "For GPU serving: pip install 'fastcrest-tether[serve,gpu]'",
+            markup=False,
         )
         raise typer.Exit(1)
 
@@ -2405,6 +2816,11 @@ def serve(
         composed.append(f"[cyan]deadline[/cyan]={deadline_ms:.0f}ms")
     if max_batch > 1:
         composed.append(f"[cyan]batch[/cyan]={max_batch}@{batch_timeout_ms:.0f}ms")
+    if inference_executor_workers != 1 or inference_executor_queue != 8:
+        composed.append(
+            f"[cyan]inference-executor[/cyan]="
+            f"{inference_executor_workers}w/{inference_executor_queue}q"
+        )
     if embodiment_cfg is not None:
         composed.append(f"[cyan]embodiment[/cyan]={embodiment_cfg.embodiment}")
         if so_arm100_adapter is not None:
@@ -2418,8 +2834,14 @@ def serve(
             f"{', no-gzip' if record_no_gzip else ''})"
         )
     if rtc:
+        aac_suffix = ""
+        if adaptive_action_chunking_canary:
+            aac_suffix = "/aac-canary"
+        elif adaptive_action_chunking:
+            aac_suffix = "/aac"
         composed.append(
             f"[cyan]rtc[/cyan]=horizon{rtc_execution_horizon}/{rtc_schedule}"
+            f"{aac_suffix}"
         )
     if composed:
         console.print(f"  Wedges:  {' · '.join(composed)}")
@@ -2447,7 +2869,7 @@ def serve(
         from tether.runtime.server import create_app
         import uvicorn
     except ImportError:
-        console.print("Install serve dependencies: pip install 'tether[serve]'", style="red", markup=False)
+        console.print("Install serve dependencies: pip install 'fastcrest-tether[serve]'", style="red", markup=False)
         raise typer.Exit(1)
 
     if replan_hz > 0 and execute_hz <= 0:
@@ -2522,6 +2944,8 @@ def serve(
         deadline_ms=deadline_ms if deadline_ms > 0 else None,
         max_batch=max_batch,
         batch_timeout_ms=batch_timeout_ms,
+        inference_executor_workers=inference_executor_workers,
+        inference_executor_queue=inference_executor_queue,
         api_key=api_key or None,
         replan_hz=replan_hz if replan_hz > 0 else None,
         execute_hz=execute_hz if execute_hz > 0 else None,
@@ -2559,6 +2983,9 @@ def serve(
         policy_b_export_dir=policy_b or None,
         policy_split_a_percent=split,
         policy_crash_threshold=max_consecutive_crashes,
+        shadow_policy=shadow_policy or None,
+        shadow_sample=shadow_sample,
+        shadow_queue_size=shadow_queue_size,
     )
     if api_key:
         composed.append("[cyan]api-key-auth[/cyan]")
@@ -2599,6 +3026,11 @@ def serve(
         )
     if a2c2_checkpoint:
         composed.append(f"[cyan]a2c2[/cyan]={Path(a2c2_checkpoint).name}")
+    if shadow_policy:
+        composed.append(
+            f"[cyan]shadow[/cyan]={Path(shadow_policy).name}"
+            f"@{shadow_sample:g}/q={shadow_queue_size}"
+        )
     if auto_calibrate:
         composed.append("[cyan]auto-calibrate[/cyan]" + ("[force]" if calibrate_force else ""))
     composed.append(f"[cyan]batch-budget[/cyan]={max_batch_cost_ms:g}ms")
@@ -2618,7 +3050,7 @@ def serve(
         except ImportError:
             console.print(
                 "MCP dependency not installed. Run:\n"
-                "  pip install 'tether[mcp]'",
+                "  pip install 'fastcrest-tether[mcp]'",
                 style="red", markup=False,
             )
             raise typer.Exit(1)
@@ -2627,7 +3059,7 @@ def serve(
         if tether_srv is None:
             err_console.print(
                 "[red]Could not find TetherServer on the app state; MCP needs a live "
-                "inference engine. Report this at github.com/FastCrest/tether-vla/issues.[/red]"
+                "inference engine. Report this at github.com/FastCrest/tether/issues.[/red]"
             )
             raise typer.Exit(1)
         mcp_srv = create_mcp_server(tether_srv)
@@ -2653,8 +3085,34 @@ def serve(
     if transport == "zmq":
         console.print("[bold green]Starting ZMQ server...[/bold green]")
         from tether.runtime.transports.zmq.factory import create_zmq_server
-        zmq_server = create_zmq_server(app_instance, host=host, port=port)
+        from tether.runtime.transports.zmq.security import validate_zmq_bind_security
+
+        try:
+            validate_zmq_bind_security(
+                host=host,
+                curve_enabled=bool(zmq_server_cert and zmq_client_cert_dir),
+                control_auth_enabled=bool(zmq_control_token),
+                allow_insecure=zmq_insecure_ok,
+            )
+        except ValueError as exc:
+            err_console.print(f"[red]{exc}[/red]", markup=False)
+            raise typer.Exit(1) from exc
+
+        zmq_server = create_zmq_server(
+            app_instance,
+            host=host,
+            port=port,
+            curve_server_cert=zmq_server_cert or None,
+            curve_client_cert_dir=zmq_client_cert_dir or None,
+            control_token=zmq_control_token or None,
+        )
         composed.append("[cyan]transport=zmq[/cyan]")
+        if zmq_server_cert:
+            composed.append("[cyan]curve=on[/cyan]")
+        if zmq_control_token:
+            composed.append("[cyan]control-auth=on[/cyan]")
+        if zmq_insecure_ok:
+            composed.append("[yellow]zmq-insecure-ok[/yellow]")
         console.print(f"[dim]Features: {' + '.join(composed)}[/dim]")
         zmq_server.run()
     elif transport == "http":
@@ -3069,7 +3527,7 @@ def _check_trt_ep_load_chain(add) -> None:
         import onnxruntime as ort
     except ImportError:
         add("ORT-TRT EP active", False,
-            "onnxruntime not installed — pip install 'tether[serve,gpu]'")
+            "onnxruntime not installed — pip install 'fastcrest-tether[serve,gpu]'")
         return
 
     if "TensorrtExecutionProvider" not in ort.get_available_providers():
@@ -3078,7 +3536,7 @@ def _check_trt_ep_load_chain(add) -> None:
             False,
             "TensorrtExecutionProvider not in onnxruntime's available "
             "providers list. Either onnxruntime-gpu isn't installed (use "
-            "'tether-vla[serve,gpu]') or you're on a CPU-only ORT build.",
+            "'fastcrest-tether[serve,gpu]') or you're on a CPU-only ORT build.",
         )
         return
 
@@ -3128,6 +3586,413 @@ def _check_trt_ep_load_chain(add) -> None:
 
 
 @app.command()
+def smoke(
+    export_dir: str = typer.Option(
+        "",
+        "--export-dir",
+        help=(
+            "Directory for the generated tiny export. Default: "
+            "$TETHER_HOME/smoke/export."
+        ),
+    ),
+    port: int = typer.Option(
+        0,
+        "--port",
+        help="Local server port. 0 picks a free localhost port.",
+    ),
+    offline: bool = typer.Option(
+        True,
+        "--offline/--online",
+        help="Run with TETHER_OFFLINE/HF offline flags enabled.",
+    ),
+    timeout_s: float = typer.Option(
+        30.0,
+        "--timeout-s",
+        help="Seconds to wait for /health and /act responses.",
+    ),
+    act_samples: int = typer.Option(
+        3,
+        "--act-samples",
+        help="Number of /act roundtrips to measure for p50/p95 smoke latency.",
+    ),
+    keep_export: bool = typer.Option(
+        True,
+        "--keep-export/--tmp-export",
+        help="Keep the generated smoke export for inspection.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: 'human', 'json', or 'markdown'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+    markdown_output: str = typer.Option(
+        "",
+        "--markdown-output",
+        help="Write a markdown smoke receipt to this path.",
+    ),
+):
+    """Run a local new-user smoke: tiny export, doctor, serve, /health, /act."""
+
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json", "markdown"):
+        err_console.print(
+            f"[red]--format must be 'human', 'json', or 'markdown', got {output_format!r}[/red]"
+        )
+        raise typer.Exit(2)
+    if act_samples < 1:
+        err_console.print("[red]--act-samples must be >= 1[/red]")
+        raise typer.Exit(2)
+
+    import tether.smoke as smoke_mod
+
+    receipt = smoke_mod.run_smoke(
+        export_dir=export_dir or None,
+        offline=offline,
+        port=port,
+        timeout_s=timeout_s,
+        keep_export=keep_export,
+        act_samples=act_samples,
+    )
+
+    if markdown_output:
+        out_path = Path(markdown_output).expanduser()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(smoke_mod.format_smoke_markdown(receipt))
+
+    if output_format == "json":
+        typer.echo(json.dumps(receipt, indent=2))
+    elif output_format == "markdown":
+        typer.echo(smoke_mod.format_smoke_markdown(receipt))
+    else:
+        console.print(smoke_mod.format_smoke_human(receipt))
+
+    if not receipt.get("passed"):
+        raise typer.Exit(1)
+
+
+@app.command(name="deploy-proof", hidden=True)
+def deploy_proof(
+    export_dir: str = typer.Argument(
+        ...,
+        help="Path to the real exported model directory to prove.",
+    ),
+    output_dir: str = typer.Option(
+        "",
+        "--output-dir",
+        help="Directory for deployment-proof.json, Markdown, logs, and MANIFEST.",
+    ),
+    profile: str = typer.Option(
+        "",
+        "--profile",
+        help="Optional JSON/YAML deployment profile with pass/fail thresholds.",
+    ),
+    port: int = typer.Option(
+        0,
+        "--port",
+        help="Local server port. 0 picks a free localhost port.",
+    ),
+    offline: bool = typer.Option(
+        True,
+        "--offline/--online",
+        help="Run with TETHER_OFFLINE/HF offline flags enabled.",
+    ),
+    timeout_s: float = typer.Option(
+        30.0,
+        "--timeout-s",
+        help="Seconds to wait for /health, /act, /metrics, and auth probes.",
+    ),
+    samples: int = typer.Option(
+        20,
+        "--samples",
+        help="Number of authenticated /act roundtrips to measure.",
+    ),
+    device: str = typer.Option(
+        "cpu",
+        "--device",
+        help="Device passed to tether serve: cpu or cuda.",
+    ),
+    providers: str = typer.Option(
+        "",
+        "--providers",
+        help="Comma-separated ORT providers passed through to tether serve.",
+    ),
+    no_strict_providers: bool = typer.Option(
+        False,
+        "--no-strict-providers",
+        help="Allow serve provider fallback instead of failing loudly.",
+    ),
+    embodiment: str = typer.Option(
+        "custom",
+        "--embodiment",
+        help="Embodiment preset used for serve and guard stress checks.",
+    ),
+    custom_embodiment_config: str = typer.Option(
+        "",
+        "--custom-embodiment-config",
+        help="Custom embodiment config JSON passed through to tether serve.",
+    ),
+    safety_config: str = typer.Option(
+        "",
+        "--safety-config",
+        help="SafetyLimits JSON passed through to tether serve and guard stress.",
+    ),
+    api_key: str = typer.Option(
+        "",
+        "--api-key",
+        help="Start serve with API-key auth and prove protected endpoints reject unauthenticated calls.",
+    ),
+    deadline_ms: float = typer.Option(
+        0.0,
+        "--deadline-ms",
+        help="Per-request deadline passed through to tether serve. 0 disables.",
+    ),
+    control_hz: float = typer.Option(
+        0.0,
+        "--control-hz",
+        help="Robot control rate for latency/control-budget evidence. 0 uses the profile.",
+    ),
+    max_concurrent: int = typer.Option(
+        0,
+        "--max-concurrent",
+        help="Max concurrent /act requests passed through to tether serve. 0 disables.",
+    ),
+    record_dir: str = typer.Option(
+        "",
+        "--record-dir",
+        help="Optional trace directory passed to tether serve --record.",
+    ),
+    record_images: str = typer.Option(
+        "hash_only",
+        "--record-images",
+        help="Trace image redaction policy: full, hash_only, or none.",
+    ),
+    prewarm: bool = typer.Option(
+        True,
+        "--prewarm/--no-prewarm",
+        help="Leave serve prewarm enabled so /health means ready.",
+    ),
+    instruction: str = typer.Option(
+        "reach",
+        "--instruction",
+        help="Instruction used for proof /act requests.",
+    ),
+    state_dim: int = typer.Option(
+        6,
+        "--state-dim",
+        help="Length of the zero state vector used for proof /act requests.",
+    ),
+    policy_diff_baseline: str = typer.Option(
+        "",
+        "--policy-diff-baseline",
+        help="Baseline trace for candidate-policy promotion evidence.",
+    ),
+    policy_diff_candidate: str = typer.Option(
+        "",
+        "--policy-diff-candidate",
+        help="Candidate trace for candidate-policy promotion evidence. Omit with --policy-diff-shadow.",
+    ),
+    policy_diff_shadow: bool = typer.Option(
+        False,
+        "--policy-diff-shadow",
+        help="Compare --policy-diff-baseline response.actions with shadow evidence.",
+    ),
+    policy_diff_fail_on: str = typer.Option(
+        "",
+        "--policy-diff-fail-on",
+        help="Policy diff proof gate: none/actions/latency/guard/shape/any. Defaults to profile.",
+    ),
+    policy_diff_min_action_cos: float = typer.Option(
+        0.995,
+        "--policy-diff-min-action-cos",
+        help="Minimum action cosine for the proof packet policy diff.",
+    ),
+    policy_diff_max_action_delta: float = typer.Option(
+        0.10,
+        "--policy-diff-max-action-delta",
+        help="Max absolute action delta for the proof packet policy diff.",
+    ),
+    policy_diff_max_latency_regression_pct: float = typer.Option(
+        0.10,
+        "--policy-diff-max-latency-regression-pct",
+        help="Max candidate latency regression fraction for the proof packet policy diff.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: 'human', 'json', or 'markdown'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+):
+    """Produce a hashed deployment proof packet for a real export."""
+
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json", "markdown"):
+        err_console.print(
+            f"[red]--format must be 'human', 'json', or 'markdown', got {output_format!r}[/red]"
+        )
+        raise typer.Exit(2)
+    if samples < 1:
+        err_console.print("[red]--samples must be >= 1[/red]")
+        raise typer.Exit(2)
+    if control_hz < 0:
+        err_console.print("[red]--control-hz must be >= 0[/red]")
+        raise typer.Exit(2)
+    valid_policy_diff_fail_on = {"", "none", "actions", "latency", "guard", "shape", "any"}
+    if policy_diff_fail_on not in valid_policy_diff_fail_on:
+        err_console.print(
+            "[red]--policy-diff-fail-on must be one of "
+            "none/actions/latency/guard/shape/any[/red]"
+        )
+        raise typer.Exit(2)
+    if policy_diff_shadow and policy_diff_candidate:
+        err_console.print("[red]--policy-diff-candidate is not allowed with --policy-diff-shadow[/red]")
+        raise typer.Exit(2)
+    if policy_diff_baseline and not policy_diff_shadow and not policy_diff_candidate:
+        err_console.print(
+            "[red]--policy-diff-candidate is required unless --policy-diff-shadow is set[/red]"
+        )
+        raise typer.Exit(2)
+
+    import tether.deploy_proof as proof_mod
+
+    try:
+        receipt = proof_mod.run_deploy_proof(
+            export_dir=export_dir,
+            output_dir=output_dir or None,
+            profile_path=profile or None,
+            offline=offline,
+            port=port,
+            timeout_s=timeout_s,
+            act_samples=samples,
+            device=device,
+            providers=providers,
+            no_strict_providers=no_strict_providers,
+            embodiment=embodiment,
+            custom_embodiment_config=custom_embodiment_config or None,
+            safety_config=safety_config or None,
+            api_key=api_key or None,
+            deadline_ms=deadline_ms,
+            control_hz=control_hz if control_hz > 0 else None,
+            max_concurrent=max_concurrent,
+            record_dir=record_dir or None,
+            record_images=record_images,
+            prewarm=prewarm,
+            instruction=instruction,
+            state_dim=state_dim,
+            policy_diff_baseline_trace=policy_diff_baseline or None,
+            policy_diff_candidate_trace=policy_diff_candidate or None,
+            policy_diff_shadow=policy_diff_shadow,
+            policy_diff_fail_on=policy_diff_fail_on or None,
+            policy_diff_min_action_cos=policy_diff_min_action_cos,
+            policy_diff_max_action_delta=policy_diff_max_action_delta,
+            policy_diff_max_latency_regression_pct=policy_diff_max_latency_regression_pct,
+        )
+    except proof_mod.DeployProofError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    if output_format == "json":
+        typer.echo(json.dumps(receipt, indent=2))
+    elif output_format == "markdown":
+        typer.echo(proof_mod.format_deploy_proof_markdown(receipt))
+    else:
+        console.print(proof_mod.format_deploy_proof_human(receipt))
+
+    if not receipt.get("passed"):
+        raise typer.Exit(1)
+
+
+app.command(
+    name="prove",
+    help="Friendly alias for `deploy-proof`: prove a real export is ready to deploy.",
+)(deploy_proof)
+
+
+@app.command()
+def promote(
+    packet: str = typer.Argument(
+        ...,
+        help="Deployment proof packet directory, or deployment-proof.json path.",
+    ),
+    profile: str = typer.Option(
+        "",
+        "--profile",
+        help="Built-in promotion profile name, or JSON/YAML path with rollout thresholds.",
+    ),
+    candidate_active: bool = typer.Option(
+        False,
+        "--candidate-active",
+        help="Return ROLLBACK instead of BLOCK when gates fail for an active rollout.",
+    ),
+    output: str = typer.Option(
+        "",
+        "--output",
+        help="Optional path to write the promotion decision JSON report.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: 'human' or 'json'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+) -> None:
+    """Decide PROMOTE / BLOCK / ROLLBACK from a deployment proof packet."""
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json"):
+        err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
+        raise typer.Exit(2)
+
+    from tether.promote import (
+        PromotionError,
+        decide_promotion,
+        format_promotion_human,
+        write_promotion_report,
+    )
+
+    try:
+        report = decide_promotion(
+            packet,
+            profile_path=profile or None,
+            candidate_active=candidate_active,
+        )
+    except PromotionError as exc:
+        err_console.print(f"[red]Promotion decision failed:[/red] {exc}")
+        raise typer.Exit(2)
+
+    if output:
+        write_promotion_report(report, output)
+    if output_format == "json":
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        console.print(format_promotion_human(report), markup=False)
+        if output:
+            console.print(f"Wrote promotion decision report: {output}")
+
+    decision = report.get("decision")
+    if decision == "PROMOTE":
+        raise typer.Exit(0)
+    if decision == "ROLLBACK":
+        raise typer.Exit(4)
+    raise typer.Exit(1)
+
+
+@app.command()
 def doctor(
     model: str = typer.Option(
         "",
@@ -3152,8 +4017,13 @@ def doctor(
     output_format: str = typer.Option(
         "human",
         "--format",
-        help="Output format for deploy diagnostics: 'human' (table) or 'json' "
-             "(machine-readable, schema_version=1). System probe is always human-readable.",
+        help="Output format: 'human' (table) or 'json' "
+             "(machine-readable, schema_version=1).",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
     ),
     skip: list[str] = typer.Option(
         [],
@@ -3192,6 +4062,8 @@ def doctor(
     import shutil
     import sys
 
+    if json_output:
+        output_format = "json"
     if output_format not in ("human", "json"):
         err_console.print(
             f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]"
@@ -3267,10 +4139,20 @@ def doctor(
     table.add_column("Check", style="cyan", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     table.add_column("Detail")
+    system_checks: list[dict[str, Any]] = []
 
     def add(name: str, ok: bool, detail: str):
+        check_id = "".join(ch.lower() if ch.isalnum() else "_" for ch in name.strip())
+        check_id = "_".join(part for part in check_id.split("_") if part)
+        system_checks.append({
+            "check_id": check_id,
+            "name": name.strip(),
+            "status": "pass" if ok else "warn",
+            "detail": detail,
+        })
         symbol = "[green]✓[/green]" if ok else "[yellow]⚠[/yellow]"
-        table.add_row(name, symbol, detail)
+        if output_format == "human":
+            table.add_row(name, symbol, detail)
 
     # Python
     py = sys.version_info
@@ -3377,7 +4259,7 @@ def doctor(
                     f"❌ JetPack R{jetpack_major} ships CUDA 11.4. ORT 1.20+ "
                     f"requires CUDA 12.x → CUDAExecutionProvider will silently "
                     f"fall to CPU. Upgrade to JetPack R36+ (Orin) or use "
-                    f"tether-vla[serve,onnx] for CPU-only inference.",
+                    f"fastcrest-tether[serve,onnx] for CPU-only inference.",
                 )
             elif jp_int >= 36:
                 add(
@@ -3681,9 +4563,9 @@ def doctor(
     # Tether itself
     try:
         from tether import __version__ as tether_version
-        add("tether-vla", True, f"version {tether_version}")
+        add("fastcrest-tether", True, f"version {tether_version}")
     except Exception as e:
-        add("tether-vla", False, str(e))
+        add("fastcrest-tether", False, str(e))
 
     # Curate data-contribution status (informational; no pass/fail).
     try:
@@ -3731,6 +4613,48 @@ def doctor(
         add("Contribute queue", _q_mb < 500, _detail)
     except Exception as _q_exc:  # noqa: BLE001
         add("Contribute queue", False, f"unavailable: {_q_exc}")
+
+    if output_format == "json":
+        from datetime import datetime, timezone
+
+        def _summary(checks: list[dict[str, Any]]) -> dict[str, int]:
+            return {
+                "pass": sum(1 for check in checks if check["status"] == "pass"),
+                "warn": sum(1 for check in checks if check["status"] == "warn"),
+                "fail": sum(1 for check in checks if check["status"] == "fail"),
+                "skip": sum(1 for check in checks if check["status"] == "skip"),
+            }
+
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "system_probe": {
+                "checks": system_checks,
+                "summary": _summary(system_checks),
+            },
+        }
+        exit_status = 0
+        if model:
+            from tether.diagnostics import (
+                exit_code as _exit_code,
+                format_json,
+                run_all_checks,
+            )
+
+            results = run_all_checks(
+                model_path=model,
+                embodiment_name=embodiment,
+                rtc=rtc,
+                skip=skip,
+            )
+            payload["deploy_diagnostics"] = json.loads(format_json(
+                results,
+                model_path=model,
+                embodiment_name=embodiment,
+            ))
+            exit_status = _exit_code(results)
+        typer.echo(json.dumps(payload, indent=2))
+        raise typer.Exit(exit_status)
 
     console.print(table)
     console.print(
@@ -3880,6 +4804,7 @@ def models_list(
                                 help="Filter by supported device (orin_nano, agx_orin, thor, a10g, a100, h100, h200)"),
     embodiment: str = typer.Option("", "--embodiment", help="Filter by supported embodiment (franka, so100, ur5)"),
     output_format: str = typer.Option("human", "--format", help="'human' (table) or 'json'"),
+    json_output: bool = typer.Option(False, "--json", help="Alias for --format json."),
 ):
     """List Tether-compatible models from the curated registry.
 
@@ -3891,6 +4816,8 @@ def models_list(
     """
     from tether.registry import REGISTRY, filter_models
 
+    if json_output:
+        output_format = "json"
     if output_format not in ("human", "json"):
         err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
         raise typer.Exit(2)
@@ -3946,7 +4873,7 @@ def models_list(
         )
     console.print(table)
     console.print(
-        "\n[dim]tether models pull <model_id>   # download to ~/.cache/tether/models/<id>[/dim]"
+        "\n[dim]tether models pull <model_id>   # download to $TETHER_HOME/models/<id> or ~/.cache/tether/models/<id>[/dim]"
         "\n[dim]tether models info <model_id>   # see benchmarks + per-device support[/dim]"
     )
 
@@ -3955,7 +4882,7 @@ def models_list(
 def models_pull(
     model_id: str = typer.Argument(help="Registry id from `tether models list`"),
     target_dir: str = typer.Option("", "--target-dir",
-                                    help="Where to write weights. Default: ~/.cache/tether/models/<model_id>/"),
+                                    help="Where to write weights. Default: $TETHER_HOME/models/<model_id>/ or ~/.cache/tether/models/<model_id>/"),
     no_verify: bool = typer.Option(False, "--no-verify",
                                     help="Skip the post-download structure check"),
     revision: str = typer.Option("", "--revision",
@@ -3984,7 +4911,7 @@ def models_pull(
         console.print("Tip: you can also pass the HuggingFace repo id (e.g. lerobot/smolvla_base).")
         raise typer.Exit(2)
 
-    target = Path(target_dir) if target_dir else (Path.home() / ".cache" / "tether" / "models" / entry.model_id)
+    target = Path(target_dir).expanduser() if target_dir else _tether_cache_path("models", entry.model_id)
     target.mkdir(parents=True, exist_ok=True)
 
     rev = revision or entry.hf_revision
@@ -3999,7 +4926,7 @@ def models_pull(
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        err_console.print("[red]huggingface_hub not installed. pip install tether[/red]")
+        err_console.print("[red]huggingface_hub not installed. pip install fastcrest-tether[/red]")
         raise typer.Exit(2)
 
     try:
@@ -4032,6 +4959,7 @@ def models_pull(
 def models_info(
     model_id: str = typer.Argument(help="Registry id from `tether models list`"),
     output_format: str = typer.Option("human", "--format", help="'human' or 'json'"),
+    json_output: bool = typer.Option(False, "--json", help="Alias for --format json."),
 ):
     """Show benchmarks + per-device support for a single model.
 
@@ -4043,6 +4971,12 @@ def models_info(
     entry = by_id(model_id)
     if entry is None:
         err_console.print(f"[red]Unknown model_id: {model_id!r}[/red]")
+        raise typer.Exit(2)
+
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json"):
+        err_console.print(f"[red]--format must be 'human' or 'json', got {output_format!r}[/red]")
         raise typer.Exit(2)
 
     if output_format == "json":
@@ -4119,7 +5053,7 @@ def go(
     target_dir: str = typer.Option(
         "",
         "--target-dir",
-        help="Where to cache weights. Default: ~/.cache/tether/models/<id>/",
+        help="Where to cache weights. Default: $TETHER_HOME/models/<id>/ or ~/.cache/tether/models/<id>/",
     ),
     port: int = typer.Option(8000, "--port", help="HTTP port for /act + /health"),
     host: str = typer.Option("0.0.0.0", "--host"),
@@ -4140,11 +5074,12 @@ def go(
     For models that ship as raw PyTorch (requires_export=True in registry),
     this command pulls + exports inline (5-15 min) + serves. The export step
     requires the [monolithic] extra:
-      pip install 'tether[monolithic]'
+      pip install 'fastcrest-tether[monolithic]'
     Without it, `tether go` errors with the install command.
 
-    Exported artifacts cache at ~/.cache/tether/exports/<model_id>/ — re-runs
-    skip the export on cache hit.
+    Exported artifacts cache at $TETHER_HOME/exports/<model_id>/, or
+    ~/.cache/tether/exports/<model_id>/ when TETHER_HOME is unset. Re-runs skip
+    the export on cache hit.
 
     Plan ref: features/01_serve/subfeatures/_dx_gaps/one-command-deploy.md
     """
@@ -4203,7 +5138,7 @@ def go(
         raise typer.Exit(2)
 
     # Step 3: target dir
-    target = Path(target_dir) if target_dir else (Path.home() / ".cache" / "tether" / "models" / entry.model_id)
+    target = Path(target_dir).expanduser() if target_dir else _tether_cache_path("models", entry.model_id)
 
     if dry_run:
         console.print(f"[bold cyan]target:[/bold cyan]   {target}")
@@ -4244,9 +5179,7 @@ def go(
     }
     if entry.requires_export:
         export_target = _DEVICE_CLASS_TO_TARGET.get(probe.device_class, "desktop")
-        # Respect TETHER_HOME for cache root so tests + custom installs can override.
-        tether_home = Path(os.environ.get("TETHER_HOME", Path.home() / ".cache" / "tether"))
-        export_dir = tether_home / "exports" / entry.model_id
+        export_dir = _tether_cache_path("exports", entry.model_id)
         export_marker = export_dir / "VERIFICATION.md"
         meta_marker = export_dir / "_tether_meta.json"
 
@@ -4342,7 +5275,7 @@ def go(
                 console.print(f"{exc}", style="red", markup=False)
                 console.print(
                     "\n`tether go` needs the monolithic export extras to deploy this model.\n"
-                    "Fix: pip install 'tether[monolithic]'\n"
+                    "Fix: pip install 'fastcrest-tether[monolithic]'\n"
                     "(pins transformers==5.3.0; use a clean venv to avoid the "
                     "base transformers<5.0 conflict)",
                     style="cyan", markup=False,
@@ -4424,7 +5357,7 @@ def go(
 # Verb-noun subgroups (2026-04-24 refactor — see ADR
 # 01_decisions/2026-04-24-cli-verb-noun-now-config-later-dashboard-eventually.md).
 #
-# Visible top-level: serve, doctor, models, train, validate, inspect, go (= 7).
+# Visible top-level: serve, doctor, models, train, validate, inspect, go, policy.
 # Old top-level commands stay registered under hidden=True so existing scripts
 # don't break; they will be removed in v0.2.
 # ---------------------------------------------------------------------------
@@ -4440,6 +5373,18 @@ inspect_app = typer.Typer(
 )
 comply_app = typer.Typer(
     help="Compliance evidence packs — export EU technical-file bundles and SBOMs.",
+)
+policy_app = typer.Typer(
+    help="Policy rollout gates - diff recorded or shadow policy behavior.",
+    no_args_is_help=True,
+)
+rollout_app = typer.Typer(
+    help="Self-serve rollout decisions from shadow evidence.",
+    no_args_is_help=True,
+)
+profiles_app = typer.Typer(
+    help="Built-in promotion profiles for proof-to-promote decisions.",
+    no_args_is_help=True,
 )
 
 # Cross-register existing functions under the new verb-noun paths.
@@ -4722,11 +5667,471 @@ def comply_gaps(
     else:
         console.print(text, markup=False)
 
+
+def _profile_policy_label(value: Any) -> str:
+    if value is True:
+        return "required"
+    if value == "auto":
+        return "auto"
+    return "optional"
+
+
+def _render_profile(profile: dict[str, Any], output_format: str) -> str:
+    if output_format == "json":
+        return json.dumps(profile, indent=2, sort_keys=True) + "\n"
+    if output_format == "yaml":
+        import yaml
+
+        return yaml.safe_dump(profile, sort_keys=False)
+    raise ValueError(output_format)
+
+
+@profiles_app.command("list")
+def profiles_list(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+) -> None:
+    """List built-in promotion profiles."""
+    from tether.promote import list_promotion_profiles
+
+    profiles = list_promotion_profiles()
+    if json_output:
+        typer.echo(json.dumps({"profiles": profiles}, indent=2, sort_keys=True))
+        return
+
+    table = Table(title="Built-in promotion profiles")
+    table.add_column("Profile", style="cyan")
+    table.add_column("Policy diff")
+    table.add_column("Evidence")
+    table.add_column("Latency")
+    table.add_column("Purpose")
+    for profile in profiles:
+        evidence = [
+            label
+            for label, enabled in (
+                ("auth", profile.get("require_auth")),
+                ("metrics", profile.get("require_metrics")),
+                ("trace", profile.get("require_record_trace")),
+                ("guard", profile.get("require_guard")),
+            )
+            if enabled
+        ]
+        latency = []
+        if profile.get("max_roundtrip_p95_ms") is not None:
+            latency.append(f"p95<={profile['max_roundtrip_p95_ms']}ms")
+        if profile.get("max_warm_roundtrip_p95_ms") is not None:
+            latency.append(f"warm<={profile['max_warm_roundtrip_p95_ms']}ms")
+        table.add_row(
+            str(profile["name"]),
+            _profile_policy_label(profile.get("require_policy_diff")),
+            ", ".join(evidence) if evidence else "packet",
+            ", ".join(latency) if latency else "hardware-neutral",
+            str(profile.get("description") or ""),
+        )
+    console.print(table)
+
+
+@profiles_app.command("show")
+def profiles_show(
+    profile: str = typer.Argument(..., help="Built-in promotion profile name."),
+    output_format: str = typer.Option(
+        "yaml",
+        "--format",
+        help="Output format: 'yaml' or 'json'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+) -> None:
+    """Show a built-in promotion profile."""
+    from tether.promote import PromotionError, get_builtin_promotion_profile
+
+    if json_output:
+        output_format = "json"
+    if output_format not in {"yaml", "json"}:
+        err_console.print(f"[red]--format must be 'yaml' or 'json', got {output_format!r}[/red]")
+        raise typer.Exit(2)
+    try:
+        loaded = get_builtin_promotion_profile(profile)
+    except PromotionError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+    console.print(_render_profile(loaded, output_format), markup=False)
+
+
+@profiles_app.command("init")
+def profiles_init(
+    profile: str = typer.Argument(..., help="Built-in promotion profile name."),
+    output: str = typer.Option(
+        "",
+        "--output",
+        "-o",
+        help="Output file. Defaults to <profile>.yml or <profile>.json.",
+    ),
+    output_format: str = typer.Option(
+        "yaml",
+        "--format",
+        help="Output format: 'yaml' or 'json'.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing output file.",
+    ),
+) -> None:
+    """Copy a built-in promotion profile to an editable local file."""
+    from tether.promote import PromotionError, get_builtin_promotion_profile
+
+    if output_format not in {"yaml", "json"}:
+        err_console.print(f"[red]--format must be 'yaml' or 'json', got {output_format!r}[/red]")
+        raise typer.Exit(2)
+    try:
+        loaded = get_builtin_promotion_profile(profile)
+    except PromotionError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    suffix = "json" if output_format == "json" else "yml"
+    target = Path(output or f"{loaded['name']}.{suffix}").expanduser()
+    if target.exists() and not force:
+        err_console.print(f"[red]Refusing to overwrite existing file:[/red] {target}")
+        err_console.print("[dim]Pass --force or choose a different --output path.[/dim]")
+        raise typer.Exit(2)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_render_profile(loaded, output_format), encoding="utf-8")
+    console.print(f"Wrote promotion profile: {target}")
+
+
+@policy_app.command("diff")
+def policy_diff_cmd(
+    baseline_trace: str = typer.Argument(
+        ...,
+        help="Baseline trace file. In --shadow mode this is the shadow trace.",
+    ),
+    candidate_trace: Optional[str] = typer.Argument(
+        None,
+        help="Candidate trace file. Omit when --shadow is set.",
+    ),
+    shadow: bool = typer.Option(
+        False,
+        "--shadow",
+        help="Compare response.actions with shadow evidence in one trace.",
+    ),
+    min_action_cos: float = typer.Option(
+        0.995,
+        "--min-action-cos",
+        help="Minimum cosine similarity before the action diff fails.",
+    ),
+    max_action_delta: float = typer.Option(
+        0.10,
+        "--max-action-delta",
+        help="Max absolute action delta before the action diff fails.",
+    ),
+    max_latency_regression_pct: float = typer.Option(
+        0.10,
+        "--max-latency-regression-pct",
+        help="Max candidate latency regression as a fraction, e.g. 0.10 = 10%.",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        help="Write the machine-readable JSON report to this path.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print the full JSON report instead of a compact summary.",
+    ),
+    fail_on: str = typer.Option(
+        "none",
+        "--fail-on",
+        help="Exit 3 on threshold failures: none/actions/latency/guard/shape/any.",
+    ),
+) -> None:
+    """Compare baseline/candidate policy traces before promotion."""
+    from tether.policy_diff import (
+        PolicyDiffError,
+        diff_policy_traces,
+        format_policy_diff,
+        should_fail,
+        write_report,
+    )
+
+    valid_fail_on = {"none", "actions", "latency", "guard", "shape", "any"}
+    if fail_on not in valid_fail_on:
+        raise typer.BadParameter(
+            f"--fail-on must be one of {sorted(valid_fail_on)}, got {fail_on!r}"
+        )
+    if shadow and candidate_trace:
+        err_console.print("[red]candidate_trace is not allowed with --shadow[/red]")
+        raise typer.Exit(2)
+    if not shadow and not candidate_trace:
+        err_console.print("[red]candidate_trace is required unless --shadow is set[/red]")
+        raise typer.Exit(2)
+
+    try:
+        report = diff_policy_traces(
+            baseline_trace=baseline_trace,
+            candidate_trace=candidate_trace,
+            shadow=shadow,
+            min_action_cos=min_action_cos,
+            max_action_delta=max_action_delta,
+            max_latency_regression_pct=max_latency_regression_pct,
+        )
+    except (FileNotFoundError, PolicyDiffError, ValueError) as exc:
+        err_console.print(f"[red]Policy diff failed:[/red] {exc}")
+        raise typer.Exit(1)
+
+    if output:
+        write_report(report, output)
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        console.print(format_policy_diff(report), markup=False)
+        if output:
+            console.print(f"Wrote policy diff report: {output}")
+
+    if should_fail(report, fail_on):  # type: ignore[arg-type]
+        raise typer.Exit(3)
+
+
+def _run_shadow_gate_command(
+    *,
+    trace: str,
+    packet_dir: str,
+    profile: str,
+    candidate_active: bool,
+    min_compared: int,
+    wait_timeout_s: float,
+    poll_s: float,
+    fail_on: str,
+    min_action_cos: float,
+    max_action_delta: float,
+    max_latency_regression_pct: float,
+    use_existing_packet: bool,
+    json_output: bool,
+) -> None:
+    from tether.shadow_rollout import (
+        ShadowRolloutError,
+        format_shadow_rollout_human,
+        run_shadow_rollout_gate,
+    )
+
+    try:
+        report = run_shadow_rollout_gate(
+            trace=trace,
+            packet_dir=packet_dir,
+            profile=profile,
+            candidate_active=candidate_active,
+            min_compared=min_compared,
+            wait_timeout_s=wait_timeout_s,
+            poll_s=poll_s,
+            fail_on=fail_on,
+            min_action_cos=min_action_cos,
+            max_action_delta=max_action_delta,
+            max_latency_regression_pct=max_latency_regression_pct,
+            use_existing_packet=use_existing_packet,
+        )
+    except ShadowRolloutError as exc:
+        err_console.print(f"[red]Shadow rollout gate failed:[/red] {exc}")
+        raise typer.Exit(2)
+
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        console.print(format_shadow_rollout_human(report), markup=False)
+
+    decision = report.get("decision")
+    if decision == "PROMOTE":
+        raise typer.Exit(0)
+    if decision == "ROLLBACK":
+        raise typer.Exit(4)
+    raise typer.Exit(1)
+
+
+@policy_app.command("shadow-gate")
+def policy_shadow_gate_cmd(
+    trace: str = typer.Argument(
+        ...,
+        help="Shadow trace file recorded by `tether serve --shadow-policy --record`.",
+    ),
+    packet_dir: str = typer.Option(
+        "./shadow-rollout-packet",
+        "--packet-dir",
+        help="Output packet directory for deployment-proof, policy-diff, and promotion decision artifacts.",
+    ),
+    profile: str = typer.Option(
+        "lab-shadow",
+        "--profile",
+        help="Promotion profile name or YAML/JSON path. Default: lab-shadow.",
+    ),
+    candidate_active: bool = typer.Option(
+        False,
+        "--candidate-active",
+        help="Return ROLLBACK instead of HOLD when gates fail for an active candidate.",
+    ),
+    min_compared: int = typer.Option(
+        1,
+        "--min-compared",
+        help="Minimum compared shadow requests required before a PROMOTE decision is allowed.",
+    ),
+    wait_timeout_s: float = typer.Option(
+        0.0,
+        "--wait-timeout-s",
+        help="Seconds to wait for pending background shadow_result rows to flush.",
+    ),
+    poll_s: float = typer.Option(
+        0.25,
+        "--poll-s",
+        help="Polling interval while waiting for shadow_result rows.",
+    ),
+    fail_on: str = typer.Option(
+        "any",
+        "--fail-on",
+        help="Policy diff gate: none/actions/latency/guard/shape/any.",
+    ),
+    min_action_cos: float = typer.Option(
+        0.995,
+        "--min-action-cos",
+        help="Minimum cosine similarity before the action diff fails.",
+    ),
+    max_action_delta: float = typer.Option(
+        0.10,
+        "--max-action-delta",
+        help="Max absolute action delta before the action diff fails.",
+    ),
+    max_latency_regression_pct: float = typer.Option(
+        0.10,
+        "--max-latency-regression-pct",
+        help="Max shadow latency regression as a fraction, e.g. 0.10 = 10%.",
+    ),
+    use_existing_packet: bool = typer.Option(
+        False,
+        "--use-existing-packet",
+        help="Use an existing deployment-proof.json in --packet-dir instead of writing a shadow-only proof packet.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print the full JSON report instead of a compact summary.",
+    ),
+) -> None:
+    """Turn shadow trace evidence into PROMOTE, HOLD, or ROLLBACK."""
+    _run_shadow_gate_command(
+        trace=trace,
+        packet_dir=packet_dir,
+        profile=profile,
+        candidate_active=candidate_active,
+        min_compared=min_compared,
+        wait_timeout_s=wait_timeout_s,
+        poll_s=poll_s,
+        fail_on=fail_on,
+        min_action_cos=min_action_cos,
+        max_action_delta=max_action_delta,
+        max_latency_regression_pct=max_latency_regression_pct,
+        use_existing_packet=use_existing_packet,
+        json_output=json_output,
+    )
+
+
+@rollout_app.command("gate")
+def rollout_gate_cmd(
+    trace: str = typer.Argument(
+        ...,
+        help="Shadow trace file recorded by `tether serve --shadow-policy --record`.",
+    ),
+    packet_dir: str = typer.Option(
+        "./shadow-rollout-packet",
+        "--packet-dir",
+        help="Output packet directory for deployment-proof, policy-diff, and promotion decision artifacts.",
+    ),
+    profile: str = typer.Option(
+        "lab-shadow",
+        "--profile",
+        help="Promotion profile name or YAML/JSON path. Default: lab-shadow.",
+    ),
+    candidate_active: bool = typer.Option(
+        False,
+        "--candidate-active",
+        help="Return ROLLBACK instead of HOLD when gates fail for an active candidate.",
+    ),
+    min_compared: int = typer.Option(
+        1,
+        "--min-compared",
+        help="Minimum compared shadow requests required before a PROMOTE decision is allowed.",
+    ),
+    wait_timeout_s: float = typer.Option(
+        0.0,
+        "--wait-timeout-s",
+        help="Seconds to wait for pending background shadow_result rows to flush.",
+    ),
+    poll_s: float = typer.Option(
+        0.25,
+        "--poll-s",
+        help="Polling interval while waiting for shadow_result rows.",
+    ),
+    fail_on: str = typer.Option(
+        "any",
+        "--fail-on",
+        help="Policy diff gate: none/actions/latency/guard/shape/any.",
+    ),
+    min_action_cos: float = typer.Option(
+        0.995,
+        "--min-action-cos",
+        help="Minimum cosine similarity before the action diff fails.",
+    ),
+    max_action_delta: float = typer.Option(
+        0.10,
+        "--max-action-delta",
+        help="Max absolute action delta before the action diff fails.",
+    ),
+    max_latency_regression_pct: float = typer.Option(
+        0.10,
+        "--max-latency-regression-pct",
+        help="Max shadow latency regression as a fraction, e.g. 0.10 = 10%.",
+    ),
+    use_existing_packet: bool = typer.Option(
+        False,
+        "--use-existing-packet",
+        help="Use an existing deployment-proof.json in --packet-dir instead of writing a shadow-only proof packet.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print the full JSON report instead of a compact summary.",
+    ),
+) -> None:
+    """Turn shadow trace evidence into a self-serve rollout decision."""
+    _run_shadow_gate_command(
+        trace=trace,
+        packet_dir=packet_dir,
+        profile=profile,
+        candidate_active=candidate_active,
+        min_compared=min_compared,
+        wait_timeout_s=wait_timeout_s,
+        poll_s=poll_s,
+        fail_on=fail_on,
+        min_action_cos=min_action_cos,
+        max_action_delta=max_action_delta,
+        max_latency_regression_pct=max_latency_regression_pct,
+        use_existing_packet=use_existing_packet,
+        json_output=json_output,
+    )
+
+
 app.add_typer(models_app, name="models")
 app.add_typer(train_app, name="train")
 app.add_typer(validate_app, name="validate")
 app.add_typer(inspect_app, name="inspect")
 app.add_typer(comply_app, name="comply")
+app.add_typer(profiles_app, name="profiles")
+app.add_typer(policy_app, name="policy")
+app.add_typer(rollout_app, name="rollout")
 
 # ─── tether connect {name} / disconnect / list ──────────────────────────────
 
@@ -5790,7 +7195,7 @@ def chat(
     tui: bool = typer.Option(
         False, "--tui",
         help="Use the Textual full-screen TUI (multi-panel layout, scroll-back, mouse). "
-             "Requires `pip install 'tether[tui]'`. Falls back to the Rich REPL if "
+             "Requires `pip install 'fastcrest-tether[tui]'`. Falls back to the Rich REPL if "
              "textual isn't installed.",
     ),
     resume: bool = typer.Option(

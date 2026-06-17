@@ -83,7 +83,7 @@ class HDF5Converter(FormatConverter):
             import h5py
         except ImportError as exc:
             raise ImportError(
-                "h5py required for HDF5 conversion: pip install 'tether[curate-hdf5]'"
+                "h5py required for HDF5 conversion: pip install 'fastcrest-tether[curate-hdf5]'"
             ) from exc
 
         result = ConversionResult(

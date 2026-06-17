@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +57,7 @@ class ActionCacheEntry:
     matching obs is effectively zero-cost."""
     image_phashes: tuple[bytes, ...]
     lang_hash: bytes
+    state_signature: np.ndarray | None
     step_index: int
     actions: np.ndarray
 
@@ -198,6 +199,11 @@ class Pi05DecomposedInference:
         self.cache_ignore_lang = cache_ignore_lang
         self._call_index: int = 0  # monotonic call counter for step-count TTL
         self._action_cache: ActionCacheEntry | None = None
+        from tether.runtime.temporal_vla_cache import TemporalVLAReusePolicy
+        self._temporal_reuse_policy = TemporalVLAReusePolicy(
+            phash_hamming_threshold=phash_hamming_threshold,
+        )
+        self._last_temporal_action_decision = None
         # Action-similarity fast path (FlashVLA, Phase 1.5). Disabled when
         # threshold == 0; enabled when threshold > 0. Defaults to off so
         # existing behavior is unchanged unless --action-similarity-threshold
@@ -371,6 +377,18 @@ class Pi05DecomposedInference:
                 episode_cache_max_episodes,
             )
 
+    def _ensure_temporal_reuse_policy(self) -> Any:
+        """Create temporal-cache fields for restored/test-built instances."""
+        if not hasattr(self, "_temporal_reuse_policy"):
+            from tether.runtime.temporal_vla_cache import TemporalVLAReusePolicy
+
+            self._temporal_reuse_policy = TemporalVLAReusePolicy(
+                phash_hamming_threshold=getattr(self, "phash_hamming_threshold", 6),
+            )
+        if not hasattr(self, "_last_temporal_action_decision"):
+            self._last_temporal_action_decision = None
+        return self._temporal_reuse_policy
+
     # ---- Public API -------------------------------------------------
 
     def predict_action_chunk(
@@ -423,17 +441,28 @@ class Pi05DecomposedInference:
             self._phash(img_wrist_r),
         )
         lang_hash = self._lang_hash(lang_tokens)
+        temporal_policy = self._ensure_temporal_reuse_policy()
+        state_signature = temporal_policy.state_signature(state)
 
         # ---- Action-chunk cache (skip full forward on hit) --------------
         if self.cache_level == "action" and self._action_cache is not None:
             entry = self._action_cache
-            steps_since = self._call_index - entry.step_index
-            lang_ok = self.cache_ignore_lang or entry.lang_hash == lang_hash
-            if (steps_since <= self.action_cache_max_age_steps
-                and lang_ok
-                and self._phashes_match(entry.image_phashes, image_phashes)):
+            decision = temporal_policy.assess(
+                cached_image_phashes=entry.image_phashes,
+                current_image_phashes=image_phashes,
+                cached_lang_hash=entry.lang_hash,
+                current_lang_hash=lang_hash,
+                cached_state=entry.state_signature,
+                current_state=state_signature,
+                cached_step_index=entry.step_index,
+                current_step_index=self._call_index,
+                max_age_steps=self.action_cache_max_age_steps,
+                allow_lang_mismatch=self.cache_ignore_lang,
+            )
+            self._last_temporal_action_decision = decision
+            if decision.reuse:
                 self._stats.action_hits += 1
-                return entry.actions
+                return entry.actions.copy()
         if self.cache_level == "action":
             self._stats.action_misses += 1
 
@@ -499,8 +528,9 @@ class Pi05DecomposedInference:
             self._action_cache = ActionCacheEntry(
                 image_phashes=image_phashes,
                 lang_hash=lang_hash,
+                state_signature=state_signature,
                 step_index=self._call_index,
-                actions=actions,
+                actions=actions.copy(),
             )
 
         return actions
@@ -573,17 +603,23 @@ class Pi05DecomposedInference:
         cache_level='episode' this also clears the episode cache."""
         self._cache = None
         self._action_cache = None
+        self._last_temporal_action_decision = None
         self._call_index = 0
-        if self._episode_cache is not None:
-            self._episode_cache.reset()
+        episode_cache = getattr(self, "_episode_cache", None)
+        if episode_cache is not None:
+            episode_cache.reset()
         # Reset action-similarity fast path — last episode's action chunk
         # has no relevance to the next task's first chunk.
         self._fast_path.reset()
 
     def get_stats(self) -> dict[str, Any]:
         base = self._stats.as_dict()
-        if self._episode_cache is not None:
-            base["episode_cache"] = self._episode_cache.stats.as_dict()
+        episode_cache = getattr(self, "_episode_cache", None)
+        if episode_cache is not None:
+            base["episode_cache"] = episode_cache.stats.as_dict()
+        temporal_decision = getattr(self, "_last_temporal_action_decision", None)
+        if temporal_decision is not None:
+            base["temporal_action_cache"] = temporal_decision.as_dict()
         return base
 
     def _predict_with_episode_cache(

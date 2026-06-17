@@ -148,3 +148,61 @@ def test_guard_status_endpoint(tmp_path, monkeypatch):
         assert resp.status_code == 200
         body = resp.json()
         assert body.get("enabled") is False
+
+
+def test_guard_endpoints_require_api_key_when_configured(tmp_path, monkeypatch):
+    """Guard control surfaces must use the same auth boundary as /act."""
+    try:
+        from fastapi.testclient import TestClient
+    except ImportError:
+        pytest.skip("fastapi/httpx not installed")
+
+    import onnxruntime as ort
+    stub = _stub_ort_session([
+        "img_cam1", "img_cam2", "img_cam3",
+        "mask_cam1", "mask_cam2", "mask_cam3",
+        "lang_tokens", "lang_masks", "state", "noise",
+    ])
+    monkeypatch.setattr(ort, "InferenceSession", lambda *a, **kw: stub)
+
+    export_dir = _make_export_dir(tmp_path, "smolvla")
+
+    from tether.runtime.server import create_app
+    app = create_app(str(export_dir), device="cpu", api_key="secret-key")
+    with TestClient(app) as client:
+        assert client.get("/guard/status").status_code == 401
+        assert client.post("/guard/reset").status_code == 401
+        authed_status = client.get(
+            "/guard/status",
+            headers={"X-Tether-Key": "secret-key"},
+        )
+        assert authed_status.status_code == 200
+        assert authed_status.json()["enabled"] is False
+        authed_reset = client.post(
+            "/guard/reset",
+            headers={"X-Tether-Key": "secret-key"},
+        )
+        assert authed_reset.status_code == 400
+        assert authed_reset.json()["error"] == "guard_not_enabled"
+
+
+def test_offline_mode_requires_bundled_tokenizer_at_startup(tmp_path, monkeypatch):
+    """TETHER_OFFLINE=1 should fail before serving an export that needs HF."""
+    import onnxruntime as ort
+
+    from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+    from tether.runtime.tokenizers import OfflineTokenizerMissingError
+
+    stub = _stub_ort_session([
+        "img_cam1", "img_cam2", "img_cam3",
+        "mask_cam1", "mask_cam2", "mask_cam3",
+        "lang_tokens", "lang_masks", "state", "noise",
+    ])
+    monkeypatch.setattr(ort, "InferenceSession", lambda *a, **kw: stub)
+    monkeypatch.setenv("TETHER_OFFLINE", "1")
+    export_dir = _make_export_dir(tmp_path, "smolvla")
+
+    server = SmolVLAOnnxServer(export_dir, device="cpu")
+
+    with pytest.raises(OfflineTokenizerMissingError, match="offline tokenizer assets missing"):
+        server.load()

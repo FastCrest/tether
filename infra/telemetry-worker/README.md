@@ -1,10 +1,10 @@
-# Reflex Pro telemetry endpoint
+# Tether Pro telemetry endpoint
 
-Cloudflare Worker that receives anonymized heartbeat POSTs from `reflex-vla` deployments running under a Pro license. Stores one row per heartbeat in D1 for aggregate analysis.
+Cloudflare Worker that receives anonymized heartbeat POSTs from `tether` deployments running under a Pro license. Stores one row per heartbeat in D1 for aggregate analysis.
 
 ## What gets received
 
-Per-heartbeat JSON payload (locked Phase 1 schema, see `src/reflex/pro/telemetry.py:HeartbeatPayload`):
+Per-heartbeat JSON payload (locked Phase 1 schema, see `src/tether/pro/telemetry.py:HeartbeatPayload`):
 
 ```json
 {
@@ -53,7 +53,7 @@ wrangler deploy
 # Edit wrangler.toml, uncomment the `routes` block, redeploy
 ```
 
-After deploy, the default URL is `https://reflex-telemetry.<your-subdomain>.workers.dev`. Update `DEFAULT_TELEMETRY_ENDPOINT` in `src/reflex/pro/telemetry.py` if you use a different URL than `https://telemetry.fastcrest.workers.dev/v1/heartbeat`.
+After deploy, the default URL is `https://reflex-telemetry.<your-subdomain>.workers.dev`. Update `DEFAULT_TELEMETRY_ENDPOINT` in `src/tether/pro/telemetry.py` if you use a different URL than `https://telemetry.fastcrest.workers.dev/v1/heartbeat`.
 
 ## Common queries
 
@@ -84,6 +84,6 @@ ORDER BY deployments DESC;
 
 ## Customer opt-out
 
-Customers can disable telemetry via `REFLEX_NO_TELEMETRY=1` env var. The Reflex client respects this before any HTTP call is attempted — see `src/reflex/pro/telemetry.py:_is_disabled`.
+Customers can disable telemetry via `TETHER_NO_TELEMETRY=1` env var. The Tether client respects this before any HTTP call is attempted — see `src/tether/pro/telemetry.py:_is_disabled`.
 
 For the customer-facing disclosure that this exists, see `docs/self_distilling_serve.md` (the Pro tier doc).

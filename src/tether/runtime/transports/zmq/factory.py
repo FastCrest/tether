@@ -18,6 +18,7 @@ import io
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -32,6 +33,9 @@ def create_zmq_server(
     *,
     host: str = "*",
     port: int = 5555,
+    curve_server_cert: str | Path | None = None,
+    curve_client_cert_dir: str | Path | None = None,
+    control_token: str | None = None,
 ) -> PolicyServer:
     """Create a ZMQ server that wraps a tether PolicyRuntime.
 
@@ -49,6 +53,9 @@ def create_zmq_server(
             ``predict_action_chunk`` / ``predict_async`` method.
         host: Bind address.
         port: Bind port.
+        curve_server_cert: Optional pyzmq CURVE server secret certificate.
+        curve_client_cert_dir: Directory of allowed client public certificates.
+        control_token: Optional token required for built-in control endpoints.
 
     Returns:
         A configured ``PolicyServer`` ready to ``run()``.
@@ -125,7 +132,13 @@ def create_zmq_server(
             "avg_infer_time_ms": round(avg * 1000, 2),
         }
 
-    server = PolicyServer(host=host, port=port)
+    server = PolicyServer(
+        host=host,
+        port=port,
+        curve_server_cert=curve_server_cert,
+        curve_client_cert_dir=curve_client_cert_dir,
+        control_token=control_token,
+    )
     server.register_endpoint("predict_action", predict_action)
     server.register_endpoint("reset", reset, requires_input=False)
     server.register_endpoint("get_status", get_status, requires_input=False)

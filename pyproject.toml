@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tether"
+name = "fastcrest-tether"
 version = "0.12.0"
 description = "FastCrest Tether — edge-to-cloud robotics + edge AI deploy CLI. Optimize, deploy, verify any VLA across Jetson, RTX, Apple Silicon, AMD. Standalone or wired to FastCrest Cloud."
 readme = "README.md"
@@ -50,12 +50,12 @@ dependencies = [
     # TetherClient (Phase 0.5 customer-sdk) — sync + async HTTP client.
     # Lightweight (~2MB); shared with [serve] which already needs FastAPI's
     # starlette/anyio stack. Adding here so `from tether import TetherClient`
-    # works on a bare `pip install tether`.
+    # works on a bare `pip install fastcrest-tether`.
     "httpx>=0.24.0",
     # Ed25519 license signature verification for Pro tier (`tether pro
     # activate <code>` and the daily heartbeat path). Small (~5MB) + already
     # transitively pulled by huggingface_hub on most installs. Required at
-    # base level so `tether pro` commands work on bare `pip install tether`.
+    # base level so `tether pro` commands work on bare `pip install fastcrest-tether`.
     "cryptography>=42.0",
     # HTTP client for the `tether connect` integration framework (#188):
     # integrations/registry.py + integrations/connector.py call requests.get()
@@ -108,10 +108,11 @@ gpu-min = [
     "nvidia-cudnn-cu12>=9.5,<10.0",
     "nvidia-cublas-cu12>=12.6,<13.0",
 ]
-# HTTP serve stack. Includes onnxruntime (CPU) so `pip install tether[serve]`
+# HTTP serve stack. Includes onnxruntime (CPU) so `pip install fastcrest-tether[serve]`
 # gives you a working server out of the box. For GPU, use `[serve,gpu]` to pull in
 # onnxruntime-gpu + CUDA libs.
 serve = [
+    "onnxruntime>=1.17.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "Pillow>=10.0.0",
@@ -121,14 +122,14 @@ serve = [
     "prometheus-client>=0.19.0",
     # ZMQ transport (Lift #2). `tether serve --transport zmq` uses these.
     # Tiny deps (~2 MB total). Added to [serve] rather than a separate extra
-    # so `pip install tether[serve]` gives you BOTH transports.
+    # so `pip install fastcrest-tether[serve]` gives you BOTH transports.
     "pyzmq>=25.0",
     "msgpack>=1.0",
     "opencv-python-headless>=4.8",  # JPEG-on-wire serialization for ZMQ transport
 ]
 safety = ["yourdfpy"]
 # Offline EU evidence-pack generator. No runtime deps today; kept as an extra
-# so pilots can install with `pip install tether[serve,comply]`.
+# so pilots can install with `pip install fastcrest-tether[serve,comply]`.
 comply = []
 # Native parity verification — installs lerobot + its deps so
 # `scripts/local_full_diff.py` can cross-check our export path against the
@@ -153,7 +154,7 @@ native = [
 # lerobot 0.5.x requires Python >=3.12. On Jetson (Python 3.10) the
 # monolithic export can't run locally — export on a cloud/desktop host
 # (Python 3.12+) and `tether serve` the resulting ONNX on the Jetson
-# with `pip install 'tether[serve]'` only.
+# with `pip install 'fastcrest-tether[serve]'` only.
 monolithic = [
     "lerobot==0.5.1; python_version >= '3.12'",
     "transformers==5.3.0",
@@ -192,11 +193,11 @@ tracing = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.30",
 ]
 # LeRobot interop — installs `lerobot>=0.5` so the SO-ARM100 adapter
-# (`reflex.embodiments.so_arm100`) can talk to the Feetech bus + import
+# (`tether.embodiments.so_arm100`) can talk to the Feetech bus + import
 # LeRobot calibration JSONs. Use this on the host wired to the arm:
 #
-#   pip install 'reflex-vla[lerobot]'
-#   reflex serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
+#   pip install 'fastcrest-tether[lerobot]'
+#   tether serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
 #
 # lerobot 0.5.x requires Python >=3.12 (we skip on 3.10/3.11 to avoid pip's
 # ResolutionImpossible; users on JetPack 6 Python 3.10 can still construct an
@@ -210,7 +211,7 @@ lerobot = [
 # Raspberry Pi / host wired to the arm. Separate from [lerobot] because the
 # legacy auto_soarm path (used by the bench wizard) only needs the SDK, not
 # the full LeRobot stack. The two extras compose: `pip install
-# 'reflex-vla[so100,lerobot]'` gives you both code paths.
+# 'fastcrest-tether[so100,lerobot]'` gives you both code paths.
 so100 = [
     "scservo-sdk>=0.0.4",
 ]

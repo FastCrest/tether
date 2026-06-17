@@ -1,6 +1,6 @@
 """Modal: docker-image-smoke-test gate.
 
-Pulls the published `ghcr.io/fastcrest/tether-vla:<tag>` image on a
+Pulls the published `ghcr.io/fastcrest/tether:<tag>` image on a
 Modal sandbox, verifies:
   1. Image pull succeeds
   2. `tether --help` exits 0
@@ -20,7 +20,7 @@ app = modal.App("tether-docker-smoke-test")
 # But Modal containers don't have docker-in-docker enabled by default.
 # Simpler: use the published image AS our Modal image and run its
 # entrypoint checks from inside Python.
-image = modal.Image.from_registry("ghcr.io/fastcrest/tether-vla:0.2.0")
+image = modal.Image.from_registry("ghcr.io/fastcrest/reflex-vla:0.2.0")  # historical tag: 0.2.0 was published under the pre-rename image name
 
 
 @app.function(image=image, timeout=300)
@@ -31,7 +31,7 @@ def smoke_test():
     applies the base image's ENTRYPOINT (=["tether"]) to subprocess execs,
     turning `tether --help` inside this container into a malformed
     `tether tether --help`. That's a Modal-test artifact, NOT a product
-    bug — `docker run ghcr.io/fastcrest/tether-vla:0.2.0 --help` works
+    bug — `docker run ghcr.io/fastcrest/reflex-vla:0.2.0 --help` works
     correctly for real customers because the ENTRYPOINT IS the whole point.
 
     So instead we import-check every production runtime module. If those

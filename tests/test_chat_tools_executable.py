@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from tether.chat.executor import _argv_for
+from tether.chat.executor import _argvs_for
 from tether.chat.schema import TOOLS
 
 TETHER_BIN = shutil.which("tether")
@@ -38,7 +38,7 @@ def _placeholder_args(schema: dict[str, Any]) -> dict[str, Any]:
                 out[name] = prop["enum"][0]
             else:
                 out[name] = "placeholder"
-        elif t == "integer":
+        elif t in {"integer", "number"}:
             out[name] = 1
         elif t == "boolean":
             out[name] = False
@@ -51,20 +51,21 @@ def test_tool_routes_to_real_cli_command(tool: dict[str, Any]) -> None:
     name = tool["function"]["name"]
     schema = tool["function"]["parameters"]
     args = _placeholder_args(schema)
-    argv = _argv_for(name, args)
+    argvs = _argvs_for(name, args)
 
-    # Strip placeholder positional / flag values; we only want to check the
-    # subcommand path exists, not invoke the operation.
-    subcommand_path: list[str] = []
-    for a in argv:
-        if a.startswith("--"):
-            break
-        subcommand_path.append(a)
+    for argv in argvs:
+        # Strip placeholder positional / flag values; we only want to check the
+        # subcommand path exists, not invoke the operation.
+        subcommand_path: list[str] = []
+        for a in argv:
+            if a.startswith("--"):
+                break
+            subcommand_path.append(a)
 
-    cmd = [TETHER_BIN, *subcommand_path, "--help"]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    assert proc.returncode == 0, (
-        f"Chat tool '{name}' routes to `{' '.join(subcommand_path)}` "
-        f"which exited {proc.returncode}.\n"
-        f"argv: {argv}\nstderr: {proc.stderr[:400]}"
-    )
+        cmd = [TETHER_BIN, *subcommand_path, "--help"]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        assert proc.returncode == 0, (
+            f"Chat tool '{name}' routes to `{' '.join(subcommand_path)}` "
+            f"which exited {proc.returncode}.\n"
+            f"argv: {argv}\nstderr: {proc.stderr[:400]}"
+        )

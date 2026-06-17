@@ -83,7 +83,7 @@ def _run(model_path: str, embodiment_name: str = "custom", **kwargs) -> CheckRes
             status="skip",
             expected="onnxruntime to inspect model inputs",
             actual="onnxruntime not installed",
-            remediation="pip install tether[serve]",
+            remediation="pip install fastcrest-tether[serve]",
             duration_ms=0.0,
             github_issue=GH_ISSUE,
         )

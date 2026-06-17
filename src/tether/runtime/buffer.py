@@ -22,9 +22,12 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from tether.runtime.adaptive_chunking import AdaptiveChunkDecision
 
 
 @dataclass
@@ -139,14 +142,26 @@ class ActionChunkBuffer:
                 return None
             return np.stack(list(self._buf), axis=0).copy()
 
-    def should_replan(self, threshold_ratio: float = 0.5) -> bool:
+    def should_replan(
+        self,
+        threshold_ratio: float = 0.5,
+        *,
+        adaptive_decision: "AdaptiveChunkDecision | None" = None,
+    ) -> bool:
         """True when the buffer size has dropped to or below threshold.
 
         Default threshold_ratio=0.5 means: when half or fewer of the
         planned actions remain, it's time to replan. Caller decides
         whether to actually trigger predict() — the buffer just
         advises.
+
+        When an AdaptiveChunkDecision is supplied, its threshold wins. This
+        keeps the existing fixed-ratio behavior as the default while allowing
+        AAC-style horizons to replan sooner under uncertainty and later when
+        the scene is stable.
         """
+        if adaptive_decision is not None:
+            threshold_ratio = adaptive_decision.replan_threshold_ratio
         with self._lock:
             return len(self._buf) <= self._capacity * threshold_ratio
 

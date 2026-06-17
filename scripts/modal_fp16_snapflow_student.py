@@ -48,7 +48,7 @@ _BUST = _build_bust()
 onnx_output = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=True)
 ONNX_OUT = "/onnx_out"
 
-# Lighter image — just ONNX tooling + tether-vla for convert_fp32_to_fp16.
+# Lighter image — just ONNX tooling + tether for convert_fp32_to_fp16.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
@@ -60,7 +60,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

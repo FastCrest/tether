@@ -145,7 +145,7 @@ Add to your project `.vscode/settings.json` to get autocomplete on embodiment JS
 
 ## Related
 
-- Plan: [`features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs_plan.md`](https://github.com/FastCrest/reflex-vla) (in reflex_context vault)
+- Plan: [`features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs_plan.md`](https://github.com/FastCrest/tether) (in reflex_context vault)
 - Canonical feature page: `features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs.md`
 - Downstream consumers (Phase 0.5):
   - **B.3 RTC adapter** uses `control.frequency_hz`, `control.rtc_execution_horizon`, `control.chunk_size`

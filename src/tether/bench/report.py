@@ -111,7 +111,7 @@ def _ort_version() -> str:
 def _tether_version() -> str:
     try:
         from importlib.metadata import version
-        return version("tether-vla")
+        return version("fastcrest-tether")
     except Exception:
         return "0.1.0+dev"
 

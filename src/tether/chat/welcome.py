@@ -9,14 +9,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-WELCOME_CARD = """[bold]tether chat[/bold] — natural language for VLA deployment
+WELCOME_CARD = """[bold]tether chat[/bold] — natural language for VLA deployment decisions
 
 What I can do for you:
+  • Prove an export      [dim]"prove ./export is ready for franka"[/dim]
+  • Certify realtime     [dim]"can ./export run at 20 Hz on Orin?"[/dim]
+  • Promote or block     [dim]"can I promote ./tether-deploy-proof?"[/dim]
+  • Explain failures     [dim]"why was this proof blocked?"[/dim]
+  • Diagnose runtime     [dim]"why is my install broken?"[/dim]
+  • Compare rollouts     [dim]"diff current and candidate traces"[/dim]
   • Deploy a model       [dim]"deploy smolvla to my mac"[/dim]
-  • Browse models        [dim]"what models are available?"[/dim]
-  • Diagnose problems    [dim]"why is my install broken?"[/dim]
-  • Inspect traces       [dim]"show my recent traces from this week"[/dim]
-  • Run benchmarks       [dim]"benchmark pi05 on my desktop"[/dim]
 
 Useful commands:
   [green]/help[/green]    list everything I can do          [green]/tools[/green]   show my tool catalog
@@ -30,10 +32,11 @@ SHORT_BANNER = """[bold]tether chat[/bold] — type a question, [green]/help[/gr
 
 TOUR_PROMPTS = [
     'what version of tether am i on?',
-    'what models can i deploy and which is smallest?',
+    'prove ./export is ready for franka without touching hardware',
+    'can ./export run at 20 Hz on Orin?',
+    'can i promote ./tether-deploy-proof?',
+    'why was my deployment proof blocked?',
     'check my install for problems',
-    "i'm on a mac with no gpu — what can i actually do?",
-    'show me my recent traces',
 ]
 
 
@@ -44,13 +47,13 @@ SLASH_HELP = """[bold]Slash commands[/bold]
   [green]/history[/green]   show the conversation so far
   [green]/clear[/green]     clear the screen (keeps conversation context)
   [green]/reset[/green]     start a fresh conversation (drops context)
-  [green]/tour[/green]      show 5 example prompts to copy-paste
+  [green]/tour[/green]      show suggested prompts to copy-paste
   [green]exit[/green]       quit
 
 [bold]What chat can do[/bold]
-  Natural-language prompts route to one of 17 tools that wrap the [cyan]tether[/cyan] CLI.
-  Examples: "deploy smolvla to my mac", "show running serve processes",
-  "list traces from yesterday", "benchmark pi05 on my desktop".
+  Natural-language prompts route to tools that wrap the [cyan]tether[/cyan] CLI.
+  Examples: "prove ./export is ready for franka", "can I promote this proof?",
+  "can ./export run at 20 Hz?", "diff these rollout traces", "deploy smolvla to my mac".
 
 [bold]Conversation persistence[/bold]
   Sessions auto-save to ~/.cache/tether/chat_history/. Resume the most
@@ -60,12 +63,13 @@ SLASH_HELP = """[bold]Slash commands[/bold]
 TOUR_BLOCK = """[bold]Try one of these[/bold] — copy-paste any line:
 
   what version of tether am i on?
-  what models can i deploy and which is smallest?
+  prove ./export is ready for franka without touching hardware
+  can ./export run at 20 Hz on Orin?
+  can i promote ./tether-deploy-proof?
+  why was my deployment proof blocked?
   check my install for problems
-  i'm on a mac with no gpu — what can i actually do?
-  show me my recent traces
 
-[dim]Tip: the assistant can also chain operations — try "deploy smolvla to my orin nano".[/dim]
+[dim]Tip: the assistant can chain proof and promotion — try "prove ./export, then tell me if it can ship".[/dim]
 """
 
 
@@ -100,6 +104,13 @@ def tools_listing() -> str:
         "deploy_one_command": "Deploy",
         "export_model": "Deploy",
         "serve_model": "Deploy",
+        "prove_deployment": "Deploy",
+        "prove_realtime_deployment": "Deploy",
+        "certify_realtime_serving": "Deploy",
+        "diff_policies": "Deploy",
+        "decide_promotion": "Deploy",
+        "list_promotion_profiles": "Deploy",
+        "show_promotion_profile": "Deploy",
         "list_models": "Models",
         "pull_model": "Models",
         "model_info": "Models",

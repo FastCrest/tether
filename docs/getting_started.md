@@ -1,6 +1,6 @@
 # Getting started with Tether
 
-A 30-minute walkthrough of the typical first hour after `pip install tether[serve,gpu]`.
+A 30-minute walkthrough of the typical first hour after `pip install fastcrest-tether[serve,gpu]`.
 
 This guide assumes a Linux box with an NVIDIA GPU. CPU-only deployments work with `[serve]` instead of `[serve,gpu]` — every example below applies, just replace `--device cuda` with `--device cpu`.
 
@@ -10,17 +10,17 @@ This guide assumes a Linux box with an NVIDIA GPU. CPU-only deployments work wit
 
 ```bash
 # GPU box (requires CUDA 12 + cuDNN 9 — easiest via nvcr.io/nvidia/tensorrt container):
-pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 
 # CPU-only box:
-pip install 'tether[serve,onnx] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,onnx] @ git+https://github.com/FastCrest/tether'
 ```
 
 Or for development from source:
 
 ```bash
 git clone https://github.com/FastCrest/tether
-cd tether-vla
+cd tether
 pip install -e '.[serve,gpu,dev]'  # or [serve,onnx,dev] for CPU
 ```
 
@@ -205,7 +205,7 @@ tether export lerobot/smolvla_base --target orin-nano --output ./sv
 scp -r ./sv jetson:~/sv
 
 # On the Jetson (Jetpack 6.x with TensorRT preinstalled):
-pip install 'tether[serve] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve] @ git+https://github.com/FastCrest/tether'
 tether serve ./sv --port 8000 --device cuda
 ```
 
@@ -236,7 +236,7 @@ ORT 1.20+ requires CUDA 12.x + cuDNN 9.x. The pip-installed `nvidia-cudnn-cu12` 
 ```bash
 docker run --gpus all -it --rm nvcr.io/nvidia/tensorrt:24.10-py3
 # inside the container:
-pip install 'tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
+pip install 'fastcrest-tether[serve,gpu] @ git+https://github.com/FastCrest/tether'
 tether serve ...
 ```
 

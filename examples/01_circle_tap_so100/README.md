@@ -18,7 +18,7 @@ by 0o8o0 (MIT) per ADR `reflex_context/01_decisions/2026-05-06-vendor-auto-soarm
 
 ```bash
 # Install Tether with the so100 + bench-game extras
-pip install 'tether[so100]'           # adds scservo_sdk for the Pi-side driver
+pip install 'fastcrest-tether[so100]'           # adds scservo_sdk for the Pi-side driver
 pip install lerobot==0.5.1                # for the from-scratch ACT training step
 ```
 

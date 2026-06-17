@@ -230,7 +230,7 @@ def check_shape_consistency(ctx: DatasetContext) -> CheckResult:
         return CheckResult(
             check_id="dataset.shape-consistency",
             decision=Decision.SKIPPED,
-            summary="pyarrow not installed; install tether-vla[validation] to enable",
+            summary="pyarrow not installed; install fastcrest-tether[validation] to enable",
         )
     declared_shape = ctx.info["features"]["action"].get("shape", [])
     declared_dim = declared_shape[0] if declared_shape else None
@@ -290,7 +290,7 @@ def check_action_finite(ctx: DatasetContext) -> CheckResult:
         return CheckResult(
             check_id="dataset.action-finite",
             decision=Decision.SKIPPED,
-            summary="pyarrow not installed; install tether-vla[validation] to enable",
+            summary="pyarrow not installed; install fastcrest-tether[validation] to enable",
         )
     table, err = _load_parquet_table(ctx.data_files[0])
     if err or table is None:

@@ -6,7 +6,7 @@ the exporter connects, and a span lands in Phoenix.
 Run:
     /Users/romirjain/tools/phoenix-env/bin/phoenix serve   # in another shell
     .venv/bin/python scripts/local_phoenix_smoke.py
-    open http://localhost:6006   # confirm "tether-vla" project + an "act" span
+    open http://localhost:6006   # confirm "tether" project + an "act" span
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from tether.runtime.tracing import get_tracer, setup_tracing, shutdown_tracing
 
 
 def main() -> int:
-    ok = setup_tracing(service_name="tether-vla", endpoint="localhost:4317")
+    ok = setup_tracing(service_name="tether", endpoint="localhost:4317")
     if not ok:
         print("FAIL: setup_tracing returned False (extras not installed)")
         return 1
@@ -39,7 +39,7 @@ def main() -> int:
     shutdown_tracing()
     print("OK: tracing flushed")
     print()
-    print("Open http://localhost:6006 — look for project 'tether-vla' with one 'act' span.")
+    print("Open http://localhost:6006 — look for project 'tether' with one 'act' span.")
     return 0
 
 

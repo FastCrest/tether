@@ -1,6 +1,6 @@
 """Textual TUI for tether chat.
 
-Optional — install with `pip install 'tether[tui]'` (adds textual). Falls
+Optional — install with `pip install 'fastcrest-tether[tui]'` (adds textual). Falls
 back to `tether.chat.console.run_repl` (Rich REPL) if textual isn't installed.
 
 Layout (4 panels):
@@ -264,7 +264,7 @@ def run_tui(proxy_url: str | None = None, dry_run: bool = False) -> None:
     if not TEXTUAL_AVAILABLE:
         print(
             "Textual not installed — falling back to the Rich REPL.\n"
-            "Install the optional extra to use the TUI: pip install 'tether[tui]'\n",
+            "Install the optional extra to use the TUI: pip install 'fastcrest-tether[tui]'\n",
             flush=True,
         )
         from tether.chat.console import run_repl

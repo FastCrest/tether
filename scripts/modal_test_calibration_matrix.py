@@ -54,7 +54,7 @@ _HEAD = _repo_head_sha()
 _BUILD_BUST = _build_bust()
 
 
-# Light image -- just CUDA + tether-vla. No LIBERO, no lerobot, no full
+# Light image -- just CUDA + tether. No LIBERO, no lerobot, no full
 # inference stack. Calibration substrate is pure-Python after CUDA probe.
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -69,7 +69,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )

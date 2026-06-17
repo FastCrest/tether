@@ -2,7 +2,7 @@
 
 Each plugin wraps a simulation benchmark (LIBERO, SimplerEnv, ManiSkill).
 Heavy sim dependencies (MuJoCo, robosuite, LIBERO) live behind the `eval` extra:
-    pip install 'tether[eval]'
+    pip install 'fastcrest-tether[eval]'
 
 The plugin framework is deliberately thin — each benchmark is one function
 that takes an export_dir and returns a standardized result dict.
