@@ -26,7 +26,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-smolvla-libero-parity")
+app = modal.App("tether-smolvla-libero-parity")
 
 
 def _hf_secret():
@@ -51,7 +51,7 @@ _HEAD = _repo_head_sha()
 
 
 # Lightweight image — no LIBERO / robosuite / MuJoCo needed. Just torch +
-# lerobot + reflex-vla, since both paths call the same underlying model.
+# lerobot + tether, since both paths call the same underlying model.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
@@ -75,7 +75,7 @@ image = (
         "num2words",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -98,11 +98,11 @@ def parity_test():
     # That internally instantiates SmolVLAPolicy. We need to export a
     # checkpoint dir first — but SmolVLANativeServer.load() uses
     # `snapshot_download` directly. Actually we need to write a
-    # reflex_config.json it can read, so let's stub one.
+    # tether_config.json it can read, so let's stub one.
     export_dir = "/tmp/smolvla_stub"
     os.makedirs(export_dir, exist_ok=True)
     import json
-    with open(f"{export_dir}/reflex_config.json", "w") as f:
+    with open(f"{export_dir}/tether_config.json", "w") as f:
         json.dump({
             "model_id": "lerobot/smolvla_libero",
             "vlm_model_id": "lerobot/smolvla_libero",
@@ -113,7 +113,7 @@ def parity_test():
             "max_state_dim": 32,
         }, f)
 
-    from reflex.runtime.smolvla_native import SmolVLANativeServer
+    from tether.runtime.smolvla_native import SmolVLANativeServer
     t0 = time.time()
     server = SmolVLANativeServer(export_dir, device="cuda", strict_providers=False)
     server.load()

@@ -13,7 +13,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-vlm-export")
+app = modal.App("tether-vlm-export")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -47,7 +47,7 @@ def export_vlm():
         tag = "PASS" if status == "pass" else "FAIL" if status == "fail" else "SKIP"
         print(f"{tag}: {name} — {detail}")
 
-    export_dir = Path("/tmp/reflex_vlm_export")
+    export_dir = Path("/tmp/tether_vlm_export")
     export_dir.mkdir(exist_ok=True)
 
     # Step 1: Load the VLM directly from HuggingFace
@@ -293,7 +293,7 @@ def main():
     print("Running VLM backbone export on Modal A100...")
     results = export_vlm.remote()
 
-    with open("/tmp/reflex_vlm_export.json", "w") as f:
+    with open("/tmp/tether_vlm_export.json", "w") as f:
         json.dump(results, f, indent=2)
 
     for step in results["steps"]:

@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/dedup/ — episode-level near-duplicate detection.
+"""Tests for src/tether/curate/dedup/ — episode-level near-duplicate detection.
 
 Covers each component (phash + DTW + cluster + canonical) and the top-level
 pipeline. Verifies the NEVER-DELETE doctrine: dedup flags but never removes data.
@@ -10,7 +10,7 @@ import io
 import numpy as np
 import pytest
 
-from reflex.curate.dedup import (
+from tether.curate.dedup import (
     DEDUP_VERSION,
     DedupInfo,
     assemble_clusters,

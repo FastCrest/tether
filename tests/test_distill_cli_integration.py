@@ -1,11 +1,11 @@
-"""Integration tests for `reflex distill` — Phase B 3/3.
+"""Integration tests for `tether distill` — Phase B 3/3.
 
 Covers the full wire path: CLI → FinetuneConfig → run_finetune →
 SnapFlowBackend.fit → finalize → libero_drop_gate.
 
 Everything that needs a GPU (real teacher load, real training step,
 real ONNX export, real LIBERO rollout) is mocked. What IS tested:
-  - `reflex distill --help` renders
+  - `tether distill --help` renders
   - Config plumbing: teacher_export + distillation_method reach cfg
   - HookRegistry gets libero_drop_gate registered (when not skipped)
   - `--skip-libero-gate` leaves the registry empty
@@ -22,10 +22,10 @@ import pytest
 pytest.importorskip("typer")
 from typer.testing import CliRunner
 
-from reflex.finetune.backends.base import CheckpointResult
-from reflex.finetune.config import FinetuneConfig
-from reflex.finetune.hooks import HookRegistry
-from reflex.finetune.postprocess import finalize
+from tether.finetune.backends.base import CheckpointResult
+from tether.finetune.config import FinetuneConfig
+from tether.finetune.hooks import HookRegistry
+from tether.finetune.postprocess import finalize
 
 
 runner = CliRunner()
@@ -40,16 +40,16 @@ class TestDistillCLI:
     def _get_app(self):
         """Import the CLI with distill registered. Isolates the lazy-import
         path and surfaces any import-time regressions immediately."""
-        from reflex.cli import app
+        from tether.cli import app
         return app
 
     def test_distill_help_renders(self):
         app = self._get_app()
         result = runner.invoke(app, ["distill", "--help"])
         assert result.exit_code == 0
-        assert "--teacher-export" in result.stdout
-        assert "--libero-gate-pp" in result.stdout
-        assert "SnapFlow" in result.stdout
+        assert "--teacher-export" in result.output
+        assert "--libero-gate-pp" in result.output
+        assert "SnapFlow" in result.output
 
     def test_dry_run_exits_without_training(self, tmp_path):
         """With --dry-run the CLI should reach preflight and bail before
@@ -64,7 +64,7 @@ class TestDistillCLI:
         fake_report.render.return_value = "(preflight stubbed)"
 
         with patch(
-            "reflex.finetune.preflight.run_preflight", return_value=fake_report,
+            "tether.finetune.preflight.run_preflight", return_value=fake_report,
         ):
             result = runner.invoke(
                 app,
@@ -77,7 +77,7 @@ class TestDistillCLI:
                 ],
             )
         # Exit 0 on successful dry run; non-zero if preflight mocking missed.
-        assert result.exit_code == 0, result.stdout
+        assert result.exit_code == 0, result.output
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +93,7 @@ class TestDistillConfigWiring:
     def test_phase_and_method_set_correctly(self, tmp_path):
         """Invoking the CLI body builds a cfg with phase='distill' and
         distillation_method='snapflow'."""
-        from reflex.finetune.cli_distill import distill_command
+        from tether.finetune.cli_distill import distill_command
 
         captured = {}
 
@@ -111,7 +111,7 @@ class TestDistillConfigWiring:
             )
 
         # run_finetune is lazy-imported inside distill_command; patch at source.
-        with patch("reflex.finetune.run.run_finetune", fake_run_finetune):
+        with patch("tether.finetune.run.run_finetune", fake_run_finetune):
             distill_command(
                 teacher_export=str(tmp_path / "teacher"),
                 dataset="lerobot/libero",
@@ -139,7 +139,7 @@ class TestDistillConfigWiring:
         assert "libero_gate_skip" not in cfg.extra_lerobot_args
 
     def test_skip_libero_gate_reaches_config(self, tmp_path):
-        from reflex.finetune.cli_distill import distill_command
+        from tether.finetune.cli_distill import distill_command
 
         captured = {}
 
@@ -156,7 +156,7 @@ class TestDistillConfigWiring:
                 verification_md_path=None,
             )
 
-        with patch("reflex.finetune.run.run_finetune", fake_run_finetune):
+        with patch("tether.finetune.run.run_finetune", fake_run_finetune):
             distill_command(
                 teacher_export=str(tmp_path / "teacher"),
                 dataset="lerobot/libero",
@@ -172,7 +172,7 @@ class TestDistillConfigWiring:
         assert captured["hooks"].handlers("on_postprocess") == []
 
     def test_libero_gate_attached_by_default(self, tmp_path):
-        from reflex.finetune.cli_distill import distill_command
+        from tether.finetune.cli_distill import distill_command
 
         captured = {}
 
@@ -184,7 +184,7 @@ class TestDistillConfigWiring:
                 onnx_path=None, verification_md_path=None,
             )
 
-        with patch("reflex.finetune.run.run_finetune", fake_run_finetune):
+        with patch("tether.finetune.run.run_finetune", fake_run_finetune):
             distill_command(
                 teacher_export=str(tmp_path / "teacher"),
                 dataset="lerobot/libero",
@@ -207,7 +207,7 @@ class TestDistillConfigWiring:
 class TestDistillRunFinetune:
     def test_snapflow_backend_dispatched(self, tmp_path):
         """run_finetune(phase='distill') should route to SnapFlowBackend."""
-        from reflex.finetune.run import run_finetune
+        from tether.finetune.run import run_finetune
 
         cfg = FinetuneConfig(
             base="",
@@ -230,7 +230,7 @@ class TestDistillRunFinetune:
         fake_backend.fit.return_value = fake_ckpt
 
         with patch(
-            "reflex.finetune.backends.resolve_backend",
+            "tether.finetune.backends.resolve_backend",
             return_value=fake_backend,
         ):
             result = run_finetune(cfg)
@@ -241,7 +241,7 @@ class TestDistillRunFinetune:
     def test_hook_veto_aborts_finalize(self, tmp_path):
         """If a hook flips ctx.extra['force_abort'], finalize() returns
         status='aborted' instead of 'ok'."""
-        from reflex.finetune.backends.base import TrainerContext
+        from tether.finetune.backends.base import TrainerContext
 
         cfg = FinetuneConfig(
             base="",
@@ -279,7 +279,7 @@ class TestDistillRunFinetune:
     def test_backend_failure_surfaces_error(self, tmp_path):
         """When SnapFlowBackend returns training_failed, run_finetune
         propagates the error without calling finalize()."""
-        from reflex.finetune.run import run_finetune
+        from tether.finetune.run import run_finetune
 
         cfg = FinetuneConfig(
             base="",
@@ -299,7 +299,7 @@ class TestDistillRunFinetune:
             error="SnapFlow requires teacher_export",
         )
         with patch(
-            "reflex.finetune.backends.resolve_backend",
+            "tether.finetune.backends.resolve_backend",
             return_value=fake_backend,
         ):
             result = run_finetune(cfg)
@@ -318,15 +318,15 @@ class TestLegacyDistillRemoved:
 
     def test_dmpo_config_not_importable(self):
         with pytest.raises(ImportError):
-            from reflex.distill.dmpo import DMPOConfig  # noqa: F401
+            from tether.distill.dmpo import DMPOConfig  # noqa: F401
 
     def test_pi_flow_config_not_importable(self):
         with pytest.raises(ImportError):
-            from reflex.distill.pi_flow import PiFlowConfig  # noqa: F401
+            from tether.distill.pi_flow import PiFlowConfig  # noqa: F401
 
     def test_get_recipe_replaced_by_get_method(self):
         """The v0.2 CLI called `get_recipe(...)`. v0.3 exposes
         `get_method(...)` — ensure the old API is gone."""
-        from reflex import distill
+        from tether import distill
         assert not hasattr(distill, "get_recipe")
         assert hasattr(distill, "get_method")

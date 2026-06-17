@@ -12,7 +12,7 @@ Verifies:
 
 Uses lightweight stub FastAPI apps that mirror the production /health + /act
 handlers, so tests run in <300 ms total without loading any real ONNX model.
-The same handler logic is in `src/reflex/runtime/server.py` create_app().
+The same handler logic is in `src/tether/runtime/server.py` create_app().
 """
 from __future__ import annotations
 

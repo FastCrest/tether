@@ -1,21 +1,21 @@
 # 04 — Record `/act` traces, browse them, replay against another model
 
-**What you'll see:** flip on JSONL trace recording on a running `reflex serve`, list captured traces, replay one against a different export to compare action chunks.
+**What you'll see:** flip on JSONL trace recording on a running `tether serve`, list captured traces, replay one against a different export to compare action chunks.
 
-**Requires:** A running `reflex serve` (see [02-deploy-smolvla-jetson.md](02-deploy-smolvla-jetson.md)) and the base `reflex-vla` install.
+**Requires:** A running `tether serve` (see [02-deploy-smolvla-jetson.md](02-deploy-smolvla-jetson.md)) and the base `tether` install.
 
 ## Why record traces
 
 - **Debugging:** when a robot does something weird, you want to replay the exact `/act` request that produced it
 - **Regression testing:** capture traces on a known-good model, replay them against a new export, diff the actions
-- **Compliance:** the EU AI Act-style audit trail Reflex's safety wedge writes (per-action SHA-256 hash chain in `--safety-config` mode)
+- **Compliance:** the EU AI Act-style audit trail Tether's safety wedge writes (per-action SHA-256 hash chain in `--safety-config` mode)
 
 ## Record
 
 Start the server with `--record`:
 
 ```bash
-reflex serve ./reflex_export --record /tmp/traces
+tether serve ./tether_export --record /tmp/traces
 ```
 
 The server writes JSONL files like:
@@ -26,14 +26,14 @@ The server writes JSONL files like:
 
 Filename: `<YYYYMMDD-HHMMSS>-<model_hash>-<session_id>.jsonl[.gz]`. One file per server session. Compressed by default; pass `--record-no-gzip` for plain `.jsonl`.
 
-Each line is one `/act` request + response, schema documented in [docs/record_replay.md §D.1](https://github.com/FastCrest/reflex-vla/blob/main/docs/record_replay.md). Sensitive image bytes are SHA-256-hashed (not stored raw) by default — pass `--record-images full` to capture raw images (large, only for debug).
+Each line is one `/act` request + response, schema documented in [docs/record_replay.md §D.1](https://github.com/FastCrest/tether/blob/main/docs/record_replay.md). Sensitive image bytes are SHA-256-hashed (not stored raw) by default — pass `--record-images full` to capture raw images (large, only for debug).
 
 Now hit `/act` from your robot or test harness as usual. Every call gets logged.
 
 ## List traces
 
 ```bash
-reflex inspect traces
+tether inspect traces
 ```
 
 ```
@@ -50,10 +50,10 @@ Recorded traces (3 of 3 total)
 Filters:
 
 ```bash
-reflex inspect traces --since 24h
-reflex inspect traces --task "pick up the red cup"
-reflex inspect traces --since 7d --limit 20
-reflex inspect traces --dir /custom/trace/path
+tether inspect traces --since 24h
+tether inspect traces --task "pick up the red cup"
+tether inspect traces --since 7d --limit 20
+tether inspect traces --dir /custom/trace/path
 ```
 
 ## Replay against a different export
@@ -65,7 +65,7 @@ Suppose you have two exports on disk:
 Replay the captured trace against the student:
 
 ```bash
-reflex replay /tmp/traces/20260427-142053-….jsonl.gz \
+tether replay /tmp/traces/20260427-142053-….jsonl.gz \
     --model ./reflex_export_v2 \
     --diff actions
 ```
@@ -92,7 +92,7 @@ If the student's actions match the teacher's at cos≈1.0 across all records, th
 ## Or use the chat agent
 
 ```bash
-reflex chat
+tether chat
 you › list my recent traces from today
 you › replay the most recent trace against ./reflex_export_v2 and tell me if it matches
 ```

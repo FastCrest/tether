@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "reflex-vla"
-version = "0.9.6"
-description = "Deploy any VLA model to any edge hardware. Now with reflex chat — natural-language CLI."
+name = "fastcrest-tether"
+version = "0.12.0"
+description = "FastCrest Tether — edge-to-cloud robotics + edge AI deploy CLI. Optimize, deploy, verify any VLA across Jetson, RTX, Apple Silicon, AMD. Standalone or wired to FastCrest Cloud."
 readme = "README.md"
 license = "BUSL-1.1"
 requires-python = ">=3.10"
-authors = [{ name = "Reflex Labs" }]
-keywords = ["vla", "robotics", "edge", "tensorrt", "jetson", "deployment"]
+authors = [{ name = "FastCrest" }]
+keywords = ["vla", "robotics", "edge", "tensorrt", "jetson", "deployment", "tether", "fastcrest"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -35,9 +35,9 @@ dependencies = [
     "numpy>=1.24.0,<2.0; platform_machine == 'aarch64'",
     "numpy>=1.24.0; platform_machine != 'aarch64'",
     "pyyaml>=6.0",
-    # Always needed: hub access for `reflex export <hf_id>` and tokenizer/config
+    # Always needed: hub access for `tether export <hf_id>` and tokenizer/config
     # loading for the auto-detect path. Apr-14 install-path verification caught
-    # that omitting these breaks `reflex export` even with [serve,gpu].
+    # that omitting these breaks `tether export` even with [serve,gpu].
     "huggingface_hub>=0.20.0",
     # Base allows 4.40 → 5.3.x. [monolithic] extra pins ==5.3.0 exactly (5.4+ has
     # a q_length regression that breaks onnx-diagnostic patches). Without the
@@ -47,16 +47,23 @@ dependencies = [
     "transformers>=4.40,<5.4",
     "onnx>=1.15.0",
     "onnxscript>=0.1.0",
-    # ReflexClient (Phase 0.5 customer-sdk) — sync + async HTTP client.
+    # TetherClient (Phase 0.5 customer-sdk) — sync + async HTTP client.
     # Lightweight (~2MB); shared with [serve] which already needs FastAPI's
-    # starlette/anyio stack. Adding here so `from reflex import ReflexClient`
-    # works on a bare `pip install reflex-vla`.
+    # starlette/anyio stack. Adding here so `from tether import TetherClient`
+    # works on a bare `pip install fastcrest-tether`.
     "httpx>=0.24.0",
-    # Ed25519 license signature verification for Pro tier (`reflex pro
+    # Ed25519 license signature verification for Pro tier (`tether pro
     # activate <code>` and the daily heartbeat path). Small (~5MB) + already
     # transitively pulled by huggingface_hub on most installs. Required at
-    # base level so `reflex pro` commands work on bare `pip install reflex-vla`.
+    # base level so `tether pro` commands work on bare `pip install fastcrest-tether`.
     "cryptography>=42.0",
+    # HTTP client for the `tether connect` integration framework (#188):
+    # integrations/registry.py + integrations/connector.py call requests.get()
+    # at module import, and the `tether connect` / `tether integrations`
+    # commands are core (not behind an extra). Undeclared since #188 — CI clean
+    # installs hit ModuleNotFoundError on tests/test_integrations.py collection
+    # (masked locally where requests is a transitive dep).
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
@@ -101,10 +108,11 @@ gpu-min = [
     "nvidia-cudnn-cu12>=9.5,<10.0",
     "nvidia-cublas-cu12>=12.6,<13.0",
 ]
-# HTTP serve stack. Includes onnxruntime (CPU) so `pip install reflex-vla[serve]`
+# HTTP serve stack. Includes onnxruntime (CPU) so `pip install fastcrest-tether[serve]`
 # gives you a working server out of the box. For GPU, use `[serve,gpu]` to pull in
 # onnxruntime-gpu + CUDA libs.
 serve = [
+    "onnxruntime>=1.17.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "Pillow>=10.0.0",
@@ -112,8 +120,17 @@ serve = [
     "jsonschema>=4.0",
     # Prometheus /metrics endpoint (D.1.8 prometheus-grafana). Tiny dep.
     "prometheus-client>=0.19.0",
+    # ZMQ transport (Lift #2). `tether serve --transport zmq` uses these.
+    # Tiny deps (~2 MB total). Added to [serve] rather than a separate extra
+    # so `pip install fastcrest-tether[serve]` gives you BOTH transports.
+    "pyzmq>=25.0",
+    "msgpack>=1.0",
+    "opencv-python-headless>=4.8",  # JPEG-on-wire serialization for ZMQ transport
 ]
 safety = ["yourdfpy"]
+# Offline EU evidence-pack generator. No runtime deps today; kept as an extra
+# so pilots can install with `pip install fastcrest-tether[serve,comply]`.
+comply = []
 # Native parity verification — installs lerobot + its deps so
 # `scripts/local_full_diff.py` can cross-check our export path against the
 # reference PyTorch policy. Required for the native-path-parity regression
@@ -129,15 +146,15 @@ native = [
     "num2words",
 ]
 # Monolithic ONNX export — cos=1.0 verified production path. Runs locally
-# via `reflex export --monolithic` (the DEFAULT as of v0.2.1). Requires
+# via `tether export --monolithic` (the DEFAULT as of v0.2.1). Requires
 # transformers==5.3.0 EXACTLY (5.4+ has a q_length regression in
 # masking_utils.sdpa_mask that breaks onnx-diagnostic patches). Base pin
 # `transformers>=4.40,<5.4` permits this extra to pin-to-exact.
 #
 # lerobot 0.5.x requires Python >=3.12. On Jetson (Python 3.10) the
 # monolithic export can't run locally — export on a cloud/desktop host
-# (Python 3.12+) and `reflex serve` the resulting ONNX on the Jetson
-# with `pip install 'reflex-vla[serve]'` only.
+# (Python 3.12+) and `tether serve` the resulting ONNX on the Jetson
+# with `pip install 'fastcrest-tether[serve]'` only.
 monolithic = [
     "lerobot==0.5.1; python_version >= '3.12'",
     "transformers==5.3.0",
@@ -148,7 +165,7 @@ monolithic = [
     "num2words",
 ]
 # Task-success evaluation (heavy sim deps). Gated behind this extra so the
-# base install stays light. Use with `reflex bench --benchmark libero_10`.
+# base install stays light. Use with `tether bench --benchmark libero_10`.
 eval = [
     "vla-eval",
     "mujoco>=3.0",
@@ -157,12 +174,12 @@ eval = [
     "h5py",
 ]
 dev = ["pytest>=8.0", "ruff>=0.4.0", "mypy>=1.10", "httpx>=0.24.0", "pytest-asyncio>=0.23"]
-# MCP server — exposes Reflex as a Model Context Protocol tool surface so
+# MCP server — exposes Tether as a Model Context Protocol tool surface so
 # agents (Claude Desktop, Cursor, custom) can call /act as a tool. Additive
 # to the REST API; both transports share the same inference engine.
 # Feature spec: features/01_serve/subfeatures/_dx_gaps/mcp-server/mcp-server.md
 mcp = ["fastmcp>=3.0"]
-# Full-screen TUI for `reflex chat --tui`. Optional (the default Rich REPL
+# Full-screen TUI for `tether chat --tui`. Optional (the default Rich REPL
 # works without textual). Adds a multi-panel layout (transcript / tool calls
 # / input / status) with mouse + scroll-back + keyboard shortcuts.
 tui = ["textual>=0.80,<10"]
@@ -175,8 +192,31 @@ tracing = [
     "opentelemetry-sdk>=1.30",
     "opentelemetry-exporter-otlp-proto-grpc>=1.30",
 ]
+# LeRobot interop — installs `lerobot>=0.5` so the SO-ARM100 adapter
+# (`tether.embodiments.so_arm100`) can talk to the Feetech bus + import
+# LeRobot calibration JSONs. Use this on the host wired to the arm:
+#
+#   pip install 'fastcrest-tether[lerobot]'
+#   tether serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
+#
+# lerobot 0.5.x requires Python >=3.12 (we skip on 3.10/3.11 to avoid pip's
+# ResolutionImpossible; users on JetPack 6 Python 3.10 can still construct an
+# adapter + run the conversion math, they just can't open a serial bus until
+# they upgrade to Python 3.12 or install scservo_sdk directly via the [so100]
+# extra).
+lerobot = [
+    "lerobot>=0.5.1; python_version >= '3.12'",
+]
+# SO-100 hardware extra — installs the scservo_sdk Python package on the
+# Raspberry Pi / host wired to the arm. Separate from [lerobot] because the
+# legacy auto_soarm path (used by the bench wizard) only needs the SDK, not
+# the full LeRobot stack. The two extras compose: `pip install
+# 'fastcrest-tether[so100,lerobot]'` gives you both code paths.
+so100 = [
+    "scservo-sdk>=0.0.4",
+]
 # Real-Time Chunking adapter (B.3). Pulls in lerobot's RTC module so
-# `reflex serve --rtc` can wrap inference with the canonical RTCProcessor.
+# `tether serve --rtc` can wrap inference with the canonical RTCProcessor.
 # Lerobot is heavy (torch + vision + datasets); only install when serving
 # RTC-enabled deployments. Skeleton + config validation work without this
 # extra; only the actual processor construction needs it.
@@ -235,14 +275,50 @@ jetson = [
     "scipy",
     "num2words",
 ]
+
+# Opt-in Triton fast-kernels path (Lift #5). `tether serve --fast-kernels` falls
+# back to ORT silently if these aren't installed, so the extra is genuinely
+# optional.
+#
+# T-5 pinning revision (2026-05-23): the initial pin `triton>=3.0,<3.2` was
+# defeated by two transitive constraints surfaced on first Modal fire:
+#   1. torch 2.7+ requires triton>=3.2 (excluded by our upper bound)
+#   2. lerobot 0.5.1 requires torch>=2.7 (excluded by FluxVLA's torch==2.6.0)
+# Resolution: bring `triton` only (no torch lower bound — torch is supplied by
+# the host stack: serve/gpu/jetson extras or whatever the user installs).
+# `triton>=3.1` matches what torch 2.6-2.8 transitively bring in; we don't
+# constrain torch here because the [serve,gpu] / [monolithic] / [jetson]
+# extras already do.
+#
+# Re-vendor cadence in src/tether/kernels/ATTRIBUTION.txt covers when
+# torch+triton drift breaks the vendored kernels.
+fast-kernels = [
+    "triton>=3.1",
+]
+
 [project.scripts]
-reflex = "reflex.cli:app"
+# Canonical CLI binary (v0.12.0+).
+tether = "tether.cli:app"
+# Backwards-compat: `reflex` entry point still works for 6 months (until
+# v0.14.0). It forwards to tether's main entry point AND emits a
+# DeprecationWarning so existing scripts/CI keep working while users
+# migrate. See src/reflex/_redirect.py for the warning + forwarder.
+reflex = "reflex._redirect:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/reflex"]
-# Note: embodiment preset JSONs at src/reflex/embodiments/presets/*.json are
-# auto-included by hatchling because they live inside the package directory.
-# Explicit force-include caused duplicate entries — removed in v0.5.2.
+# v0.12.0 renamed the package from `reflex` to `tether`. We ship BOTH
+# directories so:
+#   - `from tether import X` (new canonical) works
+#   - `from reflex import X` (backwards-compat shim, emits DeprecationWarning)
+#     works until v0.14.0 (6-month support window)
+# The src/reflex/ directory is a thin re-export shim; see its __init__.py.
+packages = ["src/tether", "src/reflex"]
+# Hatchling auto-includes .py + data files from packages. The artifacts
+# directive ensures C++/CUDA extension sources (Lift #5 JIT kernels at
+# src/tether/kernels/cuda/*/src/*.{cpp,cu}) and license/attribution files
+# are also included. A prior force-include of "src/tether/kernels" caused
+# duplicate ZIP entries (rejected by PyPI) — removed in v0.11.1.
+artifacts = ["*.cpp", "*.cu", "*.txt", "*.json"]
 
 [tool.ruff]
 target-version = "py310"
@@ -257,4 +333,5 @@ testpaths = ["tests"]
 asyncio_mode = "strict"
 markers = [
     "asyncio: mark a coroutine test for pytest-asyncio (strict mode)",
+    "hardware: requires a physical robot wired in; skipped unless RUN_HARDWARE_TESTS=1",
 ]

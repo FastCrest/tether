@@ -2,7 +2,7 @@
 
 Answers two foundational questions:
 1. Does our exported ONNX actually beat `torch.compile` eager PyTorch on the
-   same forward pass? If no, reflex export has no reason to exist.
+   same forward pass? If no, tether export has no reason to exist.
 2. What's the actual memory footprint (weights + peak forward memory) for
    each model? Determines Jetson SKU feasibility (Orin Nano 8GB / Orin 32GB /
    Thor 128GB).
@@ -19,7 +19,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-bench-onnx-vs-torch")
+app = modal.App("tether-bench-onnx-vs-torch")
 
 # onnxruntime-gpu ≥1.17 bundles its own CUDA libs, so we can pip install cleanly.
 image = (
@@ -31,10 +31,10 @@ image = (
         "onnxscript", "numpy", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -55,28 +55,28 @@ def bench():
         {
             "tag": "smolvla",
             "hf_id": "lerobot/smolvla_base",
-            "builder_mod": "reflex.exporters.smolvla_exporter",
+            "builder_mod": "tether.exporters.smolvla",
             "builder_fn": "build_expert_stack",
             "builder_kwargs": {"head_dim": 64},
         },
         {
             "tag": "pi0",
             "hf_id": "lerobot/pi0_base",
-            "builder_mod": "reflex.exporters.pi0_exporter",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi0_expert_stack",
             "builder_kwargs": {"head_dim": 128},
         },
         {
             "tag": "pi05",
             "hf_id": "lerobot/pi05_base",
-            "builder_mod": "reflex.exporters.pi0_exporter",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi05_expert_stack",
             "builder_kwargs": {"head_dim": 128},
         },
         {
             "tag": "gr00t",
             "hf_id": "nvidia/GR00T-N1.6-3B",
-            "builder_mod": "reflex.exporters.gr00t_exporter",
+            "builder_mod": "tether.exporters.gr00t",
             "builder_fn": "build_gr00t_full_stack",
             "builder_kwargs": {"embodiment_id": 0},
         },
@@ -119,7 +119,7 @@ def bench():
         torch.cuda.reset_peak_memory_stats()
 
         # ---- Load + build stack ----
-        from reflex.checkpoint import load_checkpoint
+        from tether.checkpoint import load_checkpoint
         import importlib
 
         t0 = time.time()

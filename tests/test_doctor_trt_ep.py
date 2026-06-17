@@ -1,4 +1,4 @@
-"""Unit tests for `reflex doctor`'s ORT-TRT EP load chain validation.
+"""Unit tests for `tether doctor`'s ORT-TRT EP load chain validation.
 
 Per ADR 2026-04-29-ort-trt-ep-first-class-support.md: doctor adds 4 checks:
 1. libnvinfer.so.10 loadable
@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from reflex.cli import _check_trt_ep_load_chain
+from tether.cli import _check_trt_ep_load_chain
 
 
 def _fake_onnx_module():

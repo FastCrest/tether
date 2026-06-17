@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/calibration.py — Phase 1 auto-calibration Day 1.
+"""Tests for src/tether/runtime/calibration.py — Phase 1 auto-calibration Day 1.
 
 Covers: HardwareFingerprint construction + matching + serialization,
 MeasurementQuality + MeasurementContext invariants, CalibrationEntry
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from reflex.runtime.calibration import (
+from tether.runtime.calibration import (
     DEFAULT_STALE_AFTER_DAYS,
     SCHEMA_VERSION,
     CalibrationCache,
@@ -41,7 +41,7 @@ def _mk_fp(**overrides) -> HardwareFingerprint:
         kernel_release="6.1.0",
         cpu_count=8,
         ram_gb=32,
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
     )
     defaults.update(overrides)
     return HardwareFingerprint(**defaults)
@@ -125,9 +125,9 @@ def test_fingerprint_matches_rejects_gpu_uuid_change():
     assert not fp1.matches(fp2)
 
 
-def test_fingerprint_matches_rejects_reflex_version_drift():
-    fp1 = _mk_fp(reflex_version="0.5.0")
-    fp2 = _mk_fp(reflex_version="0.6.0")
+def test_fingerprint_matches_rejects_tether_version_drift():
+    fp1 = _mk_fp(tether_version="0.5.0")
+    fp2 = _mk_fp(tether_version="0.6.0")
     assert not fp1.matches(fp2)
 
 
@@ -280,7 +280,7 @@ def test_entry_is_not_stale_when_recent():
 
 
 def test_cache_to_dict_has_schema_version_field():
-    cache = CalibrationCache(reflex_version="0.5.0")
+    cache = CalibrationCache(tether_version="0.5.0")
     d = cache.to_dict()
     assert "schema_version" in d
     assert d["schema_version"] == SCHEMA_VERSION
@@ -305,7 +305,7 @@ def test_cache_make_key_rejects_separator_in_args():
 
 
 def test_cache_record_then_lookup_roundtrip():
-    cache = CalibrationCache(reflex_version="0.5.0")
+    cache = CalibrationCache(tether_version="0.5.0")
     entry = _mk_entry()
     cache.record(embodiment="franka", model_hash="abc", entry=entry)
     out = cache.lookup(embodiment="franka", model_hash="abc")
@@ -313,7 +313,7 @@ def test_cache_record_then_lookup_roundtrip():
 
 
 def test_cache_lookup_returns_none_on_miss():
-    cache = CalibrationCache(reflex_version="0.5.0")
+    cache = CalibrationCache(tether_version="0.5.0")
     out = cache.lookup(embodiment="franka", model_hash="abc")
     assert out is None
 
@@ -322,7 +322,7 @@ def test_cache_lookup_with_fingerprint_guard():
     fp_a = _mk_fp(gpu_uuid="GPU-a")
     fp_b = _mk_fp(gpu_uuid="GPU-b")
     cache = CalibrationCache(
-        reflex_version="0.5.0", hardware_fingerprint=fp_a,
+        tether_version="0.5.0", hardware_fingerprint=fp_a,
     )
     cache.record(embodiment="franka", model_hash="abc", entry=_mk_entry())
     assert cache.lookup(
@@ -336,14 +336,14 @@ def test_cache_lookup_with_fingerprint_guard():
 
 
 def test_cache_record_updates_calibration_date():
-    cache = CalibrationCache(reflex_version="0.5.0", calibration_date="")
+    cache = CalibrationCache(tether_version="0.5.0", calibration_date="")
     cache.record(embodiment="franka", model_hash="abc", entry=_mk_entry())
     assert cache.calibration_date != ""
 
 
 def test_cache_is_stale_when_fingerprint_mismatches():
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         hardware_fingerprint=_mk_fp(gpu_uuid="GPU-a"),
     )
@@ -352,14 +352,14 @@ def test_cache_is_stale_when_fingerprint_mismatches():
 
 
 def test_cache_is_stale_when_no_fingerprint():
-    cache = CalibrationCache(reflex_version="0.5.0")
+    cache = CalibrationCache(tether_version="0.5.0")
     assert cache.is_stale(_mk_fp())
 
 
 def test_cache_is_not_stale_when_fingerprint_matches_and_recent():
     fp = _mk_fp()
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         hardware_fingerprint=fp,
     )
@@ -372,7 +372,7 @@ def test_cache_is_stale_when_old():
         "%Y-%m-%dT%H:%M:%S.%fZ"
     )
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=old_date,
         hardware_fingerprint=fp,
     )
@@ -387,7 +387,7 @@ def test_cache_is_stale_when_old():
 def test_save_load_roundtrip(tmp_path):
     fp = _mk_fp()
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         hardware_fingerprint=fp,
     )
@@ -405,7 +405,7 @@ def test_save_load_roundtrip(tmp_path):
 
 
 def test_save_writes_atomically(tmp_path):
-    cache = CalibrationCache(reflex_version="0.5.0")
+    cache = CalibrationCache(tether_version="0.5.0")
     path = tmp_path / "cache.json"
     cache.save(path)
     assert path.exists()
@@ -421,7 +421,7 @@ def test_load_or_empty_returns_fresh_cache_when_missing(tmp_path):
 def test_load_or_empty_returns_loaded_cache_when_exists(tmp_path):
     path = tmp_path / "cache.json"
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         hardware_fingerprint=_mk_fp(),
     )
@@ -435,7 +435,7 @@ def test_load_refuses_future_schema_version(tmp_path):
     path = tmp_path / "cache.json"
     path.write_text(json.dumps({
         "schema_version": SCHEMA_VERSION + 1,
-        "reflex_version": "0.6.0",
+        "tether_version": "0.6.0",
         "entries": {},
     }))
     with pytest.raises(ValueError, match="schema_version"):
@@ -454,7 +454,7 @@ def test_load_refuses_zero_schema_version(tmp_path):
 
 def test_save_creates_parent_directory(tmp_path):
     nested = tmp_path / "deeply" / "nested" / "path"
-    cache = CalibrationCache(reflex_version="0.5.0")
+    cache = CalibrationCache(tether_version="0.5.0")
     cache.save(nested / "cache.json")
     assert (nested / "cache.json").exists()
 
@@ -464,7 +464,7 @@ def test_save_creates_parent_directory(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-from reflex.runtime.calibration import measure_latency_profile  # noqa: E402
+from tether.runtime.calibration import measure_latency_profile  # noqa: E402
 
 
 def test_measure_rejects_zero_n_iters():
@@ -616,7 +616,7 @@ def test_measure_default_args_runs_clean():
 # ---------------------------------------------------------------------------
 
 
-from reflex.runtime.calibration import GreedyResolver, ResolverInputs  # noqa: E402
+from tether.runtime.calibration import GreedyResolver, ResolverInputs  # noqa: E402
 
 
 def _mk_inputs(**overrides) -> ResolverInputs:
@@ -860,7 +860,7 @@ def test_cli_serve_help_advertises_auto_calibrate_flags():
     """Guard against accidental --auto-calibrate / --calibration-cache /
     --calibrate-force flag removal or rename."""
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["serve", "--help"])
@@ -871,7 +871,7 @@ def test_cli_serve_help_advertises_auto_calibrate_flags():
 
 def test_cli_doctor_help_advertises_show_calibration():
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["doctor", "--help"])
@@ -883,7 +883,7 @@ def test_cli_doctor_show_calibration_missing_cache_human(tmp_path):
     """doctor --show-calibration on a missing cache prints a friendly
     message + exits 0."""
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     cache_path = tmp_path / "missing_cache.json"
@@ -898,7 +898,7 @@ def test_cli_doctor_show_calibration_missing_cache_human(tmp_path):
 def test_cli_doctor_show_calibration_missing_cache_json(tmp_path):
     """JSON format on missing cache emits a structured error."""
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     runner = CliRunner()
     cache_path = tmp_path / "missing_cache.json"
@@ -914,11 +914,11 @@ def test_cli_doctor_show_calibration_missing_cache_json(tmp_path):
 def test_cli_doctor_show_calibration_loaded_cache_human(tmp_path):
     """When the cache exists, --show-calibration pretty-prints entries."""
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
 
     cache_path = tmp_path / "cache.json"
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         hardware_fingerprint=_mk_fp(),
     )
@@ -938,12 +938,12 @@ def test_cli_doctor_show_calibration_loaded_cache_human(tmp_path):
 def test_cli_doctor_show_calibration_loaded_cache_json(tmp_path):
     """JSON format emits the full cache + a current_fingerprint snapshot."""
     from typer.testing import CliRunner
-    from reflex.cli import app
+    from tether.cli import app
     import json as _json
 
     cache_path = tmp_path / "cache.json"
     cache = CalibrationCache(
-        reflex_version="0.5.0",
+        tether_version="0.5.0",
         calibration_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         hardware_fingerprint=_mk_fp(),
     )
@@ -968,7 +968,7 @@ def test_cli_doctor_show_calibration_loaded_cache_json(tmp_path):
 def test_create_app_accepts_auto_calibrate_kwargs():
     """Signature drift guard — Day 4 wiring threads three new kwargs."""
     import inspect
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     sig = inspect.signature(create_app)
     for name in ("auto_calibrate", "calibration_cache_path", "calibrate_force"):
@@ -985,11 +985,11 @@ def test_create_app_accepts_auto_calibrate_kwargs():
 # ---------------------------------------------------------------------------
 
 
-from reflex.runtime.calibration import CalibrationWarmupTracker  # noqa: E402
+from tether.runtime.calibration import CalibrationWarmupTracker  # noqa: E402
 
 
 def _mk_tracker(tmp_path, **overrides) -> CalibrationWarmupTracker:
-    cache = CalibrationCache(reflex_version="0.5.0", hardware_fingerprint=_mk_fp())
+    cache = CalibrationCache(tether_version="0.5.0", hardware_fingerprint=_mk_fp())
     cache.record(embodiment="franka", model_hash="abc", entry=_mk_entry())
     cache_path = tmp_path / "cache.json"
     cache.save(cache_path)
@@ -1138,7 +1138,7 @@ def test_tracker_unstable_p95_does_not_persist(tmp_path):
 def test_tracker_does_not_persist_when_no_existing_entry(tmp_path):
     """Day 5 design: warm-up only updates an existing entry. If the
     resolver hasn't created one yet, persist is a no-op."""
-    cache = CalibrationCache(reflex_version="0.5.0", hardware_fingerprint=_mk_fp())
+    cache = CalibrationCache(tether_version="0.5.0", hardware_fingerprint=_mk_fp())
     # Note: NOT recording an entry for franka/abc
     cache_path = tmp_path / "empty_cache.json"
     cache.save(cache_path)

@@ -14,8 +14,8 @@ services:
 
   # GPU 0 Worker
   worker_0:
-    image: ghcr.io/fastcrest/reflex-vla:latest
-    command: reflex serve /exports/model --host 0.0.0.0 --port 8001
+    image: ghcr.io/fastcrest/tether:latest
+    command: tether serve /exports/model --host 0.0.0.0 --port 8001
     volumes:
       - ./my_export:/exports/model:ro
     environment:
@@ -30,8 +30,8 @@ services:
 
   # GPU 1 Worker
   worker_1:
-    image: ghcr.io/fastcrest/reflex-vla:latest
-    command: reflex serve /exports/model --host 0.0.0.0 --port 8002
+    image: ghcr.io/fastcrest/tether:latest
+    command: tether serve /exports/model --host 0.0.0.0 --port 8002
     volumes:
       - ./my_export:/exports/model:ro
     environment:

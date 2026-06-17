@@ -21,7 +21,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-gr00t-vlm-parity")
+app = modal.App("tether-gr00t-vlm-parity")
 
 
 def _hf_secret():
@@ -63,7 +63,7 @@ image = (
         "rich",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -79,8 +79,8 @@ def run_parity(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import time
     import torch
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.gr00t_exporter import build_gr00t_full_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.gr00t import build_gr00t_full_stack
 
     print(f"[parity] Loading {model_id}...")
     t0 = time.time()
@@ -118,7 +118,7 @@ def run_parity(model_id: str = "nvidia/GR00T-N1.6-3B"):
     # ours.dit, ours.action_decoder) but wires them directly, without
     # going through GR00TFullStack.forward. Any delta = wrapper bug.
     import torch.nn.functional as F
-    from reflex.exporters.gr00t_exporter import _sinusoidal_timestep
+    from tether.exporters.gr00t import _sinusoidal_timestep
 
     print(f"\n[parity] Path B (hand-rolled reference, same primitives)")
     with torch.no_grad():

@@ -1,25 +1,26 @@
 # Record & replay
 
-Every `/act` request + response from `reflex serve` can be captured to a JSONL trace file so physical-robot bugs become reproducible on a dev laptop. Traces can be:
+Every `/act` request + response from `tether serve` can be captured to a JSONL trace file so physical-robot bugs become reproducible on a dev laptop. Traces can be:
 
 - **Replayed** against the same model to verify determinism (`cos ≈ 1.0`)
 - **Diffed** against a different model to spot regression (e.g. did v0.5 regress vs v0.4?)
+- **Compared** with `tether policy diff` before promotion, including shadow-policy action deltas, latency regressions, and guard regressions
 - **Fed to A2C2** as a training corpus for the asynchronous action correction head
-- **Handed to Reflex support** as a reproduction artifact for a bug
+- **Handed to Tether support** as a reproduction artifact for a bug
 
 Two layers, two jobs — don't confuse them:
 
 | Layer | Purpose | Format | Sink | Use case |
 |---|---|---|---|---|
 | **Record/replay (this doc)** | Bit-exact replay + cosine diff | Custom JSONL schema v1 | Local `.jsonl.gz` file | "Did model B reproduce model A's actions on this trace?" |
-| **OTel tracing** (see `src/reflex/runtime/tracing.py`) | Live observability + debug UI | OTel spans (`gen_ai.*` + `reflex.*`) | Phoenix / any OTLP backend | "Why did /act take 800ms at 14:32 yesterday?" |
+| **OTel tracing** (see `src/tether/runtime/tracing.py`) | Live observability + debug UI | OTel spans (`gen_ai.*` + `tether.*`) | Phoenix / any OTLP backend | "Why did /act take 800ms at 14:32 yesterday?" |
 
-Both can run simultaneously. The `/act` hook emits `reflex.record.seq` on the OTel span so a single record can be grepped in either ledger by seq.
+Both can run simultaneously. The `/act` hook emits `tether.record.seq` on the OTel span so a single record can be grepped in either ledger by seq.
 
 ## Record
 
 ```bash
-reflex serve ./export/pi05 --record /var/log/reflex/traces --embodiment franka
+tether serve ./export/pi05 --record /var/log/tether/traces --embodiment franka
 ```
 
 One file per server session, named `<YYYYMMDD>-<HHMMSS>-<model_hash>-<session_id>.jsonl.gz` (UTC). Default: gzipped + image hashes only.
@@ -59,7 +60,7 @@ If the disk fills mid-session, the recorder catches `OSError`, logs `slug=record
 ## Replay
 
 ```bash
-reflex replay ./traces/20260424-171305-7a8b3c1d-<session>.jsonl.gz \
+tether replay ./traces/20260424-171305-7a8b3c1d-<session>.jsonl.gz \
     --model ./export/pi05 \
     --diff all
 ```
@@ -141,22 +142,53 @@ Short version:
 
 All records carry `schema_version` so readers can dispatch across versions. Additive fields don't bump the version; readers must ignore unknown fields.
 
+### Additive rollout evidence
+
+New request records may include an `evidence` block with stable, compact fields
+for deployment proof and rollout gates:
+
+```json
+{
+  "kind": "tether.rollout_evidence",
+  "schema_version": 1,
+  "policy": {"model_hash": "...", "config_hash": "...", "routing_slot": "prod"},
+  "request": {"episode_id": "ep-1", "request_id": "req-1", "image_sha256": "..."},
+  "action": {
+    "num_actions": 50,
+    "action_dim": 7,
+    "raw_present": true,
+    "raw_sha256": "...",
+    "guarded_sha256": "...",
+    "modified_by_guard": true
+  },
+  "safety": {"guard_present": true, "clamped": true, "clamp_count": 1, "violation_count": 1},
+  "latency": {"total_ms": 31.2, "rolling_p95_ms": 38.4, "rolling_p99_ms": 42.0},
+  "cache": {"status": "hit"},
+  "outcome": {"status": "success", "error_slug": null}
+}
+```
+
+When a runtime guard modifies the action chunk, records may also include
+`action_trace` with `raw_actions`, `guarded_actions`, and their hashes. This is
+what lets `tether policy diff` and deployment-proof packets distinguish "policy
+changed" from "safety layer clamped it."
+
 ## Adding a new schema version
 
 When a breaking change lands (field rename, semantic change):
 
-1. Bump `SCHEMA_VERSION` in `src/reflex/runtime/record.py` to the new int.
-2. Add a new reader at `src/reflex/replay/readers/v<N>.py` following the v1 pattern.
-3. Register it in `src/reflex/replay/readers/__init__.py` `_READERS` dict.
+1. Bump `SCHEMA_VERSION` in `src/tether/runtime/record.py` to the new int.
+2. Add a new reader at `src/tether/replay/readers/v<N>.py` following the v1 pattern.
+3. Register it in `src/tether/replay/readers/__init__.py` `_READERS` dict.
 4. Old traces still work — `load_reader()` dispatches on the file's header.
 5. Ship a migration script `scripts/migrate_trace_v<M>_to_v<N>.py` if users have old traces worth upgrading.
 6. Document the delta in this file's "Adding a new schema version" section.
 
 ## Related
 
-- `src/reflex/runtime/record.py` — writer
-- `src/reflex/replay/readers/v1.py` — reader
-- `src/reflex/replay/cli.py` — replay CLI + diff functions
+- `src/tether/runtime/record.py` — writer
+- `src/tether/replay/readers/v1.py` — reader
+- `src/tether/replay/cli.py` — replay CLI + diff functions
 - `tests/test_record.py` / `tests/test_replay_reader.py` / `tests/test_replay_diffs.py` — coverage
 - `scripts/local_record_smoke.py` — standalone writer smoke test
 - `reflex_context/features/01_serve/subfeatures/_rtc_a2c2/record-replay.md` — canonical feature page

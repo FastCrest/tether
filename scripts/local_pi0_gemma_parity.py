@@ -15,7 +15,7 @@ via the Optimum Gemma path. See
 reflex_context/03_research/pi0_empirical_derisk_findings.md
 
 Prerequisites:
-  pip install 'reflex-vla[native]' 'optimum[onnxruntime]>=1.22' onnx onnxruntime
+  pip install 'fastcrest-tether[native]' 'optimum[onnxruntime]>=1.22' onnx onnxruntime
   # Also: pi0_base cached in ~/.cache/huggingface (14GB), see scripts/local_full_diff.py
 """
 import sys

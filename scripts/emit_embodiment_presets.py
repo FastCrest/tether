@@ -9,7 +9,7 @@ Run:
 
 Source-of-truth values come from TECHNICAL_PLAN.md §4.5 / Appendix D.2
 (franka lines 1943-1974, so100 lines 1976-1999) plus per-robot URDF
-references in reflex-vla/reference/mujoco_menagerie/.
+references in tether/reference/mujoco_menagerie/.
 """
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ import json
 import sys
 from pathlib import Path
 
-# Make `reflex` importable when running from a fresh checkout
+# Make `tether` importable when running from a fresh checkout
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from reflex.embodiments import EmbodimentConfig, _PRESETS_DIR  # noqa: E402
-from reflex.embodiments.validate import (  # noqa: E402
+from tether.embodiments import EmbodimentConfig, _PRESETS_DIR  # noqa: E402
+from tether.embodiments.validate import (  # noqa: E402
     format_errors,
     validate_embodiment_config,
 )

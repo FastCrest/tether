@@ -1,11 +1,11 @@
 """Integration tests for cuda-graphs (Day 7 of cuda-graphs_plan.md).
 
 Complements tests/test_cuda_graphs.py (wrapper-level unit tests with mocked
-sessions) and tests/test_check_cuda_graphs.py (reflex doctor surface) by
+sessions) and tests/test_check_cuda_graphs.py (tether doctor surface) by
 exercising the integration surface:
 
 - create_app() propagates cuda_graphs_enabled to server._cuda_graphs_enabled
-- create_app() with legacy ReflexServer + cuda_graphs_enabled=True logs
+- create_app() with legacy TetherServer + cuda_graphs_enabled=True logs
   the no-op warning (Phase 1 production wire-up gap, tracked by
   chunk-budget-batching's decomposed-dispatch fix)
 - Pi05DecomposedInference threads cuda_graphs_enabled into the ORT session
@@ -47,13 +47,13 @@ def _has_cuda() -> bool:
 
 @pytest.fixture
 def decomposed_export_dir(tmp_path: Path) -> Path:
-    """Build a minimal decomposed export dir with a reflex_config.json that
+    """Build a minimal decomposed export dir with a tether_config.json that
     Pi05DecomposedInference's __init__ will accept."""
     export_dir = tmp_path / "export"
     export_dir.mkdir()
     (export_dir / "vlm_prefix.onnx").write_bytes(b"stub-prefix")
     (export_dir / "expert_denoise.onnx").write_bytes(b"stub-expert")
-    (export_dir / "reflex_config.json").write_text(json.dumps({
+    (export_dir / "tether_config.json").write_text(json.dumps({
         "model_type": "pi05",
         "export_kind": "decomposed",
         "num_denoising_steps": 10,
@@ -105,7 +105,7 @@ def test_create_app_propagates_cuda_graphs_enabled_to_server_attr(tmp_path, monk
     monolithic_export = tmp_path / "export"
     monolithic_export.mkdir()
     (monolithic_export / "model.onnx").write_bytes(b"stub")
-    (monolithic_export / "reflex_config.json").write_text(json.dumps({
+    (monolithic_export / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -115,10 +115,10 @@ def test_create_app_propagates_cuda_graphs_enabled_to_server_attr(tmp_path, monk
         "max_state_dim": 32,
     }))
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(monolithic_export), device="cpu", cuda_graphs_enabled=True)
-    server = app.state.reflex_server
+    server = app.state.tether_server
     assert getattr(server, "_cuda_graphs_enabled", None) is True
 
 
@@ -133,7 +133,7 @@ def test_create_app_default_cuda_graphs_disabled(tmp_path, monkeypatch):
     monolithic_export = tmp_path / "export"
     monolithic_export.mkdir()
     (monolithic_export / "model.onnx").write_bytes(b"stub")
-    (monolithic_export / "reflex_config.json").write_text(json.dumps({
+    (monolithic_export / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -143,18 +143,18 @@ def test_create_app_default_cuda_graphs_disabled(tmp_path, monkeypatch):
         "max_state_dim": 32,
     }))
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(monolithic_export), device="cpu")
-    server = app.state.reflex_server
+    server = app.state.tether_server
     assert getattr(server, "_cuda_graphs_enabled", None) is False
 
 
-def test_legacy_reflex_server_logs_noop_warning_when_cuda_graphs_set(
+def test_legacy_tether_server_logs_noop_warning_when_cuda_graphs_set(
     tmp_path, monkeypatch, caplog,
 ):
-    """When cuda_graphs_enabled=True is set on the legacy ReflexServer
-    (legacy path with no export_kind in reflex_config.json — neither
+    """When cuda_graphs_enabled=True is set on the legacy TetherServer
+    (legacy path with no export_kind in tether_config.json — neither
     monolithic nor decomposed — that doesn't currently consume the flag),
     a single info log surfaces the no-op so operators notice. Production
     wire-up for the decomposed path is tracked by chunk-budget-batching's
@@ -168,7 +168,7 @@ def test_legacy_reflex_server_logs_noop_warning_when_cuda_graphs_set(
     legacy_export = tmp_path / "export"
     legacy_export.mkdir()
     (legacy_export / "expert_stack.onnx").write_bytes(b"stub")
-    (legacy_export / "reflex_config.json").write_text(json.dumps({
+    (legacy_export / "tether_config.json").write_text(json.dumps({
         "model_type": "pi05",
         "num_denoising_steps": 10,
         "chunk_size": 50,
@@ -177,16 +177,16 @@ def test_legacy_reflex_server_logs_noop_warning_when_cuda_graphs_set(
         "max_state_dim": 32,
     }))
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
-    with caplog.at_level(logging.INFO, logger="reflex.runtime.server"):
+    with caplog.at_level(logging.INFO, logger="tether.runtime.server"):
         try:
             create_app(str(legacy_export), device="cpu", cuda_graphs_enabled=True)
         except Exception:
             pass  # legacy path may fail to load expert_stack stub; we only care about the log
 
     assert any("--cuda-graphs was set" in rec.message for rec in caplog.records), (
-        f"Expected no-op log on legacy ReflexServer; got messages: "
+        f"Expected no-op log on legacy TetherServer; got messages: "
         f"{[rec.message for rec in caplog.records]}"
     )
 
@@ -212,7 +212,7 @@ def test_pi05_decomposed_inference_wires_cuda_graphs_provider_to_session(
 
     monkeypatch.setattr(ort, "InferenceSession", fake_session)
 
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     Pi05DecomposedInference(
         decomposed_export_dir,
@@ -240,7 +240,7 @@ def test_pi05_decomposed_capture_failure_falls_back_to_eager(
     should construct an EagerSessionWrapper for that session and continue
     loading. Verifies the graceful-degrade path lands as expected."""
     import onnxruntime as ort
-    from reflex.runtime.cuda_graphs import EagerSessionWrapper
+    from tether.runtime.cuda_graphs import EagerSessionWrapper
 
     failing_capture_session = _stub_ort_session_with_io(["x"])
     failing_capture_session.run.side_effect = RuntimeError("BFC arena alloc 16MB failed")
@@ -259,7 +259,7 @@ def test_pi05_decomposed_capture_failure_falls_back_to_eager(
 
     monkeypatch.setattr(ort, "InferenceSession", fake_session)
 
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     inference = Pi05DecomposedInference(
         decomposed_export_dir,
@@ -298,7 +298,7 @@ def test_metrics_endpoint_includes_cuda_graph_counter_names(tmp_path, monkeypatc
     export_dir = tmp_path / "export"
     export_dir.mkdir()
     (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "reflex_config.json").write_text(json.dumps({
+    (export_dir / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -308,14 +308,14 @@ def test_metrics_endpoint_includes_cuda_graph_counter_names(tmp_path, monkeypatc
         "max_state_dim": 32,
     }))
 
-    from reflex.runtime.cuda_graphs import CudaGraphWrapper
+    from tether.runtime.cuda_graphs import CudaGraphWrapper
 
     sess = MagicMock()
     sess.run.return_value = ["x"]
     w = CudaGraphWrapper(sess, "vlm_prefix", embodiment="franka", model_id="metrics-warm")
     w.run(None, {})
 
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     client = TestClient(app)
@@ -323,11 +323,11 @@ def test_metrics_endpoint_includes_cuda_graph_counter_names(tmp_path, monkeypatc
     assert resp.status_code == 200
     body = resp.text
     for metric_name in (
-        "reflex_cuda_graph_captured_total",
-        "reflex_cuda_graph_replayed_total",
-        "reflex_cuda_graph_eager_fallback_total",
-        "reflex_cuda_graph_capture_failed_at_init_total",
-        "reflex_cuda_graph_capture_seconds",
+        "tether_cuda_graph_captured_total",
+        "tether_cuda_graph_replayed_total",
+        "tether_cuda_graph_eager_fallback_total",
+        "tether_cuda_graph_capture_failed_at_init_total",
+        "tether_cuda_graph_capture_seconds",
     ):
         assert metric_name in body, f"missing metric {metric_name} in /metrics output"
 
@@ -341,16 +341,16 @@ def test_prometheus_label_cardinality_stays_bounded():
     """5 embodiments × 3 model_ids × 2 sessions = 30 series. Verify the
     metric registry stays bounded — no accidental high-cardinality dimension
     (request_id, episode_id) that would blow up Prometheus storage."""
-    from reflex.observability.prometheus import (
-        reflex_cuda_graph_captured_total,
+    from tether.observability.prometheus import (
+        tether_cuda_graph_captured_total,
     )
-    from reflex.runtime.cuda_graphs import CudaGraphWrapper
+    from tether.runtime.cuda_graphs import CudaGraphWrapper
 
     embodiments = ["card_emb_a", "card_emb_b", "card_emb_c", "card_emb_d", "card_emb_e"]
     model_ids = ["card_mid_1", "card_mid_2", "card_mid_3"]
     sessions = ["vlm_prefix", "expert_denoise"]
 
-    series_before = len(reflex_cuda_graph_captured_total._metrics)
+    series_before = len(tether_cuda_graph_captured_total._metrics)
     for emb in embodiments:
         for mid in model_ids:
             for sname in sessions:
@@ -358,7 +358,7 @@ def test_prometheus_label_cardinality_stays_bounded():
                 sess.run.return_value = ["x"]
                 w = CudaGraphWrapper(sess, sname, embodiment=emb, model_id=mid)
                 w.run(None, {})
-    series_after = len(reflex_cuda_graph_captured_total._metrics)
+    series_after = len(tether_cuda_graph_captured_total._metrics)
     delta = series_after - series_before
     expected = len(embodiments) * len(model_ids) * len(sessions)
     assert delta == expected, (
@@ -400,7 +400,7 @@ def test_real_cuda_graph_capture_and_replay_parity(tmp_path):
     )
     eager_out = eager.run(None, feed)[0]
 
-    from reflex.runtime.cuda_graphs import CudaGraphWrapper, build_cuda_graph_providers
+    from tether.runtime.cuda_graphs import CudaGraphWrapper, build_cuda_graph_providers
 
     cg_session = ort.InferenceSession(
         str(onnx_path),

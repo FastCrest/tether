@@ -16,7 +16,7 @@ Usage:
 import os
 import modal
 
-app = modal.App("reflex-gr00t-keys-dump")
+app = modal.App("tether-gr00t-keys-dump")
 
 
 def _hf_secret():

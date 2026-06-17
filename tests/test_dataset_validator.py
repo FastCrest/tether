@@ -22,7 +22,7 @@ pyarrow = pytest.importorskip("pyarrow")
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from reflex.validation import (
+from tether.validation import (
     Decision,
     REGISTERED_CHECKS,
     format_human,

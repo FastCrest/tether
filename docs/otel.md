@@ -1,26 +1,26 @@
 # OpenTelemetry tracing
 
-`reflex serve` emits OpenTelemetry GenAI-semantic-convention spans for every `/act` call. Point Phoenix, Datadog, Honeycomb, New Relic, or any OTLP-compatible backend at it — no integration code on your side.
+`tether serve` emits OpenTelemetry GenAI-semantic-convention spans for every `/act` call. Point Phoenix, Datadog, Honeycomb, New Relic, or any OTLP-compatible backend at it — no integration code on your side.
 
 ## Install
 
 ```bash
-pip install 'reflex-vla[tracing]'
+pip install 'fastcrest-tether[tracing]'
 ```
 
 Without the `[tracing]` extra, tracing no-ops silently; the server emits nothing and costs nothing. Your serve behavior is unchanged.
 
 ## Quick start — Phoenix (local dev)
 
-Phoenix is a free OSS trace UI; the easiest way to see what Reflex emits.
+Phoenix is a free OSS trace UI; the easiest way to see what Tether emits.
 
 ```bash
 # Terminal 1 — Phoenix UI on :6006, OTLP gRPC collector on :4317
 pip install arize-phoenix
 phoenix serve
 
-# Terminal 2 — Reflex pointing at it
-reflex serve ./my-export/ --otel-endpoint localhost:4317 --otel-sample 1.0
+# Terminal 2 — Tether pointing at it
+tether serve ./my-export/ --otel-endpoint localhost:4317 --otel-sample 1.0
 ```
 
 Hit `/act` and open `http://localhost:6006` — every request shows up as an `act` span with all the robotics attributes below.
@@ -29,12 +29,12 @@ Hit `/act` and open `http://localhost:6006` — every request shows up as an `ac
 
 ```bash
 # Datadog Agent exposes OTLP on :4317 when you enable receivers.otlp in datadog.yaml
-reflex serve ./my-export/ \
+tether serve ./my-export/ \
     --otel-endpoint localhost:4317 \
     --otel-sample 0.1
 ```
 
-Spans land under `service:reflex-vla` in APM.
+Spans land under `service:tether` in APM.
 
 ## Flags
 
@@ -62,7 +62,7 @@ Every `/act` call produces one root span named `act`.
 | `gen_ai.operation.name` | string | `"act"` |
 | `gen_ai.request.model` | string | Export directory path (post policy-versioning, this becomes the routing slot) |
 
-### Robotics extensions (Reflex-specific, proposed upstream Phase 2)
+### Robotics extensions (Tether-specific, proposed upstream Phase 2)
 
 | Attribute | Type | Value |
 |---|---|---|
@@ -70,26 +70,26 @@ Every `/act` call produces one root span named `act`.
 | `gen_ai.action.chunk_size` | int | Number of actions returned in this chunk |
 | `gen_ai.action.denoise_steps` | int | Diffusion denoise iterations (when adaptive-denoise turbo is active) |
 
-### Reflex-specific (prefix intentional; not for upstream)
+### Tether-specific (prefix intentional; not for upstream)
 
 | Attribute | Type | Value |
 |---|---|---|
-| `reflex.instruction` | string | First 512 chars of the instruction text (truncated — never raw bytes) |
-| `reflex.state_dim` | int | Length of the proprio-state vector |
-| `reflex.image_bytes` | int | Size of the posted image in bytes (**size only** — never the image data) |
-| `reflex.rtc.episode_id` | string | Episode identifier when RTC adapter is active |
-| `reflex.rtc.episode_reset` | bool | True on the first span of a new episode |
-| `reflex.inference_mode` | string | `"decomposed"`, `"monolithic"`, `"native"`, etc. |
-| `reflex.action_chunk_len` | int | Same as `gen_ai.action.chunk_size`; kept for backward compat. |
+| `tether.instruction` | string | First 512 chars of the instruction text (truncated — never raw bytes) |
+| `tether.state_dim` | int | Length of the proprio-state vector |
+| `tether.image_bytes` | int | Size of the posted image in bytes (**size only** — never the image data) |
+| `tether.rtc.episode_id` | string | Episode identifier when RTC adapter is active |
+| `tether.rtc.episode_reset` | bool | True on the first span of a new episode |
+| `tether.inference_mode` | string | `"decomposed"`, `"monolithic"`, `"native"`, etc. |
+| `tether.action_chunk_len` | int | Same as `gen_ai.action.chunk_size`; kept for backward compat. |
 | `error.type` | string | Populated only when the server returned an error result |
 
 ## PII and security
 
-Reflex explicitly **does not** attribute:
+Tether explicitly **does not** attribute:
 
 - Raw image bytes (could contain faces, text, identifiers on screens)
 - API keys or auth headers
-- Raw state vectors when they exceed 512 dims (use `reflex.state_dim` for size only)
+- Raw state vectors when they exceed 512 dims (use `tether.state_dim` for size only)
 
 Instructions are truncated to 512 chars. If your instructions carry secrets, filter them client-side before calling `/act`.
 
@@ -102,14 +102,14 @@ File a GitHub issue if either is blocking an integration.
 
 ## Troubleshooting
 
-**"Tracing skipped — pip install reflex-vla[tracing] to enable"**
-The `[tracing]` extra isn't installed. Run `pip install 'reflex-vla[tracing]'` and restart serve.
+**"Tracing skipped — pip install fastcrest-tether[tracing] to enable"**
+The `[tracing]` extra isn't installed. Run `pip install 'fastcrest-tether[tracing]'` and restart serve.
 
 **Spans appear in Phoenix but not in Datadog**
 Your Datadog Agent probably has `receivers.otlp` disabled. Enable OTLP gRPC on :4317 in `datadog.yaml`, or point `--otel-endpoint` at an OTel Collector that forwards to Datadog.
 
 **`--otel-sample 0.1` but I see every trace**
-Parent-based sampling inherits from incoming parent context. If an upstream client is propagating a sampled trace context (via W3C traceparent), Reflex honors it. Either disable propagation upstream or rely on the root sampler by ensuring `/act` spans are the root.
+Parent-based sampling inherits from incoming parent context. If an upstream client is propagating a sampled trace context (via W3C traceparent), Tether honors it. Either disable propagation upstream or rely on the root sampler by ensuring `/act` spans are the root.
 
 **Export slowing down `/act`**
 `BatchSpanProcessor` is async — export failures shouldn't bubble to request latency. If you see correlation, drop `--otel-sample` or check collector health.

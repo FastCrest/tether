@@ -1,7 +1,7 @@
 """Modal: ros2-bridge LIVE test with real rclpy (ros:humble container).
 
 Spins up a Modal container from the official ros:humble image, installs
-reflex-vla, starts `reflex ros2-serve` in the background, then uses a
+tether, starts `tether ros2-serve` in the background, then uses a
 client script to pub synthetic image/state/task, subscribe to the
 action topic, and verify chunks arrive.
 
@@ -10,7 +10,7 @@ If this passes, the ROS2 bridge works with real (not mocked) rclpy
 """
 import modal
 
-app = modal.App("reflex-ros2-live-test")
+app = modal.App("tether-ros2-live-test")
 
 image = (
     # Research-verified pattern (ubuntu:22.04 + apt-install ros-humble-ros-base).
@@ -54,7 +54,7 @@ image = (
         'echo "numpy>=1.24,<2.0" > /tmp/reflex_cons.txt',
     )
     .pip_install(
-        "reflex-vla[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla.git",
+        "fastcrest-tether[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether.git",
         extra_options="-c /tmp/reflex_cons.txt",
     )
     .env({
@@ -73,7 +73,7 @@ image = (
 
 @app.function(image=image, timeout=600)
 def test_ros2_bridge_live():
-    """Start `reflex ros2-serve` on a fake export dir, then pub/sub test."""
+    """Start `tether ros2-serve` on a fake export dir, then pub/sub test."""
     import os
     import subprocess
     import sys
@@ -93,12 +93,12 @@ def test_ros2_bridge_live():
         print(f"rclpy import FAIL: {e}")
         return {"passed": False, "reason": f"rclpy not importable: {e}"}
 
-    # Build a minimal fake export dir so ReflexServer can "load" something.
+    # Build a minimal fake export dir so TetherServer can "load" something.
     # The bridge will call predict() and we expect SOMETHING to come back —
     # even if it's an {"error": "Model not loaded"} dict. What we're testing
     # is the ROS2 wiring, not the model.
     tmp = Path(tempfile.mkdtemp())
-    (tmp / "reflex_config.json").write_text(json.dumps({
+    (tmp / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "action_chunk_size": 50,
         "action_dim": 6,
@@ -108,7 +108,7 @@ def test_ros2_bridge_live():
     print("\n=== create_ros2_bridge_node (real rclpy) ===")
     from unittest.mock import MagicMock
     import rclpy
-    from reflex.runtime.ros2_bridge import create_ros2_bridge_node
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
 
     checks = {}
     try:

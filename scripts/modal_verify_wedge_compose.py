@@ -1,6 +1,6 @@
-"""Phase I.2 verification: reflex serve composes wedges via flags.
+"""Phase I.2 verification: tether serve composes wedges via flags.
 
-Runs `reflex serve` with --safety-config, --adaptive-steps, and --deadline-ms
+Runs `tether serve` with --safety-config, --adaptive-steps, and --deadline-ms
 simultaneously, then POSTs /act to verify the response surfaces telemetry from
 each wedge (safety_violations, adaptive_enabled, deadline_exceeded).
 
@@ -10,7 +10,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-wedge-compose-verify")
+app = modal.App("tether-wedge-compose-verify")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -26,10 +26,10 @@ image = (
         "fastapi", "uvicorn", "httpx",
         "yourdfpy", "trimesh",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 
@@ -63,7 +63,7 @@ def _make_fake_export(export_dir: str, action_dim: int = 6):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
     model.ir_version = 10
     onnx.save(model, f"{export_dir}/expert_stack.onnx")
-    with open(f"{export_dir}/reflex_config.json", "w") as f:
+    with open(f"{export_dir}/tether_config.json", "w") as f:
         json.dump({
             "model_type": "smolvla",
             "action_chunk_size": 50,
@@ -74,7 +74,7 @@ def _make_fake_export(export_dir: str, action_dim: int = 6):
 
 def _make_safety_config(path: str, num_joints: int = 6):
     """Tight limits so guard definitely fires on random-ish actions."""
-    from reflex.safety import SafetyLimits
+    from tether.safety import SafetyLimits
     limits = SafetyLimits.default(num_joints)
     # Crush the limits so any random action gets clamped
     limits.position_min = [-0.01] * num_joints
@@ -146,7 +146,7 @@ def test_compose():
     # Scenario 1: Plain serve (no wedges) — baseline
     print("[1/4] plain serve")
     r1 = _run_and_probe(
-        ["reflex", "serve", "/tmp/fake_export", "--port", "9100",
+        ["tether", "serve", "/tmp/fake_export", "--port", "9100",
          "--host", "127.0.0.1", "--device", "cpu"],
         9100, "plain",
     )
@@ -155,7 +155,7 @@ def test_compose():
     # Scenario 2: --safety-config only
     print("[2/4] serve --safety-config")
     r2 = _run_and_probe(
-        ["reflex", "serve", "/tmp/fake_export", "--port", "9101",
+        ["tether", "serve", "/tmp/fake_export", "--port", "9101",
          "--host", "127.0.0.1", "--device", "cpu",
          "--safety-config", "/tmp/safety.json"],
         9101, "safety",
@@ -165,7 +165,7 @@ def test_compose():
     # Scenario 3: --adaptive-steps only
     print("[3/4] serve --adaptive-steps")
     r3 = _run_and_probe(
-        ["reflex", "serve", "/tmp/fake_export", "--port", "9102",
+        ["tether", "serve", "/tmp/fake_export", "--port", "9102",
          "--host", "127.0.0.1", "--device", "cpu",
          "--adaptive-steps"],
         9102, "adaptive",
@@ -175,7 +175,7 @@ def test_compose():
     # Scenario 4: ALL wedges composed
     print("[4/4] serve + all wedges (safety + adaptive + deadline + cloud-fallback stub)")
     r4 = _run_and_probe(
-        ["reflex", "serve", "/tmp/fake_export", "--port", "9103",
+        ["tether", "serve", "/tmp/fake_export", "--port", "9103",
          "--host", "127.0.0.1", "--device", "cpu",
          "--safety-config", "/tmp/safety.json",
          "--adaptive-steps",
@@ -232,6 +232,6 @@ def test_compose():
 
 @app.local_entrypoint()
 def main():
-    print("Phase I.2 verification — reflex serve wedge composition\n")
+    print("Phase I.2 verification — tether serve wedge composition\n")
     result = test_compose.remote()
     print(f"\nFinal: {result['passes']}/{result['total']}")

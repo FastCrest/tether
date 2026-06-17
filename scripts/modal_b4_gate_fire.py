@@ -1,6 +1,6 @@
 """Modal: fire the B.4 A2C2 transfer-validation gate (MSE arm).
 
-Single Modal A10G run. Spins up `reflex serve` twice (low and high injected
+Single Modal A10G run. Spins up `tether serve` twice (low and high injected
 latency), records traces with `--inject-latency-ms` + `--record`, trains an
 A2C2 head on the low-latency split, and fires the gate against both.
 
@@ -21,7 +21,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-b4-gate-fire")
+app = modal.App("tether-b4-gate-fire")
 
 
 def _hf_secret():
@@ -68,8 +68,8 @@ image = (
     .pip_install("Pillow>=10.0.0")  # for synthetic input image generation
     .run_commands(
         # SHA-pinned so the image rebuilds on every commit (avoids stale-image cache).
-        f'pip install "reflex-vla[serve,gpu] @ '
-        f'git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[serve,gpu] @ '
+        f'git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[_gh_secret()],
     )
     .env({
@@ -162,7 +162,7 @@ def fire_gate(
     def run_serve_and_record(latency_ms: float, traces_dir: Path):
         traces_dir.mkdir(parents=True, exist_ok=True)
         cmd = [
-            "reflex", "serve", export_dir,
+            "tether", "serve", export_dir,
             "--port", "8000",
             "--device", "cuda",
             "--no-strict-providers",
@@ -242,7 +242,7 @@ def fire_gate(
     # ---- 3. Train A2C2 head on low-latency traces ---------------------------
     # Path A unification (2026-04-25): pure-numpy trainer; produces .npz that
     # runtime/a2c2_hook.py loads directly. No torch on this path.
-    from reflex.correction import (
+    from tether.correction import (
         A2C2Config, train_a2c2_head, evaluate_mse,
     )
 
@@ -355,7 +355,7 @@ def fire_gate(
     print(f"checkpoint saved: {head_path} ({head_path.stat().st_size / 1024:.1f} KB, {n_params} params)")
 
     # ---- 4. Fire gate -------------------------------------------------------
-    from reflex.correction.transfer_gate import GateThresholds, compute_gate_report
+    from tether.correction.transfer_gate import GateThresholds, compute_gate_report
 
     # Evaluate against zero-target (magnitude-of-correction proxy on real data).
     in_dist_mse = evaluate_mse(
@@ -377,7 +377,7 @@ def fire_gate(
     n_train_rows = base_l.shape[0] - max(1, int(base_l.shape[0] * 0.1))
     n_val_rows = max(1, int(base_l.shape[0] * 0.1))
     notes = [
-        f"B.4 MSE-arm fire on Modal A10G; reflex-vla SHA={_HEAD}",
+        f"B.4 MSE-arm fire on Modal A10G; tether SHA={_HEAD}",
         f"low={low_latency_ms}ms vs high={high_latency_ms}ms",
         f"head: action_dim={action_dim} obs_dim={obs_dim} params={n_params}",
         f"train rows={n_train_rows} val rows={n_val_rows} held-out rows={base_h.shape[0]}",

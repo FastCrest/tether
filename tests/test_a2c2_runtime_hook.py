@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/a2c2_hook.py — Phase B.5 Day 3 invariants.
+"""Tests for src/tether/runtime/a2c2_hook.py — Phase B.5 Day 3 invariants.
 
 Per a2c2-correction execution plan B.5 Day 3 acceptance criteria:
 - Auto-skip when latency_p95 < threshold (default 40ms)
@@ -17,8 +17,8 @@ import tempfile
 import numpy as np
 import pytest
 
-from reflex.kernels.a2c2_correction import A2C2Config, A2C2Head
-from reflex.runtime.a2c2_hook import (
+from tether.kernels.a2c2_correction import A2C2Config, A2C2Head
+from tether.runtime.a2c2_hook import (
     A2C2Decision,
     A2C2Hook,
     A2C2HookConfig,

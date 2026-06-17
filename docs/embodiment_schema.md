@@ -1,8 +1,8 @@
 # Embodiment config schema (v1)
 
-`reflex serve --embodiment <name>` reads a per-robot config from `configs/embodiments/<name>.json`. Three presets ship out of the box: **franka**, **so100**, **ur5**. You can also point at a custom config with `--custom-embodiment-config <path>`.
+`tether serve --embodiment <name>` reads a per-robot config from `configs/embodiments/<name>.json`. Three presets ship out of the box: **franka**, **so100**, **ur5**. You can also point at a custom config with `--custom-embodiment-config <path>`.
 
-The authoritative schema is at `src/reflex/embodiments/schema.json` (JSON Schema draft-07). This doc is a human-readable mirror — if they drift, the JSON is canonical.
+The authoritative schema is at `src/tether/embodiments/schema.json` (JSON Schema draft-07). This doc is a human-readable mirror — if they drift, the JSON is canonical.
 
 ## Top-level structure
 
@@ -30,7 +30,7 @@ The robot's commanded action vector.
 
 | Field | Type | Range | Notes |
 |---|---|---|---|
-| `type` | enum | `continuous` \| `discrete` | Reflex currently only supports `continuous`. |
+| `type` | enum | `continuous` \| `discrete` | Tether currently only supports `continuous`. |
 | `dim` | int | 1–32 | Number of action dimensions (e.g. 7 for Franka 6-DOF arm + gripper). |
 | `ranges` | array of [min, max] | length = `dim` | Per-dim hard limits (radians for joints, [0,1] for gripper width). |
 
@@ -106,8 +106,8 @@ Two layers run on every config load:
 Each failure carries a stable error slug (`action-ranges-length-mismatch`, `gripper-idx-out-of-range`, etc.) so downstream tools can map to docs / GitHub issues.
 
 ```python
-from reflex.embodiments import EmbodimentConfig
-from reflex.embodiments.validate import validate_embodiment_config, format_errors
+from tether.embodiments import EmbodimentConfig
+from tether.embodiments.validate import validate_embodiment_config, format_errors
 
 cfg = EmbodimentConfig.load_preset("franka")
 ok, errors = validate_embodiment_config(cfg)
@@ -119,8 +119,8 @@ CI gate: `bash scripts/verify_embodiment_structure.sh && pytest tests/test_embod
 
 ## Adding a new preset
 
-1. Add a new dict to `scripts/emit_embodiment_presets.py` (for arms) or create a raw JSON directly in `configs/embodiments/` and `src/reflex/embodiments/presets/` (for drones).
-2. Add the slug to the `embodiment` enum in `src/reflex/embodiments/schema.json`.
+1. Add a new dict to `scripts/emit_embodiment_presets.py` (for arms) or create a raw JSON directly in `configs/embodiments/` and `src/tether/embodiments/presets/` (for drones).
+2. Add the slug to the `embodiment` enum in `src/tether/embodiments/schema.json`.
 3. Add the slug to `ALL_PRESETS` in `tests/test_embodiments.py`.
 4. Run `python scripts/emit_embodiment_presets.py` — emits the new JSON, validates it.
 5. `pytest tests/test_embodiments.py -v` — should pass on the new preset's parametrized tests.
@@ -135,19 +135,19 @@ Add to your project `.vscode/settings.json` to get autocomplete on embodiment JS
   "json.schemas": [
     {
       "fileMatch": ["configs/embodiments/*.json"],
-      "url": "./src/reflex/embodiments/schema.json"
+      "url": "./src/tether/embodiments/schema.json"
     }
   ]
 }
 ```
 
-(Reflex doesn't ship `.vscode/settings.json` itself — that's user config.)
+(Tether doesn't ship `.vscode/settings.json` itself — that's user config.)
 
 ## Related
 
-- Plan: [`features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs_plan.md`](https://github.com/FastCrest/reflex-vla) (in reflex_context vault)
+- Plan: [`features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs_plan.md`](https://github.com/FastCrest/tether) (in reflex_context vault)
 - Canonical feature page: `features/01_serve/subfeatures/_rtc_a2c2/per-embodiment-configs.md`
 - Downstream consumers (Phase 0.5):
   - **B.3 RTC adapter** uses `control.frequency_hz`, `control.rtc_execution_horizon`, `control.chunk_size`
   - **B.6 action denormalization** uses `constraints.max_ee_velocity`, `gripper.*`
-  - **D.1 reflex doctor** validates `gripper.inverted`, `control.chunk_size`
+  - **D.1 tether doctor** validates `gripper.inverted`, `control.chunk_size`

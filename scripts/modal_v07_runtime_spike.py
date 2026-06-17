@@ -33,7 +33,7 @@ image = (
     .apt_install("git", "wget", "linux-libc-dev", "build-essential", "python3-dev", "clang")
     .pip_install("uv")
     .run_commands(
-        "uv pip install --system 'reflex-vla[serve,gpu,monolithic]==0.6.0'",
+        "uv pip install --system 'reflex-vla[serve,gpu,monolithic]==0.6.0'  # historical pin: v0.6.0 shipped under the pre-rename PyPI name",
         # ORT-TRT EP needs libnvinfer.so.10 at runtime. cuDNN-devel image
         # doesn't ship TensorRT itself. Install via pip + use the bundled libs.
         "uv pip install --system 'tensorrt>=10.0,<11'",
@@ -45,7 +45,7 @@ image = (
     })
 )
 
-app = modal.App("reflex-v07-runtime-spike")
+app = modal.App("tether-v07-runtime-spike")
 
 
 @app.function(
@@ -78,7 +78,7 @@ def spike():
     print("GPU:", nvsmi.stdout.strip())
     results["gpu"] = nvsmi.stdout.strip()
 
-    # Verify reflex + onnxruntime versions (tensorrt bundled inside ORT)
+    # Verify tether + onnxruntime versions (tensorrt bundled inside ORT)
     for pkg in ["reflex-vla", "onnxruntime-gpu"]:
         proc = subprocess.run(["pip", "show", pkg], capture_output=True, text=True)
         if proc.returncode == 0:
@@ -106,7 +106,7 @@ def spike():
     if not onnx_path.exists():
         t0 = time.perf_counter()
         proc = subprocess.run(
-            ["reflex", "export", "lerobot/smolvla_base",
+            ["tether", "export", "lerobot/smolvla_base",
              "--output", str(export_dir),
              "--target", "desktop", "--monolithic", "--num-steps", "1"],
             capture_output=True, text=True, timeout=1800,
@@ -263,7 +263,7 @@ def spike():
     # Q2: TRT-LLM rejection — DEFERRED
     # ────────────────────────────────────────────────────────────
     # Skipped this run because TRT-LLM 0.18.2 forces transformers→4.48.3
-    # which breaks reflex's pinned transformers==5.3.0. This dependency
+    # which breaks tether's pinned transformers==5.3.0. This dependency
     # conflict IS itself evidence of the Lens 2 finding (TRT-LLM install
     # pain in mixed envs). Code-level rejection test deferred to a separate
     # spike with isolated venv if needed — but Lens 1+3 already provide
@@ -274,7 +274,7 @@ def spike():
     print("evidence already convergent from Lens 1+3 research synthesis.")
     results["q2_status"] = "DEFERRED"
     results["q2_reason"] = ("TRT-LLM 0.18.2 forces transformers=4.48.3 conflicting "
-                            "with reflex's pinned 5.3.0; would need isolated venv. "
+                            "with tether's pinned 5.3.0; would need isolated venv. "
                             "Code-level confirmation isn't load-bearing.")
 
     # ────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reflex VLA bootstrap installer
+# Tether VLA bootstrap installer
 # Runs hardware + Python checks BEFORE pip install so users on
 # unsupported configs don't waste time debugging the wrong thing.
 #
@@ -8,7 +8,7 @@
 #   curl -sSf https://fastcrest.com/install | sh -s -- --extras serve,gpu
 #   curl -sSf https://fastcrest.com/install | sh -s -- --jetson --jetpack 6.2
 #
-# Source: https://github.com/FastCrest/reflex-vla
+# Source: https://github.com/FastCrest/tether
 set -eu
 
 # -- ANSI colors --------------------------------------------------------------
@@ -25,7 +25,7 @@ warn()  { printf "%b⚠%b %s\n" "${YELLOW}" "${RESET}" "$*"; }
 fail()  { printf "%b✗%b %s\n" "${RED}" "${RESET}" "$*"; }
 note()  { printf "%b%s%b\n" "${DIM}" "$*" "${RESET}"; }
 
-printf "\n%b%s%b\n" "${BOLD}${CYAN}" "Reflex VLA installer" "${RESET}"
+printf "\n%b%s%b\n" "${BOLD}${CYAN}" "Tether VLA installer" "${RESET}"
 note   "  Bootstrap that checks your environment before installing."
 echo
 
@@ -112,14 +112,14 @@ if [ "$IS_OLD_NANO" -eq 1 ]; then
   echo
   fail "Detected: $JETSON_MODEL"
   echo
-  warn "The original Jetson Nano (Maxwell, 2019) is too old for Reflex."
+  warn "The original Jetson Nano (Maxwell, 2019) is too old for Tether."
   note "  • NVIDIA EOL'd it at JetPack 4.6 (Ubuntu 18 / Python 3.6) in 2022."
   note "  • Maxwell GPU has no Tensor Cores; modern VLA models can't run usefully."
   note "  • 4 GB shared memory will OOM loading pi0 / SmolVLA in FP32."
   echo
   info "Recommended paths:"
   echo "  ${BOLD}1. Run on a Mac${RESET} (CPU path, works for chat + dev)"
-  echo "       pip install 'reflex-vla[serve,onnx]'"
+  echo "       pip install 'fastcrest-tether[serve,onnx]'"
   echo "  ${BOLD}2. Run on Jetson Orin${RESET} (Orin Nano / NX / AGX) — full GPU support"
   echo "  ${BOLD}3. Run in the cloud${RESET} (Modal, Lambda, RunPod with NVIDIA T4+)"
   echo
@@ -128,7 +128,7 @@ fi
 
 # -- Python version check -----------------------------------------------------
 if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-  fail "Python $PY_VER is too old. Reflex requires Python 3.10+."
+  fail "Python $PY_VER is too old. Tether requires Python 3.10+."
   echo
   info "Install a newer Python:"
   case "$OS" in
@@ -179,7 +179,7 @@ if [ -z "$EXTRAS" ]; then
     # on a Python 3.12+ host, then serve the ONNX on the Jetson.
     #
     # Instead we install [serve] only, and pre-install numpy<2, torch, and
-    # onnxruntime-gpu from the Jetson AI Lab index BEFORE reflex-vla so
+    # onnxruntime-gpu from the Jetson AI Lab index BEFORE tether so
     # pip doesn't pull incompatible x86_64 or numpy-2.x-linked wheels.
     EXTRAS="serve"
     ok "Detected Jetson ($JETSON_MODEL) → installing with [serve]"
@@ -197,7 +197,7 @@ if [ -z "$EXTRAS" ]; then
     ok "No GPU detected → installing with [serve,onnx,monolithic] (CPU runtime)"
   fi
   if [ "$IS_JETSON" -eq 0 ] && echo "$EXTRAS" | grep -q "monolithic"; then
-    note "  (monolithic adds the extras 'reflex go' needs to actually deploy a model — not just chat)"
+    note "  (monolithic adds the extras 'tether go' needs to actually deploy a model — not just chat)"
   fi
 fi
 echo
@@ -222,7 +222,7 @@ if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
 fi
 
 # -- Jetson: pre-install GPU deps from Jetson AI Lab --------------------------
-# This MUST happen BEFORE `pip install reflex-vla[serve]` so that:
+# This MUST happen BEFORE `pip install fastcrest-tether[serve]` so that:
 #   1. numpy<2 is locked in place before torch's transitive dep pulls 2.x
 #   2. torch comes from the Jetson AI Lab aarch64 wheel (not PyPI x86_64)
 #   3. onnxruntime-gpu comes from Jetson AI Lab (not the unresolvable PyPI one)
@@ -276,13 +276,13 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
     note "  $PYTHON -m pip install --index-url $JETSON_INDEX torch torchvision"
     note "  $PYTHON -m pip install --index-url $JETSON_INDEX onnxruntime-gpu"
     echo
-    warn "Reflex will be installed but inference will fall back to CPU (slow)."
+    warn "Tether will be installed but inference will fall back to CPU (slow)."
   fi
   echo
 fi
 
 # -- Run pip install ----------------------------------------------------------
-PIP_TARGET="reflex-vla[$EXTRAS]"
+PIP_TARGET="fastcrest-tether[$EXTRAS]"
 info "Installing: $PIP_TARGET"
 echo
 "$PYTHON" -m pip install --upgrade "$PIP_TARGET"
@@ -291,18 +291,20 @@ echo
 ok "Installed."
 echo
 info "Next:"
-echo "  reflex doctor      # check your install (Jetson: should show CUDAExecutionProvider)"
-echo "  reflex chat        # natural-language CLI"
-echo "  reflex --help      # see all commands"
+echo "  tether doctor      # check your install (Jetson: should show CUDAExecutionProvider)"
+echo "  tether chat        # natural-language CLI"
+echo "  tether --help      # see all commands"
 echo
 
 if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
   info "Jetson deployment:"
-  echo "  reflex go --preset franka    # one-command deploy (after ONNX export)"
-  echo "  reflex serve /path/to/export  # serve a pre-exported model"
+  echo "  tether go --preset franka    # one-command deploy (after ONNX export)"
+  echo "  tether serve /path/to/export  # serve a pre-exported model"
   echo
-  note "For a fully-bundled JetPack Docker image:"
-  note "  docker pull ghcr.io/fastcrest/reflex-vla:latest-jetpack"
+  note "For the published Jetson/arm64 Docker image:"
+  note "  docker pull ghcr.io/fastcrest/tether:latest-arm64"
+  note "  # Bring-your-own JetPack CUDA/cuDNN/TensorRT via nvidia-container-runtime."
+  note "  # For fully-bundled local experiments, build Dockerfile.jetpack yourself."
 fi
 
-note "Source: https://github.com/FastCrest/reflex-vla"
+note "Source: https://github.com/FastCrest/tether"

@@ -7,7 +7,7 @@ The actual parity measurement runs on Modal A100 via
 This test reads that receipt and asserts the gates fired green:
 
     cos     ≥ 0.99999  (research sidecar Lens 5 — tighter than spec's 0.999
-                        because Reflex's existing exports already hit
+                        because Tether's existing exports already hit
                         +0.99999994 stage-by-stage; anything looser hides
                         a real bug per CLAUDE.md no-good-enough-precision)
     max_abs ≤ 1e-5     (FP32 FMA-rounding floor across 10 Euler steps)

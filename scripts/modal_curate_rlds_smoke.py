@@ -1,11 +1,11 @@
 """Smoke test for the [curate-rlds] format converters on Modal.
 
 Validates:
-  1. `pip install reflex-vla[curate-rlds]` resolves cleanly with tensorflow +
+  1. `pip install fastcrest-tether[curate-rlds]` resolves cleanly with tensorflow +
      tensorflow_datasets pinned in pyproject.toml.
-  2. `reflex curate convert --format rlds` against a synthetic JSONL trace
+  2. `tether curate convert --format rlds` against a synthetic JSONL trace
      produces TFRecord + dataset_info.json + features.json output.
-  3. `reflex curate convert --format openx-embodiment` produces the same
+  3. `tether curate convert --format openx-embodiment` produces the same
      plus the OXE-specific embodiment_id schema fields.
   4. The TFRecord output is parse-readable via tf.data.TFRecordDataset
      (catches SequenceExample schema mismatches before a buyer hits one).
@@ -23,7 +23,7 @@ import subprocess
 import modal
 
 
-app = modal.App("reflex-curate-rlds-smoke")
+app = modal.App("tether-curate-rlds-smoke")
 
 
 def _hf_secret():
@@ -55,12 +55,12 @@ image = (
         "Pillow",
         "pyarrow",  # for the LeRobot v3 fallback test
         # The [curate-rlds] extra deps directly so we don't need the
-        # full reflex-vla install pulling unrelated stuff.
+        # full tether install pulling unrelated stuff.
         "tensorflow>=2.13.0",
         "tensorflow-datasets>=4.9.0",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
 )
@@ -85,7 +85,7 @@ def rlds_smoke(diagnostic_only: bool = False):
     # 1. Verify the converters can be imported with the extras installed.
     try:
         import tensorflow as tf
-        from reflex.curate.format_converters import (
+        from tether.curate.format_converters import (
             CONVERTER_REGISTRY,
             EMBODIMENT_OXE_MAP,
             OpenXEmbodimentConverter,
@@ -139,7 +139,7 @@ def rlds_smoke(diagnostic_only: bool = False):
     # 3. RLDS converter.
     rlds_out = work / "rlds_out"
     rlds_result = RLDSConverter(
-        dataset_name="reflex_test_rlds",
+        dataset_name="tether_test_rlds",
         shard_size=3,
     ).convert(input_jsonl=jsonl, output_dir=rlds_out)
     rlds_dict = rlds_result.to_dict()
@@ -226,7 +226,7 @@ def rlds_smoke(diagnostic_only: bool = False):
 
 @app.local_entrypoint()
 def main(diagnostic_only: bool = False):
-    print(f"[reflex curate-rlds Modal smoke]")
+    print(f"[tether curate-rlds Modal smoke]")
     print(f"  HEAD: {_HEAD}")
     print(f"  diagnostic_only: {diagnostic_only}")
     print()

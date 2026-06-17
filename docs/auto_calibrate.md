@@ -1,6 +1,6 @@
 # Auto-calibration
 
-`reflex serve --auto-calibrate` picks the right pre-shipped (variant × provider × NFE × chunk_size) configuration for your hardware + embodiment, then passively learns `latency_compensation_ms` from real `/act` traffic. One-flag first-deploy DX win.
+`tether serve --auto-calibrate` picks the right pre-shipped (variant × provider × NFE × chunk_size) configuration for your hardware + embodiment, then passively learns `latency_compensation_ms` from real `/act` traffic. One-flag first-deploy DX win.
 
 Per ADR `2026-04-25-auto-calibration-architecture` — SELECTION not tuning, strict partial order resolver, passive actuator-latency observation (no boot-time probe).
 
@@ -9,14 +9,14 @@ Per ADR `2026-04-25-auto-calibration-architecture` — SELECTION not tuning, str
 ```bash
 # Calibrate + serve. First run takes ~5-7s for the measurement pass; subsequent
 # runs hit the cache and start instantly.
-reflex serve ./my-export/ --embodiment franka --auto-calibrate
+tether serve ./my-export/ --embodiment franka --auto-calibrate
 
 # Override cache location (e.g., to ship a frozen cache inside a container)
-reflex serve ./my-export/ --auto-calibrate \
-    --calibration-cache /opt/reflex/calibration.json
+tether serve ./my-export/ --auto-calibrate \
+    --calibration-cache /opt/tether/calibration.json
 
 # Force re-measurement on next start (after hardware swap or driver upgrade)
-reflex serve ./my-export/ --auto-calibrate --calibrate-force
+tether serve ./my-export/ --auto-calibrate --calibrate-force
 ```
 
 When `--auto-calibrate` is unset, behavior is unchanged from baseline; calibration is fully opt-in for Phase 1. Phase 1.5 will flip to default-on after telemetry from first deploys.
@@ -37,7 +37,7 @@ The resolver runs in single-pass at startup. The warm-up tracker continuously re
 
 ## The cache
 
-Lives at `~/.reflex/calibration.json` by default. JSON schema v1:
+Lives at `~/.tether/calibration.json` by default. JSON schema v1:
 
 ```json
 {
@@ -81,13 +81,13 @@ Keyed by `{embodiment}::{model_hash}` so multi-embodiment / multi-model deployme
 
 ```bash
 # Pretty-print
-reflex doctor --show-calibration
+tether doctor --show-calibration
 
 # Machine-readable (for CI / scripts)
-reflex doctor --show-calibration --format json | jq .
+tether doctor --show-calibration --format json | jq .
 
 # Custom cache path
-reflex doctor --show-calibration --calibration-cache /opt/reflex/calibration.json
+tether doctor --show-calibration --calibration-cache /opt/tether/calibration.json
 ```
 
 Output flags:
@@ -164,8 +164,8 @@ Your hardware × embodiment × model combo has no legal NFE that fits the chunk-
 **`auto-calibrate: warmup tracker armed for ... (writes back when 30+ samples + p95 stable)`**
 Working as designed. First /act traffic populates the rolling window; the cache updates once the p95 settles.
 
-**`reflex doctor --show-calibration` says "No calibration cache found"**
-You haven't run `reflex serve --auto-calibrate` yet on this host. Or the cache lives at a different path — pass `--calibration-cache <path>`.
+**`tether doctor --show-calibration` says "No calibration cache found"**
+You haven't run `tether serve --auto-calibrate` yet on this host. Or the cache lives at a different path — pass `--calibration-cache <path>`.
 
 **Cache size**
 A typical multi-embodiment cache is < 4 KB. No concern about disk pressure.
@@ -178,7 +178,7 @@ Per ADR `2026-04-25-auto-calibration-architecture`:
 - Greedy resolver order locked: variant → provider → NFE → chunk_size → latency_compensation_ms (no parallel optimization)
 - Schema v1 first-field locked: `schema_version`. Phase 2 evolution is additive-only — no rename, no remove of v1 fields
 - Passive observation only for actuator latency — no active boot-time probe (avoids unintended first-move)
-- Cache path `~/.reflex/calibration.json` locked (customers grep for this in scripts)
+- Cache path `~/.tether/calibration.json` locked (customers grep for this in scripts)
 - `policy_slot` label vocabulary (`a` | `b` | `prod` | `shadow`) locked when policy-versioning composes here
 
 Validation test surface: 108 unit tests (substrate + harness + resolver + CLI + warmup + doctor flow). Modal cross-hardware integration is Phase 1 Day 7 (user-authorized when ready).

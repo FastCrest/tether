@@ -41,7 +41,7 @@ from __future__ import annotations
 import os
 import modal
 
-app = modal.App("reflex-policy-versioning-spike")
+app = modal.App("tether-policy-versioning-spike")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -75,28 +75,28 @@ image = (
     })
     .add_local_dir(
         os.path.join(REPO_ROOT, "src"),
-        remote_path="/root/reflex-vla/src",
+        remote_path="/root/tether-vla/src",
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "pyproject.toml"),
-        remote_path="/root/reflex-vla/pyproject.toml",
+        remote_path="/root/tether-vla/pyproject.toml",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "README.md"),
-        remote_path="/root/reflex-vla/README.md",
+        remote_path="/root/tether-vla/README.md",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "LICENSE"),
-        remote_path="/root/reflex-vla/LICENSE",
+        remote_path="/root/tether-vla/LICENSE",
         copy=True,
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        'pip install -e "/root/reflex-vla" --no-deps',
+        'pip install -e "/root/tether-vla" --no-deps',
     )
 )
 
@@ -116,7 +116,7 @@ def _layer1_raw_ort(export_dir, n_iters):
     import numpy as np
     import onnxruntime as ort
 
-    cfg_path = export_dir / "reflex_config.json"
+    cfg_path = export_dir / "tether_config.json"
     cfg = json.loads(cfg_path.read_text())
     prefix_path = export_dir / cfg["decomposed"]["vlm_prefix_onnx"]
     expert_path = export_dir / cfg["decomposed"]["expert_denoise_onnx"]
@@ -215,9 +215,9 @@ def _layer2_pi05_decomposed(export_dir, n_iters):
 
     import numpy as np
 
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
-    cfg = json.loads((export_dir / "reflex_config.json").read_text())
+    cfg = json.loads((export_dir / "tether_config.json").read_text())
     chunk_size = int(cfg.get("chunk_size", 50))
     action_dim = int(cfg.get("action_dim", 7))
     max_state_dim = int(cfg.get("max_state_dim", 32))

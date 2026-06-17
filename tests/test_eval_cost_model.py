@@ -1,9 +1,9 @@
-"""Tests for src/reflex/eval/cost_model.py — Phase 1 eval-as-a-service Day 4."""
+"""Tests for src/tether/eval/cost_model.py — Phase 1 eval-as-a-service Day 4."""
 from __future__ import annotations
 
 import pytest
 
-from reflex.eval.cost_model import (
+from tether.eval.cost_model import (
     COST_PREVIEW_GUARDRAIL_USD,
     COST_TABLE_SCHEMA_VERSION,
     CostEstimate,

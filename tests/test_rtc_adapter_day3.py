@@ -9,8 +9,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.runtime.buffer import ActionChunkBuffer
-from reflex.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
+from tether.runtime.buffer import ActionChunkBuffer
+from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-layer-pruning-reexport-spike")
+app = modal.App("tether-layer-pruning-reexport-spike")
 
 
 def _hf_secret():
@@ -89,7 +89,7 @@ image = (
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -167,7 +167,7 @@ def reexport_spike_modal(
     logger.info("[spike] pruned to %d layers", len(language_model.layers))
 
     # ---- Build wrapper + dummy inputs (mirror decomposed.py's contract) ----
-    from reflex.exporters.decomposed import (
+    from tether.exporters.decomposed import (
         Pi05PrefixWrapper,
         _PI05_BATCH_SIZE,
         _PI05_IMAGE_SIZE,
@@ -216,7 +216,7 @@ def reexport_spike_modal(
 
     logger.info("[spike] exporting pruned prefix → %s", pruned_path)
     from onnx_diagnostic.torch_export_patches import torch_export_patches
-    from reflex.exporters.monolithic import _fix_onnx_where_dtype_mismatches
+    from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
 
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):

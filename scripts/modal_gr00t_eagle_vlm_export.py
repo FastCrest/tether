@@ -20,7 +20,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-gr00t-eagle-vlm")
+app = modal.App("tether-gr00t-eagle-vlm")
 
 
 def _hf_secret():
@@ -68,7 +68,7 @@ image = (
         "rich",
     )
     .run_commands(
-        f'pip install "reflex-vla @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
             secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -95,8 +95,8 @@ def smoke_test(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import numpy as np
     import torch
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.eagle_export_stack import build_eagle_export_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.eagle_export_stack import build_eagle_export_stack
 
     print(f"[smoke] Loading {model_id}...")
     t0 = time.time()
@@ -178,8 +178,8 @@ def export(model_id: str = "nvidia/GR00T-N1.6-3B"):
 
     import torch
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.eagle_export_stack import build_eagle_export_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.eagle_export_stack import build_eagle_export_stack
 
     print(f"[export] Loading {model_id}...")
     t0 = time.time()
@@ -280,8 +280,8 @@ def parity_test(model_id: str = "nvidia/GR00T-N1.6-3B"):
     import onnxruntime as ort
     import torch
 
-    from reflex.checkpoint import load_checkpoint
-    from reflex.exporters.eagle_export_stack import build_eagle_export_stack
+    from tether.checkpoint import load_checkpoint
+    from tether.exporters.eagle_export_stack import build_eagle_export_stack
 
     onnx_path = Path(ONNX_OUTPUT_PATH) / "eagle_vlm" / "eagle_vlm.onnx"
     if not onnx_path.exists():

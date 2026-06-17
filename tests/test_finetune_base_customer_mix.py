@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.finetune.config import FinetuneConfig
+from tether.finetune.config import FinetuneConfig
 
 
 def _mk_cfg(**overrides) -> FinetuneConfig:
@@ -77,7 +77,7 @@ def test_build_dataloader_signature_accepts_base_dataset():
     via getattr (back-compat with cfg objects that don't have the field)."""
     pytest.importorskip("torch")
     pytest.importorskip("lerobot")
-    from reflex.finetune.backends.snapflow_backend import _build_dataloader
+    from tether.finetune.backends.snapflow_backend import _build_dataloader
     import inspect
     src = inspect.getsource(_build_dataloader)
     assert "base_dataset" in src, (

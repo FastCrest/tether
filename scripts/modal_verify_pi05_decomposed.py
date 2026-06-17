@@ -20,7 +20,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-verify-pi05-decomposed")
+app = modal.App("tether-verify-pi05-decomposed")
 
 
 def _hf_secret():
@@ -101,7 +101,7 @@ def verify_modal(
     mono_path = Path(monolithic_onnx_dir) / "model.onnx"
     prefix_path = Path(decomposed_dir) / "vlm_prefix.onnx"
     expert_path = Path(decomposed_dir) / "expert_denoise.onnx"
-    cfg_path = Path(decomposed_dir) / "reflex_config.json"
+    cfg_path = Path(decomposed_dir) / "tether_config.json"
 
     for p in (mono_path, prefix_path, expert_path, cfg_path):
         if not p.exists():
@@ -280,7 +280,7 @@ def main(
     --monolithic-onnx-dir  Volume path containing model.onnx + model.onnx.data
                            from export_snapflow_student_monolithic.
     --decomposed-dir       Volume path containing vlm_prefix.onnx +
-                           expert_denoise.onnx + reflex_config.json from
+                           expert_denoise.onnx + tether_config.json from
                            export_pi05_decomposed.
     --seed                 Seed both forward paths consume identical inputs.
     """

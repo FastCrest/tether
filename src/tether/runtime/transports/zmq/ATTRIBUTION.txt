@@ -1,0 +1,21 @@
+Attribution for src/tether/runtime/transports/zmq/ (Lift #2)
+=============================================================
+
+This directory contains code ported from FluxVLA's serving layer per
+the Lift #2 program (reflex_context/01_decisions/2026-05-19-fluxvla-lift-program.md).
+
+Source repo:      https://github.com/limx-org/FluxVLA-Engine
+License:          Apache License 2.0
+Attribution:      LimX Dynamics
+
+Files ported:
+- fluxvla/engines/runners/serving/zmq_server.py (lines 40-285)
+    → policy_server.py (Layer 1: generic ZMQ REP event loop)
+    → factory.py (Layer 2: PolicyRuntime → predict_action wiring)
+- fluxvla/engines/runners/serving/serializers.py (lines 1-250)
+    → serializers.py (msgpack + JPEG-on-wire codec)
+- fluxvla/engines/runners/base_inference_runner.py (lines 397-488)
+    → client.py (ZmqRuntimeClient persistent-socket pattern)
+
+Apache-2.0 license text: see src/tether/kernels/LICENSE-Apache-2.0.txt
+(shared with the Lift #5 Triton kernels attribution).

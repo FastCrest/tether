@@ -10,8 +10,8 @@ build/
 *.onnx.data
 *.trt
 *.engine
-reflex_export/
-**/reflex_export/
+tether_export/
+**/tether_export/
 
 # Reference repos — local shallow clones of competitor OSS for serve work.
 # See reflex_context/01_decisions/2026-04-22-reference-repos-folder.md.
@@ -23,6 +23,14 @@ reference/ray/
 reference/trtllm/
 reference/lerobot/
 reference/openpi/
+reference/FluxVLA/
+
+# Local eval-runner output — re-generated on each `reflex eval` run; the
+# diff churn (always present after a local fire) just clutters git status.
+eval_output/
+
+# Local `reflex verify` output — PARITY.md receipt is re-generated each run.
+verify_output/
 
 # Editor-agent session logs (never commit — were leaked to public repo in Apr 2026)
 .agents/

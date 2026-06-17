@@ -28,7 +28,7 @@ jobs:
           TAG=$(echo "$LATEST_RELEASE" | jq -r '.tagName // "—"')
           REL_DATE=$(echo "$LATEST_RELEASE" | jq -r '.publishedAt // ""' | cut -dT -f1)
           LAST_COMMIT_DATE=$(echo "$REPO_JSON" | jq -r '.pushed_at' | cut -dT -f1)
-          PYPI=$(curl -fsSL "https://pypistats.org/api/packages/reflex-vla/recent" 2>/dev/null || echo '{"data":{"last_month":0}}')
+          PYPI=$(curl -fsSL "https://pypistats.org/api/packages/tether/recent" 2>/dev/null || echo '{"data":{"last_month":0}}')
           PY30=$(echo "$PYPI" | jq -r '.data.last_month // 0')
 
           PAYLOAD=$(jq -nc \
@@ -38,7 +38,7 @@ jobs:
             --argjson py30 "$PY30" \
             '{
               embeds: [{
-                title: "Reflex Status",
+                title: "Tether Status",
                 description: "Live stats from GitHub + PyPI. Updates daily.",
                 color: 14821410,
                 fields: [
@@ -52,7 +52,7 @@ jobs:
                   {name:"Open issues",           value:($issues|tostring),      inline:true},
                   {name:"​",                value:"​",                inline:true}
                 ],
-                footer:{text:"github.com/FastCrest/reflex-vla • updated by GitHub Actions"},
+                footer:{text:"github.com/FastCrest/tether • updated by GitHub Actions"},
                 timestamp: (now|todate)
               }]
             }')

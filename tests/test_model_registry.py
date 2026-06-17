@@ -1,4 +1,4 @@
-"""Tests for the model registry + `reflex models {list,pull,info}` CLI.
+"""Tests for the model registry + `tether models {list,pull,info}` CLI.
 
 Covers:
 - Registry data invariants (every entry parses; no duplicate model_ids;
@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from reflex.registry import (
+from tether.registry import (
     REGISTRY,
     ModelEntry,
     ModelBenchmark,
@@ -43,7 +43,7 @@ class TestRegistryInvariants:
             assert "/" in e.hf_repo, f"{e.model_id}: hf_repo missing org/: {e.hf_repo!r}"
 
     def test_every_family_is_canonical(self):
-        canonical = {"pi0", "pi05", "smolvla", "openvla", "groot"}
+        canonical = {"pi0", "pi05", "smolvla", "openvla", "groot", "dreamzero", "molmoact2"}
         for e in REGISTRY:
             assert e.family in canonical, f"{e.model_id}: bad family {e.family!r}"
 
@@ -160,7 +160,7 @@ def runner():
 
 @pytest.fixture
 def cli_app():
-    from reflex.cli import app
+    from tether.cli import app
     return app
 
 
@@ -170,26 +170,33 @@ class TestCliList:
         assert result.exit_code == 0
         # Table should mention each model_id from the registry
         for e in REGISTRY:
-            assert e.model_id in result.stdout
+            assert e.model_id in result.output
 
     def test_models_list_filter_by_family(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "list", "--family", "smolvla"])
         assert result.exit_code == 0
         # smolvla entries should show, pi0/pi05 should not
-        assert "smolvla-base" in result.stdout
+        assert "smolvla-base" in result.output
         # pi05-base is in pi05 family, should be filtered out
-        assert "pi05-base" not in result.stdout or "smolvla" in result.stdout.split("pi05-base")[0]
+        assert "pi05-base" not in result.output or "smolvla" in result.output.split("pi05-base")[0]
 
     def test_models_list_json(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "list", "--format", "json"])
         assert result.exit_code == 0
         # Parse the JSON portion (rich may add trailing newlines but shouldn't change JSON)
         # Find the JSON block
-        body = json.loads(result.stdout)
+        body = json.loads(result.output)
         assert body["n"] == len(REGISTRY)
         assert len(body["models"]) == len(REGISTRY)
         ids = {m["model_id"] for m in body["models"]}
         assert "pi05-base" in ids
+
+    def test_models_list_json_alias(self, runner, cli_app):
+        result = runner.invoke(cli_app, ["models", "list", "--json"])
+        assert result.exit_code == 0, result.output
+        body = json.loads(result.output)
+        assert body["n"] == len(REGISTRY)
+        assert any(m["model_id"] == "smolvla-base" for m in body["models"])
 
     def test_models_list_no_match_message(self, runner, cli_app):
         # Use a family that's genuinely not in the registry. openvla was
@@ -197,7 +204,7 @@ class TestCliList:
         # won't accidentally match a future addition either.
         result = runner.invoke(cli_app, ["models", "list", "--family", "nonexistent_family_xyz"])
         assert result.exit_code == 0
-        assert "No models match" in result.stdout
+        assert "No models match" in result.output
 
     def test_models_list_invalid_format(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "list", "--format", "xml"])
@@ -208,32 +215,38 @@ class TestCliInfo:
     def test_info_human(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "info", "pi05-base"])
         assert result.exit_code == 0
-        assert "pi05-base" in result.stdout
-        assert "lerobot/pi05_base" in result.stdout
+        assert "pi05-base" in result.output
+        assert "lerobot/pi05_base" in result.output
 
     def test_info_json(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "info", "smolvla-base", "--format", "json"])
         assert result.exit_code == 0
-        body = json.loads(result.stdout)
+        body = json.loads(result.output)
         assert body["model_id"] == "smolvla-base"
         assert body["family"] == "smolvla"
         assert body["action_dim"] == 7
 
+    def test_info_json_alias(self, runner, cli_app):
+        result = runner.invoke(cli_app, ["models", "info", "smolvla-base", "--json"])
+        assert result.exit_code == 0
+        body = json.loads(result.output)
+        assert body["model_id"] == "smolvla-base"
+
     def test_info_unknown_id_exit_2(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "info", "nope-xyz"])
         assert result.exit_code == 2
-        assert "Unknown model_id" in result.stdout
+        assert "Unknown model_id" in result.output
 
 
 class TestCliPull:
     def test_pull_unknown_id_lists_available(self, runner, cli_app):
         result = runner.invoke(cli_app, ["models", "pull", "nope-xyz"])
         assert result.exit_code == 2
-        assert "Unknown model_id" in result.stdout
-        assert "Available registry ids:" in result.stdout
+        assert "Unknown model_id" in result.output
+        assert "Available registry ids:" in result.output
         # Should list every registered model
         for e in REGISTRY:
-            assert e.model_id in result.stdout
+            assert e.model_id in result.output
 
     def test_pull_calls_snapshot_download_with_repo_id(self, runner, cli_app, tmp_path):
         with patch("huggingface_hub.snapshot_download") as mock_dl:
@@ -241,17 +254,33 @@ class TestCliPull:
             (tmp_path / "fake").mkdir()
             (tmp_path / "fake" / "config.json").write_text("{}")
             result = runner.invoke(cli_app, ["models", "pull", "smolvla-base", "--target-dir", str(tmp_path / "fake")])
-        assert result.exit_code == 0, result.stdout
+        assert result.exit_code == 0, result.output
         mock_dl.assert_called_once()
         kwargs = mock_dl.call_args.kwargs
         assert kwargs["repo_id"] == "lerobot/smolvla_base"
         assert kwargs["local_dir"] == str(tmp_path / "fake")
 
+    def test_pull_default_target_honors_tether_home(self, runner, cli_app, tmp_path, monkeypatch):
+        tether_home = tmp_path / "tether-home"
+        monkeypatch.setenv("TETHER_HOME", str(tether_home))
+
+        def fake_download(**kwargs):
+            local_dir = Path(kwargs["local_dir"])
+            local_dir.mkdir(parents=True, exist_ok=True)
+            (local_dir / "config.json").write_text("{}")
+            return str(local_dir)
+
+        with patch("huggingface_hub.snapshot_download", side_effect=fake_download) as mock_dl:
+            result = runner.invoke(cli_app, ["models", "pull", "smolvla-base"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_dl.call_args.kwargs["local_dir"] == str(tether_home / "models" / "smolvla-base")
+
     def test_pull_handles_download_failure_with_exit_1(self, runner, cli_app, tmp_path):
         with patch("huggingface_hub.snapshot_download", side_effect=RuntimeError("403 forbidden")):
             result = runner.invoke(cli_app, ["models", "pull", "smolvla-base", "--target-dir", str(tmp_path / "out")])
         assert result.exit_code == 1
-        assert "Download failed" in result.stdout
+        assert "Download failed" in result.output
 
     def test_pull_passes_revision_override(self, runner, cli_app, tmp_path):
         with patch("huggingface_hub.snapshot_download") as mock_dl:
@@ -275,5 +304,5 @@ class TestCliPull:
                 cli_app,
                 ["models", "pull", "pi05-base", "--target-dir", str(tmp_path / "out")],
             )
-        assert result.exit_code == 0, result.stdout
-        assert "reflex export" in result.stdout
+        assert result.exit_code == 0, result.output
+        assert "tether export" in result.output

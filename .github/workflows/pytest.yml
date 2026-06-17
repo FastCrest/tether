@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Linux-only: every reflex tester runs Linux. Macs use the [onnx] extra
+        # Linux-only: every tether tester runs Linux. Macs use the [onnx] extra
         # path locally but CI doesn't add coverage there. Saves ~50% runner time.
         python-version: ["3.10", "3.12"]
 

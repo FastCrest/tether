@@ -2,7 +2,7 @@
 
 Path A unification (2026-04-25): the prior PyTorch A2C2Head was dropped.
 Trainer + runtime now share the numpy A2C2Head from
-`reflex.kernels.a2c2_correction`. The numpy class itself is exercised by
+`tether.kernels.a2c2_correction`. The numpy class itself is exercised by
 tests/test_a2c2_correction_head.py + tests/test_a2c2_serve_integration.py;
 this file covers the trainer-side encoder + the train/eval round-trip.
 
@@ -13,14 +13,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.correction import (
+from tether.correction import (
     A2C2Config,
     A2C2Head,
     build_a2c2_input_batch,
     evaluate_mse,
     train_a2c2_head,
 )
-from reflex.correction.a2c2_training import _gelu, _gelu_prime
+from tether.correction.a2c2_training import _gelu, _gelu_prime
 
 
 class TestBuildBatchInput:
@@ -212,7 +212,7 @@ class TestEvaluateMse:
     def test_zero_init_head_against_zero_target_is_near_zero(self):
         """Output layer of train_a2c2_head's _init starts at zero, so an
         untrained head emits correction=0 -> MSE vs zero target is exactly 0."""
-        from reflex.correction.a2c2_training import _init_head_for_training
+        from tether.correction.a2c2_training import _init_head_for_training
         cfg = A2C2Config(action_dim=4, obs_dim=8, position_encoding_dim=8)
         head = _init_head_for_training(cfg, seed=0)
         rng = np.random.default_rng(1)

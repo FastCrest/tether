@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock
 
-from reflex.runtime.split import SplitOrchestrator, SplitConfig, InferenceTarget
+from tether.runtime.split import SplitOrchestrator, SplitConfig, InferenceTarget
 
 
 class TestSplitOrchestrator:

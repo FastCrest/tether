@@ -1,4 +1,4 @@
-"""Tests for src/reflex/pro/consent.py — Phase 1 self-distilling-serve Day 2.
+"""Tests for src/tether/pro/consent.py — Phase 1 self-distilling-serve Day 2.
 
 Per ADR 2026-04-25-self-distilling-serve-architecture decision #1: data
 collection is EXPLICIT opt-in via TTY prompt; non-interactive contexts
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.pro.consent import (
+from tether.pro.consent import (
     CONSENT_VERSION,
     TERMS_VERSION,
     ConsentMismatch,

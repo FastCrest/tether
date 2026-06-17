@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from reflex.decompose import (
+from tether.decompose import (
     DecomposedRMSNorm,
     DecomposedRotaryEmbedding,
     decompose_rmsnorm,

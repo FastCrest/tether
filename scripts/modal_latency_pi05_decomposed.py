@@ -23,7 +23,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-latency-pi05-decomposed")
+app = modal.App("tether-latency-pi05-decomposed")
 
 
 def _hf_secret():
@@ -75,7 +75,7 @@ image = (
     )
     .run_commands(
         f'echo "bust={_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -113,7 +113,7 @@ def bench(
     import time
     import statistics
     import numpy as np
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     # Build one fixed observation to feed across all runs
     B = 1
@@ -131,10 +131,10 @@ def bench(
     )
 
     # State-out variant: decomposed export with expert_takes_state=True
-    # requires a state input. Detect from reflex_config.json and add it.
+    # requires a state input. Detect from tether_config.json and add it.
     import json as _json
     from pathlib import Path as _Path
-    cfg_path = _Path(decomposed_dir) / "reflex_config.json"
+    cfg_path = _Path(decomposed_dir) / "tether_config.json"
     if cfg_path.exists():
         with cfg_path.open() as _f:
             _cfg = _json.load(_f)

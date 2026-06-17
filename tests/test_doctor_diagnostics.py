@@ -1,4 +1,4 @@
-"""Tests for `reflex doctor` deploy diagnostics (B.4 / D.1 Day 1).
+"""Tests for `tether doctor` deploy diagnostics (B.4 / D.1 Day 1).
 
 Each check has a falsifiability gate (per the plan): at least 1 pass case
 + 1 fail case. CheckResult.__post_init__ enforces "fail must have remediation"
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.diagnostics import (
+from tether.diagnostics import (
     Check,
     CheckResult,
     exit_code,
@@ -191,6 +191,36 @@ class TestCheckVlmTokenization:
         results = run_all_checks(str(tmp_path), "custom")
         check = next(r for r in results if r.check_id == "check_vlm_tokenization")
         assert check.status == "skip"
+
+    def test_warn_when_tokenizer_required_but_not_bundled(self, tmp_path):
+        (tmp_path / "model.onnx").write_bytes(b"\x00")
+        (tmp_path / "tether_config.json").write_text(json.dumps({
+            "model_type": "smolvla",
+            "export_kind": "monolithic",
+        }))
+
+        results = run_all_checks(str(tmp_path), "custom")
+
+        check = next(r for r in results if r.check_id == "check_vlm_tokenization")
+        assert check.status == "warn"
+        assert "offline" in check.expected.lower()
+        assert "tether export" in check.remediation
+
+    def test_fail_when_offline_and_tokenizer_required_but_not_bundled(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("TETHER_OFFLINE", "1")
+        (tmp_path / "model.onnx").write_bytes(b"\x00")
+        (tmp_path / "tether_config.json").write_text(json.dumps({
+            "model_type": "smolvla",
+            "export_kind": "monolithic",
+        }))
+
+        results = run_all_checks(str(tmp_path), "custom")
+
+        check = next(r for r in results if r.check_id == "check_vlm_tokenization")
+        assert check.status == "fail"
+        assert check.remediation
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +433,7 @@ class TestSmoke:
     }
 
     def test_runs_all_registered_checks(self, tmp_path):
-        from reflex.diagnostics import _REGISTRY, _ensure_registry_loaded
+        from tether.diagnostics import _REGISTRY, _ensure_registry_loaded
         _ensure_registry_loaded()
         registered_ids = {check.check_id for check in _REGISTRY}
 
@@ -422,7 +452,7 @@ class TestSmoke:
 
     @pytest.mark.parametrize("emb", ["franka", "so100", "ur5"])
     def test_runs_against_each_preset(self, emb, tmp_path):
-        from reflex.diagnostics import _REGISTRY, _ensure_registry_loaded
+        from tether.diagnostics import _REGISTRY, _ensure_registry_loaded
         _ensure_registry_loaded()
 
         (tmp_path / "model.onnx").write_bytes(b"\x00")

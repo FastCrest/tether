@@ -5,12 +5,12 @@ Day 4 of the v0.7 plan — gates the PyPI ship.
 What this validates:
 1. Local wheel installs cleanly via uv pip from a Modal mount
 2. tensorrt + nvidia/cublas + nvidia/cudnn pip pkgs arrive automatically
-3. `import reflex` runs the LD_LIBRARY_PATH patch successfully
-4. `reflex doctor` reports all 4 TRT EP checks ✓
+3. `import tether` runs the LD_LIBRARY_PATH patch successfully
+4. `tether doctor` reports all 4 TRT EP checks ✓
 5. Latency on SmolVLA monolithic matches v0.6.0 baseline (~19.5 ms ORT-TRT EP)
 
 Usage:
-    modal profile activate <reflex-profile>
+    modal profile activate <tether-profile>
     modal run scripts/modal_v07_install_validation_a10g.py
 """
 from pathlib import Path
@@ -40,7 +40,7 @@ image = (
     .env({"PYTHONFAULTHANDLER": "1"})
 )
 
-app = modal.App("reflex-v07-install-validation")
+app = modal.App("tether-v07-install-validation")
 
 
 @app.function(image=image, gpu="A10G", timeout=900)
@@ -81,16 +81,16 @@ def validate():
         results["status"] = "FAIL_TENSORRT_NOT_AUTO_INSTALLED"
         return results
 
-    # ─── Step A: import reflex, verify LD_LIBRARY_PATH gets patched
+    # ─── Step A: import tether, verify LD_LIBRARY_PATH gets patched
     print()
     print("=" * 70)
-    print("STEP A — import reflex + verify LD_LIBRARY_PATH patch")
+    print("STEP A — import tether + verify LD_LIBRARY_PATH patch")
     print("=" * 70)
     proc = subprocess.run(
         [sys.executable, "-c",
          "import os; before=os.environ.get('LD_LIBRARY_PATH', ''); "
-         "import reflex; after=os.environ.get('LD_LIBRARY_PATH', ''); "
-         "print('VERSION:', reflex.__version__); "
+         "import tether; after=os.environ.get('LD_LIBRARY_PATH', ''); "
+         "print('VERSION:', tether.__version__); "
          "print('LD_BEFORE:', repr(before)); "
          "print('LD_AFTER:', repr(after)); "
          "print('PATCH_APPLIED:', after != before)"],
@@ -107,12 +107,12 @@ def validate():
         results["status"] = "FAIL_LD_LIBRARY_PATH_NOT_PATCHED"
         return results
 
-    # ─── Step B: reflex doctor
+    # ─── Step B: tether doctor
     print()
     print("=" * 70)
-    print("STEP B — reflex doctor")
+    print("STEP B — tether doctor")
     print("=" * 70)
-    proc = subprocess.run(["reflex", "doctor"], capture_output=True, text=True)
+    proc = subprocess.run(["tether", "doctor"], capture_output=True, text=True)
     print(proc.stdout)
     print(proc.stderr)
     results["doctor_stdout"] = proc.stdout
@@ -189,10 +189,10 @@ def validate():
 
 
 _LATENCY_SCRIPT = """
-# Critical: import reflex FIRST so its __init__.py runs the
+# Critical: import tether FIRST so its __init__.py runs the
 # LD_LIBRARY_PATH patch + eager dlopen of libnvinfer/libcublas/libcudnn.
 # Without this, ORT's TRT EP can't find the libs in this fresh subprocess.
-import reflex  # noqa: F401 — load-bearing side effect
+import tether  # noqa: F401 — load-bearing side effect
 
 import os, time, json
 import numpy as np

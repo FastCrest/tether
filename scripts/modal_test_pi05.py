@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-pi05-test")
+app = modal.App("tether-pi05-test")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -20,10 +20,10 @@ image = (
         "onnxscript", "numpy", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -47,7 +47,7 @@ def run_pi05_export():
     print("=== Step 1: Load pi0.5 checkpoint & detect ===", flush=True)
     start = time.time()
     try:
-        from reflex.checkpoint import load_checkpoint, detect_model_type
+        from tether.checkpoint import load_checkpoint, detect_model_type
         state_dict, _ = load_checkpoint("lerobot/pi05_base")
         model_type = detect_model_type(state_dict)
         total_params = sum(v.numel() for v in state_dict.values())
@@ -73,7 +73,7 @@ def run_pi05_export():
     print("\n=== Step 2: Build pi0.5 expert stack (AdaRMSNorm) ===", flush=True)
     start = time.time()
     try:
-        from reflex.exporters.pi0_exporter import build_pi05_expert_stack
+        from tether.exporters.pi0 import build_pi05_expert_stack
         expert_stack, meta = build_pi05_expert_stack(state_dict, head_dim=128)
         elapsed = time.time() - start
         log("build_expert", "pass",
@@ -103,13 +103,13 @@ def run_pi05_export():
         log("forward", "fail", f"{str(e)[:300]}\n{traceback.format_exc()[:500]}")
         return results
 
-    # Step 4: Full reflex export (including ONNX + validation)
-    print("\n=== Step 4: reflex export lerobot/pi05_base ===", flush=True)
+    # Step 4: Full tether export (including ONNX + validation)
+    print("\n=== Step 4: tether export lerobot/pi05_base ===", flush=True)
     del state_dict  # free memory
     del expert_stack
     start = time.time()
     r = subprocess.run([
-        "reflex", "export", "lerobot/pi05_base",
+        "tether", "export", "lerobot/pi05_base",
         "--target", "desktop",
         "--output", export_dir,
     ], capture_output=True, text=True, timeout=600)

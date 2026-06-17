@@ -1,10 +1,10 @@
-"""Tests for src/reflex/runtime/tracing.py — OTel tracer bootstrap."""
+"""Tests for src/tether/runtime/tracing.py — OTel tracer bootstrap."""
 from __future__ import annotations
 
 import pytest
 
-from reflex.runtime import tracing as tracing_module
-from reflex.runtime.tracing import (
+from tether.runtime import tracing as tracing_module
+from tether.runtime.tracing import (
     _NoopTracer,
     get_tracer,
     setup_tracing,

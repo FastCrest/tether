@@ -1,4 +1,4 @@
-"""End-to-end integration tests for `reflex serve` (Phase 0.5 e2e-test).
+"""End-to-end integration tests for `tether serve` (Phase 0.5 e2e-test).
 
 Covers 8 of the 10 cases from the plan; perf p99 + cache-hit-rate are deferred
 to a separate Modal job (scripts/modal_serve_e2e_perf.py — TBD; not Phase 0.5
@@ -20,7 +20,7 @@ Cases deferred to Modal (require real ONNX model load):
 
 Architecture: builds a stub FastAPI app that mirrors the production /act +
 /health surface (same hooks, same response shape). The stub uses the same
-ReflexClient for the test runner — one transport/contract end-to-end.
+TetherClient for the test runner — one transport/contract end-to-end.
 """
 from __future__ import annotations
 
@@ -283,9 +283,9 @@ class TestCase08PreWarmupConsistency:
         assert r.json()["state"] == "warmup_failed"
 
 
-# Cross-stack ReflexClient + e2e server handshake tests intentionally omitted —
+# Cross-stack TetherClient + e2e server handshake tests intentionally omitted —
 # httpx.ASGITransport is async-only in this version and doesn't compose with
-# the sync ReflexClient. The SDK is independently covered in test_client.py
+# the sync TetherClient. The SDK is independently covered in test_client.py
 # (using httpx.MockTransport); the server contract is independently covered by
 # the 8 case tests above. Both share the same documented response shape, so
 # any drift would be caught by either side.

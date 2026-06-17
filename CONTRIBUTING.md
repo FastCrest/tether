@@ -1,19 +1,19 @@
-# Contributing to reflex-vla
+# Contributing to tether
 
-thanks for looking at reflex. this is a deploy layer for VLAs (SmolVLA, pi0, pi0.5, GR00T N1.6) that gets you from `git clone` to a running policy server in minutes, with numerical parity to the reference checkpoint.
+thanks for looking at tether. this is a deploy layer for VLAs (SmolVLA, pi0, pi0.5, GR00T N1.6) that gets you from `git clone` to a running policy server in minutes, with numerical parity to the reference checkpoint.
 
 ## quick start
 
 ```bash
 # install from source
-git clone https://github.com/FastCrest/reflex-vla && cd reflex-vla
+git clone https://github.com/FastCrest/tether && cd tether
 uv pip install -e .
 
 # sanity check your box
-reflex doctor
+tether doctor
 
 # run a test policy
-reflex serve --policy smolvla --device cuda
+tether serve --policy smolvla --device cuda
 ```
 
 full setup details in `examples/01-chat-quickstart.md`.

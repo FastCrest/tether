@@ -1,7 +1,7 @@
-"""Phase IV: does `reflex turbo --strategy adaptive` actually save time on real VLAs?
+"""Phase IV: does `tether turbo --strategy adaptive` actually save time on real VLAs?
 
-The current implementation in src/reflex/kernels/turbo.py and the inline
-adaptive-stop in src/reflex/runtime/server.py:_run_denoise stop the denoise
+The current implementation in src/tether/kernels/turbo.py and the inline
+adaptive-stop in src/tether/runtime/server.py:_run_denoise stop the denoise
 loop early when consecutive velocity-norm deltas drop below 0.01. That
 heuristic was only validated on a synthetic 16-hidden toy model.
 
@@ -22,7 +22,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-adaptive-real")
+app = modal.App("tether-adaptive-real")
 
 image = (
     modal.Image.from_registry(
@@ -39,10 +39,10 @@ image = (
         "numpy<2.0", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 
@@ -54,34 +54,34 @@ def test_adaptive():
     import numpy as np
     import torch
 
-    from reflex.checkpoint import load_checkpoint
+    from tether.checkpoint import load_checkpoint
 
     models = [
         {
             "tag": "smolvla",
             "hf_id": "lerobot/smolvla_base",
-            "builder_mod": "reflex.exporters.smolvla_exporter",
+            "builder_mod": "tether.exporters.smolvla_exporter",
             "builder_fn": "build_expert_stack",
             "kwargs": {"head_dim": 64},
         },
         {
             "tag": "pi0",
             "hf_id": "lerobot/pi0_base",
-            "builder_mod": "reflex.exporters.pi0_exporter",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi0_expert_stack",
             "kwargs": {"head_dim": 128},
         },
         {
             "tag": "pi05",
             "hf_id": "lerobot/pi05_base",
-            "builder_mod": "reflex.exporters.pi0_exporter",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi05_expert_stack",
             "kwargs": {"head_dim": 128},
         },
         {
             "tag": "gr00t",
             "hf_id": "nvidia/GR00T-N1.6-3B",
-            "builder_mod": "reflex.exporters.gr00t_exporter",
+            "builder_mod": "tether.exporters.gr00t",
             "builder_fn": "build_gr00t_full_stack",
             "kwargs": {"embodiment_id": 0},
         },

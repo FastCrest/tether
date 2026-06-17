@@ -14,7 +14,7 @@ import time
 
 import modal
 
-app = modal.App("reflex-full-pipeline")
+app = modal.App("tether-full-pipeline")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -375,7 +375,7 @@ def full_pipeline():
 
     # Step 8: ONNX export of full stack (single denoise step)
     print("\n=== Step 8: ONNX export full stack ===")
-    export_dir = Path("/tmp/reflex_full_export")
+    export_dir = Path("/tmp/tether_full_export")
     export_dir.mkdir(exist_ok=True)
     try:
         expert_cpu = expert_stack.cpu()

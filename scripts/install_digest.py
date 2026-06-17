@@ -1,4 +1,7 @@
-"""Pull pypistats download counts for reflex-vla and print a Markdown digest.
+"""Pull pypistats download counts for the tether package and print a Markdown digest.
+
+Aggregates the pre-rename `reflex-vla` package (all releases <= 0.11.x shipped
+under that name) with the post-rename `tether` package once it is published.
 
 Run weekly: python scripts/install_digest.py [--days 7]
 
@@ -14,15 +17,34 @@ from datetime import date, datetime, timedelta
 
 import httpx
 
-API = "https://pypistats.org/api/packages/reflex-vla"
+API = "https://pypistats.org/api/packages"
+# Pre-rename name first; "tether" 404s until its first PyPI publish and is
+# skipped gracefully until then.
+PACKAGES = ["reflex-vla", "fastcrest-tether"]
+
+
+def _fetch_one(package: str, endpoint: str) -> dict:
+    r = httpx.get(f"{API}/{package}/{endpoint}", timeout=10.0)
+    if r.status_code == 404:
+        # Package not yet indexed by pypistats (typical for the first 1-3 days
+        # after a PyPI publish — and for "tether" until it ships at all).
+        return {"data": {} if endpoint == "recent" else []}
+    r.raise_for_status()
+    return r.json()
 
 
 def _fetch(endpoint: str) -> dict:
-    r = httpx.get(f"{API}/{endpoint}", timeout=10.0)
-    if r.status_code == 404:
-        return {"data": {}, "_note": "package not yet indexed by pypistats (typical for first 1-3 days after PyPI publish)"}
-    r.raise_for_status()
-    return r.json()
+    """Fetch `endpoint` for every package name and merge the results."""
+    if endpoint == "recent":
+        merged: dict[str, int] = {}
+        for pkg in PACKAGES:
+            for k, v in _fetch_one(pkg, endpoint).get("data", {}).items():
+                merged[k] = merged.get(k, 0) + (v or 0)
+        return {"data": merged}
+    rows: list[dict] = []
+    for pkg in PACKAGES:
+        rows.extend(_fetch_one(pkg, endpoint).get("data", []))
+    return {"data": rows}
 
 
 def main() -> int:
@@ -44,11 +66,13 @@ def main() -> int:
             "last_day": last_day,
             "last_week": last_week,
             "last_month": last_month,
+            "packages": PACKAGES,
             "fetched_at": datetime.utcnow().isoformat() + "Z",
         }, indent=2))
         return 0
 
-    print(f"# reflex-vla install digest — {date.today().isoformat()}")
+    print(f"# tether install digest — {date.today().isoformat()}")
+    print(f"(aggregated across PyPI packages: {', '.join(PACKAGES)})")
     print()
     print(f"- **Last day:** {last_day:,} downloads")
     print(f"- **Last 7 days:** {last_week:,} downloads")

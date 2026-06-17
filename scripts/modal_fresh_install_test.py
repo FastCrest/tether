@@ -1,24 +1,24 @@
 """Modal: fresh-install smoke test — simulates a new customer's first hour.
 
-Spins a clean python:3.12-slim container, pip-installs reflex-vla from
+Spins a clean python:3.12-slim container, pip-installs tether from
 the live GitHub main branch, verifies the CLI works end-to-end:
 
-  1. `reflex --help` returns zero + shows subcommands
-  2. `reflex targets` lists hardware profiles
-  3. `reflex doctor` passes (or only fails on GPU checks under CPU-only image)
-  4. imports: from reflex.runtime.server import create_app
+  1. `tether --help` returns zero + shows subcommands
+  2. `tether targets` lists hardware profiles
+  3. `tether doctor` passes (or only fails on GPU checks under CPU-only image)
+  4. imports: from tether.runtime.server import create_app
 
 If this breaks, a fresh-box customer broke in their first 5 minutes.
 """
 import modal
 
-app = modal.App("reflex-fresh-install-test")
+app = modal.App("tether-fresh-install-test")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "reflex-vla[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla.git"
+        "fastcrest-tether[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether.git"
     )
 )
 
@@ -37,16 +37,16 @@ def test_fresh_install():
         return r.returncode
 
     results = {}
-    results["help"] = _run(["reflex", "--help"])
-    results["targets"] = _run(["reflex", "targets"])
+    results["help"] = _run(["tether", "--help"])
+    results["targets"] = _run(["tether", "targets"])
 
     # Try to import the key runtime module; should not raise
     try:
-        from reflex.runtime.server import create_app  # noqa: F401
-        from reflex.verification_report import write_verification_report  # noqa: F401
-        from reflex.safety.guard import ActionGuard  # noqa: F401
+        from tether.runtime.server import create_app  # noqa: F401
+        from tether.verification_report import write_verification_report  # noqa: F401
+        from tether.safety.guard import ActionGuard  # noqa: F401
         results["imports"] = 0
-        print("[imports] reflex.runtime.server + verification_report + safety.guard OK")
+        print("[imports] tether.runtime.server + verification_report + safety.guard OK")
     except Exception as e:
         results["imports"] = 1
         print(f"[imports] FAIL: {e}")

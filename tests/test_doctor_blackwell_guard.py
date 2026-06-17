@@ -69,7 +69,7 @@ def test_gpu_is_blackwell_pattern_matches_real_gpu_names():
     SKUs we've encountered or plan to support. Names lifted from past
     incidents (rob's RTX 5090 segfault 2026-04-28) + NVIDIA product
     pages."""
-    from reflex.runtime.server import _BLACKWELL_GPU_PATTERNS
+    from tether.runtime.server import _BLACKWELL_GPU_PATTERNS
 
     real_blackwell_names = [
         "NVIDIA GeForce RTX 5090",
@@ -92,7 +92,7 @@ def test_gpu_is_blackwell_does_not_match_non_blackwell():
     """Hopper / Ada / Ampere GPUs must NOT match Blackwell patterns
     (or the doctor would emit spurious upgrade warnings on supported
     hardware)."""
-    from reflex.runtime.server import _BLACKWELL_GPU_PATTERNS
+    from tether.runtime.server import _BLACKWELL_GPU_PATTERNS
 
     non_blackwell_names = [
         "NVIDIA H100 80GB HBM3",

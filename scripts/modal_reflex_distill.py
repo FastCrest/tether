@@ -1,23 +1,23 @@
-"""Run `reflex distill` on Modal — GPU-accelerated, no local GPU needed.
+"""Run `tether distill` on Modal — GPU-accelerated, no local GPU needed.
 
 SnapFlow 1-step self-distillation for flow-matching VLAs. v0.3 supports
 pi0 + pi0.5 teachers. Student is a copy of the teacher with a zero-init
 target_time embedding; the consistency loss trains it to produce a
 1-NFE velocity when target_time=1.
 
-Teacher must be a reflex-exported dir on the shared volume (same path
-as `reflex export` produces). Either run `modal_reflex_finetune.py`
+Teacher must be a tether-exported dir on the shared volume (same path
+as `tether export` produces). Either run `modal_tether_finetune.py`
 first to create the teacher, or upload your own checkpoint.
 
 Usage:
-    modal run scripts/modal_reflex_distill.py \\
+    modal run scripts/modal_tether_distill.py \\
         --teacher-export /onnx_out/my_pi0_libero_teacher \\
         --dataset lerobot/libero \\
         --output-subdir pi0_snapflow_student \\
         --steps 10000
 
     # Bigger consistency-alpha if the student underfits:
-    modal run scripts/modal_reflex_distill.py \\
+    modal run scripts/modal_tether_distill.py \\
         --teacher-export /onnx_out/my_pi05_teacher \\
         --dataset my-org/my-demos \\
         --output-subdir pi05_snapflow \\
@@ -31,7 +31,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-distill")
+app = modal.App("tether-distill")
 
 
 def _hf_secret():
@@ -77,7 +77,7 @@ HF_CACHE_PATH = "/root/.cache/huggingface"
 ONNX_OUTPUT_PATH = "/onnx_out"
 
 # Distill needs the same image as finetune + the SnapFlow deps land
-# automatically via the `reflex-vla[monolithic]` wheel install.
+# automatically via the `fastcrest-tether[monolithic]` wheel install.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
@@ -109,7 +109,7 @@ image = (
         # Local timestamp in an echo cache-busts Modal's layer cache even
         # when _HEAD falls back to 'main' on the build server.
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -147,7 +147,7 @@ def distill_modal(
     checkpoint_every: int = 1000,
     heartbeat_every: int = 50,
 ):
-    """Run reflex.finetune.run_finetune(phase='distill') on Modal.
+    """Run tether.finetune.run_finetune(phase='distill') on Modal.
 
     Set ``variant='state_out'`` for the v0.5 pi0.5 state-out student
     (strips proprio state from lang, adds explicit state_proj).
@@ -157,10 +157,10 @@ def distill_modal(
     import logging
     from pathlib import Path
 
-    from reflex.finetune.config import FinetuneConfig
-    from reflex.finetune.hooks import HookRegistry
-    from reflex.finetune.hooks.libero_drop_gate import attach_to as attach_libero_gate
-    from reflex.finetune.run import run_finetune
+    from tether.finetune.config import FinetuneConfig
+    from tether.finetune.hooks import HookRegistry
+    from tether.finetune.hooks.libero_drop_gate import attach_to as attach_libero_gate
+    from tether.finetune.run import run_finetune
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -251,7 +251,7 @@ def main(
     checkpoint_every: int = 1000,
     heartbeat_every: int = 50,
 ):
-    print(f"[reflex distill on Modal — SnapFlow]")
+    print(f"[tether distill on Modal — SnapFlow]")
     print(f"  teacher: {teacher_export}")
     print(f"  dataset: {dataset}")
     print(f"  output:  /onnx_out/{output_subdir}")

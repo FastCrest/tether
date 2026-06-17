@@ -1,18 +1,18 @@
 # Batching
 
-`reflex serve` queues `/act` requests through a per-policy `PolicyRuntime` and flushes batches based on **estimated GPU-ms cost**, not fixed request count. Replaces the legacy `--max-batch=N` semantics in Phase 1.
+`tether serve` queues `/act` requests through a per-policy `PolicyRuntime` and flushes batches based on **estimated GPU-ms cost**, not fixed request count. Replaces the legacy `--max-batch=N` semantics in Phase 1.
 
 ## Quick start
 
 ```bash
 # Default — 100ms cost budget, 5ms timeout
-reflex serve ./my-export/
+tether serve ./my-export/
 
 # Tune for throughput (deeper batches, longer per-request latency)
-reflex serve ./my-export/ --max-batch-cost-ms 250
+tether serve ./my-export/ --max-batch-cost-ms 250
 
 # Tune for tail latency (smaller batches, faster flush)
-reflex serve ./my-export/ --max-batch-cost-ms 50 --batch-timeout-ms 2
+tether serve ./my-export/ --max-batch-cost-ms 50 --batch-timeout-ms 2
 ```
 
 That's the customer surface. The runtime + scheduler are always on; there's no opt-in flag because there's nothing to opt into — it's just better default behavior.

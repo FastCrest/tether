@@ -30,7 +30,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-cuda-graphs-ab")
+app = modal.App("tether-cuda-graphs-ab")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -75,28 +75,28 @@ image = (
     })
     .add_local_dir(
         os.path.join(REPO_ROOT, "src"),
-        remote_path="/root/reflex-vla/src",
+        remote_path="/root/tether-vla/src",
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "pyproject.toml"),
-        remote_path="/root/reflex-vla/pyproject.toml",
+        remote_path="/root/tether-vla/pyproject.toml",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "README.md"),
-        remote_path="/root/reflex-vla/README.md",
+        remote_path="/root/tether-vla/README.md",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "LICENSE"),
-        remote_path="/root/reflex-vla/LICENSE",
+        remote_path="/root/tether-vla/LICENSE",
         copy=True,
     )
     .run_commands(
         f'echo "build_bust={_BUST}"',
-        'pip install -e "/root/reflex-vla" --no-deps',
+        'pip install -e "/root/tether-vla" --no-deps',
     )
 )
 
@@ -116,11 +116,11 @@ def _run_one_session_ab(
     import numpy as np
     import onnxruntime as ort
 
-    from reflex.runtime.cuda_graphs import (
+    from tether.runtime.cuda_graphs import (
         build_cuda_graph_providers,
         try_capture_or_fall_back,
     )
-    from reflex.bench.methodology import compute_stats
+    from tether.bench.methodology import compute_stats
 
     _ORT_TO_NP = {
         "tensor(float)": np.float32,
@@ -274,9 +274,9 @@ def _run_ab_for_export(export_subdir: str, hw_label: str, n_warmup: int, n_iters
     if not export_dir.exists():
         return {"status": "fail", "reason": f"export_dir_missing: {export_dir}"}
 
-    cfg_path = export_dir / "reflex_config.json"
+    cfg_path = export_dir / "tether_config.json"
     if not cfg_path.exists():
-        return {"status": "fail", "reason": "reflex_config.json missing"}
+        return {"status": "fail", "reason": "tether_config.json missing"}
     cfg = json.loads(cfg_path.read_text())
     prefix_path = export_dir / cfg["decomposed"]["vlm_prefix_onnx"]
     expert_path = export_dir / cfg["decomposed"]["expert_denoise_onnx"]

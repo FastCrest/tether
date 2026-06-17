@@ -7,7 +7,7 @@ with TRT FP16" until we can run on real hardware.
 Tests 4 paths per model:
   1. PyTorch eager (baseline)
   2. torch.compile(mode="reduce-overhead") (the bar)
-  3. ORT-GPU FP32 (Reflex's current edge path)
+  3. ORT-GPU FP32 (Tether's current edge path)
   4. TensorRT FP16 engine built from the exported ONNX
 
 Uses nvidia/tensorrt base image so trtexec is present. tensorrt Python
@@ -19,7 +19,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-bench-trt-fp16")
+app = modal.App("tether-bench-trt-fp16")
 
 # NVIDIA's TensorRT 24.10 container ships CUDA 12.6 + cuDNN 9 + TRT 10.5 + trtexec
 # Matches onnxruntime-gpu 1.20+ requirements cleanly.
@@ -38,11 +38,11 @@ image = (
         "numpy<2.0", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
     .run_commands(
-        "cd /root/reflex-vla && pip install -e . --no-deps",
+        "cd /root/tether-vla && pip install -e . --no-deps",
         "trtexec --help | head -1 || echo 'trtexec missing'",
     )
 )
@@ -78,28 +78,28 @@ def bench_trt():
         {
             "tag": "smolvla",
             "hf_id": "lerobot/smolvla_base",
-            "builder_mod": "reflex.exporters.smolvla_exporter",
+            "builder_mod": "tether.exporters.smolvla",
             "builder_fn": "build_expert_stack",
             "builder_kwargs": {"head_dim": 64},
         },
         {
             "tag": "pi0",
             "hf_id": "lerobot/pi0_base",
-            "builder_mod": "reflex.exporters.pi0_exporter",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi0_expert_stack",
             "builder_kwargs": {"head_dim": 128},
         },
         {
             "tag": "pi05",
             "hf_id": "lerobot/pi05_base",
-            "builder_mod": "reflex.exporters.pi0_exporter",
+            "builder_mod": "tether.exporters.pi0",
             "builder_fn": "build_pi05_expert_stack",
             "builder_kwargs": {"head_dim": 128},
         },
         {
             "tag": "gr00t",
             "hf_id": "nvidia/GR00T-N1.6-3B",
-            "builder_mod": "reflex.exporters.gr00t_exporter",
+            "builder_mod": "tether.exporters.gr00t",
             "builder_fn": "build_gr00t_full_stack",
             "builder_kwargs": {"embodiment_id": 0},
         },
@@ -132,7 +132,7 @@ def bench_trt():
         torch.cuda.empty_cache()
 
         # --- load + build ---
-        from reflex.checkpoint import load_checkpoint
+        from tether.checkpoint import load_checkpoint
         import importlib
         state_dict, _ = load_checkpoint(m["hf_id"])
         builder_module = importlib.import_module(m["builder_mod"])

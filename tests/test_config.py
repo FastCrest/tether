@@ -2,7 +2,7 @@
 
 import pytest
 
-from reflex.config import get_hardware_profile, HARDWARE_PROFILES, ExportConfig
+from tether.config import get_hardware_profile, HARDWARE_PROFILES, ExportConfig
 
 
 class TestHardwareProfiles:

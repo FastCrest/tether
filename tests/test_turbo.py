@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from reflex.kernels.turbo import TurboOptimizer, TurboConfig, TurboResult
+from tether.kernels.turbo import TurboOptimizer, TurboConfig, TurboResult
 
 
 class SimpleDenoisingModel(nn.Module):

@@ -23,15 +23,15 @@ from pathlib import Path
 
 import pytest
 
-from reflex.runtime.policy import (
+from tether.runtime.policy import (
     DEFAULT_SINGLE_POLICY_SLOT,
     Policy,
     make_single_policy,
     validate_split_and_no_rtc,
 )
-from reflex.runtime.policy_crash_tracker import PolicyCrashTracker
-from reflex.runtime.policy_router import PolicyRouter
-from reflex.runtime.record import RecordWriter
+from tether.runtime.policy_crash_tracker import PolicyCrashTracker
+from tether.runtime.policy_router import PolicyRouter
+from tether.runtime.record import RecordWriter
 
 
 # ---------------------------------------------------------------------------

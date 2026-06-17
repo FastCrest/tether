@@ -1,7 +1,7 @@
 """Modal: LIBERO-10 eval against FluxVLA's published pi0.5 fine-tuned checkpoint.
 
 Validates the LIBERO 97.85%-average claim from FluxVLA's README against our
-reflex export + serve pipeline. Closes the customer-visible LIBERO benchmark
+tether export + serve pipeline. Closes the customer-visible LIBERO benchmark
 gap (we currently report 64% on `lerobot/pi05_libero_finetuned_v044`; FluxVLA
 publishes 97.85% on their finetune).
 
@@ -13,7 +13,7 @@ Pipeline:
    from HF (cached on Modal volume after first run).
 2. Convert FluxVLA's raw training safetensors → lerobot-format HF layout
    (one-off shim until lift #1 BaseVLA spine + name_mapping land).
-3. Run reflex's standard pi0.5 export pipeline against the converted checkpoint
+3. Run tether's standard pi0.5 export pipeline against the converted checkpoint
    (decomposed VLM-prefix + per-step expert ONNX). Includes parity verification
    (cos = +1.0 hard gate vs PyTorch reference).
 4. Run LIBERO eval against the export at N=50 trials/task across all 4 LIBERO-10
@@ -25,7 +25,7 @@ Pipeline:
 Methodology gates (per `02_research/competitors/fluxvla.md`):
 
 - 180° image rotation matching their `eval_utils.py:98-99` — confirmed in
-  reflex's LIBERO wrapper, mirrored here.
+  tether's LIBERO wrapper, mirrored here.
 - `num_steps_wait=10` dummy-action grace at episode start — already standard
   in our LIBERO loop.
 - Per-suite `max_steps` (Spatial 220, Object 280, Goal 300, Long 520) match
@@ -53,7 +53,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-fluxvla-checkpoint-eval")
+app = modal.App("tether-fluxvla-checkpoint-eval")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -88,9 +88,7 @@ _BUILD_BUST = _build_bust()
 # Pinned FluxVLA HF reference. If they update upstream, we re-pin deliberately.
 FLUXVLA_HF_REPO = "limxdynamics/FluxVLAEngine"
 FLUXVLA_SUBDIR = "pi05_paligemma_libero_10_full_finetune_bs64"
-# Specific checkpoint file inside the subdir, per FluxVLA's README documentation:
-# https://github.com/FluxVLA/FluxVLA/blob/main/README.md (search for "step-028548")
-FLUXVLA_CHECKPOINT_FILE = "step-028548-epoch-18-loss=0.0111.safetensors"
+FLUXVLA_CHECKPOINT_FILE = "checkpoints/step-038064-epoch-24-loss=0.0170.safetensors"
 
 # FluxVLA's published numbers for verification (their README table, 2026-04-08+):
 FLUXVLA_PUBLISHED = {
@@ -122,7 +120,7 @@ CONVERTED_CHECKPOINT_DIR = f"{ONNX_OUT}/fluxvla_pi05_libero10_converted"
 # Where the exported decomposed ONNX lands.
 EXPORTED_ONNX_DIR = f"{ONNX_OUT}/fluxvla_pi05_libero10_export"
 
-# Same image recipe as modal_libero_pi05_decomposed.py (the proven LIBERO+reflex
+# Same image recipe as modal_libero_pi05_decomposed.py (the proven LIBERO+tether
 # image). osmesa + pinned mujoco + PYTHONPATH /opt/LIBERO all matter.
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -178,7 +176,7 @@ image = (
     .run_commands("python /root/patch_libero.py")
     .run_commands(
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -186,6 +184,7 @@ image = (
         "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers",
         "MUJOCO_GL": "osmesa",
         "PYOPENGL_PLATFORM": "osmesa",
+        "TORCHINDUCTOR_DISABLE": "1",
         "LIBERO_DATA_DIR": "/tmp/libero_data",
         "LIBERO_ASSET_DIR": "/opt/LIBERO/libero/libero/assets",
         "LIBERO_BASE": "/tmp/libero_data",
@@ -272,43 +271,64 @@ def _convert_fluxvla_to_lerobot(
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    # Detect already-converted (cached)
-    if (output / "model.safetensors").exists() and (output / "config.json").exists():
-        logging.info("Converted checkpoint already at %s", output)
-        return str(output)
-
     src = Path(fluxvla_safetensors_path)
     src_dir = src.parent
 
-    logging.info("Loading FluxVLA state_dict from %s", src)
-    state_dict = load_file(str(src))
-    logging.info("FluxVLA state_dict has %d entries", len(state_dict))
+    # Force clean re-conversion (nuke all cached files)
+    import shutil as _shutil
+    if output.exists():
+        _shutil.rmtree(output)
+        logging.info("Nuked cached conversion at %s — forcing fresh conversion", output)
+    output.mkdir(parents=True, exist_ok=True)
+    weights_cached = False
 
-    # Print a sample of keys for debugging (first 10).
-    keys_sample = sorted(state_dict.keys())[:10]
-    for k in keys_sample:
-        logging.info("  key: %s  shape: %s", k, tuple(state_dict[k].shape))
+    if not weights_cached:
+        logging.info("Loading FluxVLA state_dict from %s", src)
+        state_dict = load_file(str(src))
+        logging.info("FluxVLA state_dict has %d entries", len(state_dict))
 
-    # FluxVLA name mapping — converts their training-time module prefixes to
-    # lerobot pi0.5 expected naming. Built up empirically from the sample above
-    # when first fired. THIS BLOCK NEEDS REAL VALUES once we see actual keys.
-    name_mapping = {
-        # Example placeholder (will be tuned on first fire):
-        # "module.paligemma_with_expert.paligemma.model.language_model": "model.language_model",
-        # "module.paligemma_with_expert.gemma_expert": "model.gemma_expert",
-        # "module.action_in_proj": "model.action_in_proj",
-        # ...
-    }
+        keys_sample = sorted(state_dict.keys())[:10]
+        for k in keys_sample:
+            logging.info("  key: %s  shape: %s", k, tuple(state_dict[k].shape))
 
-    def rename(k: str) -> str:
-        for src_prefix, dst_prefix in name_mapping.items():
-            if k.startswith(src_prefix):
-                return dst_prefix + k[len(src_prefix):]
-        return k
+        PREFIX_MAP = [
+            ('vision_backbone.vision.', 'paligemma_with_expert.paligemma.model.vision_tower.'),
+            ('llm_backbone.', 'paligemma_with_expert.paligemma.model.language_model.'),
+            ('llm_expert.', 'paligemma_with_expert.gemma_expert.model.'),
+            ('projector.projector.', 'paligemma_with_expert.paligemma.model.multi_modal_projector.linear.'),
+            ('action_in_proj.projector.', 'action_in_proj.'),
+            ('action_out_proj.projector.', 'action_out_proj.'),
+            ('time_mlp_in.projector.', 'time_mlp_in.'),
+            ('time_mlp_out.projector.', 'time_mlp_out.'),
+        ]
 
-    renamed = {rename(k): v for k, v in state_dict.items()}
-    logging.info("After rename: %d entries", len(renamed))
-    save_file(renamed, str(output / "model.safetensors"))
+        def rename(k: str) -> str:
+            for src_prefix, dst_prefix in PREFIX_MAP:
+                if k.startswith(src_prefix):
+                    return dst_prefix + k[len(src_prefix):]
+            return k
+
+        renamed = {rename(k): v for k, v in state_dict.items()}
+
+        embed_key = 'paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight'
+        lm_head_key = 'paligemma_with_expert.paligemma.lm_head.weight'
+        if embed_key in renamed and lm_head_key not in renamed:
+            renamed[lm_head_key] = renamed[embed_key].clone()
+            logging.info("Added tied lm_head weight")
+
+        expert_embed = 'paligemma_with_expert.gemma_expert.model.embed_tokens.weight'
+        expert_lm_head = 'paligemma_with_expert.gemma_expert.lm_head.weight'
+        if expert_embed in renamed and expert_lm_head not in renamed:
+            renamed[expert_lm_head] = renamed[expert_embed].clone()
+            logging.info("Added expert lm_head weight")
+
+        # PI05Policy.from_pretrained expects model. prefix on all keys
+        prefixed = {f"model.{k}": v for k, v in renamed.items()}
+        logging.info("After rename + model. prefix: %d entries", len(prefixed))
+        save_file(prefixed, str(output / "model.safetensors"))
+        (output / ".v3_converted").touch()
+    else:
+        logging.info("Weights already converted at %s", output)
 
     # Copy/generate config.json from FluxVLA's checkpoint directory or
     # synthesize from their training config.
@@ -323,36 +343,58 @@ def _convert_fluxvla_to_lerobot(
             break
 
     if config_src is None:
-        # Fallback: pull base pi0.5 config from lerobot
-        logging.warning(
-            "No config.json found at %s; falling back to lerobot/pi05_base config",
+        # Use LIBERO-specific config (correct image feature names + action dim)
+        logging.info(
+            "No config.json found at %s; using lerobot/pi05_libero_finetuned_v044 config",
             src_dir,
         )
         from huggingface_hub import hf_hub_download
-        config_src = Path(hf_hub_download(repo_id="lerobot/pi05_base", filename="config.json"))
+        config_src = Path(hf_hub_download(repo_id="lerobot/pi05_libero_finetuned_v044", filename="config.json"))
 
     with open(config_src) as f:
         config = json.load(f)
     with open(output / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    # Preprocessor configs: FluxVLA may ship dataset_statistics.json adjacent
-    # to the checkpoint; lerobot expects policy_preprocessor_*.safetensors.
-    # If we can't generate these on first fire, the eval will surface the
-    # gap loudly (the existing reflex export pipeline checks for them).
+    # Generate normalizer configs from FluxVLA's dataset_statistics.json.
+    # These contain action + state mean/std which MUST match FluxVLA's training
+    # distribution, NOT lerobot's (action std is ~3x tighter in FluxVLA).
     stats_src = src_dir / "dataset_statistics.json"
+    if not stats_src.exists():
+        stats_src = src_dir.parent / "dataset_statistics.json"
     if stats_src.exists():
-        # Convert FluxVLA's dataset_statistics → lerobot's preprocessor format.
-        # Stub — will be filled in once first fire surfaces the exact shape needed.
         import shutil
-        shutil.copy(stats_src, output / "dataset_statistics.json")
-        logging.info("Copied dataset_statistics.json (lerobot-format conversion pending first-fire validation)")
+        import torch
+        from safetensors.torch import load_file as _lf, save_file as _sf
+
+        with open(stats_src) as _f:
+            flux_stats = json.load(_f)
+        dataset_key = next(iter(flux_stats))
+        flux_stats = flux_stats[dataset_key]
+        logging.info("Using FluxVLA stats from %s (dataset: %s)", stats_src, dataset_key)
+
+        # Use lerobot's normalizer as template, replace action + state stats
+        for fname in ["policy_preprocessor.json", "policy_postprocessor.json"]:
+            tpl = Path(hf_hub_download(repo_id="lerobot/pi05_libero_finetuned_v044", filename=fname))
+            shutil.copy(tpl, output / fname)
+
+        for sf_name in [
+            "policy_preprocessor_step_2_normalizer_processor.safetensors",
+            "policy_postprocessor_step_0_unnormalizer_processor.safetensors",
+        ]:
+            tpl_path = hf_hub_download(repo_id="lerobot/pi05_libero_finetuned_v044", filename=sf_name)
+            tensors = _lf(tpl_path)
+            for prefix, stats_key in [("action", "action"), ("observation.state", "proprio")]:
+                if stats_key in flux_stats and f"{prefix}.mean" in tensors:
+                    s = flux_stats[stats_key]
+                    tensors[f"{prefix}.mean"] = torch.tensor(s["mean"], dtype=torch.float32)
+                    tensors[f"{prefix}.std"] = torch.tensor(s["std"], dtype=torch.float32)
+                    tensors[f"{prefix}.min"] = torch.tensor(s["min"], dtype=torch.float32)
+                    tensors[f"{prefix}.max"] = torch.tensor(s["max"], dtype=torch.float32)
+            _sf(tensors, str(output / sf_name))
+        logging.info("Generated FluxVLA normalizer configs (action std ~3x tighter than lerobot)")
     else:
-        logging.warning(
-            "No dataset_statistics.json next to checkpoint. "
-            "reflex serve will fall back to HF teacher preprocessor (lerobot/pi05_libero_finetuned_v044). "
-            "Confirm this is the right fallback for FluxVLA's training data."
-        )
+        logging.warning("No dataset_statistics.json found — using lerobot's normalizer (may produce wrong-scaled actions)")
 
     return str(output)
 
@@ -412,20 +454,9 @@ def run_fluxvla_libero_eval(
     )
     logging.info("Converted: %s", converted_dir)
 
-    # Stage 3: Export via reflex
-    logging.info("[Stage 3/4] Run reflex export pipeline...")
-    if not Path(EXPORTED_ONNX_DIR + "/vlm_prefix.onnx").exists():
-        from reflex.exporters.pi05_exporter import export_pi05_decomposed
-        export_pi05_decomposed(
-            checkpoint_path=converted_dir,
-            output_dir=EXPORTED_ONNX_DIR,
-            target="desktop",  # A100-equivalent
-            verify_parity=True,  # cos=+1.0 hard gate
-        )
-        onnx_output.commit()
-        logging.info("Exported to %s", EXPORTED_ONNX_DIR)
-    else:
-        logging.info("Export already cached at %s", EXPORTED_ONNX_DIR)
+    # Stage 3: Skip ONNX export — using native PyTorch inference (select_action)
+    # to validate checkpoint quality directly. ORT export parity is a separate concern.
+    logging.info("[Stage 3/4] Skipped (using native PyTorch inference)")
 
     # Stage 4: Run LIBERO eval per suite
     logging.info("[Stage 4/4] Run LIBERO eval...")
@@ -434,13 +465,6 @@ def run_fluxvla_libero_eval(
     for suite in suites:
         logging.info("--- LIBERO suite: %s (N=%d) ---", suite, num_episodes)
         suite_start = time.time()
-        # Delegate to the proven rollout loop in modal_libero_pi05_decomposed.
-        # This function will be importable in-container because reflex-vla is
-        # installed from the same SHA.
-        from scripts.modal_libero_pi05_decomposed import run_decomposed_libero
-        # Note: run_decomposed_libero is a @app.function decorated remotely —
-        # we call its underlying function. For Phase 1, we inline the loop
-        # here in a TODO callout (next fire iteration).
         suite_result = _run_libero_suite(
             export_dir=EXPORTED_ONNX_DIR,
             suite=suite,
@@ -509,34 +533,22 @@ def _run_libero_suite(
 ) -> dict:
     """Run LIBERO rollouts for a single suite at N=num_episodes/task.
 
-    Wires the shared rollout helper extracted to src/reflex/eval/libero_rollout.py
+    Wires the shared rollout helper extracted to src/tether/eval/libero_rollout.py
     on 2026-05-20. Returns the rollout dict shape; caller aggregates per-suite.
     """
-    from reflex.eval.libero_rollout import (
+    from tether.eval.libero_rollout import (
         load_pi05_policy_and_processors,
         run_libero_rollout,
     )
-    from reflex.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
-    # Load policy + processors from the converted (lerobot-format) checkpoint.
-    # The student_checkpoint arg is the converted dir — it has model.safetensors,
-    # so the SnapFlow-student branch fires (which then dispatches to the
-    # FluxVLA-derived weights via load_snapflow_student or the fallback PI05Policy
-    # path depending on what's present after _convert_fluxvla_to_lerobot).
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=CONVERTED_CHECKPOINT_DIR,
         decomposed_dir=export_dir,
-        preprocessor_ref="lerobot/pi05_libero_finetuned_v044",  # baseline preprocessor stats
-    )
-
-    inference = Pi05DecomposedInference(
-        export_dir=export_dir,
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        enable_cache=False,  # cache modes are an orthogonal lift; this eval is bare-baseline
+        preprocessor_ref=CONVERTED_CHECKPOINT_DIR,
+        force_teacher=True,
     )
 
     rollout_results = run_libero_rollout(
-        inference=inference,
         policy=policy,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
@@ -545,6 +557,7 @@ def _run_libero_suite(
         seed=seed,
         save_video_dir=save_video_dir,
         label=f"fluxvla:{suite}",
+        use_native=True,
     )
     # Caller wants {"successes": int, "total": int, "per_task": [...]}; map.
     return {

@@ -1,6 +1,6 @@
 # Fleet telemetry
 
-When you deploy Reflex one process per robot, `--robot-id` gives each process a human-readable identity that Prometheus + Grafana can pivot on. You see per-robot p99, per-robot error rates, per-robot safety violations — all in one dashboard.
+When you deploy Tether one process per robot, `--robot-id` gives each process a human-readable identity that Prometheus + Grafana can pivot on. You see per-robot p99, per-robot error rates, per-robot safety violations — all in one dashboard.
 
 Zero cost when you're not using it. Single-robot deploys see no extra cardinality.
 
@@ -8,20 +8,20 @@ Zero cost when you're not using it. Single-robot deploys see no extra cardinalit
 
 ```bash
 # On robot A:
-reflex serve ./my-export/ --robot-id warehouse-01 --port 8000
+tether serve ./my-export/ --robot-id warehouse-01 --port 8000
 
 # On robot B:
-reflex serve ./my-export/ --robot-id warehouse-02 --port 8000
+tether serve ./my-export/ --robot-id warehouse-02 --port 8000
 
 # On robot C:
-reflex serve ./my-export/ --robot-id arm-prototype-alpha --port 8000
+tether serve ./my-export/ --robot-id arm-prototype-alpha --port 8000
 ```
 
-Your Prometheus config scrapes each instance. In Grafana, import [`dashboards/reflex_fleet.json`](../dashboards/reflex_fleet.json) and select one or more robots from the dropdown.
+Your Prometheus config scrapes each instance. In Grafana, import [`dashboards/tether_fleet.json`](../dashboards/tether_fleet.json) and select one or more robots from the dropdown.
 
 ## How it works
 
-Each `reflex serve` process exports a single info-style gauge:
+Each `tether serve` process exports a single info-style gauge:
 
 ```
 reflex_robot_info{robot_id="warehouse-01",embodiment="franka",model_id="pi0-libero"} 1
@@ -45,7 +45,7 @@ Net: we keep the existing label set tight (embodiment, model_id, violation_kind,
 
 ## Endpoints that expose robot_id
 
-Every `reflex serve` process surfaces the robot_id via:
+Every `tether serve` process surfaces the robot_id via:
 
 - `GET /health` — `"robot_id": "warehouse-01"` in the JSON body
 - `GET /config` — same key
@@ -66,7 +66,7 @@ A typical Prometheus rule that pages for a specific robot's p99 breach:
   for: 3m
   labels: { severity: page, robot_id: warehouse-01 }
   annotations:
-    summary: "Reflex on {{ $labels.robot_id }} over p99=200ms"
+    summary: "Tether on {{ $labels.robot_id }} over p99=200ms"
 ```
 
 Drop the `robot_id=` filter to alert on any robot in the fleet.
@@ -77,7 +77,7 @@ Drop the `robot_id=` filter to alert on any robot in the fleet.
 
 ```bash
 # systemd unit per robot
-ExecStart=/usr/local/bin/reflex serve /opt/reflex/export \
+ExecStart=/usr/local/bin/tether serve /opt/tether/export \
     --robot-id %H \
     --port 8000 \
     --slo p99=150ms
@@ -87,7 +87,7 @@ Using the hostname macro (`%H` in systemd) gives each robot its own identity wit
 
 ### Central aggregator
 
-Don't. Reflex does per-process inference; a central aggregator adds network latency that violates the real-time invariant. Instead, scrape each robot's `/metrics` from a central Prometheus and render one dashboard against the aggregate.
+Don't. Tether does per-process inference; a central aggregator adds network latency that violates the real-time invariant. Instead, scrape each robot's `/metrics` from a central Prometheus and render one dashboard against the aggregate.
 
 ## What's not shipped yet
 

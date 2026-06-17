@@ -1,4 +1,4 @@
-"""Tests for the `reflex serve --policy-a/--policy-b/--split` flags (Day 5).
+"""Tests for the `tether serve --policy-a/--policy-b/--split` flags (Day 5).
 
 Per ADR 2026-04-25-policy-versioning-architecture: validation-only Phase 1.
 Full 2-policy serving lands Days 9-10 integration; this commit ships the
@@ -7,12 +7,13 @@ hook.
 """
 from __future__ import annotations
 
-from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
-from reflex.cli import app
+from tether.cli import app
 
 
 runner = CliRunner()
@@ -23,7 +24,7 @@ def fake_export(tmp_path):
     p = tmp_path / "export"
     p.mkdir()
     (p / "model.onnx").write_bytes(b"fake")
-    (p / "reflex_config.json").write_text("{}")
+    (p / "tether_config.json").write_text("{}")
     return p
 
 
@@ -32,7 +33,7 @@ def fake_export_b(tmp_path):
     p = tmp_path / "export_b"
     p.mkdir()
     (p / "model.onnx").write_bytes(b"fake")
-    (p / "reflex_config.json").write_text("{}")
+    (p / "tether_config.json").write_text("{}")
     return p
 
 
@@ -47,7 +48,7 @@ def test_policy_a_alone_fails(fake_export, fake_export_b):
         app, ["serve", str(fake_export), "--policy-a", str(fake_export)],
     )
     assert result.exit_code == 1
-    assert "must be set together" in result.stdout
+    assert "must be set together" in result.output
 
 
 def test_policy_b_alone_fails(fake_export, fake_export_b):
@@ -56,7 +57,7 @@ def test_policy_b_alone_fails(fake_export, fake_export_b):
         app, ["serve", str(fake_export), "--policy-b", str(fake_export_b)],
     )
     assert result.exit_code == 1
-    assert "must be set together" in result.stdout
+    assert "must be set together" in result.output
 
 
 def test_2policy_mutually_exclusive_with_shadow(fake_export, fake_export_b, tmp_path):
@@ -72,7 +73,7 @@ def test_2policy_mutually_exclusive_with_shadow(fake_export, fake_export_b, tmp_
         ],
     )
     assert result.exit_code == 1
-    assert "mutually exclusive" in result.stdout
+    assert "mutually exclusive" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ def test_2policy_requires_no_rtc(fake_export, fake_export_b):
         ],
     )
     assert result.exit_code == 1
-    assert "--no-rtc" in result.stdout
+    assert "--no-rtc" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +110,7 @@ def test_split_negative_rejected(fake_export, fake_export_b):
         ],
     )
     assert result.exit_code == 1
-    assert "split_a_percent" in result.stdout
+    assert "split_a_percent" in result.output
 
 
 def test_split_over_hundred_rejected(fake_export, fake_export_b):
@@ -123,7 +124,7 @@ def test_split_over_hundred_rejected(fake_export, fake_export_b):
         ],
     )
     assert result.exit_code == 1
-    assert "split_a_percent" in result.stdout
+    assert "split_a_percent" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +142,8 @@ def test_missing_policy_a_path_rejected(fake_export, fake_export_b, tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert "--policy-a" in result.stdout
-    assert "not found" in result.stdout
+    assert "--policy-a" in result.output
+    assert "not found" in result.output
 
 
 def test_missing_policy_b_path_rejected(fake_export, fake_export_b, tmp_path):
@@ -155,38 +156,39 @@ def test_missing_policy_b_path_rejected(fake_export, fake_export_b, tmp_path):
         ],
     )
     assert result.exit_code == 1
-    assert "--policy-b" in result.stdout
-    assert "not found" in result.stdout
+    assert "--policy-b" in result.output
+    assert "not found" in result.output
 
 
 # ---------------------------------------------------------------------------
-# Shadow flag (Phase 1.5; shipped inert)
+# Shadow flag
 # ---------------------------------------------------------------------------
 
 
-def test_shadow_policy_logs_phase15_warning(fake_export, tmp_path, monkeypatch):
-    """--shadow-policy is accepted in single-policy mode but logs a 'shipped
-    inert' warning. Skipping actual server-load (would need full deps)."""
+def test_shadow_policy_surfaces_active_banner(fake_export, tmp_path, monkeypatch):
+    """--shadow-policy is accepted in single-policy mode and surfaces the
+    active shadow-rollout banner before handing off to uvicorn."""
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    # Force the server-load path to fail fast so we just observe the
-    # validation + banner output. Patch ReflexServer.load to raise.
-
-    def _fake_load(self):
-        raise SystemExit(0)  # short-circuit before real model load
-
-    monkeypatch.setattr(
-        "reflex.runtime.server.ReflexServer.load", _fake_load,
+    (shadow / "model.onnx").write_bytes(b"fake")
+    (shadow / "tether_config.json").write_text("{}")
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"]),
     )
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)
     result = runner.invoke(
         app, [
             "serve", str(fake_export),
+            "--device", "cpu",
             "--shadow-policy", str(shadow),
         ],
     )
-    # The warning text should appear before SystemExit takes us out
-    assert "shadow-policy" in result.stdout.lower()
-    assert "phase 1.5" in result.stdout.lower() or "inert" in result.stdout.lower()
+    assert result.exit_code == 0, result.output
+    assert "shadow-policy" in result.output.lower()
+    assert "shadow rollout active" in result.output.lower()
+    assert "not sent to the robot" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -198,13 +200,13 @@ def test_2policy_valid_combo_surfaces_active_banner(fake_export, fake_export_b, 
     """--policy-a + --policy-b + --no-rtc + --split=50 -> validation passes,
     surfaces the '2-policy mode active' banner, then proceeds to load.
     Per ADR Day 9-10 integration: full 2-policy serving is now wired
-    via setup_two_policy_serving + create_app. ReflexServer.load is
+    via setup_two_policy_serving + create_app. TetherServer.load is
     stubbed to short-circuit before the actual model load."""
     def _fake_load(self):
         raise SystemExit(0)
 
     monkeypatch.setattr(
-        "reflex.runtime.server.ReflexServer.load", _fake_load,
+        "tether.runtime.server.TetherServer.load", _fake_load,
     )
     result = runner.invoke(
         app, [
@@ -215,5 +217,5 @@ def test_2policy_valid_combo_surfaces_active_banner(fake_export, fake_export_b, 
             "--no-rtc",
         ],
     )
-    assert "2-policy mode active" in result.stdout
-    assert "--no-rtc enforced" in result.stdout
+    assert "2-policy mode active" in result.output
+    assert "--no-rtc enforced" in result.output

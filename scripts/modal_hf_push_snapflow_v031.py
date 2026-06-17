@@ -17,7 +17,7 @@ Usage:
 import os
 import modal
 
-app = modal.App("reflex-hf-push-snapflow-v031")
+app = modal.App("tether-hf-push-snapflow-v031")
 
 image = modal.Image.debian_slim(python_version="3.12").pip_install(
     "huggingface_hub>=0.26",
@@ -71,11 +71,11 @@ Net: **+3.4 percentage points over teacher at ~10× fewer denoising steps.**
 - 10k training steps on Modal A100-80GB, batch=4, bf16
 - No reward signal; pure self-distillation from the teacher's flow
 
-Full reproduction via [Reflex VLA](https://github.com/FastCrest/reflex-vla):
+Full reproduction via [Tether VLA](https://github.com/FastCrest/tether):
 
 ```bash
-pip install reflex-vla
-reflex distill \\
+pip install fastcrest-tether
+tether distill \\
     --teacher lerobot/pi05_libero_finetuned_v044 \\
     --steps 10000 \\
     --batch 4
@@ -83,14 +83,14 @@ reflex distill \\
 
 ## Inference
 
-This checkpoint is the LeRobot PyTorch policy. For deployment, use Reflex's
+This checkpoint is the LeRobot PyTorch policy. For deployment, use Tether's
 decomposed pi0.5 runtime which runs the VLM prefix once per chunk + the
 expert denoise N times — measured **9.79× theoretical speedup** over
 monolithic ONNX (89.8% VLM compute share, 2026-04-23 microbench on A100-80GB).
 
 ```bash
-reflex export <local-checkpoint> --decomposed
-reflex serve <export-dir>
+tether export <local-checkpoint> --decomposed
+tether serve <export-dir>
 ```
 
 Latency on A100-80GB (measured 2026-04-23):
@@ -122,12 +122,12 @@ the work of the paper authors (arxiv 2604.05656).
 }
 ```
 
-If you use this checkpoint or the Reflex deployment toolchain, please cite both the
-SnapFlow paper and link to https://github.com/FastCrest/reflex-vla.
+If you use this checkpoint or the Tether deployment toolchain, please cite both the
+SnapFlow paper and link to https://github.com/FastCrest/tether.
 
-## Reflex
+## Tether
 
-[Reflex VLA](https://github.com/FastCrest/reflex-vla) is the open-source deployment
+[Tether VLA](https://github.com/FastCrest/tether) is the open-source deployment
 toolchain that produced this checkpoint and runs it ~9× faster on cheap edge hardware
 via decomposed VLM/expert ONNX export. Cross-family support: pi0, pi0.5, SmolVLA, GR00T,
 OpenVLA in one binary.

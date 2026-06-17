@@ -11,8 +11,8 @@ import time
 import numpy as np
 import pytest
 
-from reflex.runtime.buffer import ActionChunkBuffer
-from reflex.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
+from tether.runtime.buffer import ActionChunkBuffer
+from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ class TestPredictChunkWithRtc:
     def test_execution_horizon_passed_when_enabled(self):
         """When config.enabled is True, execution_horizon is in the kwargs."""
         # Skip if lerobot not installed (enabled=True triggers RTCProcessor construction)
-        from reflex.runtime.rtc_adapter import _RTC_AVAILABLE
+        from tether.runtime.rtc_adapter import _RTC_AVAILABLE
         if not _RTC_AVAILABLE:
             pytest.skip("lerobot not installed")
         policy = _RtcAwarePolicy()

@@ -1,4 +1,4 @@
-"""Tests for src/reflex/curate/uploader.py — episode filter + queue management."""
+"""Tests for src/tether/curate/uploader.py — episode filter + queue management."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from reflex.curate.uploader import (
+from tether.curate.uploader import (
     MAX_ACTION_Z_SCORE,
     MAX_DUP_IMAGE_HASH_FRAC,
     MAX_ZERO_ACTION_FRAC,
@@ -194,7 +194,7 @@ def test_run_once_live_mode_raises_stub_for_now(tmp_path: Path) -> None:
 
 
 def test_kill_switch_skips_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("REFLEX_NO_CONTRIB_UPLOAD", "1")
+    monkeypatch.setenv("TETHER_NO_CONTRIB_UPLOAD", "1")
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
     (queue_dir / "x.jsonl").write_text(json.dumps(_mk_row()) + "\n")

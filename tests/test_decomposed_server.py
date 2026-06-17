@@ -1,8 +1,8 @@
-"""Tests for src/reflex/runtime/decomposed_server.py — Pi05DecomposedServer
+"""Tests for src/tether/runtime/decomposed_server.py — Pi05DecomposedServer
 wrapper that closes the B.4/B.5 measurement gap.
 
-Per ADR 2026-04-25-decomposed-dispatch-via-reflex-serve: the wrapper
-exposes the ReflexServer interface (predict_from_base64_async,
+Per ADR 2026-04-25-decomposed-dispatch-via-tether-serve: the wrapper
+exposes the TetherServer interface (predict_from_base64_async,
 run_batch, _action_guard, etc.) so decomposed exports can serve through
 create_app + the existing /act handler + all wedges.
 
@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from reflex.runtime.decomposed_server import (
+from tether.runtime.decomposed_server import (
     DEFAULT_CAMERA_RESOLUTION,
     DEFAULT_LANG_SEQ_LEN,
     DEFAULT_MAX_ACTION_DIM,
@@ -46,7 +46,7 @@ def _make_export_dir(
     action_dim: int = 7,
     chunk_size: int = 50,
 ) -> Path:
-    """Build a minimal export dir with a reflex_config.json."""
+    """Build a minimal export dir with a tether_config.json."""
     p = tmp_path / "export"
     p.mkdir()
     config = {
@@ -68,7 +68,7 @@ def _make_export_dir(
             "max_action_dim": 32,
         },
     }
-    (p / "reflex_config.json").write_text(json.dumps(config))
+    (p / "tether_config.json").write_text(json.dumps(config))
     return p
 
 
@@ -123,14 +123,14 @@ def test_load_rejects_missing_config(tmp_path):
     p = tmp_path / "no-config"
     p.mkdir()
     server = Pi05DecomposedServer(p)
-    with pytest.raises(FileNotFoundError, match="reflex_config.json"):
+    with pytest.raises(FileNotFoundError, match="tether_config.json"):
         server.load()
 
 
 def test_load_rejects_wrong_export_kind(tmp_path, monkeypatch):
     p = _make_export_dir(tmp_path, export_kind="monolithic")
     monkeypatch.setattr(
-        "reflex.runtime.pi05_decomposed_server.Pi05DecomposedInference",
+        "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
         _StubInference,
     )
     server = Pi05DecomposedServer(p)
@@ -141,7 +141,7 @@ def test_load_rejects_wrong_export_kind(tmp_path, monkeypatch):
 def test_load_succeeds_with_valid_config(tmp_path, monkeypatch):
     p = _make_export_dir(tmp_path)
     monkeypatch.setattr(
-        "reflex.runtime.pi05_decomposed_server.Pi05DecomposedInference",
+        "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
         _StubInference,
     )
     server = Pi05DecomposedServer(p)
@@ -156,7 +156,7 @@ def test_load_succeeds_with_valid_config(tmp_path, monkeypatch):
 def test_load_reads_action_dim_from_config(tmp_path, monkeypatch):
     p = _make_export_dir(tmp_path, action_dim=14)
     monkeypatch.setattr(
-        "reflex.runtime.pi05_decomposed_server.Pi05DecomposedInference",
+        "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
         _StubInference,
     )
     server = Pi05DecomposedServer(p)
@@ -173,7 +173,7 @@ def _build_loaded_server(tmp_path, monkeypatch) -> Pi05DecomposedServer:
     p = _make_export_dir(tmp_path)
     stub = _StubInference()
     monkeypatch.setattr(
-        "reflex.runtime.pi05_decomposed_server.Pi05DecomposedInference",
+        "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
         lambda **kwargs: stub,
     )
     server = Pi05DecomposedServer(p)
@@ -331,7 +331,7 @@ def test_inference_mode_cuda_after_load(tmp_path, monkeypatch):
 def test_inference_mode_cpu_after_load(tmp_path, monkeypatch):
     p = _make_export_dir(tmp_path)
     monkeypatch.setattr(
-        "reflex.runtime.pi05_decomposed_server.Pi05DecomposedInference",
+        "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
         _StubInference,
     )
     server = Pi05DecomposedServer(p, device="cpu")

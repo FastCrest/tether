@@ -1,7 +1,7 @@
 name: Doctor regression smoke
 
 # Builds the wheel from src, installs it in a fresh venv on Linux + macOS,
-# runs `reflex doctor`, asserts it exits 0 + emits the expected platform-
+# runs `tether doctor`, asserts it exits 0 + emits the expected platform-
 # specific check signals. Catches install-chain regressions like the v0.7.0
 # LD_LIBRARY_PATH bug where the doctor would crash silently — caught by Modal
 # A10G validation only because of an explicit hardware-matrix fire ($4 of Modal
@@ -18,9 +18,9 @@ name: Doctor regression smoke
 # What this validates:
 # - Wheel builds cleanly via pyproject-build (catches hatchling metadata regressions)
 # - Wheel installs cleanly into a fresh Python via pip (catches dependency-resolution issues)
-# - `reflex --version` prints the version from pyproject.toml (catches stale __version__)
-# - `reflex doctor` exits 0 (catches doctor crashes — the v0.7.0 bug type)
-# - `reflex doctor` emits the expected version line + warning shape per platform
+# - `tether --version` prints the version from pyproject.toml (catches stale __version__)
+# - `tether doctor` exits 0 (catches doctor crashes — the v0.7.0 bug type)
+# - `tether doctor` emits the expected version line + warning shape per platform
 #   (sanity check that the doctor table renders without Rich markup eating brackets)
 
 on:
@@ -77,39 +77,39 @@ jobs:
       - name: Install wheel in fresh venv (base extras only)
         shell: bash
         run: |
-          python -m venv /tmp/reflex-doctor-venv
-          /tmp/reflex-doctor-venv/bin/python -m pip install --upgrade pip
+          python -m venv /tmp/tether-doctor-venv
+          /tmp/tether-doctor-venv/bin/python -m pip install --upgrade pip
           # Install with [onnx] extra — minimal serve dependency surface that
           # exercises the LD_LIBRARY_PATH patch path without pulling tensorrt
           # (which has no Mac wheel and is huge on Linux). Doctor should still
           # exit 0 with TRT libs ⚠ NOT installed warnings.
-          /tmp/reflex-doctor-venv/bin/python -m pip install "$(ls dist/reflex_vla-*.whl)[onnx]"
+          /tmp/tether-doctor-venv/bin/python -m pip install "$(ls dist/fastcrest_tether-*.whl)[onnx]"
 
-      - name: Verify reflex --version matches pyproject.toml
+      - name: Verify tether --version matches pyproject.toml
         shell: bash
         run: |
-          REPORTED=$(/tmp/reflex-doctor-venv/bin/reflex --version 2>&1 | tr -d '[:space:]')
+          REPORTED=$(/tmp/tether-doctor-venv/bin/tether --version 2>&1 | tr -d '[:space:]')
           EXPECTED=${{ steps.version.outputs.expected }}
           echo "Reported: $REPORTED"
           echo "Expected: $EXPECTED"
-          # Tolerate "reflex 0.7.1" or just "0.7.1" — match the version digits
+          # Tolerate "tether 0.7.1" or just "0.7.1" — match the version digits
           if ! echo "$REPORTED" | grep -qF "$EXPECTED"; then
-            echo "FAIL: reflex --version output does not contain $EXPECTED"
+            echo "FAIL: tether --version output does not contain $EXPECTED"
             exit 1
           fi
           echo "PASS: --version output contains expected version"
 
-      - name: Run reflex doctor (must exit 0)
+      - name: Run tether doctor (must exit 0)
         shell: bash
         run: |
-          /tmp/reflex-doctor-venv/bin/reflex doctor 2>&1 | tee /tmp/doctor.log
+          /tmp/tether-doctor-venv/bin/tether doctor 2>&1 | tee /tmp/doctor.log
           DOCTOR_EXIT=${PIPESTATUS[0]}
           echo "EXIT: $DOCTOR_EXIT"
           if [ "$DOCTOR_EXIT" -ne 0 ]; then
-            echo "FAIL: reflex doctor exited $DOCTOR_EXIT (expected 0)"
+            echo "FAIL: tether doctor exited $DOCTOR_EXIT (expected 0)"
             exit 1
           fi
-          echo "PASS: reflex doctor exited 0"
+          echo "PASS: tether doctor exited 0"
 
       - name: Assert doctor table rendered + version line present
         shell: bash
@@ -117,9 +117,9 @@ jobs:
           # Sanity: doctor should mention the package + the version. Catches
           # Rich-markup regressions where bracketed text ([serve,gpu]) gets
           # eaten by the parser (the v0.7.0 doctor bug).
-          if ! grep -qE "reflex-vla.*${{ steps.version.outputs.expected }}" /tmp/doctor.log; then
-            echo "FAIL: doctor output missing 'reflex-vla' version line for ${{ steps.version.outputs.expected }}"
-            grep -i "reflex-vla" /tmp/doctor.log || true
+          if ! grep -qE "tether.*${{ steps.version.outputs.expected }}" /tmp/doctor.log; then
+            echo "FAIL: doctor output missing 'tether' version line for ${{ steps.version.outputs.expected }}"
+            grep -i "tether" /tmp/doctor.log || true
             exit 1
           fi
           # Doctor should always render the table header + Python version row

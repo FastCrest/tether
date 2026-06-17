@@ -1,9 +1,9 @@
 """Test that the README quickstart install path actually works on a fresh box.
 
 Spins up a clean Linux container, runs the EXACT command from README:
-  pip install 'reflex-vla[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla'
-  reflex export lerobot/smolvla_base --target desktop --output ./sv
-  reflex serve ./sv --port 8000 --device cuda
+  pip install 'fastcrest-tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether'
+  tether export lerobot/smolvla_base --target desktop --output ./sv
+  tether serve ./sv --port 8000 --device cuda
   curl -X POST http://localhost:8000/act ...
 
 Validates the entire user journey from `pip install` to first action.
@@ -15,9 +15,9 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-install-path-verify")
+app = modal.App("tether-install-path-verify")
 
-# CLEAN base image — no Reflex preinstalled, just python + git.
+# CLEAN base image — no Tether preinstalled, just python + git.
 # We're testing what a real user gets when they run the README pip command.
 image = (
     modal.Image.from_registry(
@@ -25,7 +25,7 @@ image = (
         add_python="3.12",
     )
     .apt_install("git", "curl")
-    # NOTE: we do NOT pre-install reflex-vla. Test simulates a fresh box.
+    # NOTE: we do NOT pre-install tether. Test simulates a fresh box.
 )
 
 
@@ -61,21 +61,21 @@ def test_fresh_install():
 
     # Step 1: pip install with the EXACT README command
     step(
-        "1. pip install reflex-vla[serve,gpu] from git",
-        "pip install 'reflex-vla[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla'",
+        "1. pip install fastcrest-tether[serve,gpu] from git",
+        "pip install 'fastcrest-tether[serve,gpu] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether'",
         timeout=600,
     )
 
-    # Step 2: reflex --help
-    step("2. reflex --help", ["reflex", "--help"], timeout=30)
+    # Step 2: tether --help
+    step("2. tether --help", ["tether", "--help"], timeout=30)
 
-    # Step 3: reflex models
-    step("3. reflex models", ["reflex", "models"], timeout=30)
+    # Step 3: tether models
+    step("3. tether models", ["tether", "models"], timeout=30)
 
-    # Step 4: reflex export smolvla (smallest model for fastest test)
+    # Step 4: tether export smolvla (smallest model for fastest test)
     step(
-        "4. reflex export lerobot/smolvla_base",
-        ["reflex", "export", "lerobot/smolvla_base", "--target", "desktop",
+        "4. tether export lerobot/smolvla_base",
+        ["tether", "export", "lerobot/smolvla_base", "--target", "desktop",
          "--output", "/tmp/sv"],
         timeout=600,
     )
@@ -85,7 +85,7 @@ def test_fresh_install():
     files = os.listdir("/tmp/sv") if os.path.exists("/tmp/sv") else []
     results.append({
         "step": "5. export contents",
-        "passed": "expert_stack.onnx" in files and "reflex_config.json" in files,
+        "passed": "expert_stack.onnx" in files and "tether_config.json" in files,
         "elapsed_s": 0,
         "exit_code": 0,
         "stdout_tail": f"files: {files}",
@@ -94,11 +94,11 @@ def test_fresh_install():
     print(f"\n--- 5. verify export contents ---", flush=True)
     print(f"  files: {files}", flush=True)
 
-    # Step 6: reflex serve in background, wait for /health, POST /act
-    print(f"\n--- 6. reflex serve + POST /act ---", flush=True)
+    # Step 6: tether serve in background, wait for /health, POST /act
+    print(f"\n--- 6. tether serve + POST /act ---", flush=True)
     serve_log = open("/tmp/serve.log", "wb")
     serve = subprocess.Popen(
-        ["reflex", "serve", "/tmp/sv", "--port", "8765",
+        ["tether", "serve", "/tmp/sv", "--port", "8765",
          "--host", "127.0.0.1", "--device", "cuda"],
         stdout=serve_log, stderr=subprocess.STDOUT,
     )

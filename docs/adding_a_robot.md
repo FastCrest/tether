@@ -1,8 +1,10 @@
 # Adding a Robot — Embodiment Cookbook
 
-Step-by-step guide to adding a new robot (arm, drone, or other manipulator) to Reflex VLA. Reflex ships four shipped presets out of the box (`franka`, `so100`, `ur5`, `quadcopter`); this guide shows how to add a fifth.
+> Sibling cookbook: [`adding_a_vla.md`](./adding_a_vla.md) — for adding a new VLA model on the BaseVLA spine.
 
-The full schema lives at [`src/reflex/embodiments/schema.json`](../src/reflex/embodiments/schema.json) — that file is authoritative, this doc is a friendly walkthrough. The two examples below have been validated against the live schema at PR time so they parse without modification.
+Step-by-step guide to adding a new robot (arm, drone, or other manipulator) to Tether. Tether ships four shipped presets out of the box (`franka`, `so100`, `ur5`, `quadcopter`); this guide shows how to add a fifth.
+
+The full schema lives at [`src/tether/embodiments/schema.json`](../src/tether/embodiments/schema.json) — that file is authoritative, this doc is a friendly walkthrough. The two examples below have been validated against the live schema at PR time so they parse without modification.
 
 ---
 
@@ -11,9 +13,9 @@ The full schema lives at [`src/reflex/embodiments/schema.json`](../src/reflex/em
 Adding a new robot is 4 steps:
 
 1. **Create the JSON config** — declare action space, normalization, control rates, safety constraints.
-2. **Place it in the presets directory** — `src/reflex/embodiments/presets/<slug>.json`.
-3. **Add the slug to the schema enum** — `src/reflex/embodiments/schema.json` `embodiment.enum`.
-4. **Validate** — run the test suite + `reflex doctor` + `reflex go --dry-run`.
+2. **Place it in the presets directory** — `src/tether/embodiments/presets/<slug>.json`.
+3. **Add the slug to the schema enum** — `src/tether/embodiments/schema.json` `embodiment.enum`.
+4. **Validate** — run the test suite + `tether doctor` + `tether go --dry-run`.
 
 Two worked examples below: **MyArm-6** (6-DOF arm with gripper) and **SkyScout** (quadcopter delivery drone with payload release).
 
@@ -27,7 +29,7 @@ The schema has eight top-level fields. Three of them (`gripper`, `payload_releas
 
 Imagine a 6-axis robotic arm with a parallel-jaw gripper as the 7th component. Action space is joint positions in radians; the gripper component is normalized [0, 1].
 
-Save to `src/reflex/embodiments/presets/myarm6.json`:
+Save to `src/tether/embodiments/presets/myarm6.json`:
 
 ```json
 {
@@ -90,7 +92,7 @@ Field-by-field notes:
 
 A 5-DOF drone with body-rate control + thrust + payload release. No gripper. State is 10-DOF (position + orientation quaternion + linear velocity — matches `nav_msgs/Odometry`).
 
-Save to `src/reflex/embodiments/presets/skyscout.json`:
+Save to `src/tether/embodiments/presets/skyscout.json`:
 
 ```json
 {
@@ -149,17 +151,17 @@ Note for the drone:
 - **No `gripper` block.** Drones omit it. The cross-field validator only checks `gripper.component_idx` when the block is present.
 - **No `max_gripper_velocity`** in `constraints`. Optional — required only when a `gripper` block is also present (enforced by the cross-field validator with the `gripper-missing-velocity-cap` slug).
 - **`payload_release.component_idx = 4`** maps the 5th action component (zero-indexed) to the payload trigger.
-- **10-DOF state** matches `nav_msgs/Odometry` (position 3 + orientation quaternion xyzw 4 + linear velocity 3). Pair with `reflex ros2-serve --state-msg-type odom --state-topic /mavros/local_position/odom` at deployment.
+- **10-DOF state** matches `nav_msgs/Odometry` (position 3 + orientation quaternion xyzw 4 + linear velocity 3). Pair with `tether ros2-serve --state-msg-type odom --state-topic /mavros/local_position/odom` at deployment.
 
 ---
 
 ## Step 2: Place it in the presets directory
 
-The canonical location is **`src/reflex/embodiments/presets/<slug>.json`**. The package's `load_preset()` reads from there; everything else is dev fallback.
+The canonical location is **`src/tether/embodiments/presets/<slug>.json`**. The package's `load_preset()` reads from there; everything else is dev fallback.
 
 ```bash
 # Move your config in
-mv myarm6.json src/reflex/embodiments/presets/myarm6.json
+mv myarm6.json src/tether/embodiments/presets/myarm6.json
 ```
 
 The file name (minus `.json`) must match the `"embodiment"` field inside the JSON. The loader uses the filename as the slug.
@@ -168,7 +170,7 @@ The file name (minus `.json`) must match the `"embodiment"` field inside the JSO
 
 ## Step 3: Add the slug to the schema enum
 
-Edit [`src/reflex/embodiments/schema.json`](../src/reflex/embodiments/schema.json) and add your new slug to the `embodiment.enum` array:
+Edit [`src/tether/embodiments/schema.json`](../src/tether/embodiments/schema.json) and add your new slug to the `embodiment.enum` array:
 
 ```json
 "embodiment": {
@@ -189,8 +191,8 @@ Three things to verify, in order:
 ### a. Validate the JSON programmatically
 
 ```python
-from reflex.embodiments import EmbodimentConfig
-from reflex.embodiments.validate import validate_embodiment_config
+from tether.embodiments import EmbodimentConfig
+from tether.embodiments.validate import validate_embodiment_config
 
 cfg = EmbodimentConfig.load_preset("myarm6")
 ok, errors = validate_embodiment_config(cfg)
@@ -215,10 +217,10 @@ Add a `test_<slug>_specifics` test if your embodiment has invariants worth pinni
 
 ```bash
 # Verify the embodiment loads + the preset table sees it
-reflex doctor
+tether doctor
 
 # Dry-run a deploy without pulling weights
-reflex go --model smolvla-base --embodiment myarm6 --dry-run
+tether go --model smolvla-base --embodiment myarm6 --dry-run
 ```
 
 ---
@@ -229,8 +231,8 @@ A one-liner that catches the most common schema mistake (using wrong field names
 
 ```bash
 python -c "
-from reflex.embodiments import EmbodimentConfig
-from reflex.embodiments.validate import validate_embodiment_config
+from tether.embodiments import EmbodimentConfig
+from tether.embodiments.validate import validate_embodiment_config
 cfg = EmbodimentConfig.load_preset('myarm6')
 ok, errs = validate_embodiment_config(cfg)
 blocking = [e for e in errs if e['severity']=='error']
@@ -273,11 +275,11 @@ These align with the FastCrest customer vertical research base. Numbers are star
 - **State source:** `nav_msgs/Odometry` from `/mavros/local_position/odom` (full 10-DOF state — pos + quat + linear velocity)
 - **Hardware tier:** Jetson Orin Nano (companion computer)
 - **Reference preset:** `quadcopter.json`
-- **Deploy:** `reflex ros2-serve <export> --state-msg-type odom --state-topic /mavros/local_position/odom --rate-hz 50`
+- **Deploy:** `tether ros2-serve <export> --state-msg-type odom --state-topic /mavros/local_position/odom --rate-hz 50`
 
 ### Smart-camera deployment (camera-only inference)
 
-- **Action space:** typically 0-DOF (pure perception) — Reflex serves classification + bounding boxes via `/act` with whatever output channels the model produces
+- **Action space:** typically 0-DOF (pure perception) — Tether serves classification + bounding boxes via `/act` with whatever output channels the model produces
 - **Control rate:** 10-15 Hz (frame-rate bound)
 - **Camera setup:** Fixed or PTZ
 - **Hardware tier:** Jetson Orin Nano / Xavier NX
@@ -295,18 +297,18 @@ Before opening a PR adding a new embodiment:
 - [ ] `mean_state` and `std_state` have equal length (each other's length, not action_dim)
 - [ ] If `gripper` is present, `gripper.component_idx` is in `[0, action_dim)` AND `constraints.max_gripper_velocity` is present
 - [ ] If `payload_release` is present, `payload_release.component_idx` is in `[0, action_dim)`
-- [ ] Config placed at `src/reflex/embodiments/presets/<slug>.json` only (no duplicate in `configs/embodiments/`)
-- [ ] If the slug is new, it's added to `embodiment.enum` in `src/reflex/embodiments/schema.json`
+- [ ] Config placed at `src/tether/embodiments/presets/<slug>.json` only (no duplicate in `configs/embodiments/`)
+- [ ] If the slug is new, it's added to `embodiment.enum` in `src/tether/embodiments/schema.json`
 - [ ] `pytest tests/test_embodiments.py` passes
-- [ ] `reflex doctor` reports the new preset as available
-- [ ] `reflex go --embodiment <slug> --dry-run` resolves cleanly
+- [ ] `tether doctor` reports the new preset as available
+- [ ] `tether go --embodiment <slug> --dry-run` resolves cleanly
 
 ---
 
 ## See also
 
 - [`docs/embodiment_schema.md`](./embodiment_schema.md) — full field-by-field schema reference
-- [`docs/cli_reference.md`](./cli_reference.md) — every reflex command and its flags
+- [`docs/cli_reference.md`](./cli_reference.md) — every tether command and its flags
 - [`docs/getting_started.md`](./getting_started.md) — step-by-step first deploy
-- [`src/reflex/embodiments/schema.json`](../src/reflex/embodiments/schema.json) — authoritative JSON schema
-- [`src/reflex/embodiments/presets/`](../src/reflex/embodiments/presets/) — four shipped presets as living examples
+- [`src/tether/embodiments/schema.json`](../src/tether/embodiments/schema.json) — authoritative JSON schema
+- [`src/tether/embodiments/presets/`](../src/tether/embodiments/presets/) — four shipped presets as living examples

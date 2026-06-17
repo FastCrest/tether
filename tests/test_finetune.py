@@ -1,4 +1,4 @@
-"""Tests for reflex.finetune — the v0.3 MVP surface.
+"""Tests for tether.finetune — the v0.3 MVP surface.
 
 v0.3 scope: SmolVLA LoRA wrapper over lerobot-train + auto-export. These
 tests don't actually run lerobot-train (requires GPU + HF dataset
@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from reflex.finetune import FinetuneConfig, FinetuneResult, run_finetune
-from reflex.finetune.run import (
+from tether.finetune import FinetuneConfig, FinetuneResult, run_finetune
+from tether.finetune.run import (
     _build_lerobot_command,
     _locate_checkpoint,
     _validate_config,
@@ -138,14 +138,14 @@ class TestLerobotCommandBuild:
         assert "--precision=" not in joined
 
     def test_policy_type_inference(self):
-        from reflex.finetune.run import _infer_policy_type
+        from tether.finetune.run import _infer_policy_type
         assert _infer_policy_type("lerobot/smolvla_base") == "smolvla"
         assert _infer_policy_type("lerobot/pi0_base") == "pi0"
         assert _infer_policy_type("lerobot/pi05_base") == "pi05"
         assert _infer_policy_type("nvidia/GR00T-N1.6-3B") == "gr00t_n1_5"
 
     def test_policy_type_unknown_rejected(self):
-        from reflex.finetune.run import _infer_policy_type
+        from tether.finetune.run import _infer_policy_type
         with pytest.raises(ValueError, match="Could not infer"):
             _infer_policy_type("some-random/unknown-model")
 
@@ -199,7 +199,7 @@ class TestRunFinetuneOrchestration:
     """
 
     def _setup_fake_checkpoint(self, output_dir: Path, step: int = 1000) -> Path:
-        # Match the new layout: reflex root / training / checkpoints / <step> / ...
+        # Match the new layout: tether root / training / checkpoints / <step> / ...
         d = output_dir / "training" / "checkpoints" / str(step) / "pretrained_model"
         d.mkdir(parents=True)
         (d / "model.safetensors").write_bytes(b"\x00")
@@ -219,7 +219,7 @@ class TestRunFinetuneOrchestration:
     def test_config_failure_aborts(self, tmp_path):
         """Invalid config → aborted status, no subprocess launched."""
         cfg = self._cfg(tmp_path, base="")  # missing base
-        with patch("reflex.finetune.run._run_lerobot_training") as mock_train:
+        with patch("tether.finetune.run._run_lerobot_training") as mock_train:
             result = run_finetune(cfg)
         assert result.status == "aborted"
         mock_train.assert_not_called()
@@ -227,7 +227,7 @@ class TestRunFinetuneOrchestration:
 
     def test_training_failure_surfaces_rc(self, tmp_path):
         cfg = self._cfg(tmp_path)
-        with patch("reflex.finetune.run._run_lerobot_training", return_value=42):
+        with patch("tether.finetune.run._run_lerobot_training", return_value=42):
             result = run_finetune(cfg)
         assert result.status == "training_failed"
         assert "exited with code 42" in (result.error or "")
@@ -242,9 +242,9 @@ class TestRunFinetuneOrchestration:
             ckpt = self._setup_fake_checkpoint(cfg.output, step=1000)
             return 0
 
-        with patch("reflex.finetune.run._run_lerobot_training", side_effect=_fake_train), \
+        with patch("tether.finetune.run._run_lerobot_training", side_effect=_fake_train), \
              patch(
-                 "reflex.finetune.run._auto_export",
+                 "tether.finetune.run._auto_export",
                  return_value=(tmp_path / "export" / "model.onnx", None),
              ):
             result = run_finetune(cfg)
@@ -259,7 +259,7 @@ class TestRunFinetuneOrchestration:
         """If lerobot-train exits 0 but produces no checkpoint, that's a
         bug we want to surface — not report success."""
         cfg = self._cfg(tmp_path)
-        with patch("reflex.finetune.run._run_lerobot_training", return_value=0):
+        with patch("tether.finetune.run._run_lerobot_training", return_value=0):
             result = run_finetune(cfg)
         assert result.status == "training_failed"
         assert "no checkpoint found" in (result.error or "")
@@ -271,9 +271,9 @@ class TestRunFinetuneOrchestration:
             self._setup_fake_checkpoint(cfg.output)
             return 0
 
-        with patch("reflex.finetune.run._run_lerobot_training", side_effect=_fake_train), \
+        with patch("tether.finetune.run._run_lerobot_training", side_effect=_fake_train), \
              patch(
-                 "reflex.finetune.run._auto_export",
+                 "tether.finetune.run._auto_export",
                  return_value=(None, "torch.onnx.export raised: OOM"),
              ):
             result = run_finetune(cfg)
@@ -288,8 +288,8 @@ class TestRunFinetuneOrchestration:
             return 0
 
         auto_export_mock = MagicMock()
-        with patch("reflex.finetune.run._run_lerobot_training", side_effect=_fake_train), \
-             patch("reflex.finetune.run._auto_export", auto_export_mock):
+        with patch("tether.finetune.run._run_lerobot_training", side_effect=_fake_train), \
+             patch("tether.finetune.run._auto_export", auto_export_mock):
             result = run_finetune(cfg)
 
         assert result.status == "ok"
@@ -298,15 +298,15 @@ class TestRunFinetuneOrchestration:
 
 
 class TestCliWiring:
-    """The `reflex finetune` subcommand should be registered on the main
+    """The `tether finetune` subcommand should be registered on the main
     typer app and showable via --help without a functional lerobot install."""
 
     def test_finetune_help_works(self):
         from typer.testing import CliRunner
-        from reflex.cli import app as cli_app
+        from tether.cli import app as cli_app
         runner = CliRunner()
         result = runner.invoke(cli_app, ["finetune", "--help"])
         assert result.exit_code == 0
-        assert "base" in result.stdout.lower()
-        assert "dataset" in result.stdout.lower()
-        assert "output" in result.stdout.lower()
+        assert "base" in result.output.lower()
+        assert "dataset" in result.output.lower()
+        assert "output" in result.output.lower()

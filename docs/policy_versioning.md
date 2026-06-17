@@ -1,18 +1,18 @@
 # Policy versioning (2-policy A/B serve mode)
 
-`reflex serve --policy-a ./v1/ --policy-b ./v2/ --split 80 --no-rtc` loads two policies side-by-side and routes /act traffic deterministically per-episode. 80% of episodes go to A, 20% to B. Sticky-per-episode (router uses SHA-256 hash of `episode_id`), so cache locality + RTC carry-over (when applicable) is preserved within an episode.
+`tether serve --policy-a ./v1/ --policy-b ./v2/ --split 80 --no-rtc` loads two policies side-by-side and routes /act traffic deterministically per-episode. 80% of episodes go to A, 20% to B. Sticky-per-episode (router uses SHA-256 hash of `episode_id`), so cache locality + RTC carry-over (when applicable) is preserved within an episode.
 
 Per ADR `2026-04-25-policy-versioning-architecture`. Phase 1 ships the substrate (router + crash tracker + record-replay schema + Prometheus labels). Full 2-instance load wires in a follow-up; this doc shows what's available today + what lands when.
 
 ## Quick start
 
 ```bash
-# 1. Verify both policies pass `reflex doctor` first
-reflex doctor ./v1/
-reflex doctor ./v2/
+# 1. Verify both policies pass `tether doctor` first
+tether doctor ./v1/
+tether doctor ./v2/
 
 # 2. Start 2-policy serve (80/20 split, RTC off)
-reflex serve ./v1/ \
+tether serve ./v1/ \
     --policy-a ./v1/ \
     --policy-b ./v2/ \
     --split 80 \
@@ -23,8 +23,8 @@ curl -X POST http://localhost:8000/act \
     -H "Content-Type: application/json" \
     -d '{"episode_id": "ep_xyz", "image": "...", "instruction": "pick up the cup"}'
 # Response headers:
-#   X-Reflex-Policy-Slot: a
-#   X-Reflex-Model-Version: pi0-libero-v1@<hash>
+#   X-Tether-Policy-Slot: a
+#   X-Tether-Model-Version: pi0-libero-v1@<hash>
 ```
 
 ## Why this exists
@@ -41,7 +41,9 @@ Three load-bearing customer signals:
 | `--policy-a <path>` | (unset) | 2-policy mode: path to policy A export. Must be set together with `--policy-b`. |
 | `--policy-b <path>` | (unset) | 2-policy mode: path to policy B export. Mutually exclusive with `--shadow-policy`. |
 | `--split <int>` | `50` | Percent of episodes routed to A. `0` = all to B; `100` = all to A (shadow-staging). |
-| `--shadow-policy <path>` | (unset) | Phase 1.5 — shadow inference. Phase 1 ships INERT (warning only). |
+| `--shadow-policy <path>` | (unset) | Shadow inference: mirror sampled traffic to a candidate export and append `shadow_result` evidence. |
+| `--shadow-sample <float>` | `1.0` | Fraction of `/act` requests mirrored to `--shadow-policy` in `[0, 1]`. |
+| `--shadow-queue-size <int>` | `32` | Bounded background shadow queue. `0` disables queueing; overload records `shadow_queue_full`. |
 | `--no-rtc` | `false` | **REQUIRED** in 2-policy mode. RTC carry-over is per-policy; cross-policy carry-over produces OOD actions. |
 
 ## Sticky-per-episode routing
@@ -139,7 +141,7 @@ rate(reflex_cache_hit_total{policy_slot="a"}[5m])
 
 ## Memory check (refuse-to-load)
 
-2-policy mode requires roughly 2× model_size_bytes of GPU VRAM. Before loading the second policy, `reflex serve` checks:
+2-policy mode requires roughly 2× model_size_bytes of GPU VRAM. Before loading the second policy, `tether serve` checks:
 ```
 2 × model_size_bytes > 0.7 × total_gpu_bytes
 ```
@@ -154,17 +156,17 @@ to single-policy mode.[/red]
 
 ## What's NOT shipped Phase 1
 
-- **Shadow inference** (`--shadow-policy`) — Phase 1.5; flag is accepted but logs an "inert" warning.
 - **Canary auto-promotion** — manual operator control over `--split` for now; Phase 2 wires automated ramp-up + rollback based on Prometheus signals.
 - **Cross-policy memory pooling** — each policy holds its own ONNX session + buffers; no shared workspace. Phase 2 explores `onnxruntime` IO-binding sharing.
 
 ## Shipped 2026-04-25
 
-- ✅ `setup_two_policy_serving` helper composes the substrate (`src/reflex/runtime/two_policy_setup.py`)
+- ✅ `setup_two_policy_serving` helper composes the substrate (`src/tether/runtime/two_policy_setup.py`)
 - ✅ `create_app` lifespan loads 2 ReflexServers + builds dispatcher when `policy_b_export_dir` is set
 - ✅ `/act` handler dispatches via `TwoPolicyDispatcher.predict()` when `server.two_policy_state` is set
-- ✅ `X-Reflex-Policy-Slot` + `X-Reflex-Model-Version` + `X-Reflex-Routing-Key` + `X-Reflex-Routing-Degraded` response headers
+- ✅ `X-Tether-Policy-Slot` + `X-Tether-Model-Version` + `X-Tether-Routing-Key` + `X-Tether-Routing-Degraded` response headers
 - ✅ Per-request `routing` block in record-replay JSONL trace
+- ✅ Shadow policy execution records candidate actions as append-only `shadow_result` rows without returning them to the robot client
 - ✅ Per-slot `policy_slot` label on Prometheus `reflex_act_latency_seconds`
 - ✅ **Per-slot `PolicyRuntime` queue + cost-budget scheduler** (chunk-budget-batching benefit in 2-policy mode)
 - ✅ Refuse-to-load memory check fires before either ReflexServer loads

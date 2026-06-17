@@ -2,7 +2,7 @@
 
 The `VERIFICATION.md` file is your **trust receipt** — it proves that the exported ONNX model produces the same outputs as the original PyTorch checkpoint. This guide explains every section in plain English.
 
-The exact rendering code lives in [`src/reflex/verification_report.py`](../src/reflex/verification_report.py). If you ever see a mismatch between this doc and an actual report, the source file wins.
+The exact rendering code lives in [`src/tether/verification_report.py`](../src/tether/verification_report.py). If you ever see a mismatch between this doc and an actual report, the source file wins.
 
 ---
 
@@ -10,10 +10,10 @@ The exact rendering code lives in [`src/reflex/verification_report.py`](../src/r
 
 `VERIFICATION.md` is auto-generated at two points:
 
-1. **`reflex export`** — creates a skeleton with file hashes but no parity numbers yet.
-2. **`reflex validate`** — fills in the numerical parity results.
+1. **`tether export`** — creates a skeleton with file hashes but no parity numbers yet.
+2. **`tether validate`** — fills in the numerical parity results.
 
-Until you run `reflex validate`, the parity section will say _"Not yet verified. Run `reflex validate <export_dir>` to populate."_ The Files + Export metadata sections are populated at export time regardless.
+Until you run `tether validate`, the parity section will say _"Not yet verified. Run `tether validate <export_dir>` to populate."_ The Files + Export metadata sections are populated at export time regardless.
 
 ---
 
@@ -28,7 +28,7 @@ Until you run `reflex validate`, the parity section will say _"Not yet verified.
 - **ONNX opset:** 19
 - **Denoising steps (baked in):** 10
 - **Action chunk size:** 50
-- **Reflex version:** 0.9.6
+- **Tether version:** 0.9.6
 - **Platform:** Linux-5.15.0-aarch64
 ```
 
@@ -40,7 +40,7 @@ Until you run `reflex validate`, the parity section will say _"Not yet verified.
 | **ONNX opset** | ONNX operator set version. Higher = more ops available. Standard: 19 |
 | **Denoising steps** | Number of flow-matching denoise iterations baked into the ONNX graph. More steps = higher quality but slower inference |
 | **Action chunk size** | How many future actions the model predicts per inference call |
-| **Reflex version** | The `reflex-vla` package version used for export (auto-filled from `reflex.__version__`) |
+| **Tether version** | The `tether` package version used for export (auto-filled from `tether.__version__`) |
 | **Platform** | `platform.platform()` output where the export was run |
 
 > **For drones:** The action chunk size is typically smaller (20 vs 50) because flight dynamics require faster replanning. The denoising steps may also be lower for latency-sensitive aerial deployments.
@@ -77,7 +77,7 @@ Total: **3 files, 247.5MB**
 
 ### Parity section
 
-This is the most important part — it appears after running `reflex validate`.
+This is the most important part — it appears after running `tether validate`.
 
 ```markdown
 ## Parity
@@ -97,7 +97,7 @@ This is the most important part — it appears after running `reflex validate`.
 | 4 | 1.192e-07 | 3.278e-08 | PASS |
 ```
 
-The values in this example are float32 ULP multiples (1.192e-07 is the float32 machine epsilon at this magnitude) — characteristic of a correctly-exported model where the only disagreement between PyTorch and ONNX is at the floating-point precision floor. Reflex's parity ledger reports first-action `max_abs` of **5.96e-07** for SmolVLA, **2.09e-07** for pi0, **2.38e-07** for pi0.5, and **8.34e-07** for GR00T — all at machine precision, all reproducible with the same seed.
+The values in this example are float32 ULP multiples (1.192e-07 is the float32 machine epsilon at this magnitude) — characteristic of a correctly-exported model where the only disagreement between PyTorch and ONNX is at the floating-point precision floor. Tether's parity ledger reports first-action `max_abs` of **5.96e-07** for SmolVLA, **2.09e-07** for pi0, **2.38e-07** for pi0.5, and **8.34e-07** for GR00T — all at machine precision, all reproducible with the same seed.
 
 #### Key metrics explained
 
@@ -129,8 +129,8 @@ The configurable pass/fail cutoff. Default: `1e-04` (0.0001).
 
 ```bash
 # Override the threshold
-reflex validate ./reflex_export/ --threshold 1e-3  # more lenient
-reflex validate ./reflex_export/ --threshold 1e-5  # stricter
+tether validate ./tether_export/ --threshold 1e-3  # more lenient
+tether validate ./tether_export/ --threshold 1e-5  # stricter
 ```
 
 **`Fixtures`**
@@ -139,7 +139,7 @@ The number of random test inputs used. Each fixture is a synthetic (image, instr
 
 **`Seed`**
 
-The random seed used to generate fixtures. Same seed + same model + same export settings = identical results. This is what makes the verification **reproducible** by anyone with the same `reflex-vla` version.
+The random seed used to generate fixtures. Same seed + same model + same export settings = identical results. This is what makes the verification **reproducible** by anyone with the same `tether` version.
 
 ---
 
@@ -149,12 +149,12 @@ The random seed used to generate fixtures. Same seed + same model + same export 
 ## Reproducer
 
 ```bash
-reflex export lerobot/smolvla-base --target orin-nano --output <dir>
-reflex validate <dir>
+tether export lerobot/smolvla-base --target orin-nano --output <dir>
+tether validate <dir>
 ```
 ```
 
-Anyone with the model ID + target + opset listed in the metadata block can reproduce the entire export + validation pipeline from scratch and verify the SHA256s + parity numbers match. If they don't match, either (a) the model on HF was updated, or (b) the runner is on a different Reflex version — the version field at the top tells them which.
+Anyone with the model ID + target + opset listed in the metadata block can reproduce the entire export + validation pipeline from scratch and verify the SHA256s + parity numbers match. If they don't match, either (a) the model on HF was updated, or (b) the runner is on a different Tether version — the version field at the top tells them which.
 
 ---
 
@@ -177,8 +177,8 @@ Different deployments tolerate different levels of `max_abs_diff`. The shipped 1
 1. **Re-export with default settings:**
 
    ```bash
-   reflex export <model> --target desktop --precision fp16
-   reflex validate ./reflex_export/
+   tether export <model> --target desktop --precision fp16
+   tether validate ./tether_export/
    ```
 
    Some custom targets or precisions (`fp8`, `int8`) widen the tolerance gap. Start with `fp16` on the `desktop` target to isolate model issues from quantization issues.
@@ -186,27 +186,27 @@ Different deployments tolerate different levels of `max_abs_diff`. The shipped 1
 2. **Try a lower opset:**
 
    ```bash
-   reflex export <model> --opset 17
+   tether export <model> --opset 17
    ```
 
    Some attention-heavy models hit precision-sensitive ops in opset 19; opset 17 falls back to slower but more numerically stable kernels.
 
-3. **Run `reflex doctor`:**
+3. **Run `tether doctor`:**
 
    ```bash
-   reflex doctor --export-dir ./reflex_export/
+   tether doctor --export-dir ./tether_export/
    ```
 
    Catches the common silent-failure modes (cuDNN version skew, TRT EP loadchain breakage, JetPack mismatches) that manifest as parity failures.
 
-4. **File an issue:** If a shipped model in the registry consistently fails validation, open a GitHub issue with the full `VERIFICATION.md` attached + your `reflex doctor` output. The Reflex maintainers can reproduce against the registry's expected hash.
+4. **File an issue:** If a shipped model in the registry consistently fails validation, open a GitHub issue with the full `VERIFICATION.md` attached + your `tether doctor` output. The Tether maintainers can reproduce against the registry's expected hash.
 
 ---
 
 ## See also
 
-- [`docs/cli_reference.md`](./cli_reference.md) — full flag list for `reflex export` and `reflex validate`
+- [`docs/cli_reference.md`](./cli_reference.md) — full flag list for `tether export` and `tether validate`
 - [`docs/eval.md`](./eval.md) — task-success eval (parity is a necessary but not sufficient condition; pass eval also)
-- [`docs/doctor_check_list.md`](./doctor_check_list.md) — what `reflex doctor` checks
+- [`docs/doctor_check_list.md`](./doctor_check_list.md) — what `tether doctor` checks
 - [`docs/adding_a_robot.md`](./adding_a_robot.md) — embodiment cookbook (the embodiment config affects state shape passed to the policy)
-- [`src/reflex/verification_report.py`](../src/reflex/verification_report.py) — the renderer (authoritative)
+- [`src/tether/verification_report.py`](../src/tether/verification_report.py) — the renderer (authoritative)

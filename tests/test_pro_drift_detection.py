@@ -1,11 +1,11 @@
-"""Tests for src/reflex/pro/drift_detection.py — Phase 1 Day 10."""
+"""Tests for src/tether/pro/drift_detection.py — Phase 1 Day 10."""
 from __future__ import annotations
 
 import random
 
 import pytest
 
-from reflex.pro.drift_detection import (
+from tether.pro.drift_detection import (
     DEFAULT_ACTION_WASSERSTEIN_MAX,
     DEFAULT_KL_DIVERGENCE_MAX,
     MIN_SAMPLES_FOR_DRIFT,

@@ -2,7 +2,7 @@
 
 Actual live test runs on Modal via `scripts/modal_ros2_live_test.py` —
 spins an ubuntu:22.04 + ros-humble-ros-base container, installs
-reflex-vla with a numpy<2.0 constraint (rclpy compiled against numpy
+tether with a numpy<2.0 constraint (rclpy compiled against numpy
 1.21 is forward-ABI-compatible with 1.22/1.24/1.26 but broken against
 2.x), and verifies real rclpy can create the bridge node, spin_once,
 and shutdown cleanly.

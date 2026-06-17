@@ -1,14 +1,13 @@
 """Tests for the VLA inference server."""
 
 import json
-import tempfile
-from pathlib import Path
+import time
 from unittest.mock import patch, MagicMock
 
 import numpy as np
 import pytest
 
-from reflex.runtime.server import ReflexServer
+from tether.runtime.server import TetherServer
 
 
 @pytest.fixture
@@ -24,35 +23,212 @@ def mock_export_dir(tmp_path):
             "num_layers": 16,
         },
     }
-    config_path = tmp_path / "reflex_config.json"
+    config_path = tmp_path / "tether_config.json"
     config_path.write_text(json.dumps(config))
     return tmp_path
 
 
-class TestReflexServer:
+class TestTetherServer:
     def test_loads_config(self, mock_export_dir):
-        server = ReflexServer(mock_export_dir, device="cpu")
+        server = TetherServer(mock_export_dir, device="cpu")
         assert server.config["model_id"] == "lerobot/smolvla_base"
         assert server.config["expert"]["action_dim"] == 32
 
     def test_not_ready_before_load(self, mock_export_dir):
-        server = ReflexServer(mock_export_dir, device="cpu")
+        server = TetherServer(mock_export_dir, device="cpu")
         assert not server.ready
 
     def test_predict_before_load_returns_error(self, mock_export_dir):
-        server = ReflexServer(mock_export_dir, device="cpu")
+        server = TetherServer(mock_export_dir, device="cpu")
         result = server.predict()
         assert "error" in result
 
     def test_loads_with_missing_onnx(self, mock_export_dir):
-        server = ReflexServer(mock_export_dir, device="cpu")
+        server = TetherServer(mock_export_dir, device="cpu")
         server.load()
         assert not server.ready  # No ONNX file, so not ready
 
 
-class TestReflexServerWithMockORT:
+class TestTetherServerWithMockORT:
+    def test_predict_async_offloads_non_batched_predict(self, mock_export_dir):
+        import asyncio
+
+        server = TetherServer(mock_export_dir, device="cpu", max_batch=1)
+
+        def slow_predict(**kwargs):
+            time.sleep(0.15)
+            return {"ok": True, "kwargs": kwargs}
+
+        server.predict = slow_predict
+
+        async def run_check():
+            start = time.perf_counter()
+            task = asyncio.create_task(
+                server.predict_async(instruction="pick", state=[0.0])
+            )
+            await asyncio.sleep(0.01)
+            elapsed = time.perf_counter() - start
+            result = await task
+            return elapsed, result
+
+        elapsed, result = asyncio.run(run_check())
+        server.shutdown_inference_executor()
+
+        assert elapsed < 0.08
+        assert result["ok"] is True
+        assert result["kwargs"]["instruction"] == "pick"
+
+    def test_predict_async_rejects_when_executor_is_full(self, mock_export_dir):
+        import asyncio
+        import threading
+
+        server = TetherServer(
+            mock_export_dir,
+            device="cpu",
+            max_batch=1,
+            inference_executor_workers=1,
+            inference_executor_queue=0,
+        )
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_predict(**_kwargs):
+            started.set()
+            release.wait(timeout=2.0)
+            return {"ok": True}
+
+        server.predict = slow_predict
+
+        async def run_check():
+            first = asyncio.create_task(server.predict_async(instruction="first"))
+            try:
+                assert await asyncio.to_thread(started.wait, 1.0)
+                rejected = await server.predict_async(instruction="second")
+            finally:
+                release.set()
+            accepted = await first
+            return accepted, rejected
+
+        accepted, rejected = asyncio.run(run_check())
+        server.shutdown_inference_executor()
+
+        assert rejected["error"] == "inference_executor_full"
+        assert rejected["max_workers"] == 1
+        assert rejected["max_queue"] == 0
+        assert rejected["rejected_total"] >= 1
+        assert accepted["ok"] is True
+
+    def test_batch_worker_offloads_sync_batch_predict(self, mock_export_dir):
+        import asyncio
+
+        server = TetherServer(
+            mock_export_dir,
+            device="cpu",
+            max_batch=2,
+            batch_timeout_ms=1,
+        )
+
+        def slow_batch(batch):
+            time.sleep(0.15)
+            return [{"ok": True, "batch_size": len(batch)} for _ in batch]
+
+        server._predict_batch_sync = slow_batch
+
+        async def run_check():
+            await server.start_batch_worker()
+            try:
+                start = time.perf_counter()
+                task = asyncio.create_task(
+                    server.predict_async(instruction="pick", state=[0.0])
+                )
+                await asyncio.sleep(0.01)
+                elapsed = time.perf_counter() - start
+                result = await task
+                return elapsed, result
+            finally:
+                await server.stop_batch_worker()
+
+        elapsed, result = asyncio.run(run_check())
+        server.shutdown_inference_executor()
+
+        assert elapsed < 0.08
+        assert result["ok"] is True
+        assert result["batch_size"] == 1
+
+    def test_denoise_uses_iobinding_when_enabled(self, mock_export_dir):
+        class _FakeOutput:
+            name = "velocity"
+
+        class _FakeOrtValue:
+            def __init__(self, array):
+                self._array = array
+
+            def numpy(self):
+                return self._array
+
+        class _FakeBinding:
+            def __init__(self, velocity):
+                self.velocity = velocity
+                self.bound_inputs = []
+                self.bound_outputs = []
+                self.clear_outputs_calls = 0
+
+            def bind_cpu_input(self, name, array):
+                self.bound_inputs.append((name, array.shape))
+
+            def bind_output(self, name, *args):
+                self.bound_outputs.append((name, args))
+
+            def clear_binding_outputs(self):
+                self.clear_outputs_calls += 1
+
+            def get_outputs(self):
+                return [_FakeOrtValue(self.velocity)]
+
+        class _FakeSession:
+            def __init__(self, velocity):
+                self.binding = _FakeBinding(velocity)
+                self.run_calls = 0
+                self.run_with_iobinding_calls = 0
+
+            def get_outputs(self):
+                return [_FakeOutput()]
+
+            def io_binding(self):
+                return self.binding
+
+            def run(self, *_args, **_kwargs):
+                self.run_calls += 1
+                raise AssertionError("session.run should not be used")
+
+            def run_with_iobinding(self, _binding):
+                self.run_with_iobinding_calls += 1
+
+        server = TetherServer(mock_export_dir, device="cpu")
+        server.num_denoising_steps = 1
+        server._expert_input_names = []
+        server._ort_iobinding_enabled = True
+
+        noisy = np.zeros((1, 2, 3), dtype=np.float32)
+        velocity = np.ones_like(noisy)
+        fake_session = _FakeSession(velocity)
+        server._ort_session = fake_session
+
+        actions, steps = server._run_denoise(
+            noisy_actions=noisy,
+            position_ids=np.arange(2, dtype=np.int64)[None, :],
+        )
+
+        np.testing.assert_allclose(actions, -np.ones_like(noisy))
+        assert steps == 1
+        assert fake_session.run_calls == 0
+        assert fake_session.run_with_iobinding_calls == 1
+        bound_names = [name for name, _shape in fake_session.binding.bound_inputs]
+        assert bound_names == ["position_ids", "noisy_actions", "timestep"]
+        assert fake_session.binding.bound_outputs == [("velocity", ("cpu",))]
+
     def test_predict_returns_actions(self, mock_export_dir):
-        server = ReflexServer(mock_export_dir, device="cpu")
+        server = TetherServer(mock_export_dir, device="cpu")
         server.action_dim = 32
         server.chunk_size = 50
         server.expert_hidden = 720
@@ -75,7 +251,7 @@ class TestReflexServerWithMockORT:
         assert mock_session.run.call_count == 10  # 10 denoising steps
 
     def test_predict_action_shape(self, mock_export_dir):
-        server = ReflexServer(mock_export_dir, device="cpu")
+        server = TetherServer(mock_export_dir, device="cpu")
         server.action_dim = 6
         server.chunk_size = 20
         server.expert_hidden = 720
@@ -94,10 +270,10 @@ class TestReflexServerWithMockORT:
 class TestCreateApp:
     def test_app_creates(self, mock_export_dir):
         try:
-            from reflex.runtime.server import create_app
+            from tether.runtime.server import create_app
             app = create_app(str(mock_export_dir), device="cpu")
             assert app is not None
-            assert app.title == "Reflex VLA Server"
+            assert app.title == "Tether VLA Server"
         except ImportError:
             pytest.skip("fastapi not installed")
 
@@ -117,7 +293,7 @@ class TestStrictProviderMode:
         # Drop a dummy ONNX file so _load_onnx actually runs
         (tmp_path / "expert_stack.onnx").write_bytes(b"\x08\x07")  # ONNX magic stub
 
-        server = ReflexServer(
+        server = TetherServer(
             mock_export_dir, device="cuda", strict_providers=True,
         )
 
@@ -134,7 +310,7 @@ class TestStrictProviderMode:
 
     def test_non_strict_allows_fallback(self, mock_export_dir, tmp_path):
         (tmp_path / "expert_stack.onnx").write_bytes(b"\x08\x07")
-        server = ReflexServer(
+        server = TetherServer(
             mock_export_dir, device="cuda", strict_providers=False,
         )
         mock_session = MagicMock()
@@ -150,7 +326,7 @@ class TestStrictProviderMode:
 
     def test_strict_accepts_when_cuda_active(self, mock_export_dir, tmp_path):
         (tmp_path / "expert_stack.onnx").write_bytes(b"\x08\x07")
-        server = ReflexServer(
+        server = TetherServer(
             mock_export_dir, device="cuda", strict_providers=True,
         )
         mock_session = MagicMock()
@@ -171,7 +347,7 @@ class TestStrictProviderMode:
         self, mock_export_dir, tmp_path
     ):
         (tmp_path / "expert_stack.onnx").write_bytes(b"\x08\x07")
-        server = ReflexServer(
+        server = TetherServer(
             mock_export_dir, device="cpu", strict_providers=True,
         )
         mock_session = MagicMock()
@@ -189,7 +365,7 @@ class TestStrictProviderMode:
     ):
         (tmp_path / "expert_stack.onnx").write_bytes(b"\x08\x07")
         # device=cpu but explicit CUDAExecutionProvider in list
-        server = ReflexServer(
+        server = TetherServer(
             mock_export_dir,
             device="cpu",
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"],

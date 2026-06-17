@@ -1,4 +1,4 @@
-"""Verify `reflex --help` shows all 7 wedges + the 4 new commands work.
+"""Verify `tether --help` shows all 7 wedges + the 4 new commands work.
 
 Usage:
     modal run scripts/modal_verify_cli.py
@@ -6,7 +6,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-cli-verify")
+app = modal.App("tether-cli-verify")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -16,10 +16,10 @@ image = (
         "numpy", "Pillow",
         "typer", "rich", "pydantic>=2.0", "pyyaml",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e .")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e .")
 )
 
 
@@ -35,8 +35,8 @@ def verify():
         print(f"{tag}: {name} — {detail}", flush=True)
 
     # 1. Check --help lists all 7 wedges
-    print("=== Step 1: reflex --help lists 7 wedges ===", flush=True)
-    r = subprocess.run(["reflex", "--help"], capture_output=True, text=True)
+    print("=== Step 1: tether --help lists 7 wedges ===", flush=True)
+    r = subprocess.run(["tether", "--help"], capture_output=True, text=True)
     wedges = ["export", "serve", "guard", "turbo", "split", "adapt", "check"]
     missing = [w for w in wedges if w not in r.stdout]
     if not missing:
@@ -44,10 +44,10 @@ def verify():
     else:
         log("help_lists_wedges", "fail", f"missing: {missing}")
 
-    # 2. reflex turbo
-    print("\n=== Step 2: reflex turbo --trials 2 ===", flush=True)
+    # 2. tether turbo
+    print("\n=== Step 2: tether turbo --trials 2 ===", flush=True)
     r = subprocess.run(
-        ["reflex", "turbo", "--trials", "2", "--action-dim", "6", "--chunk-size", "5"],
+        ["tether", "turbo", "--trials", "2", "--action-dim", "6", "--chunk-size", "5"],
         capture_output=True, text=True, timeout=60,
     )
     if r.returncode == 0 and "Turbo Benchmark" in r.stdout:
@@ -55,33 +55,33 @@ def verify():
     else:
         log("turbo", "fail", r.stderr[-200:] or r.stdout[-200:])
 
-    # 3. reflex split
-    print("\n=== Step 3: reflex split --prefer edge ===", flush=True)
+    # 3. tether split
+    print("\n=== Step 3: tether split --prefer edge ===", flush=True)
     r = subprocess.run(
-        ["reflex", "split", "--prefer", "edge", "--output", "/tmp/split.json"],
+        ["tether", "split", "--prefer", "edge", "--output", "/tmp/split.json"],
         capture_output=True, text=True, timeout=30,
     )
-    if r.returncode == 0 and "Reflex Split" in r.stdout:
+    if r.returncode == 0 and "Tether Split" in r.stdout:
         log("split", "pass", "selected target reported + config saved")
     else:
         log("split", "fail", r.stderr[-200:] or r.stdout[-200:])
 
-    # 4. reflex adapt (no URDF, uses default)
-    print("\n=== Step 4: reflex adapt --num-joints 6 ===", flush=True)
+    # 4. tether adapt (no URDF, uses default)
+    print("\n=== Step 4: tether adapt --num-joints 6 ===", flush=True)
     r = subprocess.run(
-        ["reflex", "adapt", "--num-joints", "6", "--framework", "lerobot",
+        ["tether", "adapt", "--num-joints", "6", "--framework", "lerobot",
          "--output", "/tmp/embodiment.json"],
         capture_output=True, text=True, timeout=30,
     )
-    if r.returncode == 0 and "Reflex Adapt" in r.stdout:
+    if r.returncode == 0 and "Tether Adapt" in r.stdout:
         log("adapt", "pass", "embodiment config generated")
     else:
         log("adapt", "fail", r.stderr[-200:] or r.stdout[-200:])
 
-    # 5. reflex check (on a small HF model to avoid big download)
-    print("\n=== Step 5: reflex check lerobot/smolvla_base ===", flush=True)
+    # 5. tether check (on a small HF model to avoid big download)
+    print("\n=== Step 5: tether check lerobot/smolvla_base ===", flush=True)
     r = subprocess.run(
-        ["reflex", "check", "lerobot/smolvla_base", "--target", "desktop"],
+        ["tether", "check", "lerobot/smolvla_base", "--target", "desktop"],
         capture_output=True, text=True, timeout=300,
     )
     if "Pre-Deployment Checks" in r.stdout or "Passed" in r.stdout:
@@ -99,7 +99,7 @@ def verify():
 
 @app.local_entrypoint()
 def main():
-    print("Verifying reflex CLI (all 7 wedges) on Modal...")
+    print("Verifying tether CLI (all 7 wedges) on Modal...")
     results = verify.remote()
     for step in results["steps"]:
         tag = "PASS" if step["status"] == "pass" else "FAIL"

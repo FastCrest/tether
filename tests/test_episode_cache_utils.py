@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "src/reflex/runtime/episode_cache.py"
+_MODULE_PATH = Path(__file__).resolve().parents[1] / "src/tether/runtime/episode_cache.py"
 _SPEC = importlib.util.spec_from_file_location("episode_cache", _MODULE_PATH)
 assert _SPEC is not None
 episode_cache = importlib.util.module_from_spec(_SPEC)

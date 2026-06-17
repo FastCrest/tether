@@ -1,7 +1,7 @@
-"""LIBERO eval routed through reflex serve HTTP -- closes B.5 Day 5
+"""LIBERO eval routed through tether serve HTTP -- closes B.5 Day 5
 + b4 gate methodology gap.
 
-The existing scripts/modal_libero_monolithic_onnx.py BYPASSES reflex
+The existing scripts/modal_libero_monolithic_onnx.py BYPASSES tether
 serve and calls the ONNX session directly. That validates the model
 correctness but skips ALL the wedges (action_guard, RTC, A2C2,
 record-replay, prometheus, policy-versioning, chunk-budget-batching).
@@ -9,12 +9,12 @@ For the B.5 Day 5 deliverable ("LIBERO success delta with A2C2-on vs
 A2C2-off"), we need LIBERO actions to flow through the actual /act
 handler -- otherwise the A2C2 hook isn't exercised.
 
-Per ADR 2026-04-25-decomposed-dispatch-via-reflex-serve §"Validation
-experiments to file" #2: this is the LIBERO-via-reflex-serve harness.
+Per ADR 2026-04-25-decomposed-dispatch-via-tether-serve §"Validation
+experiments to file" #2: this is the LIBERO-via-tether-serve harness.
 
 Architecture:
 - Single Modal A100 container
-- Spawn `reflex serve <decomposed_export>` as subprocess (uses the
+- Spawn `tether serve <decomposed_export>` as subprocess (uses the
   Pi05DecomposedServer dispatch shipped in commit cfb846d today)
 - Wait for /health
 - Boot LIBERO + run episodes; for each step, POST /act with
@@ -28,9 +28,9 @@ end-to-end Modal run is the next-session validation. ~$5-10 to
 validate when fired.
 
 Usage (when ready to fire):
-    modal run scripts/modal_libero_via_reflex_serve.py
-    modal run scripts/modal_libero_via_reflex_serve.py --num-episodes 3 --tasks 0
-    modal run scripts/modal_libero_via_reflex_serve.py --a2c2-checkpoint /a2c2/head.npz
+    modal run scripts/modal_libero_via_tether_serve.py
+    modal run scripts/modal_libero_via_tether_serve.py --num-episodes 3 --tasks 0
+    modal run scripts/modal_libero_via_tether_serve.py --a2c2-checkpoint /a2c2/head.npz
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-libero-via-reflex-serve")
+app = modal.App("tether-libero-via-tether-serve")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -83,7 +83,7 @@ GATE_OUTPUT_PATH = "/gate_out"
 
 
 # Image: same shape as modal_libero (LIBERO + osmesa + MuJoCo) + the
-# reflex-vla install + httpx for the HTTP client.
+# tether install + httpx for the HTTP client.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
@@ -99,7 +99,7 @@ image = (
         "bddl==1.0.1", "future", "robomimic", "hydra-core>=1.1",
         "easydict", "einops", "opencv-python-headless",
         "gym", "gymnasium", "lerobot==0.5.1", "num2words", "imageio",
-        "httpx>=0.24",  # for the HTTP client to reflex serve
+        "httpx>=0.24",  # for the HTTP client to tether serve
     )
     .run_commands(
         "git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git /opt/LIBERO"
@@ -115,7 +115,7 @@ image = (
         "LIBERO_BASE": "/tmp/libero_data",
         "PYTHONPATH": "/opt/LIBERO",
     })
-    # Mount local reflex-vla source instead of pulling from git+https. Removes
+    # Mount local tether source instead of pulling from git+https. Removes
     # the dependency on a workspace-level github-token Modal secret (every
     # fresh Modal account otherwise needs the secret added at
     # https://modal.com/secrets/<workspace>/main/create?secret_name=github-token
@@ -123,29 +123,29 @@ image = (
     # immediately — no git push needed before modal run.
     .add_local_dir(
         os.path.join(REPO_ROOT, "src"),
-        remote_path="/root/reflex-vla/src",
+        remote_path="/root/tether-vla/src",
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "pyproject.toml"),
-        remote_path="/root/reflex-vla/pyproject.toml",
+        remote_path="/root/tether-vla/pyproject.toml",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "README.md"),
-        remote_path="/root/reflex-vla/README.md",
+        remote_path="/root/tether-vla/README.md",
         copy=True,
     )
     .add_local_file(
         os.path.join(REPO_ROOT, "LICENSE"),
-        remote_path="/root/reflex-vla/LICENSE",
+        remote_path="/root/tether-vla/LICENSE",
         copy=True,
     )
     .run_commands(
         "mkdir -p /tmp/libero_data",
         f'echo "build_bust={_BUILD_BUST}"',
-        'pip install -e "/root/reflex-vla[serve,gpu]"',
+        'pip install -e "/root/tether-vla[serve,gpu]"',
     )
 )
 
@@ -191,7 +191,7 @@ def libero_via_serve(
     serve_health_timeout_s: int = 480,
     serve_port: int = 8000,
 ) -> dict:
-    """Run LIBERO episodes against a reflex serve subprocess.
+    """Run LIBERO episodes against a tether serve subprocess.
 
     Args:
         export_subdir: subfolder under /onnx_out/ -- the decomposed export
@@ -202,8 +202,8 @@ def libero_via_serve(
         a2c2_checkpoint: path to A2C2 head .npz (e.g.,
             /gate_out/run_001/a2c2_head.npz). Empty = baseline (no A2C2).
         seed: RNG seed.
-        serve_health_timeout_s: how long to wait for reflex serve /health.
-        serve_port: port for the reflex serve subprocess.
+        serve_health_timeout_s: how long to wait for tether serve /health.
+        serve_port: port for the tether serve subprocess.
 
     Returns:
         {"status": "ok"|"fail", "success_rate_pct": float, "per_task": [...],
@@ -234,9 +234,9 @@ def libero_via_serve(
     export_dir = f"{ONNX_OUTPUT_PATH}/{export_subdir}"
     print(f"[libero_via_serve] export_dir={export_dir} a2c2={a2c2_checkpoint or '(none)'}")
 
-    # ---- Spawn reflex serve subprocess ----
+    # ---- Spawn tether serve subprocess ----
     serve_cmd = [
-        "reflex", "serve", export_dir,
+        "tether", "serve", export_dir,
         "--port", str(serve_port),
         "--device", "cuda",
         "--no-strict-providers",
@@ -282,7 +282,7 @@ def libero_via_serve(
         serve_proc.terminate()
         return {
             "status": "fail",
-            "reason": f"reflex serve didn't come up in {serve_health_timeout_s}s",
+            "reason": f"tether serve didn't come up in {serve_health_timeout_s}s",
         }
 
     # ---- HTTP client helper ----
@@ -493,13 +493,13 @@ def libero_via_serve(
             if results["total_eps"] else 0.0
         )
         results["success_rate_pct"] = round(success_rate, 1)
-        print(f"\n====== {task_suite_name} via reflex serve (a2c2={a2c2_checkpoint or 'off'}) ======")
+        print(f"\n====== {task_suite_name} via tether serve (a2c2={a2c2_checkpoint or 'off'}) ======")
         print(f"  Export:  {export_subdir}")
         print(f"  Success: {results['total_success']}/{results['total_eps']} = {success_rate:.1f}%")
         return results
     finally:
         # Always terminate the serve subprocess.
-        print("[libero_via_serve] shutting down reflex serve...")
+        print("[libero_via_serve] shutting down tether serve...")
         serve_proc.terminate()
         try:
             serve_proc.wait(20)
@@ -523,7 +523,7 @@ def main(
     rtc: bool = False,
     rtc_execution_horizon: int = 0,
 ):
-    """Run LIBERO via reflex serve.
+    """Run LIBERO via tether serve.
 
     --tasks "0"          single task
     --tasks "0,1,2"      3 tasks
@@ -538,7 +538,7 @@ def main(
         task_list = None
     else:
         task_list = [int(t) for t in tasks.split(",")]
-    print(f"Running LIBERO {suite} via reflex serve: tasks={task_list or 'all'}, "
+    print(f"Running LIBERO {suite} via tether serve: tasks={task_list or 'all'}, "
           f"{num_episodes} eps each, a2c2={a2c2_checkpoint or '(off)'}, "
           f"inject_latency_ms={inject_latency_ms}")
     r = libero_via_serve.remote(

@@ -1,4 +1,4 @@
-"""Tests for src/reflex/observability/webhooks.py — webhook event dispatcher."""
+"""Tests for src/tether/observability/webhooks.py — webhook event dispatcher."""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from reflex.observability.webhooks import (
+from tether.observability.webhooks import (
     ALL_WEBHOOK_EVENTS,
     WebhookDispatcher,
     WebhookEvent,

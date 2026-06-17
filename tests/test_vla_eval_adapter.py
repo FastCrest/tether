@@ -1,4 +1,4 @@
-"""Tests for reflex.runtime.adapters.vla_eval pure helpers.
+"""Tests for tether.runtime.adapters.vla_eval pure helpers.
 
 These exercise image-picking and action-truncation logic without requiring
 ``vla-eval`` to be installed. The adapter class itself (built via
@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reflex.runtime.adapters.vla_eval import (
+from tether.runtime.adapters.vla_eval import (
     build_adapter_class,
     pick_image,
     truncate_actions,

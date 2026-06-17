@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from reflex.bench import (
+from tether.bench import (
     BenchEnvironment,
     BenchReport,
     LatencyStats,
@@ -154,6 +154,15 @@ class TestCaptureEnvironment:
             assert f["bytes"] > 0
             assert len(f["sha256_prefix"]) == 16
 
+    def test_capture_includes_external_data_files(self, tmp_path):
+        # Large monolithic exports save weights as model.onnx.data; the bench
+        # receipt must hash that file too, not only the lightweight protobuf.
+        (tmp_path / "model.onnx").write_bytes(b"protobuf")
+        (tmp_path / "model.onnx.data").write_bytes(b"external-weights")
+        env = capture_environment(export_dir=tmp_path)
+        names = {f["name"] for f in env.onnx_files}
+        assert names == {"model.onnx", "model.onnx.data"}
+
 
 # ---------- report rendering ----------
 
@@ -185,7 +194,7 @@ class TestBenchReport:
     def test_to_markdown_contains_methodology_section(self, tmp_path):
         r = BenchReport(stats=self._stats(), environment=self._env(tmp_path))
         md = r.to_markdown()
-        assert "# Reflex Bench Report" in md
+        assert "# Tether Bench Report" in md
         assert "Per-chunk latency" in md
         assert "Reproducibility envelope" in md
         assert "What this measures" in md
@@ -232,7 +241,7 @@ class TestBenchReport:
         out = tmp_path / "deep" / "nested" / "bench.md"
         r.write_markdown(out)
         assert out.exists()
-        assert "Reflex Bench Report" in out.read_text()
+        assert "Tether Bench Report" in out.read_text()
 
     def test_write_json_roundtrips(self, tmp_path):
         r = BenchReport(stats=self._stats(), environment=self._env(tmp_path))

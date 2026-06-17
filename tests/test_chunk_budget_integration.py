@@ -37,7 +37,7 @@ def _make_export_dir(tmp_path: Path) -> Path:
     export_dir = tmp_path / "export"
     export_dir.mkdir()
     (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "reflex_config.json").write_text(json.dumps({
+    (export_dir / "tether_config.json").write_text(json.dumps({
         "model_type": "smolvla",
         "export_kind": "monolithic",
         "num_denoising_steps": 10,
@@ -94,15 +94,15 @@ def test_policy_runtime_installed_in_lifespan(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     export_dir = _setup_app(tmp_path, monkeypatch)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     with TestClient(app) as client:
         # Hit /health to ensure lifespan completed
         resp = client.get("/health")
         assert resp.status_code in (200, 503)
-        # The runtime should be installed on app.state.reflex_server.policies
-        server = app.state.reflex_server
+        # The runtime should be installed on app.state.tether_server.policies
+        server = app.state.tether_server
         policies = getattr(server, "policies", None)
         assert policies is not None, "create_app should install server.policies"
         assert "prod" in policies, "single-policy default slot should be 'prod'"
@@ -118,11 +118,11 @@ def test_act_routes_through_policy_runtime(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     export_dir = _setup_app(tmp_path, monkeypatch)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     with TestClient(app) as client:
-        runtime = app.state.reflex_server.policies["prod"]
+        runtime = app.state.tether_server.policies["prod"]
         before_batches = runtime.snapshot()["batches_run"]
 
         resp = client.post("/act", json={
@@ -146,7 +146,7 @@ def test_act_fans_back_correct_result_shape(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     export_dir = _setup_app(tmp_path, monkeypatch)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     with TestClient(app) as client:
@@ -167,11 +167,11 @@ def test_cost_model_records_measurements_after_act(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     export_dir = _setup_app(tmp_path, monkeypatch)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     with TestClient(app) as client:
-        runtime = app.state.reflex_server.policies["prod"]
+        runtime = app.state.tether_server.policies["prod"]
         # Five /act calls — should leave at least one measurement per shape
         for _ in range(5):
             resp = client.post("/act", json={
@@ -190,13 +190,13 @@ def test_runtime_stops_cleanly_on_lifespan_exit(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     export_dir = _setup_app(tmp_path, monkeypatch)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     runtime_ref = None
     with TestClient(app) as client:
         client.get("/health")
-        runtime_ref = app.state.reflex_server.policies["prod"]
+        runtime_ref = app.state.tether_server.policies["prod"]
         assert runtime_ref.is_running is True
     # After context exit, lifespan should have stopped the runtime
     assert runtime_ref is not None
@@ -210,7 +210,7 @@ def test_metrics_endpoint_includes_batch_diagnostics(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     export_dir = _setup_app(tmp_path, monkeypatch)
-    from reflex.runtime.server import create_app
+    from tether.runtime.server import create_app
 
     app = create_app(str(export_dir), device="cpu")
     with TestClient(app) as client:
@@ -228,10 +228,10 @@ def test_metrics_endpoint_includes_batch_diagnostics(tmp_path, monkeypatch):
         body = metrics_resp.text
 
         # All five batch-budget metric families should be present.
-        assert "reflex_batch_cost_per_flush_ms" in body
-        assert "reflex_batch_size_per_flush" in body
-        assert "reflex_batch_flush_total" in body
-        assert "reflex_captured_graph_hit_rate" in body
-        assert "reflex_policy_runtime_queue_depth" in body
+        assert "tether_batch_cost_per_flush_ms" in body
+        assert "tether_batch_size_per_flush" in body
+        assert "tether_batch_flush_total" in body
+        assert "tether_captured_graph_hit_rate" in body
+        assert "tether_policy_runtime_queue_depth" in body
         # Phase 1 single-shape: capture-hit-rate gauge should always be 1.0.
-        assert "reflex_captured_graph_hit_rate{" in body
+        assert "tether_captured_graph_hit_rate{" in body

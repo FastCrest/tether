@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/policy.py — Days 3-4 + Day 5 substrate.
+"""Tests for src/tether/runtime/policy.py — Days 3-4 + Day 5 substrate.
 
 Per ADR 2026-04-25-policy-versioning-architecture: per-policy state
 bundle for 2-policy A/B mode. The Policy dataclass is a frozen
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from reflex.runtime.policy import (
+from tether.runtime.policy import (
     DEFAULT_SINGLE_POLICY_SLOT,
     Policy,
     make_single_policy,
@@ -76,7 +76,7 @@ def test_policy_default_crash_count_is_zero():
 
 
 def test_model_version_combines_id_and_hash():
-    """X-Reflex-Model-Version header format -- stable across releases."""
+    """X-Tether-Model-Version header format -- stable across releases."""
     p = Policy(**_valid_kwargs(model_id="pi0-libero", model_hash="abc12345"))
     assert p.model_version == "pi0-libero@abc12345"
 

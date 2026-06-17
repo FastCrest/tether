@@ -81,14 +81,14 @@ def main():
         torch_actions = np.asarray(torch_actions)
 
     import os
-    if os.environ.get("REFLEX_NATIVE", "0") == "1":
+    if os.environ.get("TETHER_NATIVE", "0") == "1":
         print("Running NATIVE path (lerobot SmolVLAPolicy + DecomposedRMSNorm) ...")
-        from reflex.runtime.smolvla_native import SmolVLANativeServer
-        server = SmolVLANativeServer("/tmp/reflex_libero_export3", device="cpu", strict_providers=False)
+        from tether.runtime.smolvla_native import SmolVLANativeServer
+        server = SmolVLANativeServer("/tmp/tether_libero_export3", device="cpu", strict_providers=False)
     else:
         print("Running decomposed ONNX pipeline ...")
-        from reflex.runtime.server import ReflexServer
-        server = ReflexServer("/tmp/reflex_libero_export3", device="cpu", strict_providers=False)
+        from tether.runtime.server import TetherServer
+        server = TetherServer("/tmp/tether_libero_export3", device="cpu", strict_providers=False)
     server.load()
 
     # same image as raw batch

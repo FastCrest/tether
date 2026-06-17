@@ -1,4 +1,4 @@
-"""Tests for src/reflex/runtime/batching.py — cost-weighted scheduler primitives.
+"""Tests for src/tether/runtime/batching.py — cost-weighted scheduler primitives.
 
 Covers: cost-model rolling-window correctness, cold-start fallback, threading
 safety, scheduler flush conditions at boundaries (empty / single-over-budget
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from reflex.runtime.batching import (
+from tether.runtime.batching import (
     _DEFAULT_COLD_START_MS,
     _MAX_BUDGET_MS,
     _MIN_BUDGET_MS,

@@ -1,6 +1,6 @@
-"""Phase III verification: reflex serve --max-batch N actually batches.
+"""Phase III verification: tether serve --max-batch N actually batches.
 
-Spins up `reflex serve` with three configurations:
+Spins up `tether serve` with three configurations:
   - max_batch=1 (baseline, no batching)
   - max_batch=4 (small batch)
   - max_batch=8 (bigger batch)
@@ -19,7 +19,7 @@ Usage:
 
 import modal
 
-app = modal.App("reflex-batching-verify")
+app = modal.App("tether-batching-verify")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -37,10 +37,10 @@ image = (
         "fastapi", "uvicorn", "httpx",
         "yourdfpy", "trimesh",
     )
-    .add_local_dir("src/reflex", "/root/reflex-vla/src/reflex", copy=True)
-    .add_local_file("pyproject.toml", "/root/reflex-vla/pyproject.toml", copy=True)
-    .add_local_file("README.md", "/root/reflex-vla/README.md", copy=True)
-    .run_commands("cd /root/reflex-vla && pip install -e . --no-deps")
+    .add_local_dir("src/tether", "/root/tether-vla/src/tether", copy=True)
+    .add_local_file("pyproject.toml", "/root/tether-vla/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/root/tether-vla/README.md", copy=True)
+    .run_commands("cd /root/tether-vla && pip install -e . --no-deps")
 )
 
 
@@ -74,7 +74,7 @@ def _make_fake_export(export_dir: str, action_dim: int = 6):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
     model.ir_version = 10
     onnx.save(model, f"{export_dir}/expert_stack.onnx")
-    with open(f"{export_dir}/reflex_config.json", "w") as f:
+    with open(f"{export_dir}/tether_config.json", "w") as f:
         json.dump({
             "model_type": "smolvla",
             "action_chunk_size": 50,
@@ -120,7 +120,7 @@ def test_batching():
         return False
 
     def run_scenario(label: str, port: int, max_batch: int, n_concurrent: int):
-        cmd = ["reflex", "serve", "/tmp/fake_export",
+        cmd = ["tether", "serve", "/tmp/fake_export",
                "--port", str(port), "--host", "127.0.0.1",
                "--device", "cpu", "--no-strict-providers"]
         if max_batch > 1:

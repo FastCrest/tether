@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://reflex-vla.io/schemas/doctor-output-v1.json",
-  "title": "reflex doctor --format json output",
-  "description": "Stable envelope for `reflex doctor --format json`. Schema v1: additive fields don't bump version; breaking changes do. Authoritative spec for CI consumers.",
+  "$id": "https://tether.fastcrest.com/schemas/doctor-output-v1.json",
+  "title": "tether doctor --format json output",
+  "description": "Stable envelope for `tether doctor --format json`. Schema v1: additive fields don't bump version; breaking changes do. Authoritative spec for CI consumers.",
   "type": "object",
   "required": ["schema_version", "timestamp", "model", "embodiment", "checks", "summary"],
   "additionalProperties": false,

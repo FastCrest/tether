@@ -1,20 +1,20 @@
-"""Run `reflex finetune` on Modal — GPU-accelerated, no local GPU needed.
+"""Run `tether finetune` on Modal — GPU-accelerated, no local GPU needed.
 
-This is the v0.3 MVP scaffold. Wraps `reflex.finetune.run_finetune` on
+This is the v0.3 MVP scaffold. Wraps `tether.finetune.run_finetune` on
 an A10G (default) or A100 (for larger base models). Writes output to
-the shared gr00t-onnx-outputs volume so subsequent `reflex serve` or
+the shared gr00t-onnx-outputs volume so subsequent `tether serve` or
 parity runs can pick up the exported ONNX without re-copying the
 6-12GB file across the network.
 
 Usage:
-    modal run scripts/modal_reflex_finetune.py \\
+    modal run scripts/modal_tether_finetune.py \\
         --base lerobot/smolvla_base \\
         --dataset lerobot/libero \\
         --output-subdir my_smolvla_libero \\
         --steps 5000
 
     # With a larger GPU for pi0-scale models (v0.5+):
-    modal run scripts/modal_reflex_finetune.py \\
+    modal run scripts/modal_tether_finetune.py \\
         --base lerobot/pi0_base \\
         --dataset my-org/my-demos \\
         --output-subdir my_pi0_run \\
@@ -29,7 +29,7 @@ import os
 import subprocess
 import modal
 
-app = modal.App("reflex-finetune")
+app = modal.App("tether-finetune")
 
 
 def _hf_secret():
@@ -94,11 +94,11 @@ image = (
     )
     .run_commands(
         # [monolithic] extra pulls onnx-diagnostic + optree + scipy,
-        # which reflex.exporters.monolithic needs at import time for the
+        # which tether.exporters.monolithic needs at import time for the
         # auto-export chain that runs after training succeeds.
         # GITHUB_TOKEN injected from modal secret `github-token` because
         # the repo is private.
-        f'pip install "reflex-vla[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/reflex-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({
@@ -128,11 +128,11 @@ def finetune_modal(
     target: str = "desktop",
     skip_export: bool = False,
 ):
-    """Run reflex.finetune.run_finetune on Modal."""
+    """Run tether.finetune.run_finetune on Modal."""
     import logging
     from pathlib import Path
 
-    from reflex.finetune import FinetuneConfig, run_finetune
+    from tether.finetune import FinetuneConfig, run_finetune
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -191,7 +191,7 @@ def main(
     target: str = "desktop",
     skip_export: bool = False,
 ):
-    print(f"[reflex finetune on Modal]")
+    print(f"[tether finetune on Modal]")
     print(f"  base:    {base}")
     print(f"  dataset: {dataset}")
     print(f"  output:  /onnx_out/{output_subdir}")

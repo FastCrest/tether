@@ -1,6 +1,6 @@
-# Eval-as-a-service (`reflex eval`)
+# Eval-as-a-service (`tether eval`)
 
-`reflex eval ./my-export/ --suite libero --num-episodes 3` — one command, ~30 minutes, LIBERO success rate + per-task numbers + optional MP4 clips + cost transparency. Wraps the existing Modal image + `osmesa`/MuJoCo recipe + the `vla-eval` adapter.
+`tether eval ./my-export/ --suite libero --num-episodes 3` — one command, ~30 minutes, LIBERO success rate + per-task numbers + optional MP4 clips + cost transparency. Wraps the existing Modal image + `osmesa`/MuJoCo recipe + the `vla-eval` adapter.
 
 Per ADR `2026-04-25-eval-as-a-service-architecture`. Phase 1 ships LIBERO only on Modal (with Linux x86_64 local fallback); Phase 2 adds SimplerEnv + `customer` suite + HF Hub video upload.
 
@@ -11,20 +11,20 @@ Per ADR `2026-04-25-eval-as-a-service-architecture`. Phase 1 ships LIBERO only o
 modal token new
 
 # 2. Smoke run (~$0.20, ~3 minutes on A10G cold start)
-reflex eval ./my-export/ \
+tether eval ./my-export/ \
     --suite libero \
     --num-episodes 3 \
     --tasks libero_spatial
 
 # 3. Full bench (~$10, ~30 minutes)
-reflex eval ./my-export/ \
+tether eval ./my-export/ \
     --suite libero \
     --num-episodes 50 \
     --video \
     --output ./eval-out/
 
 # 4. Cost preview before kicking off something expensive
-reflex eval ./my-export/ \
+tether eval ./my-export/ \
     --num-episodes 100 \
     --cost-preview
 ```
@@ -33,7 +33,7 @@ Output: `./eval-out/report.json` (machine-readable, schema v1) + `./eval-out/vid
 
 ## Why this exists
 
-Every research group evaluating a new VLA asks for the same thing: "give me task-success numbers I can put in a paper". The existing path is `clone modal_libero_*.py + figure out the auth + figure out the dep pins + handle the 5 documented failure modes + parse the output yourself`. That's 1-2 days of yak-shaving per group. `reflex eval` ships the whole path in one verb.
+Every research group evaluating a new VLA asks for the same thing: "give me task-success numbers I can put in a paper". The existing path is `clone modal_libero_*.py + figure out the auth + figure out the dep pins + handle the 5 documented failure modes + parse the output yourself`. That's 1-2 days of yak-shaving per group. `tether eval` ships the whole path in one verb.
 
 ## The 10 flags
 
@@ -43,7 +43,7 @@ Every research group evaluating a new VLA asks for the same thing: "give me task
 | `--num-episodes` | `3` | Per-task. 3 = smoke; 50-100 = published-paper grade. |
 | `--tasks` | `(all)` | Comma-separated. Empty = the 4 LIBERO families (spatial / object / goal / 10). |
 | `--runtime` | `modal` | `modal` = bundled image (turnkey). `local` = Linux x86_64 + `[eval-local]` extra. |
-| `--seed` | `0` | Matches `reflex bench`. Pass `--seed 7` to reproduce prior `modal_libero_*.py` published runs. |
+| `--seed` | `0` | Matches `tether bench`. Pass `--seed 7` to reproduce prior `modal_libero_*.py` published runs. |
 | `--max-parallel` | `1` | Honored when the runtime supports it (Modal yes, local no). |
 | `--cost-preview` | `false` | Dry-run: estimate `$` without invoking. Useful before 100-ep × 90-task runs. |
 | `--video` | `false` | Per-episode MP4 to `<output>/videos/`. Cap at ~10MB / episode. |
@@ -52,7 +52,7 @@ Every research group evaluating a new VLA asks for the same thing: "give me task
 
 ## Pre-flight smoke test
 
-Before invoking the expensive run, `reflex eval` runs a **pre-flight** in an isolated subprocess that exercises the LIBERO init path (import + `OffScreenRenderEnv` + `env.reset()`). This catches **4 of the 5 documented LIBERO failure modes** in ~2 seconds, before you spend $$ on a doomed run.
+Before invoking the expensive run, `tether eval` runs a **pre-flight** in an isolated subprocess that exercises the LIBERO init path (import + `OffScreenRenderEnv` + `env.reset()`). This catches **4 of the 5 documented LIBERO failure modes** in ~2 seconds, before you spend $$ on a doomed run.
 
 Bounded `failure_mode` enum, surfaced in the CLI + telemetry:
 
@@ -62,7 +62,7 @@ Bounded `failure_mode` enum, surfaced in the CLI + telemetry:
 | `egl-black-frames` | Force `MUJOCO_GL=osmesa` in your env. |
 | `dep-version-conflict` | Pin `robosuite==1.4.1`, `bddl==1.0.1`, `mujoco==3.3.2`. Use `--runtime modal` for known-good pins. |
 | `osmesa-compile-hang` | Increase `--preflight-timeout` (cold containers take 60-180s for first-scene compile). |
-| `import-error` | `pip install 'reflex-vla[eval-local]'` for local; `--runtime modal` for the bundled image. |
+| `import-error` | `pip install 'fastcrest-tether[eval-local]'` for local; `--runtime modal` for the bundled image. |
 
 The 5th failure (per-episode OOM) is per-call probabilistic; backoff + a legible error in the runner covers it.
 
@@ -129,7 +129,7 @@ Cross-field invariant: `success == True` if and only if `terminal_reason == "suc
 
 ## Cost transparency
 
-`reflex eval --cost-preview` prints a `$` estimate **before** invoking. The cost table is baked at ship time and refreshed quarterly against actual Modal billing logs.
+`tether eval --cost-preview` prints a `$` estimate **before** invoking. The cost table is baked at ship time and refreshed quarterly against actual Modal billing logs.
 
 Current rates (cost-table schema v1):
 
@@ -145,29 +145,29 @@ Above-`$50` estimate triggers an extra **"are you sure?"** warning so the custom
 Phase 1: **Linux x86_64 only**. Requires the `[eval-local]` extra:
 
 ```bash
-pip install 'reflex-vla[eval-local]'
+pip install 'fastcrest-tether[eval-local]'
 ```
 
-`--runtime local` **never silently falls back to Modal**. If the local env is broken, `reflex eval` fails loud with a remediation pointer. This avoids surprise Modal bills + masks real env-config issues.
+`--runtime local` **never silently falls back to Modal**. If the local env is broken, `tether eval` fails loud with a remediation pointer. This avoids surprise Modal bills + masks real env-config issues.
 
 macOS local fallback is Phase 2 (the `osmesa` + MuJoCo + `lerobot` dep stack on macOS isn't ready).
 
 ## Doctor integration
 
-`reflex doctor` gains 3 additive checks (no new `--eval-ready` subflag — keeps the doctor surface flat):
+`tether doctor` gains 3 additive checks (no new `--eval-ready` subflag — keeps the doctor surface flat):
 
 - `check_modal_auth` — pass when `~/.modal.toml` exists OR `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` env are set
 - `check_libero_importable` — pass when `import libero` works
-- `check_vla_eval_importable` — pass when the Reflex internal adapter at `src/reflex/runtime/adapters/vla_eval.py` imports
+- `check_vla_eval_importable` — pass when the Tether internal adapter at `src/tether/runtime/adapters/vla_eval.py` imports
 
-All 3 are **warns** (not fails) — customers not using `reflex eval` aren't blocked.
+All 3 are **warns** (not fails) — customers not using `tether eval` aren't blocked.
 
 ## Reproducing prior LIBERO numbers
 
 The `modal_libero_*.py` scripts produced the published 80%+ LIBERO numbers using `seed=7`. To reproduce:
 
 ```bash
-reflex eval ./my-export/ \
+tether eval ./my-export/ \
     --suite libero \
     --num-episodes 50 \
     --seed 7 \
@@ -211,4 +211,4 @@ Install via `pip install modal` then run `modal token new` to authenticate. `--r
 
 ## Pricing
 
-`reflex eval` is **free** to use. You pay Modal directly for compute (per the cost table above). Reflex Pro license is **not required** for `reflex eval` — it's the open-source serve-side feature. (Pro license gates `--collect-data`, `--distill-schedule`, etc. on the `reflex serve` side; see `self_distilling_serve.md`.)
+`tether eval` is **free** to use. You pay Modal directly for compute (per the cost table above). Tether Pro license is **not required** for `tether eval` — it's the open-source serve-side feature. (Pro license gates `--collect-data`, `--distill-schedule`, etc. on the `tether serve` side; see `self_distilling_serve.md`.)
