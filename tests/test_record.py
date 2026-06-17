@@ -5,11 +5,14 @@ modes, gzip round-trip, disk-full degraded path, model/config hashing.
 
 Pure stdlib — no model loads, no network.
 """
+
 from __future__ import annotations
 
 import gzip
 import hashlib
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -89,9 +92,18 @@ class TestHeaderFormat:
         rec.close()
         h = _read_all(rec.filepath)[0]
         for field in [
-            "kind", "schema_version", "tether_version", "model_hash",
-            "config_hash", "export_dir", "model_type", "export_kind",
-            "hardware", "providers", "session_id", "started_at",
+            "kind",
+            "schema_version",
+            "tether_version",
+            "model_hash",
+            "config_hash",
+            "export_dir",
+            "model_type",
+            "export_kind",
+            "hardware",
+            "providers",
+            "session_id",
+            "started_at",
         ]:
             assert field in h, f"header missing required field '{field}'"
 
@@ -121,8 +133,16 @@ class TestRequestFormat:
         rec.close()
         req_rec = _read_all(rec.filepath)[1]
         for field in [
-            "kind", "schema_version", "seq", "chunk_id", "timestamp",
-            "request", "response", "latency", "denoise", "mode",
+            "kind",
+            "schema_version",
+            "seq",
+            "chunk_id",
+            "timestamp",
+            "request",
+            "response",
+            "latency",
+            "denoise",
+            "mode",
         ]:
             assert field in req_rec, f"request missing '{field}'"
         assert req_rec["kind"] == "request"
@@ -351,6 +371,126 @@ class TestGzipRoundTrip:
 
 
 # ---------------------------------------------------------------------------
+# Background writer
+# ---------------------------------------------------------------------------
+
+
+class TestBackgroundWriter:
+    def test_write_request_returns_before_background_emit_completes(self, tmp_path, monkeypatch):
+        rec = _make_writer(tmp_path, gzip_output=False)
+        emit_started = threading.Event()
+        release_emit = threading.Event()
+        original_emit = rec._emit
+
+        def slow_emit(record):
+            emit_started.set()
+            if not release_emit.wait(1.0):
+                raise TimeoutError("test did not release RecordWriter worker")
+            original_emit(record)
+
+        monkeypatch.setattr(rec, "_emit", slow_emit)
+
+        started_at = time.perf_counter()
+        seq = _dummy_request(rec)
+        elapsed = time.perf_counter() - started_at
+
+        assert seq == 0
+        assert elapsed < 0.05
+        assert emit_started.wait(1.0)
+        assert not rec.filepath.exists()
+
+        release_emit.set()
+        rec.flush_sync()
+        records = _read_all(rec.filepath)
+        assert [r["kind"] for r in records] == ["header", "request"]
+        rec.close()
+
+    def test_write_request_snapshots_mutable_inputs(self, tmp_path, monkeypatch):
+        rec = _make_writer(tmp_path, gzip_output=False)
+        emit_started = threading.Event()
+        release_emit = threading.Event()
+        original_emit = rec._emit
+
+        def blocking_emit(record):
+            emit_started.set()
+            if not release_emit.wait(1.0):
+                raise TimeoutError("test did not release RecordWriter worker")
+            original_emit(record)
+
+        monkeypatch.setattr(rec, "_emit", blocking_emit)
+
+        state = [1.0, 2.0]
+        actions = [[3.0, 4.0]]
+        cache = {"hit": False, "nested": {"count": 1}}
+
+        try:
+            seq = _dummy_request(
+                rec,
+                state=state,
+                actions=actions,
+                action_dim=2,
+                cache=cache,
+            )
+            assert seq == 0
+            assert emit_started.wait(1.0)
+
+            state[0] = 99.0
+            actions[0][0] = 99.0
+            cache["nested"]["count"] = 99
+
+            release_emit.set()
+            rec.flush_sync()
+            request = _read_all(rec.filepath)[1]
+            assert request["request"]["state"] == [1.0, 2.0]
+            assert request["response"]["actions"] == [[3.0, 4.0]]
+            assert request["cache"]["nested"]["count"] == 1
+        finally:
+            release_emit.set()
+            rec.close()
+
+    def test_queue_full_degrades_and_short_circuits(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tether.runtime.record.RECORD_QUEUE_MAXSIZE", 1)
+        rec = _make_writer(tmp_path, gzip_output=False)
+        emit_started = threading.Event()
+        release_emit = threading.Event()
+        original_emit = rec._emit
+
+        def blocking_emit(record):
+            emit_started.set()
+            release_emit.wait(1.0)
+            original_emit(record)
+
+        monkeypatch.setattr(rec, "_emit", blocking_emit)
+
+        try:
+            assert _dummy_request(rec, i=0) == 0
+            assert emit_started.wait(1.0)
+            assert _dummy_request(rec, i=1) == 1
+
+            assert _dummy_request(rec, i=2) == -1
+            assert rec.degraded is True
+            assert _dummy_request(rec, i=3) == -1
+        finally:
+            release_emit.set()
+            rec.close()
+
+    def test_close_drains_pending_records(self, tmp_path):
+        rec = _make_writer(tmp_path, gzip_output=False)
+        for i in range(10):
+            _dummy_request(rec, i=i)
+        rec.write_footer({"total_requests": 10})
+
+        rec.close()
+
+        records = _read_all(rec.filepath)
+        requests = [r for r in records if r["kind"] == "request"]
+        assert len(requests) == 10
+        assert requests[-1]["seq"] == 9
+        assert records[-1]["kind"] == "footer"
+        assert records[-1]["total_requests"] == 10
+
+
+# ---------------------------------------------------------------------------
 # Disk-full degraded path (D.1.11)
 # ---------------------------------------------------------------------------
 
@@ -362,6 +502,7 @@ class TestDegradedPath:
         still returns a valid seq — subsequent calls return -1."""
         rec = _make_writer(tmp_path)
         _dummy_request(rec)  # opens file + writes header + record
+        rec.flush_sync()
         assert not rec.degraded
 
         # Make every subsequent write raise
@@ -371,27 +512,32 @@ class TestDegradedPath:
         rec._fh.write = always_fail  # type: ignore[assignment]
 
         # The call that triggers degradation still returns a valid seq
-        _dummy_request(rec, i=1)
+        assert _dummy_request(rec, i=1) == 1
+        rec.flush_sync()
         assert rec.degraded is True
 
         # Subsequent calls short-circuit and return -1
         seq_after = _dummy_request(rec, i=2)
         assert seq_after == -1
+        rec.close()
 
     def test_degraded_recorder_skips_subsequent_writes(self, tmp_path):
         """Once degraded, write_request returns -1 and doesn't touch the file."""
         rec = _make_writer(tmp_path)
         _dummy_request(rec)
+        rec.flush_sync()
         rec.degraded = True
         size_before = rec.filepath.stat().st_size
         seq = _dummy_request(rec, i=99)
         assert seq == -1
         assert rec.filepath.stat().st_size == size_before
+        rec.close()
 
     def test_degraded_skips_footer(self, tmp_path):
         """write_footer is a no-op when degraded."""
         rec = _make_writer(tmp_path)
         _dummy_request(rec)
+        rec.flush_sync()
         rec.degraded = True
         rec.write_footer({"total_requests": 99})
         rec.close()

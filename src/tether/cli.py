@@ -7744,6 +7744,5 @@ def data_revoke() -> None:
     set_contribute_data(False)
     console.print(f"Revoked: {removed} files deleted. Data contribution disabled.")
 
-
 if __name__ == "__main__":
     app()

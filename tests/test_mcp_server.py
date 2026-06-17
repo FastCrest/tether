@@ -247,6 +247,52 @@ async def test_validate_dataset_tool_returns_error_on_missing_path():
 
 
 # ---------------------------------------------------------------------------
+# Resource: version://current
+# ---------------------------------------------------------------------------
+
+
+def _resource_text(result) -> str:
+    if isinstance(result, list):
+        contents = result
+    elif hasattr(result, "contents"):
+        contents = result.contents
+    else:
+        return result.text if hasattr(result, "text") else str(result)
+    return "".join(
+        (
+            item.text
+            if hasattr(item, "text")
+            else item.content
+            if hasattr(item, "content")
+            else str(item)
+        )
+        for item in contents
+    )
+
+
+@pytest.mark.asyncio
+async def test_version_resource_registered():
+    mcp = create_mcp_server(_mock_tether_server())
+    resources = await mcp.list_resources()
+    uris = {str(r.uri) for r in resources}
+    assert "version://current" in uris
+
+
+@pytest.mark.asyncio
+async def test_version_resource_returns_package_version():
+    import json
+    from tether import __version__
+
+    mcp = create_mcp_server(_mock_tether_server())
+    result = await mcp.read_resource("version://current")
+
+    data = json.loads(_resource_text(result))
+    assert data["version"] == __version__
+    assert data["package"] == "fastcrest-tether"
+    assert data["service"] == "tether"
+
+
+# ---------------------------------------------------------------------------
 # Resource: metrics://prometheus
 # ---------------------------------------------------------------------------
 
@@ -256,15 +302,7 @@ async def test_metrics_resource_returns_prometheus_text():
     mcp = create_mcp_server(_mock_tether_server())
     # Read the metrics resource
     result = await mcp.read_resource("metrics://prometheus")
-    # read_resource returns a list of ReadResourceContents or strings depending
-    # on FastMCP version — handle both
-    if isinstance(result, list):
-        payload = "".join(
-            (item.text if hasattr(item, "text") else str(item))
-            for item in result
-        )
-    else:
-        payload = result.text if hasattr(result, "text") else str(result)
+    payload = _resource_text(result)
     # Real Prometheus exposition starts with # HELP or # TYPE comments
     assert isinstance(payload, str)
     assert len(payload) > 0
