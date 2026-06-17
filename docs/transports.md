@@ -8,8 +8,8 @@ produces actions; the transport delivers them to the robot client.
 
 | Transport | Flag | When to use | Install |
 |---|---|---|---|
-| **HTTP** (default) | `--transport http` | Standard REST API. Works with any HTTP client (curl, Python requests, browser). Best for prototyping + debugging. | `pip install tether[serve]` |
-| **ZMQ** | `--transport zmq` | Low-latency binary wire. 20× lower bandwidth for multi-camera setups. 10× smaller robot-side install. Best for production robot deployments where every millisecond matters. | Server: `pip install tether[serve]`. Robot: `pip install pyzmq msgpack numpy opencv-python-headless` (~25 MB) |
+| **HTTP** (default) | `--transport http` | Standard REST API. Works with any HTTP client (curl, Python requests, browser). Best for prototyping + debugging. | `pip install fastcrest-tether[serve]` |
+| **ZMQ** | `--transport zmq` | Low-latency binary wire. 20× lower bandwidth for multi-camera setups. 10× smaller robot-side install. Best for production robot deployments where every millisecond matters. | Server: `pip install fastcrest-tether[serve]`. Robot: `pip install pyzmq msgpack numpy opencv-python-headless` (~25 MB) |
 | **ROS2** | (v1.0) | Native ROS2 action server. Reserved for v1.0. | — |
 
 ## Quick Start
@@ -29,8 +29,8 @@ curl -X POST http://localhost:8000/act \
 ### ZMQ
 
 ```bash
-# Server (GPU machine)
-tether serve ./my_export/ --transport zmq --port 5555
+# Local dev server. Non-loopback ZMQ binds require Secure ZMQ below.
+tether serve ./my_export/ --transport zmq --host 127.0.0.1 --port 5555
 ```
 
 ```python
@@ -46,6 +46,54 @@ obs = {
 }
 actions = client.predict_action(obs)
 robot.execute(actions[0])  # first action in the chunk
+```
+
+### Secure ZMQ
+
+Production ZMQ deployments should use CURVE authentication/encryption and a
+control token for operational endpoints such as `ping` and `kill`.
+`tether serve --transport zmq` refuses non-loopback binds unless both are
+configured. For isolated lab networks only, operators can pass
+`--zmq-insecure-ok` to make that risk explicit.
+
+Generate one server keypair and one client keypair:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import zmq.auth
+
+out = Path("zmq-certs")
+(out / "clients").mkdir(parents=True, exist_ok=True)
+zmq.auth.create_certificates(out, "server")
+zmq.auth.create_certificates(out / "clients", "robot-1")
+PY
+```
+
+Start the server with the server secret certificate and the directory of
+allowed client public certificates:
+
+```bash
+tether serve ./my_export/ \
+  --transport zmq \
+  --port 5555 \
+  --zmq-server-cert ./zmq-certs/server.key_secret \
+  --zmq-client-cert-dir ./zmq-certs/clients \
+  --zmq-control-token "$TETHER_ZMQ_CONTROL_TOKEN"
+```
+
+Configure the robot-side client with its secret certificate, the server public
+certificate, and the same control token:
+
+```python
+import os
+
+client = ZmqRuntimeClient(
+    "tcp://gpu-server:5555",
+    curve_client_cert="./zmq-certs/clients/robot-1.key_secret",
+    curve_server_public_key="./zmq-certs/server.key",
+    auth_token=os.environ["TETHER_ZMQ_CONTROL_TOKEN"],
+)
 ```
 
 ## ZMQ Performance

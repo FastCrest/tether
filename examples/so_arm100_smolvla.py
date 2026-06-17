@@ -19,14 +19,14 @@ Hardware requirements:
     - USB-to-serial bridge on /dev/ttyUSB0 (Linux) or /dev/tty.usbserial-* (Mac)
 
 Python requirements:
-    pip install 'reflex-vla[serve,gpu,monolithic,lerobot]'   # GPU host
-    pip install 'reflex-vla[serve,onnx,lerobot,so100]'       # Mac / Pi at the arm
+    pip install 'fastcrest-tether[serve,gpu,monolithic,lerobot]'   # GPU host
+    pip install 'fastcrest-tether[serve,onnx,lerobot,so100]'       # Mac / Pi at the arm
 
 Calibration:
     If you already have a LeRobot calibration file (recorded via
     `lerobot-calibrate --robot so_follower`), point CAL_PATH at it.
     Otherwise, run:
-        reflex calibrate so_arm100 default --output calib.json
+        tether calibrate so_arm100 default --output calib.json
     and replace with a real calibration before running on hardware.
 
 Usage:
@@ -59,26 +59,26 @@ def build_adapter() -> SOARM100Adapter:
     if not Path(CAL_PATH).exists():
         print(
             f"[warn] {CAL_PATH} not found; using factory defaults. "
-            f"Generate one with `reflex calibrate so_arm100 default --output {CAL_PATH}` "
+            f"Generate one with `tether calibrate so_arm100 default --output {CAL_PATH}` "
             f"or import an existing LeRobot calibration with "
-            f"`reflex calibrate so_arm100 import <path>`."
+            f"`tether calibrate so_arm100 import <path>`."
         )
         return SOARM100Adapter.default(port=PORT)
     return SOARM100Adapter.from_calibration(CAL_PATH, port=PORT)
 
 
 def phase_export(adapter: SOARM100Adapter) -> None:
-    """Run `reflex export` with the SO-ARM100 calibration embedded.
+    """Run `tether export` with the SO-ARM100 calibration embedded.
 
     This drives the same code path as the CLI command:
-        reflex export lerobot/smolvla_base \
+        tether export lerobot/smolvla_base \
             --output bundle/ \
             --embodiment so_arm100 \
             --calibration calib.json
     """
     import subprocess
     cmd = [
-        sys.executable, "-m", "reflex.cli", "export", MODEL_ID,
+        sys.executable, "-m", "tether.cli", "export", MODEL_ID,
         "--output", BUNDLE_DIR,
         "--embodiment", "so_arm100",
     ]
@@ -101,14 +101,14 @@ def phase_export(adapter: SOARM100Adapter) -> None:
 
 
 def phase_verify() -> None:
-    """Run `reflex verify` on the exported bundle.
+    """Run `tether verify` on the exported bundle.
 
     The `--embodiment so_arm100` flag tells verify to record provenance for
     the parity cert; the numerical gates are unchanged.
     """
     import subprocess
     cmd = [
-        sys.executable, "-m", "reflex.cli", "verify", BUNDLE_DIR,
+        sys.executable, "-m", "tether.cli", "verify", BUNDLE_DIR,
         "--num-episodes", str(N_EPISODES),
         "--output", VERIFY_OUT,
         "--embodiment", "so_arm100",
@@ -125,7 +125,7 @@ def phase_verify() -> None:
 
 
 def phase_serve(adapter: SOARM100Adapter) -> None:
-    """Start `reflex serve` against the bundle on the SO-ARM100.
+    """Start `tether serve` against the bundle on the SO-ARM100.
 
     NOTE: this opens a live serial port + runs until killed. Don't fire-and-
     forget in headless scripts; we exec the CLI directly so Ctrl+C reaches
@@ -133,14 +133,14 @@ def phase_serve(adapter: SOARM100Adapter) -> None:
     """
     import os
     print(
-        f"[serve] launching: reflex serve {BUNDLE_DIR} "
+        f"[serve] launching: tether serve {BUNDLE_DIR} "
         f"--embodiment so_arm100 --port {PORT}"
     )
     print("[serve] Ctrl+C to stop. Endpoints: /act /health /config")
     os.execvp(
         sys.executable,
         [
-            sys.executable, "-m", "reflex.cli", "serve", BUNDLE_DIR,
+            sys.executable, "-m", "tether.cli", "serve", BUNDLE_DIR,
             "--embodiment", "so_arm100",
         ],
     )

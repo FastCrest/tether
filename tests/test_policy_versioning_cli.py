@@ -7,7 +7,8 @@ hook.
 """
 from __future__ import annotations
 
-from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -160,33 +161,34 @@ def test_missing_policy_b_path_rejected(fake_export, fake_export_b, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Shadow flag (Phase 1.5; shipped inert)
+# Shadow flag
 # ---------------------------------------------------------------------------
 
 
-def test_shadow_policy_logs_phase15_warning(fake_export, tmp_path, monkeypatch):
-    """--shadow-policy is accepted in single-policy mode but logs a 'shipped
-    inert' warning. Skipping actual server-load (would need full deps)."""
+def test_shadow_policy_surfaces_active_banner(fake_export, tmp_path, monkeypatch):
+    """--shadow-policy is accepted in single-policy mode and surfaces the
+    active shadow-rollout banner before handing off to uvicorn."""
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    # Force the server-load path to fail fast so we just observe the
-    # validation + banner output. Patch TetherServer.load to raise.
-
-    def _fake_load(self):
-        raise SystemExit(0)  # short-circuit before real model load
-
-    monkeypatch.setattr(
-        "tether.runtime.server.TetherServer.load", _fake_load,
+    (shadow / "model.onnx").write_bytes(b"fake")
+    (shadow / "tether_config.json").write_text("{}")
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"]),
     )
+    monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)
     result = runner.invoke(
         app, [
             "serve", str(fake_export),
+            "--device", "cpu",
             "--shadow-policy", str(shadow),
         ],
     )
-    # The warning text should appear before SystemExit takes us out
+    assert result.exit_code == 0, result.output
     assert "shadow-policy" in result.output.lower()
-    assert "phase 1.5" in result.output.lower() or "inert" in result.output.lower()
+    assert "shadow rollout active" in result.output.lower()
+    assert "not sent to the robot" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -59,7 +59,11 @@ ALGO = "hmac-sha256-v1"
 # Project salt — public and intentionally so. It's a domain-separation
 # string, not a secret. Phase 1.5 will pair this with a server-issued
 # customer-secret stored alongside the license.
-_PROJECT_SALT = b"tether-vla:pro-fingerprint:v1"
+# NOTE: keeps the pre-rename "reflex-vla" salt on purpose — it is a wire
+# contract: rotating it changes every customer fingerprint and breaks Pro
+# license node binding for 0.11.x pilots on upgrade. Rotate only with a
+# coordinated v2 scheme.
+_PROJECT_SALT = b"reflex-vla:pro-fingerprint:v1"
 
 
 @dataclass(frozen=True)

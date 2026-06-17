@@ -27,7 +27,7 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             expected="`import libero` succeeds",
             actual=f"ImportError: {exc}",
             remediation=(
-                f"Install via `pip install 'tether[eval-local]'`. "
+                f"Install via `pip install 'fastcrest-tether[eval-local]'`. "
                 f"Required only for `tether eval --runtime local`; "
                 f"--runtime modal ships LIBERO in the bundled image. "
                 f"Phase 1 local fallback is Linux x86_64 only."

@@ -16,8 +16,10 @@ Plan: features/01_serve/subfeatures/_ecosystem/prometheus-grafana_plan.md
 """
 from __future__ import annotations
 
+import math
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -113,6 +115,20 @@ tether_fallback_invocations_total = Counter(
     registry=REGISTRY,
 )
 
+tether_inference_executor_rejected_total = Counter(
+    "tether_inference_executor_rejected_total",
+    "Inference executor submissions rejected because the bounded queue was full",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
+tether_rtc_adaptive_decisions_total = Counter(
+    "tether_rtc_adaptive_decisions_total",
+    "Adaptive RTC action-chunk decisions partitioned by bounded reason",
+    labelnames=("reason",),
+    registry=REGISTRY,
+)
+
 # Action-similarity fast-path skip counter (action-similarity-fast-path
 # Phase 1.5 — FlashVLA). Increments when the inference path returns a
 # cached action chunk instead of running the expert. Operator visibility
@@ -164,6 +180,78 @@ tether_robot_info = Gauge(
     "tether_robot_info",
     "Static per-process robot identity. Value always 1. Join via `instance`.",
     labelnames=("robot_id", "embodiment", "model_id"),
+    registry=REGISTRY,
+)
+
+tether_inference_executor_in_flight = Gauge(
+    "tether_inference_executor_in_flight",
+    "Synchronous inference calls currently running in executor worker threads",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
+tether_inference_executor_queue_depth = Gauge(
+    "tether_inference_executor_queue_depth",
+    "Synchronous inference calls accepted but not yet running in executor workers",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+
+tether_inference_executor_capacity = Gauge(
+    "tether_inference_executor_capacity",
+    "Configured inference executor capacity by kind",
+    labelnames=("embodiment", "model_id", "policy_slot", "kind"),
+    registry=REGISTRY,
+)
+
+# Adaptive RTC action-chunking gauges. Labels match the /act latency histogram
+# and stay bounded: embodiment × model_id × policy_slot.
+tether_rtc_adaptive_horizon = Gauge(
+    "tether_rtc_adaptive_horizon",
+    "Latest adaptive RTC execution horizon in actions",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_applied_horizon = Gauge(
+    "tether_rtc_adaptive_applied_horizon",
+    "Latest RTC execution horizon actually applied after canary gating",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_risk_score = Gauge(
+    "tether_rtc_adaptive_risk_score",
+    "Latest adaptive RTC risk score used for horizon selection",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_replan_threshold_ratio = Gauge(
+    "tether_rtc_adaptive_replan_threshold_ratio",
+    "Latest adaptive RTC replan threshold ratio",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_guard_margin = Gauge(
+    "tether_rtc_adaptive_guard_margin",
+    "Latest ActionGuard safety margin feeding adaptive RTC chunking",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_correction_magnitude = Gauge(
+    "tether_rtc_adaptive_correction_magnitude",
+    "Latest A2C2 correction magnitude feeding adaptive RTC chunking",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_uncertainty = Gauge(
+    "tether_rtc_adaptive_uncertainty",
+    "Latest model uncertainty feeding adaptive RTC chunking",
+    labelnames=("embodiment", "model_id", "policy_slot"),
+    registry=REGISTRY,
+)
+tether_rtc_adaptive_action_delta = Gauge(
+    "tether_rtc_adaptive_action_delta",
+    "Latest overlap delta between previous and current RTC action chunks",
+    labelnames=("embodiment", "model_id", "policy_slot"),
     registry=REGISTRY,
 )
 
@@ -228,6 +316,118 @@ def inc_fallback_invocation(embodiment: str, target: str) -> None:
     ).inc()
 
 
+def inc_inference_executor_rejected(
+    embodiment: str,
+    model_id: str,
+    policy_slot: str = "prod",
+) -> None:
+    tether_inference_executor_rejected_total.labels(
+        embodiment=embodiment,
+        model_id=model_id,
+        policy_slot=policy_slot,
+    ).inc()
+
+
+_RTC_ADAPTIVE_REASONS = frozenset({
+    "disabled",
+    "no_signal",
+    "stable",
+    "stable_high_latency",
+    "uncertainty",
+    "guard_margin",
+    "correction",
+    "action_delta",
+    "unknown",
+})
+
+
+def observe_rtc_adaptive_chunking(
+    *,
+    embodiment: str,
+    model_id: str,
+    policy_slot: str = "prod",
+    decision: Mapping[str, Any] | None = None,
+    signal: Mapping[str, Any] | None = None,
+    last_action_delta: float | None = None,
+) -> None:
+    """Emit bounded metrics for the latest adaptive RTC chunking snapshot."""
+    labels = {
+        "embodiment": embodiment,
+        "model_id": model_id,
+        "policy_slot": policy_slot,
+    }
+
+    if decision:
+        reason = _bounded_rtc_reason(decision.get("reason"))
+        tether_rtc_adaptive_decisions_total.labels(reason=reason).inc()
+        _set_gauge_if_float(
+            tether_rtc_adaptive_horizon,
+            labels,
+            decision.get("horizon"),
+        )
+        _set_gauge_if_float(
+            tether_rtc_adaptive_applied_horizon,
+            labels,
+            decision.get("applied_horizon"),
+        )
+        _set_gauge_if_float(
+            tether_rtc_adaptive_risk_score,
+            labels,
+            decision.get("risk_score"),
+        )
+        _set_gauge_if_float(
+            tether_rtc_adaptive_replan_threshold_ratio,
+            labels,
+            decision.get("replan_threshold_ratio"),
+        )
+
+    if signal:
+        _set_gauge_if_float(
+            tether_rtc_adaptive_guard_margin,
+            labels,
+            signal.get("guard_margin"),
+        )
+        _set_gauge_if_float(
+            tether_rtc_adaptive_correction_magnitude,
+            labels,
+            signal.get("correction_magnitude"),
+        )
+        _set_gauge_if_float(
+            tether_rtc_adaptive_uncertainty,
+            labels,
+            signal.get("uncertainty"),
+        )
+        signal_delta = _metric_float(signal.get("action_delta"))
+    else:
+        signal_delta = None
+
+    if signal_delta is None:
+        signal_delta = _metric_float(last_action_delta)
+    if signal_delta is not None:
+        tether_rtc_adaptive_action_delta.labels(**labels).set(signal_delta)
+
+
+def _bounded_rtc_reason(value: Any) -> str:
+    reason = str(value) if value is not None else "unknown"
+    return reason if reason in _RTC_ADAPTIVE_REASONS else "unknown"
+
+
+def _metric_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _set_gauge_if_float(gauge: Gauge, labels: dict[str, str], value: Any) -> None:
+    out = _metric_float(value)
+    if out is not None:
+        gauge.labels(**labels).set(out)
+
+
 def inc_action_skip() -> None:
     tether_action_skip_total.inc()
 
@@ -256,6 +456,30 @@ def set_robot_info(robot_id: str, embodiment: str, model_id: str) -> None:
 
 def set_episodes_active(embodiment: str, value: int) -> None:
     tether_episodes_active.labels(embodiment=embodiment).set(value)
+
+
+def set_inference_executor_state(
+    embodiment: str,
+    model_id: str,
+    policy_slot: str = "prod",
+    *,
+    in_flight: int,
+    queue_depth: int,
+    max_workers: int,
+    max_queue: int,
+) -> None:
+    labels = {
+        "embodiment": embodiment,
+        "model_id": model_id,
+        "policy_slot": policy_slot,
+    }
+    tether_inference_executor_in_flight.labels(**labels).set(in_flight)
+    tether_inference_executor_queue_depth.labels(**labels).set(queue_depth)
+    tether_inference_executor_capacity.labels(**labels, kind="workers").set(max_workers)
+    tether_inference_executor_capacity.labels(**labels, kind="queue").set(max_queue)
+    tether_inference_executor_capacity.labels(**labels, kind="total").set(
+        max_workers + max_queue
+    )
 
 
 @contextmanager

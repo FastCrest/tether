@@ -17,7 +17,7 @@ Small N (1 task, a few episodes): this is a plumbing/tap validation, NOT a
 statistically-powered cert (that needs >= 30 episodes through `tether verify`).
 
 Reuses the PROVEN LIBERO+CUDA image from
-`scripts/modal_fast_kernels_l3_side_by_side.py` verbatim, installing tether-vla
+`scripts/modal_fast_kernels_l3_side_by_side.py` verbatim, installing tether
 from git @ local HEAD (which must be pushed). Run:
 
     ( sleep 2400 && modal app stop tether-verify-deepening-smoke ) &   # watchdog
@@ -91,7 +91,7 @@ image = (
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
     .run_commands(
-        f'pip install "tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({

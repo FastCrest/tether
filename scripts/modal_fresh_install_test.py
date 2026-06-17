@@ -1,6 +1,6 @@
 """Modal: fresh-install smoke test — simulates a new customer's first hour.
 
-Spins a clean python:3.12-slim container, pip-installs tether-vla from
+Spins a clean python:3.12-slim container, pip-installs tether from
 the live GitHub main branch, verifies the CLI works end-to-end:
 
   1. `tether --help` returns zero + shows subcommands
@@ -18,7 +18,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "tether-vla[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla.git"
+        "fastcrest-tether[serve,onnx] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether.git"
     )
 )
 

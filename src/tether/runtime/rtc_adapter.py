@@ -24,6 +24,13 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from tether.runtime.adaptive_chunking import (
+    AdaptiveChunkConfig,
+    AdaptiveChunkController,
+    AdaptiveChunkDecision,
+    AdaptiveChunkSignal,
+    overlapping_action_delta,
+)
 from tether.runtime.buffer import ActionChunkBuffer
 
 logger = logging.getLogger(__name__)
@@ -55,7 +62,7 @@ def require_rtc() -> None:
     """Raise if lerobot's RTC module isn't installed in this env."""
     if not _RTC_AVAILABLE:
         raise ImportError(
-            "lerobot.policies.rtc not available. Install tether-vla[rtc] "
+            "lerobot.policies.rtc not available. Install fastcrest-tether[rtc] "
             "or pip install lerobot>=0.5.1."
         )
 
@@ -111,10 +118,21 @@ class RtcAdapterConfig:
     guidance_space: str = "normalized"  # 'normalized' | 'processed'
     gripper_dim_indices: list[int] = field(default_factory=list)
     skip_gripper_smoothing: bool = True
+    adaptive_chunking_enabled: bool = False
+    adaptive_chunking_canary: bool = False
+    adaptive_min_horizon: int = 1
+    adaptive_low_uncertainty: float = 0.20
+    adaptive_high_uncertainty: float = 0.65
+    adaptive_low_guard_margin: float = 0.05
+    adaptive_high_correction_magnitude: float = 0.20
+    adaptive_high_action_delta: float = 0.25
+    adaptive_high_latency_ms: float = 120.0
 
     def __post_init__(self) -> None:
         """Validate the Tether-side extras. lerobot's RTCConfig validates
         its own fields when constructed via _build_lerobot_rtc_config()."""
+        if self.adaptive_chunking_canary:
+            self.adaptive_chunking_enabled = True
         if self.prefix_attention_schedule not in _VALID_SCHEDULES:
             raise ValueError(
                 f"prefix_attention_schedule must be one of {_VALID_SCHEDULES}, "
@@ -131,6 +149,40 @@ class RtcAdapterConfig:
         if not 1 <= self.latency_percentile <= 99:
             raise ValueError(
                 f"latency_percentile must be in [1, 99], got {self.latency_percentile}"
+            )
+        if self.adaptive_min_horizon < 1:
+            raise ValueError(
+                f"adaptive_min_horizon must be >= 1, got {self.adaptive_min_horizon}"
+            )
+        if self.adaptive_low_uncertainty < 0:
+            raise ValueError(
+                "adaptive_low_uncertainty must be >= 0, "
+                f"got {self.adaptive_low_uncertainty}"
+            )
+        if self.adaptive_high_uncertainty <= self.adaptive_low_uncertainty:
+            raise ValueError(
+                "adaptive_high_uncertainty must be greater than "
+                "adaptive_low_uncertainty"
+            )
+        if self.adaptive_low_guard_margin < 0:
+            raise ValueError(
+                "adaptive_low_guard_margin must be >= 0, "
+                f"got {self.adaptive_low_guard_margin}"
+            )
+        if self.adaptive_high_correction_magnitude < 0:
+            raise ValueError(
+                "adaptive_high_correction_magnitude must be >= 0, "
+                f"got {self.adaptive_high_correction_magnitude}"
+            )
+        if self.adaptive_high_action_delta < 0:
+            raise ValueError(
+                "adaptive_high_action_delta must be >= 0, "
+                f"got {self.adaptive_high_action_delta}"
+            )
+        if self.adaptive_high_latency_ms <= 0:
+            raise ValueError(
+                "adaptive_high_latency_ms must be positive, "
+                f"got {self.adaptive_high_latency_ms}"
             )
 
 
@@ -276,6 +328,29 @@ class RtcAdapter:
         self._active_episode_id: str | None = None
         self._chunk_count: int = 0
         self._prev_chunk_left_over: Any = None  # set in merge_and_update (Day 3)
+        self._last_action_delta: float | None = None
+        self._last_adaptive_signal = AdaptiveChunkSignal()
+        self._last_adaptive_decision: AdaptiveChunkDecision | None = None
+        self._last_execution_horizon: int | None = None
+        self._last_actions_consumed: int | None = None
+        self._adaptive_chunker: AdaptiveChunkController | None = None
+        if config.adaptive_chunking_enabled:
+            self._adaptive_chunker = AdaptiveChunkController(
+                AdaptiveChunkConfig(
+                    enabled=True,
+                    min_horizon=config.adaptive_min_horizon,
+                    base_horizon=config.rtc_execution_horizon,
+                    max_horizon=action_buffer.capacity,
+                    low_uncertainty=config.adaptive_low_uncertainty,
+                    high_uncertainty=config.adaptive_high_uncertainty,
+                    low_guard_margin=config.adaptive_low_guard_margin,
+                    high_correction_magnitude=(
+                        config.adaptive_high_correction_magnitude
+                    ),
+                    high_action_delta=config.adaptive_high_action_delta,
+                    high_latency_ms=config.adaptive_high_latency_ms,
+                )
+            )
 
     # ---- Public API ---------------------------------------------
 
@@ -304,6 +379,8 @@ class RtcAdapter:
         # Step 1+2: latency → actions_consumed
         latency_s = self.latency.estimate()
         actions_consumed = int(latency_s * self.config.execute_hz)
+        self._last_actions_consumed = actions_consumed
+        adaptive_decision = self._decide_adaptive_horizon(latency_s)
         logger.debug(
             "[rtc] predict — latency p%d=%.3fs → %d actions consumed",
             self.config.latency_percentile, latency_s, actions_consumed,
@@ -317,8 +394,15 @@ class RtcAdapter:
             "inference_delay": actions_consumed,
             "prev_chunk_left_over": self._prev_chunk_left_over,
         }
+        execution_horizon = self.config.rtc_execution_horizon
+        if (
+            adaptive_decision is not None
+            and not self.config.adaptive_chunking_canary
+        ):
+            execution_horizon = adaptive_decision.horizon
+        self._last_execution_horizon = execution_horizon
         if self.config.enabled:
-            rtc_kwargs["execution_horizon"] = self.config.rtc_execution_horizon
+            rtc_kwargs["execution_horizon"] = execution_horizon
 
         t0 = time.monotonic()
         try:
@@ -338,6 +422,48 @@ class RtcAdapter:
         self.latency.record(elapsed_s)
 
         return actions
+
+    def record_adaptive_signal(
+        self,
+        *,
+        uncertainty: float | None = None,
+        guard_margin: float | None = None,
+        correction_magnitude: float | None = None,
+    ) -> None:
+        """Record external runtime signals for the next AAC decision.
+
+        The /act handler calls this after guard/A2C2 post-processing. Keeping
+        it separate from predict preserves the current response while allowing
+        the next chunk horizon to react to the latest safety/correction facts.
+        """
+        self._last_adaptive_signal = AdaptiveChunkSignal(
+            uncertainty=_clean_signal_value(uncertainty),
+            guard_margin=_clean_signal_value(guard_margin),
+            correction_magnitude=_clean_signal_value(correction_magnitude),
+        )
+
+    def _decide_adaptive_horizon(
+        self,
+        latency_s: float,
+    ) -> AdaptiveChunkDecision | None:
+        """Return current AAC decision, or None when disabled."""
+        if self._adaptive_chunker is None:
+            self._last_adaptive_decision = None
+            return None
+        decision = self._adaptive_chunker.decide(
+            AdaptiveChunkSignal(
+                uncertainty=self._last_adaptive_signal.uncertainty,
+                guard_margin=self._last_adaptive_signal.guard_margin,
+                correction_magnitude=(
+                    self._last_adaptive_signal.correction_magnitude
+                ),
+                latency_ms=latency_s * 1000.0,
+                action_delta=self._last_action_delta,
+            ),
+            capacity=self.buffer.capacity,
+        )
+        self._last_adaptive_decision = decision
+        return decision
 
     def merge_and_update(
         self,
@@ -367,6 +493,7 @@ class RtcAdapter:
             chunk_2d = actions[0]
         else:
             chunk_2d = actions
+        self._last_action_delta = overlapping_action_delta(prev_leftover, chunk_2d)
         self.buffer.push_chunk(chunk_2d)
 
         # 3. Stash the snapshot for the NEXT predict call's guidance
@@ -375,6 +502,8 @@ class RtcAdapter:
         # 4. Record latency + bump chunk count
         self.latency.record(elapsed_time)
         self._chunk_count += 1
+        if self.config.enabled and self._last_execution_horizon is None:
+            self._last_execution_horizon = self.config.rtc_execution_horizon
 
     def reset(self, episode_id: str | None = None) -> None:
         """Reset RTC state at episode boundary.
@@ -385,6 +514,11 @@ class RtcAdapter:
         self._active_episode_id = episode_id
         self._chunk_count = 0
         self._prev_chunk_left_over = None
+        self._last_action_delta = None
+        self._last_adaptive_signal = AdaptiveChunkSignal()
+        self._last_adaptive_decision = None
+        self._last_execution_horizon = None
+        self._last_actions_consumed = None
         # Clear the latency window — old samples are stale on a fresh episode
         self.latency = LatencyTracker(
             percentile=self.config.latency_percentile,
@@ -399,13 +533,41 @@ class RtcAdapter:
     def get_stats(self) -> dict[str, Any]:
         """Stats for logging / metrics. Consumed by Prometheus exporter
         (Phase 0.5.8) + ``tether monitor``."""
-        return {
+        stats = {
             "enabled": self.config.enabled,
             "chunk_count": self._chunk_count,
             "active_episode_id": self._active_episode_id,
             "latency": self.latency.summary(),
             "rtc_available": _RTC_AVAILABLE,
+            "configured_execution_horizon": self.config.rtc_execution_horizon,
         }
+        if self._last_execution_horizon is not None:
+            stats["execution_horizon"] = self._last_execution_horizon
+        if self._last_actions_consumed is not None:
+            stats["actions_consumed"] = self._last_actions_consumed
+        if self._last_action_delta is not None:
+            stats["last_action_delta"] = self._last_action_delta
+        if self._last_adaptive_signal.has_values():
+            stats["adaptive_signal"] = self._last_adaptive_signal.as_dict()
+        if self._last_adaptive_decision is not None:
+            adaptive_chunking = self._last_adaptive_decision.as_dict()
+            adaptive_chunking["canary"] = self.config.adaptive_chunking_canary
+            if self._last_execution_horizon is not None:
+                adaptive_chunking["applied_horizon"] = self._last_execution_horizon
+            stats["adaptive_chunking"] = adaptive_chunking
+        return stats
+
+
+def _clean_signal_value(value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        cleaned = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(cleaned):
+        return None
+    return cleaned
 
 
 __all__ = [

@@ -41,7 +41,9 @@ Three load-bearing customer signals:
 | `--policy-a <path>` | (unset) | 2-policy mode: path to policy A export. Must be set together with `--policy-b`. |
 | `--policy-b <path>` | (unset) | 2-policy mode: path to policy B export. Mutually exclusive with `--shadow-policy`. |
 | `--split <int>` | `50` | Percent of episodes routed to A. `0` = all to B; `100` = all to A (shadow-staging). |
-| `--shadow-policy <path>` | (unset) | Phase 1.5 — shadow inference. Phase 1 ships INERT (warning only). |
+| `--shadow-policy <path>` | (unset) | Shadow inference: mirror sampled traffic to a candidate export and append `shadow_result` evidence. |
+| `--shadow-sample <float>` | `1.0` | Fraction of `/act` requests mirrored to `--shadow-policy` in `[0, 1]`. |
+| `--shadow-queue-size <int>` | `32` | Bounded background shadow queue. `0` disables queueing; overload records `shadow_queue_full`. |
 | `--no-rtc` | `false` | **REQUIRED** in 2-policy mode. RTC carry-over is per-policy; cross-policy carry-over produces OOD actions. |
 
 ## Sticky-per-episode routing
@@ -154,7 +156,6 @@ to single-policy mode.[/red]
 
 ## What's NOT shipped Phase 1
 
-- **Shadow inference** (`--shadow-policy`) — Phase 1.5; flag is accepted but logs an "inert" warning.
 - **Canary auto-promotion** — manual operator control over `--split` for now; Phase 2 wires automated ramp-up + rollback based on Prometheus signals.
 - **Cross-policy memory pooling** — each policy holds its own ONNX session + buffers; no shared workspace. Phase 2 explores `onnxruntime` IO-binding sharing.
 
@@ -165,6 +166,7 @@ to single-policy mode.[/red]
 - ✅ `/act` handler dispatches via `TwoPolicyDispatcher.predict()` when `server.two_policy_state` is set
 - ✅ `X-Tether-Policy-Slot` + `X-Tether-Model-Version` + `X-Tether-Routing-Key` + `X-Tether-Routing-Degraded` response headers
 - ✅ Per-request `routing` block in record-replay JSONL trace
+- ✅ Shadow policy execution records candidate actions as append-only `shadow_result` rows without returning them to the robot client
 - ✅ Per-slot `policy_slot` label on Prometheus `reflex_act_latency_seconds`
 - ✅ **Per-slot `PolicyRuntime` queue + cost-budget scheduler** (chunk-budget-batching benefit in 2-policy mode)
 - ✅ Refuse-to-load memory check fires before either ReflexServer loads

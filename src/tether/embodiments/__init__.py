@@ -53,7 +53,7 @@ def _warn_rtc_horizon_migration(
     )
 
 # Embodiment preset JSONs are bundled INSIDE the package so they ship with
-# `pip install tether` (since v0.5.2). For dev workflows the repo also
+# `pip install fastcrest-tether` (since v0.5.2). For dev workflows the repo also
 # keeps editable copies in <repo>/configs/embodiments/ — those are checked
 # as a fallback when running from source if the in-package presets are
 # missing for some reason. Canonical runtime location is the package.
@@ -141,7 +141,7 @@ class EmbodimentConfig:
             user_dir = Path.home() / ".cache" / "tether" / "embodiments"
             raise ValueError(
                 f"Unknown embodiment preset '{name}'.\n"
-                f"  Available bundled presets: {available or '(none — package may be stale, try: pip install --upgrade tether-vla)'}\n"
+                f"  Available bundled presets: {available or '(none — package may be stale, try: pip install --upgrade tether)'}\n"
                 f"  Workarounds:\n"
                 f"    1. Drop --embodiment to run without normalization (raw actions).\n"
                 f"    2. Use one of the bundled presets above.\n"

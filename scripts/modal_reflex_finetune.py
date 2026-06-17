@@ -98,7 +98,7 @@ image = (
         # auto-export chain that runs after training succeeds.
         # GITHUB_TOKEN injected from modal secret `github-token` because
         # the repo is private.
-        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({

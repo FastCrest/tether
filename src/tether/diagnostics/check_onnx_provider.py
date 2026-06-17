@@ -23,7 +23,7 @@ def _run(**kwargs) -> CheckResult:
             expected="onnxruntime installed",
             actual="ImportError — onnxruntime is missing",
             remediation=(
-                "pip install tether[serve] (CPU) or tether-vla[gpu] (GPU). "
+                "pip install fastcrest-tether[serve] (CPU) or fastcrest-tether[gpu] (GPU). "
                 "ONNX runtime is required for the inference path."
             ),
             duration_ms=0.0,
@@ -77,7 +77,7 @@ def _run(**kwargs) -> CheckResult:
         actual=f"only CPU EP available (got: {available})",
         remediation=(
             "Running CPU-only is fine for dev. For production, install onnxruntime-gpu: "
-            "pip install tether[gpu]. Per ADR 2026-04-14, --strict-providers fails "
+            "pip install fastcrest-tether[gpu]. Per ADR 2026-04-14, --strict-providers fails "
             "the server if GPU is requested but unavailable."
         ),
         duration_ms=0.0,

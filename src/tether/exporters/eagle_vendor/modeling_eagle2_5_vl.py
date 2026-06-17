@@ -8,7 +8,7 @@ import inspect
 
 import torch
 import torch.utils.checkpoint as cp
-# Eagle VLM: export-only vendor (2026-04-19 by tether-vla).
+# Eagle VLM: export-only vendor (2026-04-19 by tether).
 # peft is required for training but not for inference/export. Make the
 # import optional so environments without peft (our export pipeline)
 # still work. The wrap_*_lora methods below will error if called without

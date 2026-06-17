@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Optional dep: fastmcp ships behind tether-vla[mcp]. When not
+# Optional dep: fastmcp ships behind tether[mcp]. When not
 # installed, all tests in this file skip rather than error -- the mcp-
 # server feature is correctly gated as an extra. Caught while verifying
 # Track A status 2026-04-25.

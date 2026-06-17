@@ -228,6 +228,17 @@ class TestTetherGoCli:
         assert "pi05-libero" in result.output
         assert "a10g" in result.output
 
+    def test_dry_run_default_target_honors_tether_home(self, runner, cli_app, tmp_path, monkeypatch):
+        tether_home = tmp_path / "tether-home"
+        monkeypatch.setenv("TETHER_HOME", str(tether_home))
+
+        result = runner.invoke(cli_app, [
+            "go", "--model", "smolvla-base", "--device-class", "cpu", "--dry-run",
+        ])
+
+        assert result.exit_code == 0, result.output
+        assert f"target:   {tether_home / 'models' / 'smolvla-base'}" in result.output
+
     def test_dry_run_with_family_resolves(self, runner, cli_app):
         result = runner.invoke(cli_app, [
             "go", "--model", "smolvla", "--device-class", "orin_nano", "--dry-run",

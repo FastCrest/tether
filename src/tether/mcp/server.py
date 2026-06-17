@@ -87,13 +87,13 @@ def create_mcp_server(
 
     Raises:
         ImportError: if `fastmcp` is not installed. Install via
-            `pip install tether[mcp]` or `pip install fastmcp`.
+            `pip install fastcrest-tether[mcp]` or `pip install fastmcp`.
     """
     try:
         from fastmcp import FastMCP
     except ImportError as exc:
         raise ImportError(
-            "fastmcp not installed. Install via `pip install tether[mcp]` "
+            "fastmcp not installed. Install via `pip install fastcrest-tether[mcp]` "
             "or `pip install fastmcp`."
         ) from exc
 
@@ -318,7 +318,7 @@ def create_mcp_server(
             return {"error": {
                 "kind": "ImportError",
                 "message": f"bench helpers unavailable: {exc}",
-                "remediation": "Reinstall tether-vla with default extras (serve + bench substrate).",
+                "remediation": "Reinstall tether with default extras (serve + bench substrate).",
             }}
 
         path = Path(export_dir).expanduser()
@@ -406,7 +406,7 @@ def create_mcp_server(
             return {"error": {
                 "kind": "ImportError",
                 "message": f"registry unavailable: {exc}",
-                "remediation": "Reinstall tether-vla with default extras.",
+                "remediation": "Reinstall tether with default extras.",
             }}
 
         if target not in HARDWARE_PROFILES:

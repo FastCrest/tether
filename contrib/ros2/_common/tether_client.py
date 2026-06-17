@@ -1,4 +1,4 @@
-"""Shared reflex serve client for ROS2 robot adapters.
+"""Shared tether serve client for ROS2 robot adapters.
 
 Wraps either the ZMQ client (preferred for production) or HTTP client
 (fallback) with a unified interface. Robot adapters call
@@ -14,8 +14,8 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-class ReflexClient:
-    """Unified client for calling reflex serve from ROS2 adapters.
+class TetherClient:
+    """Unified client for calling tether serve from ROS2 adapters.
 
     Args:
         server_url: Server URL. Format determines transport:
@@ -38,7 +38,7 @@ class ReflexClient:
     def _connect(self) -> None:
         if self._server_url.startswith("tcp://"):
             try:
-                from reflex.runtime.transports.zmq.client import ZmqRuntimeClient
+                from tether.runtime.transports.zmq.client import ZmqRuntimeClient
                 self._client = ZmqRuntimeClient(
                     self._server_url, timeout_ms=self._timeout_ms,
                 )
@@ -104,11 +104,11 @@ class ReflexClient:
         if hasattr(self._client, "close"):
             self._client.close()
 
-    def __enter__(self) -> "ReflexClient":
+    def __enter__(self) -> "TetherClient":
         return self
 
     def __exit__(self, *args: Any) -> None:
         self.close()
 
 
-__all__ = ["ReflexClient"]
+__all__ = ["TetherClient"]

@@ -1,4 +1,4 @@
-# Contributing to tether-vla
+# Contributing to tether
 
 thanks for looking at tether. this is a deploy layer for VLAs (SmolVLA, pi0, pi0.5, GR00T N1.6) that gets you from `git clone` to a running policy server in minutes, with numerical parity to the reference checkpoint.
 
@@ -6,7 +6,7 @@ thanks for looking at tether. this is a deploy layer for VLAs (SmolVLA, pi0, pi0
 
 ```bash
 # install from source
-git clone https://github.com/FastCrest/tether && cd tether-vla
+git clone https://github.com/FastCrest/tether && cd tether
 uv pip install -e .
 
 # sanity check your box

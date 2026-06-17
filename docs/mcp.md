@@ -5,7 +5,7 @@ Tether exposes a [Model Context Protocol](https://spec.modelcontextprotocol.io/)
 ## Install
 
 ```bash
-pip install tether[mcp]
+pip install fastcrest-tether[mcp]
 ```
 
 Pulls [`fastmcp`](https://github.com/jlowin/fastmcp) >= 3.0 alongside the core dependencies.
@@ -89,7 +89,7 @@ Shadow actions, A/B policy routing, and dataset validation run via explicit tool
 
 **"fastmcp not installed"**
 ```bash
-pip install tether[mcp]
+pip install fastcrest-tether[mcp]
 ```
 
 **Claude Desktop doesn't list Tether as a tool**

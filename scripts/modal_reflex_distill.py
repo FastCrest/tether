@@ -77,7 +77,7 @@ HF_CACHE_PATH = "/root/.cache/huggingface"
 ONNX_OUTPUT_PATH = "/onnx_out"
 
 # Distill needs the same image as finetune + the SnapFlow deps land
-# automatically via the `tether-vla[monolithic]` wheel install.
+# automatically via the `fastcrest-tether[monolithic]` wheel install.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
@@ -109,7 +109,7 @@ image = (
         # Local timestamp in an echo cache-busts Modal's layer cache even
         # when _HEAD falls back to 'main' on the build server.
         f'echo "build_bust={_BUILD_BUST}"',
-        f'pip install "tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether-vla@{_HEAD}"',
+        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
         secrets=[modal.Secret.from_name("github-token")],
     )
     .env({

@@ -7,7 +7,7 @@
 ## Install
 
 ```bash
-pip install tether
+pip install fastcrest-tether
 ```
 
 (~40 seconds; pulls torch + transformers + onnx as deps. Yes, it's chunky — the chat agent itself is ~50 KB, but it shares the install with the rest of Tether.)
@@ -55,9 +55,9 @@ Here's what the doctor found:
   ✓ tether 0.3.5
   ⚠ torch + CUDA — torch 2.11.0, CUDA unavailable (you're on Apple Silicon)
   ⚠ ONNX Runtime — not installed
-    Action: pip install 'tether[serve,onnx]'
+    Action: pip install 'fastcrest-tether[serve,onnx]'
   ⚠ fastapi + uvicorn — not installed
-    Action: pip install 'tether[serve,onnx]'
+    Action: pip install 'fastcrest-tether[serve,onnx]'
 ```
 
 ### "What models can I deploy?"

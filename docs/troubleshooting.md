@@ -183,7 +183,7 @@ ERROR: Ignored the following versions that require a different python version: 0
 
 **Fix:** On Jetson, install `[serve]` only — **not** `[monolithic]`:
 ```bash
-pip install 'tether[serve]'
+pip install 'fastcrest-tether[serve]'
 ```
 
 The monolithic ONNX export (`tether export --monolithic`) requires lerobot and must run on a **Python 3.12+ host** (desktop, cloud GPU, or Docker). Export there, then copy the ONNX to the Jetson and serve it:

@@ -276,7 +276,7 @@ def _render_vulnerability_manifest(deployment: DeploymentMetadata) -> str:
         "",
         "| Component | Version | CVE | Severity | Status | Fix version | Notes |",
         "|---|---|---|---|---|---|---|",
-        "| tether-vla | see SBOM | TBD | TBD | monitoring | TBD | Fill during operations |",
+        "| tether | see SBOM | TBD | TBD | monitoring | TBD | Fill during operations |",
         "",
         "## Update Handling",
         "",

@@ -12,7 +12,7 @@ Each example is a self-contained walkthrough you can paste into a terminal. Star
 All examples assume you've installed at least the base package:
 
 ```bash
-pip install tether
+pip install fastcrest-tether
 ```
 
 Some examples need the GPU or monolithic export extras — each example flags what it needs at the top.

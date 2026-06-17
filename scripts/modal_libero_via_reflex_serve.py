@@ -83,7 +83,7 @@ GATE_OUTPUT_PATH = "/gate_out"
 
 
 # Image: same shape as modal_libero (LIBERO + osmesa + MuJoCo) + the
-# tether-vla install + httpx for the HTTP client.
+# tether install + httpx for the HTTP client.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
@@ -115,7 +115,7 @@ image = (
         "LIBERO_BASE": "/tmp/libero_data",
         "PYTHONPATH": "/opt/LIBERO",
     })
-    # Mount local tether-vla source instead of pulling from git+https. Removes
+    # Mount local tether source instead of pulling from git+https. Removes
     # the dependency on a workspace-level github-token Modal secret (every
     # fresh Modal account otherwise needs the secret added at
     # https://modal.com/secrets/<workspace>/main/create?secret_name=github-token

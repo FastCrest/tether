@@ -19,17 +19,25 @@ Then from robot:
 from __future__ import annotations
 
 import base64
+import hashlib
+import inspect
 import io
 import json
 import logging
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import torch
 
+from .inference_executor import (
+    BoundedInferenceExecutor,
+    InferenceExecutorFull,
+    InferenceExecutorSnapshot,
+)
 from .record import (
     RecordWriter,
     compute_config_hash,
@@ -42,8 +50,11 @@ from .tracing import get_tracer, setup_tracing, shutdown_tracing
 try:
     from tether.observability import (
         METRICS_CONTENT_TYPE,
+        inc_inference_executor_rejected,
+        observe_rtc_adaptive_chunking,
         record_act_latency,
         render_metrics,
+        set_inference_executor_state,
         set_robot_info,
         set_server_up,
         track_in_flight,
@@ -52,8 +63,11 @@ try:
 except ImportError:  # pragma: no cover
     _METRICS_AVAILABLE = False
     METRICS_CONTENT_TYPE = "text/plain"
+    def inc_inference_executor_rejected(*args, **kwargs): pass
+    def observe_rtc_adaptive_chunking(*args, **kwargs): pass
     def record_act_latency(*args, **kwargs): pass
     def render_metrics() -> bytes: return b"# prometheus_client not installed\n"
+    def set_inference_executor_state(*args, **kwargs): pass
     def set_server_up(*args): pass
     def set_robot_info(*args, **kwargs): pass
 
@@ -69,6 +83,421 @@ try:
     from tether import __version__ as _TETHER_VERSION
 except ImportError:
     _TETHER_VERSION = ""
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(out):
+        return None
+    return out
+
+
+def _call_accepts_keyword(fn: Any, keyword: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return keyword in params or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in params.values()
+    )
+
+
+async def _predict_from_request_async(server: Any, request: Any) -> dict[str, Any]:
+    predict = getattr(server, "predict_from_base64_async")
+    kwargs: dict[str, Any] = {
+        "image_b64": getattr(request, "image", None),
+        "instruction": getattr(request, "instruction", "") or "",
+        "state": getattr(request, "state", None),
+    }
+    image_wrist = getattr(request, "image_wrist", None)
+    if image_wrist is not None and _call_accepts_keyword(predict, "image_wrist_b64"):
+        kwargs["image_wrist_b64"] = image_wrist
+    return await predict(**kwargs)
+
+
+def _shadow_request_key(request: Any) -> str:
+    for attr in ("request_id", "episode_id", "session_id"):
+        value = getattr(request, attr, None)
+        if value:
+            return f"{attr}:{value}"
+    payload = {
+        "instruction": getattr(request, "instruction", "") or "",
+        "state": getattr(request, "state", None),
+        "image_sha256": hashlib.sha256(
+            (getattr(request, "image", None) or "").encode("utf-8")
+        ).hexdigest()[:16],
+    }
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return "body:" + hashlib.sha256(body.encode("utf-8")).hexdigest()[:32]
+
+
+def _shadow_sample_decision(request: Any, sample_rate: float) -> tuple[bool, str, float]:
+    rate = max(0.0, min(1.0, float(sample_rate)))
+    key = _shadow_request_key(request)
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    score = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    return score < rate, key, score
+
+
+def _snapshot_predict_request(request: Any) -> Any:
+    state = getattr(request, "state", None)
+    return SimpleNamespace(
+        image=getattr(request, "image", None),
+        image_wrist=getattr(request, "image_wrist", None),
+        instruction=getattr(request, "instruction", "") or "",
+        state=list(state) if state is not None else None,
+        episode_id=getattr(request, "episode_id", None),
+        request_id=getattr(request, "request_id", None),
+        session_id=getattr(request, "session_id", None),
+    )
+
+
+def _actions_for_record(value: Any) -> list[list[float]] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(row, list) for row in value):
+        return None
+    return value
+
+
+def _shadow_routing_for_request(
+    server: Any,
+    request: Any,
+    production_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    shadow_server = getattr(server, "_shadow_server", None)
+    if shadow_server is None:
+        return None
+
+    sample_rate = float(getattr(server, "_shadow_sample", 1.0) or 0.0)
+    sampled, routing_key, score = _shadow_sample_decision(request, sample_rate)
+    record: dict[str, Any] = {
+        "shadow_sampled": bool(sampled),
+        "shadow_sample_rate": sample_rate,
+        "shadow_routing_key": routing_key,
+        "shadow_sample_score": round(score, 8),
+        "shadow_policy_export_dir": str(getattr(shadow_server, "export_dir", "")),
+        "shadow_model_hash": str(getattr(server, "_shadow_model_hash", "")),
+        "shadow_config_hash": str(getattr(server, "_shadow_config_hash", "")),
+    }
+    if not sampled:
+        return record
+    if isinstance(production_result, dict) and "error" in production_result:
+        record["shadow_sampled"] = False
+        record["shadow_skip_reason"] = "production_error"
+        return record
+    return record
+
+
+async def _complete_shadow_policy_record(
+    server: Any,
+    request: Any,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    if not record.get("shadow_sampled"):
+        return record
+    shadow_server = getattr(server, "_shadow_server", None)
+    if shadow_server is None:
+        record["shadow_sampled"] = False
+        record["shadow_skip_reason"] = "shadow_server_missing"
+        return record
+
+    t0 = time.perf_counter()
+    try:
+        shadow_result = await _predict_from_request_async(shadow_server, request)
+    except Exception as exc:  # noqa: BLE001 - shadow must not control the robot
+        record["shadow_latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
+        record["shadow_error"] = f"{type(exc).__name__}: {exc}"[:500]
+        logger.warning("shadow_policy.predict_failed: %s", exc)
+        return record
+
+    record["shadow_latency_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
+    if not isinstance(shadow_result, dict):
+        record["shadow_error"] = "shadow result was not a JSON object"
+        return record
+    if "error" in shadow_result:
+        record["shadow_error"] = str(shadow_result.get("error", ""))[:500]
+        return record
+
+    shadow_actions = _actions_for_record(shadow_result.get("actions"))
+    if shadow_actions is None:
+        record["shadow_error"] = "shadow result did not include action chunk"
+        return record
+    record["shadow_actions"] = shadow_actions
+    record["shadow_num_actions"] = len(shadow_actions)
+    record["shadow_action_dim"] = (
+        len(shadow_actions[0]) if shadow_actions and isinstance(shadow_actions[0], list) else 0
+    )
+    if "latency_ms" in shadow_result:
+        try:
+            record["shadow_model_latency_ms"] = float(shadow_result["latency_ms"])
+        except (TypeError, ValueError):
+            pass
+    return record
+
+
+async def _run_shadow_policy_for_record(
+    server: Any,
+    request: Any,
+    production_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    record = _shadow_routing_for_request(server, request, production_result)
+    if record is None:
+        return None
+    return await _complete_shadow_policy_record(server, request, record)
+
+
+def _write_shadow_result_record(
+    recorder: Any,
+    *,
+    seq: int,
+    request: Any,
+    routing: dict[str, Any],
+) -> None:
+    actions = _actions_for_record(routing.get("shadow_actions"))
+    error = None
+    if routing.get("shadow_error"):
+        error = {
+            "slug": "shadow-error",
+            "message": str(routing.get("shadow_error"))[:500],
+        }
+    recorder.write_shadow_result(
+        seq=seq,
+        routing=routing,
+        actions=actions,
+        action_dim=int(routing.get("shadow_action_dim") or 0),
+        latency_total_ms=(
+            float(routing["shadow_latency_ms"])
+            if routing.get("shadow_latency_ms") is not None
+            else None
+        ),
+        episode_id=getattr(request, "episode_id", None),
+        request_id=getattr(request, "request_id", None),
+        error=error,
+    )
+
+
+async def _shadow_worker_loop(server: Any) -> None:
+    queue = getattr(server, "_shadow_queue", None)
+    if queue is None:
+        return
+    while True:
+        item = await queue.get()
+        try:
+            request = item["request"]
+            routing = dict(item["routing"])
+            completed = await _complete_shadow_policy_record(server, request, routing)
+            recorder = getattr(server, "_recorder", None)
+            if recorder is not None:
+                _write_shadow_result_record(
+                    recorder,
+                    seq=int(item["seq"]),
+                    request=request,
+                    routing=completed,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("shadow_policy.worker_failed: %s", exc)
+        finally:
+            queue.task_done()
+
+
+async def _stop_shadow_worker(server: Any, *, timeout_s: float = 5.0) -> None:
+    task = getattr(server, "_shadow_worker_task", None)
+    queue = getattr(server, "_shadow_queue", None)
+    if task is None or queue is None:
+        return
+    import asyncio as _asyncio
+    try:
+        await _asyncio.wait_for(queue.join(), timeout=timeout_s)
+    except _asyncio.TimeoutError:
+        logger.warning(
+            "shadow_policy queue did not drain within %.1fs; cancelling worker",
+            timeout_s,
+        )
+    task.cancel()
+    try:
+        await task
+    except _asyncio.CancelledError:
+        pass
+
+
+def _record_rtc_adaptive_signal(
+    rtc_adapter: Any,
+    result: dict[str, Any],
+    *,
+    guard_margin: float | None = None,
+) -> None:
+    """Feed latest guard/A2C2/uncertainty telemetry into RTC AAC state."""
+    if rtc_adapter is None or not hasattr(rtc_adapter, "record_adaptive_signal"):
+        return
+
+    uncertainty = None
+    for key in ("uncertainty_score", "uncertainty", "model_uncertainty"):
+        uncertainty = _coerce_optional_float(result.get(key))
+        if uncertainty is not None:
+            break
+
+    if guard_margin is None:
+        guard_margin = _coerce_optional_float(result.get("guard_margin"))
+    else:
+        guard_margin = _coerce_optional_float(guard_margin)
+
+    rtc_adapter.record_adaptive_signal(
+        uncertainty=uncertainty,
+        guard_margin=guard_margin,
+        correction_magnitude=_coerce_optional_float(
+            result.get("a2c2_correction_magnitude")
+        ),
+    )
+
+
+def _rtc_adaptive_record_from_stats(stats: Any) -> dict[str, Any] | None:
+    """Extract the additive RTC telemetry block written into JSONL records."""
+    if not isinstance(stats, dict):
+        return None
+
+    out: dict[str, Any] = {}
+    for key in ("adaptive_chunking", "adaptive_signal"):
+        value = stats.get(key)
+        if isinstance(value, dict) and value:
+            out[key] = value
+
+    action_delta = _coerce_optional_float(stats.get("last_action_delta"))
+    if action_delta is not None:
+        out["last_action_delta"] = action_delta
+
+    return out or None
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        out = int(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out > 0 else None
+
+
+def _action_execution_from_rtc_stats(
+    stats: Any,
+    result: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Translate RTC/AAC runtime stats into response-level execution evidence."""
+    if not isinstance(stats, dict):
+        return None
+    if stats.get("enabled") is not True:
+        return None
+
+    adaptive = stats.get("adaptive_chunking")
+    adaptive = adaptive if isinstance(adaptive, dict) else {}
+    signal = stats.get("adaptive_signal")
+    signal = signal if isinstance(signal, dict) else {}
+
+    horizon = (
+        _coerce_optional_int(adaptive.get("applied_horizon"))
+        or _coerce_optional_int(adaptive.get("horizon"))
+        or _coerce_optional_int(stats.get("execution_horizon"))
+        or _coerce_optional_int(stats.get("configured_execution_horizon"))
+    )
+    out: dict[str, Any] = {
+        "scheduler": "rtc",
+        "execution_mode": "rtc_adaptive" if adaptive else "rtc_fixed",
+    }
+    if horizon is not None:
+        out["executed_horizon"] = horizon
+        out["execution_horizon"] = horizon
+
+    reason = adaptive.get("reason")
+    if reason not in (None, "", [], {}):
+        out["adaptive_reason"] = str(reason)
+        out["horizon_reason"] = str(reason)
+    elif horizon is not None:
+        out["adaptive_reason"] = "fixed_rtc_horizon"
+        out["horizon_reason"] = "fixed_rtc_horizon"
+
+    chunk_count = _coerce_optional_int(stats.get("chunk_count"))
+    if chunk_count is not None:
+        out["chunk_count"] = chunk_count
+        out["cache_status"] = "rtc_carry_hit" if chunk_count > 1 else "rtc_carry_cold"
+
+    actions_consumed = _coerce_optional_int(stats.get("actions_consumed"))
+    if actions_consumed is not None:
+        out["actions_consumed"] = actions_consumed
+
+    action_delta = _coerce_optional_float(stats.get("last_action_delta"))
+    if action_delta is not None:
+        out["last_action_delta"] = action_delta
+
+    if adaptive:
+        out["adaptive_chunking"] = adaptive
+    if signal:
+        out["adaptive_signal"] = signal
+
+    if result and result.get("deadline_exceeded") is True:
+        out["deadline_exceeded"] = True
+        out["deadline_cause"] = "inference_latency_over_deadline"
+
+    return out if len(out) > 2 else None
+
+
+def _set_span_optional_float(span: Any, name: str, value: Any) -> None:
+    out = _coerce_optional_float(value)
+    if out is not None:
+        span.set_attribute(name, out)
+
+
+def _set_rtc_adaptive_span_attrs(span: Any, rtc_record: dict[str, Any]) -> None:
+    decision = rtc_record.get("adaptive_chunking")
+    if isinstance(decision, dict):
+        reason = decision.get("reason")
+        if reason is not None:
+            span.set_attribute("tether.rtc.adaptive.reason", str(reason))
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.horizon", decision.get("horizon")
+        )
+        _set_span_optional_float(
+            span,
+            "tether.rtc.adaptive.applied_horizon",
+            decision.get("applied_horizon"),
+        )
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.risk_score", decision.get("risk_score")
+        )
+        _set_span_optional_float(
+            span,
+            "tether.rtc.adaptive.replan_threshold_ratio",
+            decision.get("replan_threshold_ratio"),
+        )
+        if "canary" in decision:
+            span.set_attribute(
+                "tether.rtc.adaptive.canary",
+                bool(decision.get("canary")),
+            )
+
+    signal = rtc_record.get("adaptive_signal")
+    if isinstance(signal, dict):
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.guard_margin", signal.get("guard_margin")
+        )
+        _set_span_optional_float(
+            span,
+            "tether.rtc.adaptive.correction_magnitude",
+            signal.get("correction_magnitude"),
+        )
+        _set_span_optional_float(
+            span, "tether.rtc.adaptive.uncertainty", signal.get("uncertainty")
+        )
+
+    _set_span_optional_float(
+        span, "tether.rtc.adaptive.action_delta", rtc_record.get("last_action_delta")
+    )
 
 
 # ─── Blackwell auto-detect ──────────────────────────────────────────────────
@@ -160,6 +589,8 @@ class TetherServer:
         deadline_ms: float | None = None,
         max_batch: int = 1,
         batch_timeout_ms: float = 5.0,
+        inference_executor_workers: int = 1,
+        inference_executor_queue: int = 8,
     ):
         """Create the server.
 
@@ -187,6 +618,10 @@ class TetherServer:
             deadline_ms: soft deadline per `predict()` call. If the denoise
                 loop + safety check exceeds this, the server returns the last
                 known good action (or a zero vector) and logs a deadline miss.
+            inference_executor_workers: worker threads used by async entrypoints
+                to offload synchronous predict calls.
+            inference_executor_queue: accepted-but-not-yet-running inference
+                submissions before async entrypoints reject overload.
         """
         self.export_dir = Path(export_dir)
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -200,6 +635,7 @@ class TetherServer:
         self._vlm = None
         self._vlm_loaded = False
         self._expert_input_names: list[str] = []
+        self._ort_iobinding_enabled = self.device.type == "cuda"
 
         # Composed wedges (Phase I.2)
         self._safety_config_path = Path(safety_config) if safety_config else None
@@ -219,6 +655,15 @@ class TetherServer:
         self._batch_worker_task = None
         self._batches_run = 0
         self._batched_requests = 0
+
+        # Async inference offload: bounded, dedicated executor so sync predict()
+        # work cannot build an unbounded queue behind the event loop.
+        self._inference_policy_slot = "prod"
+        self._inference_executor = BoundedInferenceExecutor(
+            max_workers=inference_executor_workers,
+            max_queue=inference_executor_queue,
+            on_state_change=self._record_inference_executor_state,
+        )
 
         # Rolling latency history for p50/p95/p99 reporting (goal:
         # latency-histograms). Capped at 1024 samples — a ring buffer in
@@ -593,6 +1038,75 @@ class TetherServer:
     def ready(self) -> bool:
         return self._ready
 
+    def _prepare_ort_iobinding(
+        self,
+        constant_inputs: dict[str, np.ndarray],
+    ) -> tuple[Any, str, list[Any]] | None:
+        """Bind denoise-loop constant inputs once for ORT I/O Binding."""
+        if (
+            not self._ort_iobinding_enabled
+            or getattr(self, "_ort_session", None) is None
+            or not hasattr(self._ort_session, "io_binding")
+        ):
+            return None
+
+        try:
+            output_name = self._ort_session.get_outputs()[0].name
+            binding = self._ort_session.io_binding()
+            kept_alive: list[Any] = []
+            for name, array in constant_inputs.items():
+                self._bind_ort_input(binding, name, array, kept_alive)
+            return binding, output_name, kept_alive
+        except Exception as e:
+            logger.debug("ORT I/O Binding unavailable; falling back to session.run: %s", e)
+            return None
+
+    def _bind_ort_input(
+        self,
+        binding: Any,
+        name: str,
+        array: np.ndarray,
+        kept_alive: list[Any],
+    ) -> None:
+        if self.device.type == "cuda":
+            import onnxruntime as ort
+
+            ort_value = ort.OrtValue.ortvalue_from_numpy(array, "cuda", 0)
+            binding.bind_ortvalue_input(name, ort_value)
+            kept_alive.append(ort_value)
+        else:
+            binding.bind_cpu_input(name, array)
+
+    def _run_ort_velocity(
+        self,
+        dynamic_inputs: dict[str, np.ndarray],
+        constant_inputs: dict[str, np.ndarray],
+        iobinding: tuple[Any, str, list[Any]] | None,
+    ) -> np.ndarray:
+        if iobinding is None:
+            return self._ort_session.run(
+                None,
+                {**dynamic_inputs, **constant_inputs},
+            )[0]
+
+        binding, output_name, kept_alive = iobinding
+        dynamic_kept_alive: list[Any] = []
+        try:
+            if hasattr(binding, "clear_binding_outputs"):
+                binding.clear_binding_outputs()
+            for name, array in dynamic_inputs.items():
+                self._bind_ort_input(binding, name, array, dynamic_kept_alive)
+            if self.device.type == "cuda":
+                binding.bind_output(output_name, "cuda", 0)
+            else:
+                binding.bind_output(output_name, "cpu")
+            self._ort_session.run_with_iobinding(binding)
+            return binding.get_outputs()[0].numpy()
+        finally:
+            # Keep OrtValues alive until ORT has finished the call.
+            kept_alive.extend(dynamic_kept_alive)
+            del kept_alive[len(kept_alive) - len(dynamic_kept_alive):]
+
     def _run_denoise(
         self,
         noisy_actions: np.ndarray,
@@ -647,35 +1161,35 @@ class TetherServer:
                 # v0.3/v0.4 single-tensor fallback
                 vlm_kv_single = zeros_4d
 
+        constant_feed: dict[str, np.ndarray] = {"position_ids": position_ids}
+        if expert_has_split_kv and vlm_k is not None and vlm_v is not None:
+            constant_feed["vlm_k"] = vlm_k
+            constant_feed["vlm_v"] = vlm_v
+            prefix_len = int(vlm_k.shape[2])  # [L, B, seq, kv]
+            batch = noisy_actions.shape[0]
+            if "prefix_offset" in self._expert_input_names:
+                constant_feed["prefix_offset"] = np.full(
+                    (batch, 1), prefix_len, dtype=np.int64
+                )
+            if "kv_mask" in self._expert_input_names:
+                # All-valid mask when we don't have the prefix pad mask handy.
+                # TODO: plumb the real padded-token mask through from the
+                # VLM orchestrator.
+                constant_feed["kv_mask"] = np.ones((batch, prefix_len), dtype=bool)
+        elif expert_has_single_kv and vlm_kv_single is not None:
+            constant_feed["vlm_kv"] = vlm_kv_single
+
+        iobinding = self._prepare_ort_iobinding(constant_feed)
+
         for step in range(self.num_denoising_steps):
             t = 1.0 + step * dt
             timestep = np.array([t], dtype=np.float32)
 
-            feed_dict = {
+            dynamic_feed = {
                 "noisy_actions": noisy_actions,
                 "timestep": timestep,
-                "position_ids": position_ids,
             }
-            if expert_has_split_kv and vlm_k is not None and vlm_v is not None:
-                feed_dict["vlm_k"] = vlm_k
-                feed_dict["vlm_v"] = vlm_v
-                prefix_len = int(vlm_k.shape[2])  # [L, B, seq, kv]
-                batch = noisy_actions.shape[0]
-                if "prefix_offset" in self._expert_input_names:
-                    feed_dict["prefix_offset"] = np.full(
-                        (batch, 1), prefix_len, dtype=np.int64
-                    )
-                if "kv_mask" in self._expert_input_names:
-                    # All-valid mask when we don't have the prefix pad mask handy.
-                    # TODO: plumb the real padded-token mask through from the
-                    # VLM orchestrator.
-                    feed_dict["kv_mask"] = np.ones(
-                        (batch, prefix_len), dtype=bool
-                    )
-            elif expert_has_single_kv and vlm_kv_single is not None:
-                feed_dict["vlm_kv"] = vlm_kv_single
-
-            velocity = self._ort_session.run(None, feed_dict)[0]
+            velocity = self._run_ort_velocity(dynamic_feed, constant_feed, iobinding)
 
             noisy_actions = noisy_actions + velocity * dt
 
@@ -763,6 +1277,7 @@ class TetherServer:
         noisy_actions, steps_used = self._run_denoise(noisy_actions, position_ids, vlm_kv=vlm_kv)
 
         actions_np = noisy_actions[0]  # [chunk, action_dim]
+        raw_actions_before_guard = actions_np.copy()
 
         # tether guard — safety check
         safety_violations = 0
@@ -851,6 +1366,8 @@ class TetherServer:
             # (omit when guard_summary remained None due to exception above).
             if guard_summary is not None:
                 result["guard_summary"] = guard_summary
+                if guard_summary.get("clamped"):
+                    result["_raw_actions_for_record"] = raw_actions_before_guard.tolist()
         if self._deadline_ms is not None:
             result["deadline_exceeded"] = deadline_exceeded
             if self._deadline_misses:
@@ -915,6 +1432,57 @@ class TetherServer:
         self._batch_worker_task = None
         self._batch_queue = None
 
+    def shutdown_inference_executor(self) -> None:
+        """Stop the dedicated inference offload pool."""
+        self._inference_executor.shutdown(wait=False)
+
+    def _inference_executor_metric_labels(self) -> tuple[str, str, str]:
+        ec = getattr(self, "embodiment_config", None)
+        embodiment = getattr(ec, "embodiment", None) or "custom"
+        model_id = Path(self.export_dir).name or "unknown"
+        policy_slot = getattr(self, "_inference_policy_slot", "prod") or "prod"
+        return embodiment, model_id, policy_slot
+
+    def _record_inference_executor_state(
+        self,
+        snapshot: InferenceExecutorSnapshot | None = None,
+    ) -> None:
+        snapshot = snapshot or self._inference_executor.snapshot()
+        embodiment, model_id, policy_slot = self._inference_executor_metric_labels()
+        set_inference_executor_state(
+            embodiment=embodiment,
+            model_id=model_id,
+            policy_slot=policy_slot,
+            in_flight=snapshot.running,
+            queue_depth=snapshot.queue_depth,
+            max_workers=snapshot.max_workers,
+            max_queue=snapshot.max_queue,
+        )
+
+    def _record_inference_executor_rejected(self) -> None:
+        embodiment, model_id, policy_slot = self._inference_executor_metric_labels()
+        inc_inference_executor_rejected(
+            embodiment=embodiment,
+            model_id=model_id,
+            policy_slot=policy_slot,
+        )
+
+    def _inference_executor_full_result(
+        self,
+        exc: InferenceExecutorFull,
+    ) -> dict[str, Any]:
+        snapshot = self._inference_executor.snapshot()
+        return {
+            "error": "inference_executor_full",
+            "message": str(exc),
+            "max_workers": snapshot.max_workers,
+            "max_queue": snapshot.max_queue,
+            "queue_depth": snapshot.queue_depth,
+            "in_flight": snapshot.running,
+            "pending": snapshot.pending,
+            "rejected_total": snapshot.rejected,
+        }
+
     async def predict_async(
         self,
         image: np.ndarray | None = None,
@@ -923,14 +1491,24 @@ class TetherServer:
     ) -> dict[str, Any]:
         """Async front-door used by the HTTP /act handler.
 
-        - If max_batch <= 1: runs `self.predict()` synchronously in this task.
+        - If max_batch <= 1: runs `self.predict()` in the bounded inference
+          executor.
         - If max_batch > 1: enqueues the request onto a batch queue. A worker
           coroutine drains the queue every `batch_timeout_ms` ms (or when the
           queue hits max_batch) and runs ONE batched ONNX inference, then
           splits the results back to each waiter.
         """
         if self._max_batch <= 1 or self._batch_queue is None:
-            return self.predict(image=image, instruction=instruction, state=state)
+            try:
+                return await self._inference_executor.submit(
+                    self.predict,
+                    image=image,
+                    instruction=instruction,
+                    state=state,
+                )
+            except InferenceExecutorFull as exc:
+                self._record_inference_executor_rejected()
+                return self._inference_executor_full_result(exc)
 
         import asyncio
         loop = asyncio.get_event_loop()
@@ -968,13 +1546,19 @@ class TetherServer:
                             fut.set_exception(asyncio.CancelledError())
                     return
 
-            # Run batched inference (sync — we're holding the event loop, but
-            # the actual ORT call is the bottleneck and yields the GIL).
             try:
-                results = self._predict_batch_sync(batch)
+                results = await self._inference_executor.submit(
+                    self._predict_batch_sync, batch,
+                )
                 for (fut, *_), result in zip(batch, results):
                     if not fut.done():
                         fut.set_result(result)
+            except InferenceExecutorFull as exc:
+                self._record_inference_executor_rejected()
+                result = self._inference_executor_full_result(exc)
+                for fut, *_ in batch:
+                    if not fut.done():
+                        fut.set_result(dict(result))
             except Exception as e:
                 for fut, *_ in batch:
                     if not fut.done():
@@ -1004,17 +1588,19 @@ class TetherServer:
         )
 
         dt = -1.0 / self.num_denoising_steps
+        constant_feed = {"position_ids": position_ids_batched}
+        iobinding = self._prepare_ort_iobinding(constant_feed)
         for step in range(self.num_denoising_steps):
             t = 1.0 + step * dt
             timestep = np.full((b,), t, dtype=np.float32)
-            velocity = self._ort_session.run(
-                None,
+            velocity = self._run_ort_velocity(
                 {
                     "noisy_actions": noisy_batched,
                     "timestep": timestep,
-                    "position_ids": position_ids_batched,
                 },
-            )[0]
+                constant_feed,
+                iobinding,
+            )
             noisy_batched = noisy_batched + velocity * dt
 
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -1093,11 +1679,7 @@ class TetherServer:
         """
         results: list[dict[str, Any]] = []
         for req in requests:
-            res = await self.predict_from_base64_async(
-                image_b64=getattr(req, "image", None),
-                instruction=getattr(req, "instruction", "") or "",
-                state=getattr(req, "state", None),
-            )
+            res = await _predict_from_request_async(self, req)
             results.append(res)
         return results
 
@@ -1111,6 +1693,8 @@ try:
         instruction: str = ""
         state: list[float] | None = None
         episode_id: str | None = None  # B.3: triggers RTC reset on change
+        request_id: str | None = None
+        session_id: str | None = None
 
     class HealthResponse(BaseModel):
         status: str
@@ -1135,6 +1719,8 @@ def create_app(
     deadline_ms: float | None = None,
     max_batch: int = 1,
     batch_timeout_ms: float = 5.0,
+    inference_executor_workers: int = 1,
+    inference_executor_queue: int = 8,
     max_batch_cost_ms: float = 100.0,  # PolicyRuntime budget per chunk-budget-batching ADR
     api_key: str | None = None,
     replan_hz: float | None = None,
@@ -1183,6 +1769,9 @@ def create_app(
     policy_b_export_dir: str | None = None,  # 2-policy mode: path to slot B
     policy_split_a_percent: int = 50,  # % traffic to slot A in [0, 100]
     policy_crash_threshold: int = 5,  # per-slot circuit-breaker threshold
+    shadow_policy: str | None = None,  # shadow mode: mirror sampled traffic to this export
+    shadow_sample: float = 1.0,  # fraction of /act traffic mirrored to shadow_policy
+    shadow_queue_size: int = 32,  # bounded pending shadow requests; 0 disables queueing
 ) -> Any:
     """Create a FastAPI app for serving VLA predictions.
 
@@ -1220,19 +1809,35 @@ def create_app(
     server.health_state flips to "degraded" — /health returns 503 and
     /act returns 503 with Retry-After: 60. Successful /act resets the
     counter. Default 5. Set to 0 to disable.
+
+    inference_executor_workers / inference_executor_queue: bounded async
+    offload capacity for synchronous predict work. Saturation returns an
+    `inference_executor_full` error result instead of growing an unbounded
+    default-executor queue.
     """
     try:
         from contextlib import asynccontextmanager
         from fastapi import Depends, FastAPI, Header, HTTPException
         from fastapi.responses import JSONResponse
     except ImportError:
-        raise ImportError("Install fastapi: pip install 'tether[serve]'")
+        raise ImportError("Install fastapi: pip install 'fastcrest-tether[serve]'")
 
     # Route: decomposed-ONNX by default; native PyTorch path under TETHER_NATIVE=1.
     # The native path bypasses our ONNX export and runs lerobot's SmolVLAPolicy
     # directly (RMSNorm still swapped for DecomposedRMSNorm for TRT-export compat
     # on the decomposed side). See tether/runtime/smolvla_native.py.
     import os as _os
+
+    if policy_b_export_dir and shadow_policy:
+        raise ValueError("policy_b_export_dir and shadow_policy are mutually exclusive")
+    try:
+        _shadow_sample_rate = float(shadow_sample)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("shadow_sample must be a float in [0, 1]") from exc
+    if _shadow_sample_rate < 0.0 or _shadow_sample_rate > 1.0:
+        raise ValueError("shadow_sample must be in [0, 1]")
+    if int(shadow_queue_size) < 0:
+        raise ValueError("shadow_queue_size must be >= 0")
 
     # Dispatch order:
     #   1. TETHER_NATIVE=1 — SmolVLANativeServer (PyTorch native path)
@@ -1247,6 +1852,113 @@ def create_app(
             _monolithic_cfg = json.loads(_config_path.read_text())
         except Exception:
             _monolithic_cfg = {}
+
+    def _build_shadow_server(shadow_export_dir: str | Path) -> Any:
+        shadow_export_dir = Path(shadow_export_dir)
+        shadow_cfg_path = shadow_export_dir / "tether_config.json"
+        shadow_cfg: dict[str, Any] = {}
+        if shadow_cfg_path.exists():
+            try:
+                shadow_cfg = json.loads(shadow_cfg_path.read_text())
+            except Exception:
+                shadow_cfg = {}
+
+        if _os.environ.get("TETHER_NATIVE", "0") == "1":
+            from tether.runtime.smolvla_native import SmolVLANativeServer
+            shadow_srv = SmolVLANativeServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+            )
+        elif shadow_cfg.get("export_kind") == "decomposed":
+            from tether.runtime.decomposed_server import Pi05DecomposedServer
+            shadow_srv = Pi05DecomposedServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+                action_similarity_threshold=action_similarity_threshold,
+                max_similar_skips=max_similar_skips,
+            )
+        elif shadow_cfg.get("export_kind") == "monolithic":
+            model_type = shadow_cfg.get("model_type", "smolvla")
+            if model_type == "pi0":
+                from tether.runtime.pi0_onnx_server import Pi0OnnxServer
+                shadow_srv = Pi0OnnxServer(
+                    shadow_export_dir,
+                    providers=providers,
+                    device=device,
+                    max_batch=max_batch,
+                    strict_providers=strict_providers,
+                )
+            elif model_type == "pi05":
+                from tether.runtime.pi05_onnx_server import Pi05OnnxServer
+                shadow_srv = Pi05OnnxServer(
+                    shadow_export_dir,
+                    providers=providers,
+                    device=device,
+                    max_batch=max_batch,
+                    strict_providers=strict_providers,
+                )
+            elif model_type == "smolvla":
+                from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+                shadow_srv = SmolVLAOnnxServer(
+                    shadow_export_dir,
+                    providers=providers,
+                    device=device,
+                    max_batch=max_batch,
+                    strict_providers=strict_providers,
+                )
+            elif model_type == "gr00t":
+                shadow_srv = TetherServer(
+                    shadow_export_dir,
+                    device=device,
+                    providers=providers,
+                    strict_providers=strict_providers,
+                    safety_config=safety_config,
+                    adaptive_steps=adaptive_steps,
+                    cloud_fallback_url=cloud_fallback_url,
+                    deadline_ms=deadline_ms,
+                    max_batch=max_batch,
+                    batch_timeout_ms=batch_timeout_ms,
+                    inference_executor_workers=inference_executor_workers,
+                    inference_executor_queue=inference_executor_queue,
+                )
+            else:
+                raise ValueError(
+                    f"Shadow runtime for model_type={model_type!r} is not supported"
+                )
+        else:
+            shadow_srv = TetherServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+                inference_executor_workers=inference_executor_workers,
+                inference_executor_queue=inference_executor_queue,
+            )
+        shadow_srv.embodiment_config = embodiment_config
+        shadow_srv._inference_policy_slot = "shadow"  # type: ignore[attr-defined]
+        return shadow_srv
 
     if _os.environ.get("TETHER_NATIVE", "0") == "1":
         from tether.runtime.smolvla_native import SmolVLANativeServer
@@ -1325,6 +2037,8 @@ def create_app(
                 deadline_ms=deadline_ms,
                 max_batch=max_batch,
                 batch_timeout_ms=batch_timeout_ms,
+                inference_executor_workers=inference_executor_workers,
+                inference_executor_queue=inference_executor_queue,
             )
         else:
             raise ValueError(
@@ -1343,12 +2057,24 @@ def create_app(
             deadline_ms=deadline_ms,
             max_batch=max_batch,
             batch_timeout_ms=batch_timeout_ms,
+            inference_executor_workers=inference_executor_workers,
+            inference_executor_queue=inference_executor_queue,
         )
 
     # Attach embodiment config (B.1) — optional, downstream consumers
     # (RTC adapter, action denormalization, tether doctor) read via
     # getattr(server, 'embodiment_config', None).
     server.embodiment_config = embodiment_config
+    server._shadow_server = None  # type: ignore[attr-defined]
+    server._shadow_policy_export_dir = (  # type: ignore[attr-defined]
+        str(Path(shadow_policy).expanduser()) if shadow_policy else ""
+    )
+    server._shadow_sample = _shadow_sample_rate if shadow_policy else 0.0  # type: ignore[attr-defined]
+    server._shadow_model_hash = ""  # type: ignore[attr-defined]
+    server._shadow_config_hash = ""  # type: ignore[attr-defined]
+    server._shadow_queue = None  # type: ignore[attr-defined]
+    server._shadow_worker_task = None  # type: ignore[attr-defined]
+    server._shadow_queue_size = int(shadow_queue_size)  # type: ignore[attr-defined]
 
     # Synthetic latency injection (B.4). Clamped to [0, 1000] ms. The
     # /act handler sleeps for this long AFTER inference + recording so
@@ -1487,10 +2213,35 @@ def create_app(
                     "curate dual-write disabled: %s", _curate_exc,
                 )
                 _curate_collector = None
+            _prod_model_hash = compute_model_hash(export_dir)
+            _prod_config_hash = compute_config_hash(export_dir)
+            _policies_meta = [
+                {
+                    "slot": "prod",
+                    "export_dir": str(export_dir),
+                    "model_hash": _prod_model_hash,
+                    "config_hash": _prod_config_hash,
+                }
+            ]
+            if shadow_policy:
+                _shadow_export_for_meta = Path(shadow_policy).expanduser()
+                _shadow_model_hash_for_meta = compute_model_hash(_shadow_export_for_meta)
+                _shadow_config_hash_for_meta = compute_config_hash(_shadow_export_for_meta)
+                server._shadow_model_hash = _shadow_model_hash_for_meta  # type: ignore[attr-defined]
+                server._shadow_config_hash = _shadow_config_hash_for_meta  # type: ignore[attr-defined]
+                _policies_meta.append(
+                    {
+                        "slot": "shadow",
+                        "export_dir": str(_shadow_export_for_meta),
+                        "model_hash": _shadow_model_hash_for_meta,
+                        "config_hash": _shadow_config_hash_for_meta,
+                        "sample_rate": _shadow_sample_rate,
+                    }
+                )
             server._recorder = RecordWriter(  # type: ignore[attr-defined]
                 record_dir=record_dir,
-                model_hash=compute_model_hash(export_dir),
-                config_hash=compute_config_hash(export_dir),
+                model_hash=_prod_model_hash,
+                config_hash=_prod_config_hash,
                 export_dir=export_dir,
                 model_type=_model_type,
                 export_kind=_export_kind,
@@ -1502,6 +2253,7 @@ def create_app(
                 image_redaction=record_image_redaction,  # type: ignore[arg-type]
                 gzip_output=record_gzip,
                 tether_version=_TETHER_VERSION,
+                policies=_policies_meta,
                 curate_collector=_curate_collector,
             )
             logger.info(
@@ -1730,7 +2482,7 @@ def create_app(
         # OTEL_EXPORTER_OTLP_ENDPOINT is set (or default localhost:4317).
         # No-ops cleanly if deps absent — server behavior unchanged.
         setup_tracing(
-            service_name="tether-vla",
+            service_name="tether",
             endpoint=otel_endpoint,
             sample_rate=otel_sample,
         )
@@ -1801,6 +2553,56 @@ def create_app(
             logger.error("=" * 70)
             raise
         logger.info("Model loaded successfully.")
+        if shadow_policy:
+            shadow_export_path = Path(shadow_policy).expanduser()
+            if not shadow_export_path.exists():
+                raise FileNotFoundError(
+                    f"Shadow policy export not found: {shadow_export_path}"
+                )
+            if _shadow_sample_rate <= 0:
+                logger.warning(
+                    "shadow_policy configured but shadow_sample=0; no /act "
+                    "requests will be mirrored until --shadow-sample is > 0"
+                )
+            server.health_state = "loading_shadow"  # type: ignore[attr-defined]
+            logger.warning(
+                "Loading shadow policy from %s ... sampled traffic will be "
+                "recorded under routing.shadow_actions and never returned to "
+                "the robot client.",
+                shadow_export_path,
+            )
+            shadow_server = _build_shadow_server(shadow_export_path)
+            shadow_server.load()
+            server._shadow_server = shadow_server  # type: ignore[attr-defined]
+            if not getattr(server, "_shadow_model_hash", ""):
+                server._shadow_model_hash = compute_model_hash(shadow_export_path)  # type: ignore[attr-defined]
+            if not getattr(server, "_shadow_config_hash", ""):
+                server._shadow_config_hash = compute_config_hash(shadow_export_path)  # type: ignore[attr-defined]
+            if server.prewarm_enabled:
+                logger.warning("Shadow policy warmup starting.")
+                shadow_warmup = shadow_server.predict()
+                if isinstance(shadow_warmup, dict) and "error" in shadow_warmup:
+                    raise RuntimeError(
+                        f"Shadow policy warmup failed: {shadow_warmup['error']}"
+                    )
+            logger.info(
+                "Shadow policy loaded: export=%s sample_rate=%.3f",
+                shadow_export_path,
+                _shadow_sample_rate,
+            )
+            if _shadow_sample_rate > 0 and int(shadow_queue_size) > 0:
+                import asyncio as _asyncio_shadow
+                server._shadow_queue = _asyncio_shadow.Queue(  # type: ignore[attr-defined]
+                    maxsize=int(shadow_queue_size)
+                )
+                server._shadow_worker_task = _asyncio_shadow.create_task(  # type: ignore[attr-defined]
+                    _shadow_worker_loop(server),
+                    name="tether-shadow-policy-worker",
+                )
+                logger.info(
+                    "Shadow worker started: queue_size=%d",
+                    int(shadow_queue_size),
+                )
         # Only configure replan buffering after load() so chunk_size is known.
         if replan_hz is not None and execute_hz is not None and hasattr(
             server, "configure_replan"
@@ -1870,6 +2672,7 @@ def create_app(
             # Build server B via setup_two_policy_serving's server_factory,
             # which mirrors the same load() path. We pass server A in via a
             # closure to avoid re-loading it.
+            server._inference_policy_slot = "a"  # type: ignore[attr-defined]
             servers_pair = {"a": server}
 
             def _two_policy_server_factory(*, export_dir, **kwargs):
@@ -1894,7 +2697,10 @@ def create_app(
                     deadline_ms=deadline_ms,
                     max_batch=max_batch,
                     batch_timeout_ms=batch_timeout_ms,
+                    inference_executor_workers=inference_executor_workers,
+                    inference_executor_queue=inference_executor_queue,
                 )
+                srv_b._inference_policy_slot = "b"
                 srv_b.load()
                 servers_pair["b"] = srv_b
                 return srv_b
@@ -1995,6 +2801,7 @@ def create_app(
                 # documented. Operator sees the error in logs + the
                 # banner the CLI prints.
                 server.two_policy_state = None  # type: ignore[attr-defined]
+                server._inference_policy_slot = "prod"  # type: ignore[attr-defined]
 
         # PolicyRuntime — per-policy queue + cost-weighted scheduler (Phase 1
         # chunk-budget-batching). Single-policy default key "prod"; multi-policy
@@ -2163,6 +2970,10 @@ def create_app(
                     logger.warning(
                         "two_policy_runtime.stop failed: %s", exc,
                     )
+            try:
+                await _stop_shadow_worker(server)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("shadow_worker.stop failed: %s", exc)
             # Flush + close JSONL recorder if armed
             _rec = getattr(server, "_recorder", None)
             if _rec is not None:
@@ -2170,6 +2981,28 @@ def create_app(
                     _rec.write_footer({"total_requests": _rec.seq})
                 finally:
                     _rec.close()
+            _servers_to_shutdown = [server]
+            _shadow_shutdown = getattr(server, "_shadow_server", None)
+            if _shadow_shutdown is not None:
+                _servers_to_shutdown.append(_shadow_shutdown)
+            _two_state_shutdown = getattr(server, "two_policy_state", None)
+            if _two_state_shutdown is not None:
+                _servers_to_shutdown.extend(
+                    [
+                        getattr(_two_state_shutdown, "server_a", None),
+                        getattr(_two_state_shutdown, "server_b", None),
+                    ]
+                )
+            for _srv_shutdown in {
+                id(_srv): _srv for _srv in _servers_to_shutdown if _srv is not None
+            }.values():
+                _shutdown = getattr(_srv_shutdown, "shutdown_inference_executor", None)
+                if _shutdown is None:
+                    continue
+                try:
+                    _shutdown()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("inference_executor.shutdown failed: %s", exc)
             shutdown_tracing()
 
     app = FastAPI(
@@ -2334,12 +3167,7 @@ def create_app(
                     if _runtime is None:
                         # Fallback for backends/tests that don't install a runtime —
                         # call the per-request path directly.
-                        result = await server.predict_from_base64_async(
-                            image_b64=request.image,
-                            instruction=request.instruction,
-                            state=request.state,
-                            image_wrist_b64=request.image_wrist,
-                        )
+                        result = await _predict_from_request_async(server, request)
                     else:
                         try:
                             result = await _runtime.submit(request)
@@ -2373,6 +3201,20 @@ def create_app(
                         )
                 raise
 
+            _slot_label = (
+                _two_routing_decision.slot
+                if _two_routing_decision is not None
+                else "prod"
+            )
+            _rtc_for_record: dict[str, Any] | None = None
+            _shadow_for_record: dict[str, Any] | None = None
+            _raw_actions_for_record: list[list[float]] | None = (
+                result.get("_raw_actions_for_record")
+                if isinstance(result, dict)
+                and isinstance(result.get("_raw_actions_for_record"), list)
+                else None
+            )
+
             # Circuit-breaker bookkeeping on returned result. Error-result
             # responses (e.g., NaN guard trips) count as crashes; clean
             # responses reset the counter to 0.
@@ -2398,6 +3240,7 @@ def create_app(
             # the chunk + reports a violation. No-op when guard absent.
             _eg = getattr(server, "embodiment_guard", None)
             _guard_violations: list[str] = []
+            _guard_margin: float | None = None
             if (
                 _eg is not None
                 and isinstance(result, dict)
@@ -2408,8 +3251,13 @@ def create_app(
                 try:
                     _arr = np.asarray(result["actions"], dtype=np.float32)
                     _safe, _check_results = _eg.check(_arr)
+                    _guard_margin = _eg.safety_margin(_safe)
+                    if _guard_margin is not None:
+                        result["guard_margin"] = round(_guard_margin, 6)
                     _was_modified = not np.array_equal(_arr, _safe)
                     if _was_modified:
+                        if _raw_actions_for_record is None:
+                            _raw_actions_for_record = _arr.tolist()
                         result["actions"] = _safe.tolist()
                         for _cr in _check_results:
                             _guard_violations.extend(_cr.violations)
@@ -2447,11 +3295,6 @@ def create_app(
                     # operators can split per-slot p99 in 2-policy mode.
                     # Default "prod" preserves single-policy series.
                     try:
-                        _slot_label = (
-                            _two_routing_decision.slot
-                            if _two_routing_decision is not None
-                            else "prod"
-                        )
                         record_act_latency(
                             float(result["latency_ms"]) / 1000.0,
                             embodiment=_emb_label,
@@ -2547,10 +3390,82 @@ def create_app(
                 except Exception as exc:  # noqa: BLE001 — A2C2 must never break /act
                     logger.warning("a2c2_hook.apply_failed: %s", exc)
 
+            if _rtc is not None and isinstance(result, dict) and "error" not in result:
+                try:
+                    _record_rtc_adaptive_signal(
+                        _rtc,
+                        result,
+                        guard_margin=_guard_margin,
+                    )
+                    _rtc_stats = _rtc.get_stats() if hasattr(_rtc, "get_stats") else None
+                    _rtc_for_record = _rtc_adaptive_record_from_stats(_rtc_stats)
+                    _action_execution = _action_execution_from_rtc_stats(
+                        _rtc_stats,
+                        result,
+                    )
+                    if _action_execution is not None:
+                        _existing_execution = result.get("action_execution")
+                        if isinstance(_existing_execution, dict):
+                            _merged_execution = dict(_action_execution)
+                            _merged_execution.update(_existing_execution)
+                            result["action_execution"] = _merged_execution
+                        else:
+                            result["action_execution"] = _action_execution
+                    if _rtc_for_record is not None:
+                        _set_rtc_adaptive_span_attrs(span, _rtc_for_record)
+                        _decision = _rtc_for_record.get("adaptive_chunking")
+                        _signal = _rtc_for_record.get("adaptive_signal")
+                        observe_rtc_adaptive_chunking(
+                            embodiment=_emb_label,
+                            model_id=_model_label,
+                            policy_slot=_slot_label,
+                            decision=(
+                                _decision if isinstance(_decision, dict) else None
+                            ),
+                            signal=_signal if isinstance(_signal, dict) else None,
+                            last_action_delta=_rtc_for_record.get("last_action_delta"),
+                        )
+                except Exception as exc:  # noqa: BLE001 — RTC signal must not break /act
+                    logger.warning("RTC adaptive signal update failed: %s", exc)
+
+            _rec = getattr(server, "_recorder", None)
+            if isinstance(result, dict):
+                _shadow_for_record = _shadow_routing_for_request(
+                    server, request, result
+                )
+                if _shadow_for_record is not None:
+                    sampled = bool(_shadow_for_record.get("shadow_sampled"))
+                    queue = getattr(server, "_shadow_queue", None)
+                    if sampled and _rec is None:
+                        _shadow_for_record["shadow_sampled"] = False
+                        _shadow_for_record["shadow_skip_reason"] = "recording_disabled"
+                        sampled = False
+                    elif sampled and queue is None:
+                        _shadow_for_record["shadow_sampled"] = False
+                        _shadow_for_record["shadow_skip_reason"] = "shadow_queue_disabled"
+                        sampled = False
+                    elif sampled:
+                        _shadow_for_record["shadow_mode"] = "background"
+                        _shadow_for_record["shadow_pending"] = True
+                    result["shadow_sampled"] = sampled
+                    if sampled:
+                        result["shadow_mode"] = _shadow_for_record.get("shadow_mode")
+                        result["shadow_pending"] = bool(
+                            _shadow_for_record.get("shadow_pending")
+                        )
+                    if _shadow_for_record.get("shadow_skip_reason"):
+                        result["shadow_skip_reason"] = _shadow_for_record[
+                            "shadow_skip_reason"
+                        ]
+                    span.set_attribute("tether.shadow.sampled", sampled)
+                    span.set_attribute(
+                        "tether.shadow.mode",
+                        str(_shadow_for_record.get("shadow_mode") or "skipped"),
+                    )
+
             # JSONL record hook (B.2). Writes inside the OTel span context
             # so the seq attribute below cross-links the two ledgers. Recorder
             # absent or degraded → no-op.
-            _rec = getattr(server, "_recorder", None)
             if _rec is not None and isinstance(result, dict):
                 actions = result.get("actions") or []
                 action_dim = (
@@ -2575,6 +3490,10 @@ def create_app(
                         "cached": _two_routing_decision.cached,
                         "crash_verdict": _two_routing_decision.crash_verdict,
                     }
+                if _shadow_for_record is not None:
+                    if _routing_for_record is None:
+                        _routing_for_record = {}
+                    _routing_for_record.update(_shadow_for_record)
                 # Failure-classifier substrate (per failure-classifier-v1 research
                 # sidecar Finding 3.1): pass through guard_summary if predict()
                 # populated it. None when ActionGuard wasn't built (no URDF /
@@ -2587,16 +3506,59 @@ def create_app(
                     image_b64=request.image,
                     instruction=request.instruction,
                     state=request.state,
+                    episode_id=request.episode_id,
+                    request_id=request.request_id,
                     actions=actions,
+                    raw_actions=_raw_actions_for_record,
                     action_dim=action_dim,
                     latency_total_ms=latency_total,
                     mode=str(result.get("inference_mode", "")),
                     error=err,
                     routing=_routing_for_record,
                     guard=_guard_for_record,
+                    rtc=_rtc_for_record,
                 )
                 if rec_seq >= 0:
                     span.set_attribute("tether.record.seq", rec_seq)
+                    if (
+                        _shadow_for_record is not None
+                        and _shadow_for_record.get("shadow_pending") is True
+                    ):
+                        queue = getattr(server, "_shadow_queue", None)
+                        request_snapshot = _snapshot_predict_request(request)
+                        if queue is None:
+                            queued_routing = dict(_shadow_for_record)
+                            queued_routing["shadow_pending"] = False
+                            queued_routing["shadow_error"] = "shadow_queue_disabled"
+                            _write_shadow_result_record(
+                                _rec,
+                                seq=rec_seq,
+                                request=request_snapshot,
+                                routing=queued_routing,
+                            )
+                        else:
+                            try:
+                                queue.put_nowait(
+                                    {
+                                        "seq": rec_seq,
+                                        "request": request_snapshot,
+                                        "routing": dict(_shadow_for_record),
+                                    }
+                                )
+                            except Exception as exc:  # noqa: BLE001
+                                queued_routing = dict(_shadow_for_record)
+                                queued_routing["shadow_pending"] = False
+                                queued_routing["shadow_error"] = (
+                                    "shadow_queue_full"
+                                    if type(exc).__name__ == "QueueFull"
+                                    else f"{type(exc).__name__}: {exc}"
+                                )
+                                _write_shadow_result_record(
+                                    _rec,
+                                    seq=rec_seq,
+                                    request=request_snapshot,
+                                    routing=queued_routing,
+                                )
 
             # Synthetic latency injection (B.4 A2C2 gate). Runs AFTER
             # JSONL recording so recorded latency_ms is the true compute
@@ -2662,6 +3624,9 @@ def create_app(
                     if _two_routing_decision.degraded_routing:
                         _resp_headers["X-Tether-Routing-Degraded"] = "true"
 
+            if isinstance(result, dict):
+                result.pop("_raw_actions_for_record", None)
+
             return JSONResponse(content=result, headers=_resp_headers)
 
     @app.get("/config")
@@ -2671,7 +3636,7 @@ def create_app(
         return JSONResponse(content=cfg)
 
     @app.get("/guard/status")
-    async def guard_status():
+    async def guard_status(_auth: None = Depends(_require_api_key)):
         g = getattr(server, "_action_guard", None)
         if g is None:
             return JSONResponse(content={"enabled": False})
@@ -2685,7 +3650,7 @@ def create_app(
         })
 
     @app.post("/guard/reset")
-    async def guard_reset():
+    async def guard_reset(_auth: None = Depends(_require_api_key)):
         g = getattr(server, "_action_guard", None)
         if g is None:
             return JSONResponse(

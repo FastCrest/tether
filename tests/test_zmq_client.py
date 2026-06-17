@@ -34,6 +34,20 @@ def server_port():
     thread.join(timeout=2)
 
 
+@pytest.fixture
+def auth_server_port():
+    """Start a ZMQ server that protects control endpoints with a token."""
+    runtime = _MockRuntime()
+    server = create_zmq_server(runtime, port=0, control_token="secret")
+    port = server.bound_port
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+    yield port
+    server.close()
+    thread.join(timeout=2)
+
+
 # ── predict_action ───────────────────────────────────────────────────
 
 
@@ -115,6 +129,24 @@ def test_profile_overhead_minimal(server_port):
 def test_ping(server_port):
     with ZmqRuntimeClient(f"tcp://127.0.0.1:{server_port}") as client:
         result = client.ping()
+        assert result["status"] == "ok"
+
+
+def test_ping_sends_auth_token(auth_server_port):
+    with ZmqRuntimeClient(
+        f"tcp://127.0.0.1:{auth_server_port}",
+        auth_token="secret",
+    ) as client:
+        result = client.ping()
+        assert result["status"] == "ok"
+
+
+def test_kill_sends_auth_token(auth_server_port):
+    with ZmqRuntimeClient(
+        f"tcp://127.0.0.1:{auth_server_port}",
+        auth_token="secret",
+    ) as client:
+        result = client.kill()
         assert result["status"] == "ok"
 
 

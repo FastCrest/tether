@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Reflex VLA fleet dashboard — per-robot breakdown. Requires `reflex serve --robot-id <id>` on each process so the `reflex_robot_info` gauge is populated. Panels join hot metrics against robot_info via `instance`. Tested against Grafana 10.4.0 (schemaVersion 39). See features/01_serve/subfeatures/_ecosystem/fleet-telemetry/fleet-telemetry.md.",
+  "description": "Tether fleet dashboard — per-robot breakdown. Requires `tether serve --robot-id <id>` on each process so the `reflex_robot_info` gauge is populated. Panels join hot metrics against robot_info via `instance`. Tested against Grafana 10.4.0 (schemaVersion 39). See features/01_serve/subfeatures/_ecosystem/fleet-telemetry/fleet-telemetry.md.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -190,7 +190,7 @@
     {
       "name": "DS_PROMETHEUS",
       "label": "Prometheus",
-      "description": "Prometheus data source that scrapes your reflex serve processes.",
+      "description": "Prometheus data source that scrapes your tether serve processes.",
       "type": "datasource",
       "pluginId": "prometheus",
       "pluginName": "Prometheus"
