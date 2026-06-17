@@ -660,9 +660,8 @@ class RecordWriter:
         error: dict[str, Any] | None = None,
     ) -> None:
         """Emit append-only shadow policy evidence for an existing request seq."""
-        if self.degraded:
+        if self.degraded or self._closed:
             return
-        self._write_header()
         record: dict[str, Any] = {
             "kind": "shadow_result",
             "schema_version": SCHEMA_VERSION,
@@ -687,7 +686,10 @@ class RecordWriter:
             record["latency"] = {"total_ms": latency_total_ms}
         if error is not None:
             record["error"] = error
-        self._emit(record)
+        needs_header = not self._header_written
+        queued_records = (self._header_record(), record) if needs_header else (record,)
+        if self._enqueue_records(queued_records) and needs_header:
+            self._header_written = True
 
     def write_footer(self, totals: dict[str, int]) -> None:
         """Emit footer on clean shutdown. Optional per D.1.6 — readers
