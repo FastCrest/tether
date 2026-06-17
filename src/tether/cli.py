@@ -7699,34 +7699,5 @@ def data_revoke() -> None:
     set_contribute_data(False)
     console.print(f"Revoked: {removed} files deleted. Data contribution disabled.")
 
-
-# ── MCP subcommand ─────────────────────────────────────────────────────────
-
-mcp_app = typer.Typer(name="mcp", help="MCP server utilities.", no_args_is_help=True)
-app.add_typer(mcp_app, name="mcp")
-
-
-def _mcp_version_callback(value: bool) -> None:
-    if value:
-        typer.echo(f"reflex mcp {__version__}")
-        raise typer.Exit()
-
-
-@mcp_app.callback(invoke_without_command=True)
-def mcp_main(
-    ctx: typer.Context,
-    version: bool = typer.Option(
-        None,
-        "--version",
-        help="Show MCP server version and exit.",
-        callback=_mcp_version_callback,
-        is_eager=True,
-    ),
-) -> None:
-    """MCP server utilities. Use --version to check the running server version."""
-    if ctx.invoked_subcommand is None:
-        typer.echo(ctx.get_help())
-
-
 if __name__ == "__main__":
     app()
