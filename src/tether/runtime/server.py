@@ -205,9 +205,11 @@ async def _complete_shadow_policy_record(
     shadow_server = getattr(server, "_shadow_server", None)
     if shadow_server is None:
         record["shadow_sampled"] = False
+        record["shadow_pending"] = False
         record["shadow_skip_reason"] = "shadow_server_missing"
         return record
 
+    record["shadow_pending"] = False
     t0 = time.perf_counter()
     try:
         shadow_result = await _predict_from_request_async(shadow_server, request)
@@ -307,7 +309,7 @@ async def _shadow_worker_loop(server: Any) -> None:
             queue.task_done()
 
 
-async def _stop_shadow_worker(server: Any, *, timeout_s: float = 5.0) -> None:
+async def _stop_shadow_worker(server: Any, *, timeout_s: float = 30.0) -> None:
     task = getattr(server, "_shadow_worker_task", None)
     queue = getattr(server, "_shadow_queue", None)
     if task is None or queue is None:
