@@ -44,10 +44,10 @@ wrangler secret put SLACK_WEBHOOK_URL
 
 # 7. Deploy the worker
 wrangler deploy
-# → note the URL (e.g. https://reflex-licenses.<subdomain>.workers.dev)
+# → note the URL (e.g. https://tether-licenses.<subdomain>.workers.dev)
 
 # 8. Generate the Ed25519 keypair (one-time)
-curl -X POST https://reflex-licenses.<subdomain>.workers.dev/admin/init \
+curl -X POST https://tether-licenses.<subdomain>.workers.dev/admin/init \
     -H "Authorization: Bearer <YOUR_ADMIN_TOKEN>"
 # → response includes public_key_b64 + private_key_b64
 # IMMEDIATELY:
@@ -62,15 +62,15 @@ curl -X POST https://reflex-licenses.<subdomain>.workers.dev/admin/init \
 # 10. Commit + push the public-key + endpoint changes
 
 # Test the live worker
-curl https://reflex-licenses.<subdomain>.workers.dev/healthz
-curl https://reflex-licenses.<subdomain>.workers.dev/v1/pubkey
+curl https://tether-licenses.<subdomain>.workers.dev/healthz
+curl https://tether-licenses.<subdomain>.workers.dev/v1/pubkey
 ```
 
 ## Issue your first license
 
 ```bash
 # From your laptop (admin CLI talks to the worker)
-export TETHER_LICENSE_ENDPOINT=https://reflex-licenses.<subdomain>.workers.dev
+export TETHER_LICENSE_ENDPOINT=https://tether-licenses.<subdomain>.workers.dev
 export REFLEX_ADMIN_TOKEN=<your_admin_token>
 
 python -m tether.admin.issue_license \
