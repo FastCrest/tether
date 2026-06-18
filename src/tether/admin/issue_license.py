@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from tether.admin._client import admin_request
+from tether.admin._client import AdminError, admin_request
 
 VALID_TIERS = ["trial", "pro", "team", "enterprise", "educational", "research", "oss"]
 
@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.expires_in < 1:
         sys.stderr.write("ERROR: --expires-in must be >= 1\n")
         return 2
+    if args.max_seats < 1:
+        sys.stderr.write("ERROR: --max-seats must be >= 1\n")
+        return 2
 
     body = {
         "customer_id": args.customer_id,
@@ -44,13 +47,17 @@ def main(argv: list[str] | None = None) -> int:
         "notes": args.notes,
     }
 
-    resp = admin_request("POST", "/admin/issue", body)
+    try:
+        resp = admin_request("POST", "/admin/issue", body)
+    except AdminError as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        return exc.exit_code
 
     license_id = resp.get("license_id", "?")
     code = resp.get("activation_code", "?")
     code_expires = resp.get("activation_expires_at", "?")
-    license = resp.get("license", {})
-    expires = license.get("expires_at", "?")
+    lic = resp.get("license", {})
+    expires = lic.get("expires_at", "?")
 
     print()
     print(f"  License issued for {args.customer_id}")
