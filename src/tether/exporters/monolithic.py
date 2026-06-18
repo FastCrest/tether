@@ -148,6 +148,22 @@ def _require_monolithic_deps() -> None:
         except ImportError:
             missing.append(pip_name)
 
+    # lerobot version must be exactly 0.5.1 — the SmolVLA/pi0 export patches
+    # target its 0.5.1 module layout (SmolVLMWithExpertModel.embed_image, the
+    # masking_utils surface). A different lerobot imports fine but then fails
+    # the monkeypatch or exports a wrong graph — the common, confusing failure
+    # behind issue #190. Assert it explicitly rather than discovering it later.
+    try:
+        import lerobot
+        lerobot_ver = getattr(lerobot, "__version__", "unknown")
+        if lerobot_ver != "0.5.1":
+            missing.append(
+                f"lerobot==0.5.1 (found {lerobot_ver}; the monolithic export "
+                f"patches target lerobot 0.5.1's module layout exactly)"
+            )
+    except ImportError:
+        pass  # already reported as missing above
+
     if missing:
         raise ImportError(
             "Missing dependencies for monolithic export:\n  - "
@@ -255,7 +271,17 @@ def apply_export_patches() -> None:
             _embed_image_with_explicit_patch_mask._tether_patched = True
             _smolvla.SmolVLMWithExpertModel.embed_image = _embed_image_with_explicit_patch_mask
     except Exception as exc:
-        logger.debug("SmolVLA explicit patch-mask export patch not installed: %s", exc)
+        # WARNING, not debug: if this patch fails to apply (e.g. a lerobot API
+        # change moved SmolVLMWithExpertModel.embed_image), the SmolVLA export
+        # proceeds with the UNPATCHED forward and can fail later with a cryptic
+        # mask-broadcast error — or export a subtly wrong graph. Surface it so
+        # the failure is attributable, not silent (relates to issue #190).
+        logger.warning(
+            "SmolVLA explicit patch-mask export patch did NOT apply (%s). "
+            "The export will continue unpatched; if it fails downstream with a "
+            "vision/attention-mask shape error, this is the likely cause. "
+            "Verify lerobot==0.5.1 is installed.", exc,
+        )
 
     try:
         from transformers.models.smolvlm import modeling_smolvlm as _smolvlm
