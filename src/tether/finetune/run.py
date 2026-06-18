@@ -17,9 +17,9 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
 
 from tether.finetune.config import FinetuneConfig, FinetuneResult
+from tether.seeding import seed_everything, seeded_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         "lerobot-train",
         f"--policy.type={policy_type}",
         f"--policy.repo_id={repo_id}",
-        f"--policy.push_to_hub=false",
+        "--policy.push_to_hub=false",
         f"--dataset.repo_id={cfg.dataset}",
         f"--output_dir={lerobot_output}",
         f"--steps={cfg.num_steps}",
@@ -175,7 +175,7 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         cmd.append(f"--policy.n_action_steps={cfg.chunk_size}")
     if cfg.mode == "lora":
         cmd.extend([
-            f"--peft.method_type=lora",
+            "--peft.method_type=lora",
             f"--peft.r={cfg.lora_rank}",
         ])
     for k, v in cfg.extra_lerobot_args.items():
@@ -193,10 +193,11 @@ def _run_lerobot_training(
     and the root logger. Returns the subprocess exit code.
     """
     cmd = _build_lerobot_command(cfg)
+    env = seeded_subprocess_env(cfg.seed, env)
     logger.info("[finetune] exec: %s", " ".join(cmd))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log:
-        log.write(f"# tether finetune — lerobot-train invocation\n")
+        log.write("# tether finetune — lerobot-train invocation\n")
         log.write(f"# cmd: {' '.join(cmd)}\n\n")
         log.flush()
         proc = subprocess.Popen(
@@ -375,6 +376,14 @@ def run_finetune(cfg: FinetuneConfig, *, hooks=None) -> FinetuneResult:
             output_dir=cfg.output,
             error="config validation failed:\n  " + "\n  ".join(errs),
         )
+
+    seed_report = seed_everything(cfg.seed)
+    logger.info(
+        "[finetune] seeded process: seed=%d torch=%s cuda=%s",
+        cfg.seed,
+        seed_report["torch"],
+        seed_report["cuda"],
+    )
 
     # Pre-flight validation (v0.5) — catches top customer pains before
     # any GPU time. Dry-run + skip flags supported.
