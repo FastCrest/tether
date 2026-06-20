@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from importlib.metadata import PackageNotFoundError, version as _dist_version
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,8 @@ _TOKENIZER_REFS = {
     "pi05": "google/paligemma-3b-pt-224",
     "smolvla": "HuggingFaceTB/SmolLM2-135M",
 }
+
+_SMOLVLA_EXPORT_PATCH_FAILURES: list[str] = []
 
 
 def _quiet_noisy_export_loggers() -> None:
@@ -120,7 +123,7 @@ def _require_monolithic_deps() -> None:
     """Check that the ``[monolithic]`` optional dep group is installed.
 
     Raises ImportError with a clean message if anything's missing or a
-    transformers version mismatch is detected (5.4+ has the q_length bug).
+    required package version mismatch is detected.
     """
     _quiet_noisy_export_loggers()
     missing = []
@@ -136,8 +139,25 @@ def _require_monolithic_deps() -> None:
     except ImportError as e:
         missing.append(f"transformers==5.3.0 ({e})")
 
+    try:
+        __import__("lerobot")
+        try:
+            lerobot_version = _dist_version("lerobot")
+        except PackageNotFoundError as exc:
+            raise ImportError(
+                "lerobot imports but package metadata is missing; install with: "
+                "pip install 'fastcrest-tether[monolithic]'"
+            ) from exc
+        if lerobot_version != "0.5.1":
+            raise ImportError(
+                f"lerobot {lerobot_version} detected; monolithic export requires "
+                "exactly lerobot==0.5.1. Install with: "
+                "pip install 'fastcrest-tether[monolithic]'"
+            )
+    except ImportError as e:
+        missing.append(f"lerobot==0.5.1 ({e})")
+
     for mod_name, pip_name in [
-        ("lerobot", "lerobot==0.5.1"),
         ("onnx_diagnostic", "onnx-diagnostic>=0.9"),
         ("onnxscript", "onnxscript>=0.1"),
         ("optree", "optree"),
@@ -156,6 +176,29 @@ def _require_monolithic_deps() -> None:
         )
 
 
+def _record_smolvla_export_patch_failure(patch_name: str, exc: BaseException) -> None:
+    message = f"{patch_name}: {type(exc).__name__}: {exc}"
+    _SMOLVLA_EXPORT_PATCH_FAILURES.append(message)
+    logger.warning(
+        "[smolvla] export patch failed; SmolVLA monolithic export will stop "
+        "before torch.export instead of failing later: %s",
+        message,
+    )
+
+
+def _raise_if_smolvla_export_patches_failed() -> None:
+    if not _SMOLVLA_EXPORT_PATCH_FAILURES:
+        return
+    details = "\n  - ".join(_SMOLVLA_EXPORT_PATCH_FAILURES)
+    raise RuntimeError(
+        "SmolVLA monolithic export patches failed to install. This usually "
+        "means the lerobot/transformers export stack does not match the pinned "
+        "monolithic environment; install with: pip install "
+        "'fastcrest-tether[monolithic]'.\n  - "
+        + details
+    )
+
+
 def apply_export_patches() -> None:
     """Install the full set of transformers + lerobot patches required for
     the monolithic `torch.export` path. Safe to call multiple times; later
@@ -167,6 +210,8 @@ def apply_export_patches() -> None:
     import types
 
     import torch
+
+    _SMOLVLA_EXPORT_PATCH_FAILURES.clear()
 
     # Stub GR00T imports to avoid Python 3.13 dataclass issue (harmless on 3.12 too)
     for _mod in ("lerobot.policies.groot.groot_n1", "lerobot.policies.groot.modeling_groot"):
@@ -255,7 +300,10 @@ def apply_export_patches() -> None:
             _embed_image_with_explicit_patch_mask._tether_patched = True
             _smolvla.SmolVLMWithExpertModel.embed_image = _embed_image_with_explicit_patch_mask
     except Exception as exc:
-        logger.debug("SmolVLA explicit patch-mask export patch not installed: %s", exc)
+        _record_smolvla_export_patch_failure(
+            "SmolVLA explicit patch-mask export patch",
+            exc,
+        )
 
     try:
         from transformers.models.smolvlm import modeling_smolvlm as _smolvlm
@@ -294,7 +342,10 @@ def apply_export_patches() -> None:
             _vision_attention_forward_no_dense_mask._tether_patched = True
             _smolvlm.SmolVLMVisionAttention.forward = _vision_attention_forward_no_dense_mask
     except Exception as exc:
-        logger.debug("SmolVLM vision attention export patch not installed: %s", exc)
+        _record_smolvla_export_patch_failure(
+            "SmolVLM vision attention export patch",
+            exc,
+        )
 
     # DynamicCache deepcopy bypass (FakeTensor can't be deepcopied)
     _orig_deepcopy = copy.deepcopy
@@ -506,7 +557,6 @@ def _fix_onnx_where_dtype_mismatches(onnx_path: Path) -> int:
     for init in shape_info.graph.initializer:
         name_dtype[init.name] = init.data_type
 
-    FLOAT_TYPES = {TensorProto.FLOAT, TensorProto.FLOAT16, TensorProto.BFLOAT16, TensorProto.DOUBLE}
     INT_TYPES = {TensorProto.INT64, TensorProto.INT32, TensorProto.INT16, TensorProto.INT8}
 
     fixes = 0
@@ -589,6 +639,7 @@ def export_smolvla_monolithic(
     from onnx_diagnostic.torch_export_patches import torch_export_patches
 
     apply_export_patches()
+    _raise_if_smolvla_export_patches_failed()
 
     logger.info("[smolvla] Loading %s", model_id)
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy

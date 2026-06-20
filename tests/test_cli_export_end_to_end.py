@@ -17,6 +17,10 @@ releasing.
 """
 from __future__ import annotations
 
+import logging
+import sys
+import types
+
 import pytest
 
 
@@ -63,3 +67,47 @@ def test_dep_check_catches_wrong_transformers(monkeypatch):
     monkeypatch.setattr(transformers, "__version__", "4.99.0")
     with pytest.raises(ImportError, match="5.3.0"):
         monolithic._require_monolithic_deps()
+
+
+def test_dep_check_catches_wrong_lerobot(monkeypatch):
+    """_require_monolithic_deps() must fail early on the known-bad
+    lerobot 0.4.x stack instead of letting torch.export fail downstream."""
+    from tether.exporters import monolithic
+    import transformers
+
+    monkeypatch.setattr(transformers, "__version__", "5.3.0")
+    for mod_name in ("lerobot", "onnx_diagnostic", "onnxscript", "optree", "scipy"):
+        monkeypatch.setitem(sys.modules, mod_name, types.ModuleType(mod_name))
+
+    def _fake_dist_version(dist_name: str) -> str:
+        if dist_name == "lerobot":
+            return "0.4.4"
+        raise monolithic.PackageNotFoundError(dist_name)
+
+    monkeypatch.setattr(monolithic, "_dist_version", _fake_dist_version)
+
+    with pytest.raises(ImportError, match=r"lerobot 0\.4\.4.*lerobot==0\.5\.1"):
+        monolithic._require_monolithic_deps()
+
+
+def test_smolvla_export_patch_failure_is_warning_then_fatal(caplog):
+    """SmolVLA-specific export patches should not hide at debug level.
+
+    A failed patch is logged immediately and converted into a clear RuntimeError
+    before SmolVLA torch.export can hit a cryptic FakeTensor shape error.
+    """
+    from tether.exporters import monolithic
+
+    monolithic._SMOLVLA_EXPORT_PATCH_FAILURES.clear()
+    try:
+        with caplog.at_level(logging.WARNING, logger="tether.exporters.monolithic"):
+            monolithic._record_smolvla_export_patch_failure(
+                "SmolVLA explicit patch-mask export patch",
+                RuntimeError("boom"),
+            )
+
+        assert any("export patch failed" in rec.message for rec in caplog.records)
+        with pytest.raises(RuntimeError, match="SmolVLA monolithic export patches failed"):
+            monolithic._raise_if_smolvla_export_patches_failed()
+    finally:
+        monolithic._SMOLVLA_EXPORT_PATCH_FAILURES.clear()
