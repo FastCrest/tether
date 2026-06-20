@@ -324,6 +324,27 @@ artifacts = ["*.cpp", "*.cu", "*.txt", "*.json"]
 target-version = "py310"
 line-length = 100
 
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+ignore_missing_imports = true
+follow_imports = "silent"
+check_untyped_defs = false
+warn_unused_configs = true
+exclude = [
+    "src/tether/models/third_party/",
+]
+
+[[tool.mypy.overrides]]
+module = "tether.exporters.monolithic"
+disable_error_code = [
+    "assignment",
+    "attr-defined",
+    "method-assign",
+    "misc",
+    "no-redef",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # pytest-asyncio v1.x requires explicit mode declaration. Tests use
