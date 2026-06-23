@@ -54,9 +54,11 @@ def inject_table_into_readme(readme: str | Path, table: str) -> bool:
     if not readme.is_file():
         return False
     text = readme.read_text()
-    if README_TABLE_BEGIN not in text or README_TABLE_END not in text:
+    if README_TABLE_BEGIN not in text:
         return False
     pre, rest = text.split(README_TABLE_BEGIN, 1)
+    if README_TABLE_END not in rest:
+        return False  # END marker missing or precedes BEGIN (malformed) — skip
     _, post = rest.split(README_TABLE_END, 1)
     new = f"{pre}{README_TABLE_BEGIN}\n\n{table.rstrip()}\n\n{README_TABLE_END}{post}"
     if new != text:

@@ -13,6 +13,7 @@ from tether.realtime_cert import (
 )
 from tether.realtime_cert_publish import (
     CertificateLoadError,
+    inject_table_into_readme,
     load_certificate,
     publish,
 )
@@ -171,3 +172,14 @@ def test_publish_without_readme(tmp_path):
 
     assert result["readme_updated"] is False
     assert out.exists()
+
+
+def test_inject_skips_malformed_markers(tmp_path):
+    # END marker before BEGIN (out of order) must return False, not raise.
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "x\n<!-- END:jetson-latency-table -->\n<!-- BEGIN:jetson-latency-table -->\ny\n"
+    )
+    before = readme.read_text()
+    assert inject_table_into_readme(readme, "| t |") is False
+    assert readme.read_text() == before  # left untouched
