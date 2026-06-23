@@ -232,3 +232,31 @@ def test_release_assurance_packet_refuses_to_overwrite_proof_manifest(tmp_path: 
 
     with pytest.raises(ReleaseAssuranceError, match="separate from the input proof"):
         write_release_assurance_packet(report, packet)
+
+
+def test_guard_violations_block_promotion() -> None:
+    # Regression: a runtime ActionGuard clamp (guard_violations > 0) is a hard-safety
+    # signal that must prevent PROMOTE even when the promotion gate passed — instead of
+    # being listed in blocked_by while the verdict stays PROMOTE (the prior bug).
+    from tether.release_assurance import _blocking_safety_signals, _final_decision
+
+    clamping = [{"name": "guard_violations", "status": "fail"}]
+    clean = [{"name": "guard_violations", "status": "pass"}]
+    promote = {"decision": "PROMOTE"}
+
+    assert _blocking_safety_signals(clamping) == ["guard_violations"]
+    assert _blocking_safety_signals(clean) == []
+    # Passing promotion gate + clamping -> HOLD; active candidate clamping -> ROLLBACK.
+    assert _final_decision(
+        promotion=promote, realtime=None, shadow=None,
+        candidate_active=False, safety_blocked=True,
+    ) == "HOLD"
+    assert _final_decision(
+        promotion=promote, realtime=None, shadow=None,
+        candidate_active=True, safety_blocked=True,
+    ) == "ROLLBACK"
+    # No hard-safety signal -> the promotion gate decides (PROMOTE).
+    assert _final_decision(
+        promotion=promote, realtime=None, shadow=None,
+        candidate_active=False, safety_blocked=False,
+    ) == "PROMOTE"

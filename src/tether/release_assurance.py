@@ -398,14 +398,31 @@ def _confidence(
     return max(0, min(100, score))
 
 
+# Risk signals that gate the release decision regardless of the promotion
+# profile: zero-tolerance runtime/behavioral safety breaches that the profile
+# does not (and should not) make tunable. A failing hard-safety signal forces
+# HOLD (or ROLLBACK for an active candidate) even when the promotion gate passed.
+_HARD_SAFETY_SIGNALS = frozenset({"guard_violations", "policy_guard_regression"})
+
+
+def _blocking_safety_signals(risk_signals: list[dict[str, Any]]) -> list[str]:
+    """Names of failing hard-safety signals that must block promotion."""
+    return [
+        str(signal.get("name"))
+        for signal in risk_signals
+        if signal.get("status") == "fail" and signal.get("name") in _HARD_SAFETY_SIGNALS
+    ]
+
+
 def _final_decision(
     *,
     promotion: dict[str, Any],
     realtime: dict[str, Any] | None,
     shadow: dict[str, Any] | None,
     candidate_active: bool,
+    safety_blocked: bool = False,
 ) -> ReleaseDecision:
-    blocking = False
+    blocking = safety_blocked
     if promotion.get("decision") != "PROMOTE":
         blocking = True
     if realtime is not None and realtime.get("decision") != "PASS":
@@ -564,11 +581,13 @@ def build_release_assurance(
         shadow=shadow_report,
     )
     gaps = _gaps(proof=proof, realtime=realtime_report, shadow=shadow_report)
+    blocking_signals = _blocking_safety_signals(risk_signals)
     decision = _final_decision(
         promotion=promotion,
         realtime=realtime_report,
         shadow=shadow_report,
         candidate_active=candidate_active,
+        safety_blocked=bool(blocking_signals),
     )
     confidence = _confidence(components=components, risk_signals=risk_signals, gaps=gaps)
 
@@ -578,9 +597,15 @@ def build_release_assurance(
         if component["present"]
         and component["decision"] not in {"PASS", "PROMOTE"}
     ]
-    failed_signals = [
-        signal["name"] for signal in risk_signals if signal.get("status") == "fail"
-    ]
+    # blocked_by must agree with the decision: empty when we PROMOTE (so a failing but
+    # profile-permitted signal no longer contradicts a PROMOTE verdict), and the full
+    # set of failing signals when the release is held/rolled back. Hard-safety signals
+    # (blocking_signals) independently force a non-PROMOTE decision above.
+    failed_signals = (
+        [signal["name"] for signal in risk_signals if signal.get("status") == "fail"]
+        if decision != "PROMOTE"
+        else []
+    )
 
     return {
         "schema_version": RELEASE_ASSURANCE_SCHEMA_VERSION,
