@@ -655,7 +655,7 @@ def format_release_assurance_markdown(report: dict[str, Any]) -> str:
         failed = ", ".join(component.get("failed_checks") or [])
         lines.append(
             f"| `{component.get('name')}` | {bool(component.get('present'))} | "
-            f"`{component.get('decision')}` | {failed or "-"} |"
+            f"`{component.get('decision')}` | {failed or '-'} |"
         )
 
     lines.extend([
