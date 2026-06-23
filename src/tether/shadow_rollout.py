@@ -72,7 +72,7 @@ def _write_synthetic_proof_packet(
     policy_diff: dict[str, Any],
     policy_diff_fail_on: str,
 ) -> None:
-    checks = [
+    checks: list[dict[str, Any]] = [
         {
             "name": "shadow_trace_present",
             "status": "pass",
@@ -138,6 +138,40 @@ def _write_synthetic_proof_packet(
     )
 
 
+_DERIVED_PACKET_OUTPUTS = {
+    "MANIFEST.json",
+    "promotion-decision.json",
+    "release-assurance.json",
+    "release-assurance.md",
+}
+
+
+def _refresh_packet_manifest(packet_dir: Path) -> None:
+    files = []
+    for path in sorted(
+        p
+        for p in packet_dir.iterdir()
+        if p.is_file() and p.name not in _DERIVED_PACKET_OUTPUTS
+    ):
+        files.append(
+            {
+                "name": path.name,
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256_file(path),
+            }
+        )
+    manifest = {
+        "kind": "tether.manifest",
+        "schema_version": 1,
+        "generated_at": _now_iso(),
+        "files": files,
+    }
+    (packet_dir / "MANIFEST.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def run_shadow_rollout_gate(
     *,
     trace: str | Path,
@@ -185,6 +219,7 @@ def run_shadow_rollout_gate(
             raise ShadowRolloutError(
                 f"--use-existing-packet set but {proof_path} does not exist"
             )
+        _refresh_packet_manifest(packet_path)
     else:
         _write_synthetic_proof_packet(
             packet_path,

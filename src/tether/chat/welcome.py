@@ -109,6 +109,7 @@ def tools_listing() -> str:
         "certify_realtime_serving": "Deploy",
         "diff_policies": "Deploy",
         "decide_promotion": "Deploy",
+        "assure_release": "Deploy",
         "list_promotion_profiles": "Deploy",
         "show_promotion_profile": "Deploy",
         "list_models": "Models",

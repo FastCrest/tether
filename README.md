@@ -393,6 +393,24 @@ It writes a hashed packet with `policy-diff.json` and
 `promotion-decision.json`, then exits `0` for `PROMOTE`, `1` for `HOLD`, and
 `4` for `ROLLBACK`.
 
+For the operator-facing release decision, use the composed assurance command.
+It consumes an existing proof packet, optionally adds realtime/action-execution
+and shadow evidence, and writes one `release-assurance.json` / Markdown report:
+
+```bash
+tether release assure /tmp/tether-deploy-proof \
+  --profile warehouse-safe \
+  --control-hz 20 \
+  --execution-cert \
+  --shadow-trace ./traces/shadow.jsonl.gz \
+  --output-dir /tmp/tether-release-assurance
+```
+
+The top-level decision is `PROMOTE`, `HOLD`, or `ROLLBACK`. The report includes
+component decisions, risk signals such as policy action delta, latency
+regression, stale action window, chunk-boundary delta, velocity discontinuity,
+and open evidence gaps for production rollout.
+
 For serving-specific deployment confidence, turn the same proof packet into a
 realtime certificate. This answers whether the measured `/act` path fits the
 robot control loop on the target hardware/cell:
@@ -532,14 +550,14 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | Ada Lovelace (RTX 40-series, L4) | sm_8.9 | ✅ Supported | |
 | Hopper (H100, H200) | sm_9.0 | ✅ Supported | |
 | Jetson Orin (Orin Nano / NX / AGX) | sm_8.7 | ✅ Supported | JetPack 6.x |
-| Jetson Thor | sm_10.x | ⚠️ Untested | Should work — same Blackwell silicon as desktop, but ORT-bundled CUDA EP needs Blackwell support (see below) |
-| **Blackwell desktop (RTX 5090, RTX PRO 6000, B200, GB200)** | **sm_10.0** | **❌ Not yet supported** | ORT's bundled cuBLAS/cuDNN don't ship sm_100 kernels. Server segfaults at `InferenceSession` init. **Workaround:** use `tether chat` (no GPU needed), or `/act` testing on Modal cloud or non-Blackwell GPU until ORT updates ship. Tracking: [microsoft/onnxruntime#blackwell](https://github.com/microsoft/onnxruntime/issues) |
+| Jetson Thor | sm_10.x | ⚠️ Untested | Same Blackwell silicon as desktop; ORT ≥1.25.1 ships those kernels. Untested only for lack of hardware. |
+| **Blackwell desktop (RTX 5090, RTX PRO 6000, B200, GB200)** | **sm_10.0 / 12.0** | **⚠️ Supported (smoke-validate)** | The pinned `onnxruntime-gpu>=1.25.1` ships Blackwell sm_120 kernels, so the earlier `InferenceSession`-init segfault is resolved. Smoke-validation recommended before declaring fully production-ready (open ORT threading issue #27621). On ORT < 1.25.1 the server still segfaults — `tether doctor` and the `tether go` Blackwell guard detect this and print the upgrade path. |
 | Older NVIDIA (Turing RTX 20, GTX 16) | sm_7.5 | ⚠️ Best-effort | Should work but not in CI matrix |
 | Pre-Tensor-Core (Maxwell Jetson Nano 4GB, GTX 9-series) | sm_5.x | ❌ Not supported | NVIDIA EOL'd this hardware at JetPack 4.6 (Python 3.6) — too old for modern ML stacks regardless. The bootstrap installer auto-detects and bails fast with redirect instructions. |
 
-**For Blackwell users right now:** the bootstrap installer accepts your hardware and the package installs cleanly, but `tether go` will segfault at server startup. The real fix requires ORT to ship Blackwell-aware bundled binaries (no published timeline). Workarounds: chat-only mode (no GPU needed), `tether doctor`, `tether models list` all work fine. `/act` and TRT-engine inference need a non-Blackwell GPU temporarily.
+**For Blackwell users:** the default install pins `onnxruntime-gpu>=1.25.1`, which ships Blackwell sm_120 kernels — so `tether go` serves on RTX 50-series / B200 / GB200 hardware. The earlier `InferenceSession`-init segfault only occurs on ORT < 1.25.1; `tether doctor` and the `tether go` Blackwell guard detect that and print the upgrade path. Smoke-validate your model on-device before production (open ORT threading issue #27621).
 
-A Blackwell-specific runtime path via TensorRT-LLM (which supports sm_100) is tracked upstream.
+A native TensorRT-LLM path (sm_100 / sm_120) is tracked upstream as an additional Blackwell runtime.
 
 ## Composable runtime wedges
 
@@ -589,6 +607,10 @@ Plus PyTorch-level native-path sanity checks (`SmolVLAPolicy` with DecomposedRMS
 Full ledger: [reflex_context/measured_numbers.md](reflex_context/measured_numbers.md).
 
 **Latency numbers are intentionally not in the README yet** — earlier TRT FP16 tables were measured on a now-abandoned decomposed-ONNX path. `tether bench <export_dir>` reproduces on any hardware.
+
+<!-- BEGIN:jetson-latency-table -->
+<!-- Auto-populated by scripts/publish_jetson_latency.py from `tether bench realtime` certificates. Empty until certs are published. -->
+<!-- END:jetson-latency-table -->
 
 Reproduce on your own GPU with one command:
 

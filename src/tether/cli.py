@@ -38,6 +38,7 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deployment confidence for VLA robot
   [green]tether chat[/green]                ask what to prove, deploy, or fix
   [green]tether chat --tui[/green]          ↳ full-screen TUI (needs [dim]pip install 'tether\\[tui]'[/dim])
   [green]tether prove ./export[/green]      collect a deployment proof packet
+  [green]tether release assure ./proof[/green] decide PROMOTE / HOLD / ROLLBACK
   [green]tether promote ./proof[/green]     decide PROMOTE / BLOCK / ROLLBACK
   [green]tether rollout gate ./trace[/green] decide PROMOTE / HOLD / ROLLBACK from shadow evidence
   [green]tether profiles list[/green]       choose a built-in promotion profile
@@ -86,6 +87,7 @@ def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
         "smoke",
         "deploy-proof",
         "prove",
+        "release",
         "promote",
         "profiles",
         "policy",
@@ -962,6 +964,60 @@ def _bench_realtime_cmd(
         raise typer.Exit(1)
 
 
+@app.command(name="publish-latency", hidden=True)
+def publish_latency_cmd(
+    certs: list[str] = typer.Argument(
+        ...,
+        help="Realtime cert JSON files, or dirs containing realtime-serving-cert.json",
+    ),
+    out: Path = typer.Option(
+        Path("reflex_context/06_experiments/jetson_latency_results.md"),
+        "--out",
+        help="Results doc path.",
+    ),
+    readme: Path = typer.Option(
+        Path("README.md"), "--readme", help="README to inject the table into."
+    ),
+    no_readme: bool = typer.Option(
+        False, "--no-readme", help="Don't touch the README."
+    ),
+    title: str = typer.Option(
+        "Realtime serving latency", "--title", help="Table heading."
+    ),
+) -> None:
+    """Publish `bench realtime` certificates into a comparison latency table.
+
+    Renders one row per certificate (model x target), writes the results doc, and
+    injects the table into the README between the latency-table markers. The
+    standalone `scripts/publish_jetson_latency.py` is the same flow without the CLI.
+    """
+
+    from tether.realtime_cert_publish import CertificateLoadError, publish
+
+    try:
+        result = publish(
+            list(certs),
+            out=out,
+            readme=None if no_readme else readme,
+            title=title,
+        )
+    except CertificateLoadError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    typer.echo(result["table"])
+    console.print(
+        f"  [dim]Wrote[/dim] {result['out']}  ({result['count']} certificate(s))"
+    )
+    if not no_readme:
+        if result["readme_updated"]:
+            console.print(f"  [dim]Injected table into[/dim] {readme}")
+        else:
+            err_console.print(
+                f"[yellow]Markers not found in {readme}; skipped injection.[/yellow]"
+            )
+
+
 @app.command(name="bench", hidden=True)
 def benchmark_cmd(
     export_dir: str = typer.Argument(
@@ -1195,6 +1251,7 @@ def benchmark_cmd(
         except Exception:
             export_config = {}
 
+    server: Any
     if export_config.get("export_kind") == "monolithic":
         model_type = export_config.get("model_type", "smolvla")
         if model_type == "pi0":
@@ -4103,7 +4160,7 @@ def doctor(
 
         if output_format == "json":
             import json as _json
-            payload = {
+            payload: dict[str, Any] = {
                 "path": str(cache_path),
                 "current_fingerprint": current_fp.to_dict(),
                 "is_stale": is_stale,
@@ -4626,7 +4683,7 @@ def doctor(
                 "skip": sum(1 for check in checks if check["status"] == "skip"),
             }
 
-        payload: dict[str, Any] = {
+        payload = {
             "schema_version": 1,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "system_probe": {
@@ -4935,7 +4992,6 @@ def models_pull(
             repo_id=entry.hf_repo,
             revision=rev or None,
             local_dir=str(target),
-            local_dir_use_symlinks=False,
         )
     except Exception as e:
         err_console.print(f"[red]Download failed: {type(e).__name__}: {e}[/red]")
@@ -5163,7 +5219,6 @@ def go(
                 repo_id=entry.hf_repo,
                 revision=entry.hf_revision or None,
                 local_dir=str(target),
-                local_dir_use_symlinks=False,
             )
         except Exception as e:
             err_console.print(f"[red]Download failed: {type(e).__name__}: {e}[/red]")
@@ -5381,6 +5436,10 @@ policy_app = typer.Typer(
 )
 rollout_app = typer.Typer(
     help="Self-serve rollout decisions from shadow evidence.",
+    no_args_is_help=True,
+)
+release_app = typer.Typer(
+    help="Release assurance packets for robot policy updates.",
     no_args_is_help=True,
 )
 profiles_app = typer.Typer(
@@ -6125,6 +6184,253 @@ def rollout_gate_cmd(
     )
 
 
+@release_app.command("assure")
+def release_assure_cmd(
+    packet: str = typer.Argument(
+        ...,
+        help="Deployment proof packet directory, or deployment-proof.json path.",
+    ),
+    profile: str = typer.Option(
+        "",
+        "--profile",
+        help="Built-in promotion profile name, or JSON/YAML path.",
+    ),
+    candidate_active: bool = typer.Option(
+        False,
+        "--candidate-active",
+        help="Return ROLLBACK instead of HOLD when gates fail for an active candidate.",
+    ),
+    realtime: bool = typer.Option(
+        False,
+        "--realtime",
+        help="Attach a realtime serving certificate to the release assurance report.",
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="Hardware/cell label written into the realtime evidence.",
+    ),
+    control_hz: float = typer.Option(
+        0.0,
+        "--control-hz",
+        help="Robot control rate. Setting this implies --realtime.",
+    ),
+    max_roundtrip_p95_ms: float = typer.Option(
+        0.0,
+        "--max-roundtrip-p95-ms",
+        help="Optional p95 roundtrip budget. 0 uses realtime certificate default.",
+    ),
+    max_jitter_p95_minus_p50_ms: float = typer.Option(
+        0.0,
+        "--max-jitter-p95-minus-p50-ms",
+        help="Optional jitter budget. 0 uses profile/default behavior.",
+    ),
+    max_deadline_misses: int = typer.Option(
+        0,
+        "--max-deadline-misses",
+        help="Allowed deadline misses in realtime evidence.",
+    ),
+    max_control_budget_misses: int = typer.Option(
+        0,
+        "--max-control-budget-misses",
+        help="Allowed samples slower than the control period.",
+    ),
+    max_act_errors: int = typer.Option(
+        0,
+        "--max-act-errors",
+        help="Allowed /act errors.",
+    ),
+    execution_cert: bool = typer.Option(
+        False,
+        "--execution-cert",
+        help="Attach action-execution continuity checks to realtime evidence.",
+    ),
+    max_stale_action_window_ms: float = typer.Option(
+        0.0,
+        "--max-stale-action-window-ms",
+        help="Execution cert stale-action budget. 0 uses 100 ms.",
+    ),
+    max_chunk_boundary_delta: float = typer.Option(
+        0.0,
+        "--max-chunk-boundary-delta",
+        help="Execution cert max chunk-boundary action delta. 0 uses 0.15.",
+    ),
+    max_velocity_discontinuity: float = typer.Option(
+        0.0,
+        "--max-velocity-discontinuity",
+        help="Execution cert max boundary velocity jump. 0 uses 0.2.",
+    ),
+    require_phase_aware_horizon: bool = typer.Option(
+        False,
+        "--require-phase-aware-horizon",
+        help="Require phase/low-speed transition evidence in the action execution cert.",
+    ),
+    require_runtime_attribution: bool = typer.Option(
+        True,
+        "--require-runtime-attribution/--no-require-runtime-attribution",
+        help="Require scheduler/cache/adaptive-horizon attribution.",
+    ),
+    shadow_trace: str = typer.Option(
+        "",
+        "--shadow-trace",
+        help="Optional shadow trace recorded by `tether serve --shadow-policy --record`.",
+    ),
+    min_compared: int = typer.Option(
+        1,
+        "--min-compared",
+        help="Minimum compared shadow requests required before promotion.",
+    ),
+    wait_timeout_s: float = typer.Option(
+        0.0,
+        "--wait-timeout-s",
+        help="Seconds to wait for pending background shadow_result rows.",
+    ),
+    poll_s: float = typer.Option(
+        0.25,
+        "--poll-s",
+        help="Polling interval while waiting for shadow_result rows.",
+    ),
+    fail_on: str = typer.Option(
+        "any",
+        "--fail-on",
+        help="Shadow policy diff gate: none/actions/latency/guard/shape/any.",
+    ),
+    min_action_cos: float = typer.Option(
+        0.995,
+        "--min-action-cos",
+        help="Minimum action cosine before the shadow diff fails.",
+    ),
+    max_action_delta: float = typer.Option(
+        0.10,
+        "--max-action-delta",
+        help="Max absolute action delta before the shadow diff fails.",
+    ),
+    max_latency_regression_pct: float = typer.Option(
+        0.10,
+        "--max-latency-regression-pct",
+        help="Max shadow latency regression as a fraction, e.g. 0.10 = 10%.",
+    ),
+    output_dir: str = typer.Option(
+        "",
+        "--output-dir",
+        help="Directory for release-assurance.json, Markdown, and MANIFEST.",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: 'human', 'json', or 'markdown'.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Alias for --format json.",
+    ),
+) -> None:
+    """Build one promote/hold/rollback release assurance packet."""
+    if json_output:
+        output_format = "json"
+    if output_format not in ("human", "json", "markdown"):
+        err_console.print(
+            f"[red]--format must be 'human', 'json', or 'markdown', got {output_format!r}[/red]"
+        )
+        raise typer.Exit(2)
+    if control_hz < 0:
+        err_console.print("[red]--control-hz must be >= 0[/red]")
+        raise typer.Exit(2)
+    if min_compared < 1:
+        err_console.print("[red]--min-compared must be >= 1[/red]")
+        raise typer.Exit(2)
+    if poll_s <= 0:
+        err_console.print("[red]--poll-s must be > 0[/red]")
+        raise typer.Exit(2)
+    valid_fail_on = {"none", "actions", "latency", "guard", "shape", "any"}
+    if fail_on not in valid_fail_on:
+        err_console.print("[red]--fail-on must be one of none/actions/latency/guard/shape/any[/red]")
+        raise typer.Exit(2)
+    if (
+        max_roundtrip_p95_ms < 0
+        or max_jitter_p95_minus_p50_ms < 0
+        or max_stale_action_window_ms < 0
+        or max_chunk_boundary_delta < 0
+        or max_velocity_discontinuity < 0
+        or max_deadline_misses < 0
+        or max_control_budget_misses < 0
+        or max_act_errors < 0
+    ):
+        err_console.print("[red]realtime thresholds and miss/error budgets must be >= 0[/red]")
+        raise typer.Exit(2)
+
+    from tether.release_assurance import (
+        ReleaseAssuranceError,
+        build_release_assurance,
+        format_release_assurance_human,
+        format_release_assurance_markdown,
+        write_release_assurance_packet,
+    )
+
+    try:
+        report = build_release_assurance(
+            packet=packet,
+            profile_path=profile or None,
+            candidate_active=candidate_active,
+            realtime=realtime,
+            target=target,
+            control_hz=control_hz if control_hz > 0 else None,
+            max_roundtrip_p95_ms=(
+                max_roundtrip_p95_ms if max_roundtrip_p95_ms > 0 else None
+            ),
+            max_jitter_p95_minus_p50_ms=(
+                max_jitter_p95_minus_p50_ms
+                if max_jitter_p95_minus_p50_ms > 0
+                else None
+            ),
+            max_deadline_misses=max_deadline_misses,
+            max_control_budget_misses=max_control_budget_misses,
+            max_act_errors=max_act_errors,
+            execution_cert=execution_cert,
+            max_stale_action_window_ms=(
+                max_stale_action_window_ms if max_stale_action_window_ms > 0 else 100.0
+            ),
+            max_chunk_boundary_delta=(
+                max_chunk_boundary_delta if max_chunk_boundary_delta > 0 else 0.15
+            ),
+            max_velocity_discontinuity=(
+                max_velocity_discontinuity if max_velocity_discontinuity > 0 else 0.2
+            ),
+            require_phase_aware_horizon=require_phase_aware_horizon,
+            require_runtime_attribution=require_runtime_attribution,
+            shadow_trace=shadow_trace or None,
+            shadow_min_compared=min_compared,
+            shadow_wait_timeout_s=wait_timeout_s,
+            shadow_poll_s=poll_s,
+            shadow_fail_on=fail_on,
+            shadow_min_action_cos=min_action_cos,
+            shadow_max_action_delta=max_action_delta,
+            shadow_max_latency_regression_pct=max_latency_regression_pct,
+        )
+        if output_dir:
+            write_release_assurance_packet(report, output_dir)
+    except ReleaseAssuranceError as exc:
+        err_console.print(f"[red]Release assurance failed:[/red] {exc}")
+        raise typer.Exit(2)
+
+    if output_format == "json":
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    elif output_format == "markdown":
+        typer.echo(format_release_assurance_markdown(report))
+    else:
+        console.print(format_release_assurance_human(report), markup=False)
+        if output_dir:
+            console.print(f"\n  [dim]Release assurance packet:[/dim] {output_dir}")
+
+    decision = report.get("decision")
+    if decision == "PROMOTE":
+        raise typer.Exit(0)
+    if decision == "ROLLBACK":
+        raise typer.Exit(4)
+    raise typer.Exit(1)
+
+
 app.add_typer(models_app, name="models")
 app.add_typer(train_app, name="train")
 app.add_typer(validate_app, name="validate")
@@ -6133,6 +6439,7 @@ app.add_typer(comply_app, name="comply")
 app.add_typer(profiles_app, name="profiles")
 app.add_typer(policy_app, name="policy")
 app.add_typer(rollout_app, name="rollout")
+app.add_typer(release_app, name="release")
 
 # ─── tether connect {name} / disconnect / list ──────────────────────────────
 
@@ -6415,7 +6722,7 @@ def _agent_run_once(agent_daemon: Any, cfg: Any, client: Any = None) -> Any:
     for name in ("run_once", "run_agent_once", "run_cycle"):
         fn = getattr(agent_daemon, name, None)
         if callable(fn):
-            attempts = []
+            attempts: list[Any] = []
             if client is not None:
                 attempts.extend(
                     (
@@ -6440,7 +6747,7 @@ def _agent_run_loop(agent_daemon: Any, cfg: Any, client: Any = None) -> None:
     for name in ("run_forever", "run_loop", "run_daemon", "start_daemon"):
         fn = getattr(agent_daemon, name, None)
         if callable(fn):
-            attempts = []
+            attempts: list[Any] = []
             if client is not None:
                 attempts.extend(
                     (
@@ -7095,7 +7402,7 @@ def pro_status(
 
     expires_at = data.get("expires_at", "")
     last_hb = data.get("last_heartbeat_at", "")
-    days_remaining = "?"
+    days_remaining: int | str = "?"
     if expires_at:
         try:
             exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
@@ -7326,7 +7633,7 @@ def calibrate_so_arm100_import(
 
     out_path = Path(output).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    adapter.config.write_lerobot_calibration(out_path)
+    adapter.config.write_lerobot_calibration(str(out_path))
     console.print(f"[green]Calibration imported[/green] → {out_path}")
     console.print(
         "  Joints: "
@@ -7354,7 +7661,7 @@ def calibrate_so_arm100_default(
     adapter = SOARM100Adapter.default()
     out_path = Path(output).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    adapter.config.write_lerobot_calibration(out_path)
+    adapter.config.write_lerobot_calibration(str(out_path))
     console.print(f"[green]Default calibration written[/green] → {out_path}")
     console.print(
         "  [yellow]Factory defaults assume your servos are mid-pose with no "
@@ -7502,6 +7809,7 @@ def curate_convert(
     import json as _json
     from tether.curate.format_converters import (
         CONVERTER_REGISTRY,
+        FormatConverter,
         HDF5Converter,
         LeRobotV3Converter,
         OpenXEmbodimentConverter,
@@ -7516,6 +7824,7 @@ def curate_convert(
         raise typer.Exit(2)
 
     try:
+        converter: FormatConverter
         if format == "lerobot-v3":
             converter = LeRobotV3Converter(robot_type=robot_type, fps=fps)
         elif format == "hdf5":

@@ -176,6 +176,35 @@ the selected `--fail-on` gate tripped.
 
 ---
 
+## `tether release`
+
+Customer-facing release assurance workflow. It consumes an existing proof packet
+and returns the decision an operator needs before a robot policy update reaches a
+fleet: `PROMOTE`, `HOLD`, or `ROLLBACK`.
+
+```bash
+tether release assure ./tether-deploy-proof \
+  --profile warehouse-safe \
+  --control-hz 20 \
+  --execution-cert \
+  --shadow-trace ./traces/shadow.jsonl.gz \
+  --output-dir ./release-assurance \
+  --json
+```
+
+`release assure` composes lower-level evidence instead of replacing it:
+deployment proof, promotion gates, optional realtime serving certificate,
+optional action-execution certificate, and optional shadow rollout gate. The
+JSON/Markdown report includes component decisions, blocking checks, risk signals
+such as stale action windows and chunk-boundary jumps, and open evidence gaps.
+
+Artifacts written with `--output-dir`: `release-assurance.json`,
+`release-assurance.md`, and `MANIFEST.json`. Exit codes: `0` means `PROMOTE`,
+`1` means `HOLD`, `4` means `ROLLBACK`, and `2` means the packet or arguments
+could not be loaded.
+
+---
+
 ## `tether rollout`
 
 Self-serve rollout decision workflow for candidate policies that were mirrored

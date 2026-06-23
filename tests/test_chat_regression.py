@@ -145,6 +145,44 @@ def test_decide_promotion_tool_routes_to_promote() -> None:
     ]
 
 
+def test_assure_release_tool_routes_to_release_assure() -> None:
+    tool = by_name()["assure_release"]
+    props = tool["function"]["parameters"]["properties"]
+    assert "packet" in props
+    assert "control_hz" in props
+    assert "shadow_trace" in props
+    assert "execution_cert" in props
+
+    argv = _argv_for(
+        "assure_release",
+        {
+            "packet": "./proof",
+            "profile": "warehouse-safe",
+            "candidate_active": True,
+            "control_hz": 20,
+            "target": "agx-orin-cell-a",
+            "execution_cert": True,
+            "shadow_trace": "./shadow.jsonl.gz",
+            "min_compared": 100,
+            "output_dir": "./release",
+            "json": True,
+        },
+    )
+
+    assert argv == [
+        "release", "assure", "./proof",
+        "--profile", "warehouse-safe",
+        "--candidate-active",
+        "--control-hz", "20",
+        "--target", "agx-orin-cell-a",
+        "--execution-cert",
+        "--shadow-trace", "./shadow.jsonl.gz",
+        "--min-compared", "100",
+        "--output-dir", "./release",
+        "--json",
+    ]
+
+
 def test_certify_realtime_serving_routes_to_bench_realtime() -> None:
     tool = by_name()["certify_realtime_serving"]
     props = tool["function"]["parameters"]["properties"]
@@ -338,9 +376,11 @@ def test_system_prompt_prefers_realtime_cert_for_control_budget() -> None:
     p = SYSTEM_PROMPT
     assert "certify_realtime_serving" in p
     assert "prove_realtime_deployment" in p
+    assert "assure_release" in p
     assert "20 Hz" in p
     assert "control-loop budget" in p
-    assert "Use certify_realtime_serving only when the user gives an existing proof packet" in p
+    assert "Use assure_release when the user gives an existing proof packet" in p
+    assert "Use certify_realtime_serving only when the user asks specifically" in p
 
 
 def test_system_prompt_prefers_policy_diff_for_rollout_questions() -> None:
@@ -348,5 +388,5 @@ def test_system_prompt_prefers_policy_diff_for_rollout_questions() -> None:
     assert "diff_policies" in p
     assert "decide_promotion" in p
     assert "list_promotion_profiles" in p
-    assert "promote, block, or roll back" in p
+    assert "promote, hold, or roll back" in p
     assert "safe to promote" in p

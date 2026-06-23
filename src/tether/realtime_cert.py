@@ -119,6 +119,7 @@ def _control_budget_summary(
         period_ms = 1000.0 / control_hz
 
     samples = _roundtrip_samples(receipt)
+    missed_samples: int | None
     if period_ms and samples:
         missed_samples = sum(1 for value in samples if value > period_ms)
         missed_source = "act_samples"
@@ -553,6 +554,68 @@ def format_realtime_certificate_markdown(report: dict[str, Any]) -> str:
         from tether.action_execution_cert import format_action_execution_markdown
 
         lines.extend(["", format_action_execution_markdown(execution).rstrip()])
+    return "\n".join(lines) + "\n"
+
+
+def _latency_cell(value: Any) -> str:
+    """Format a millisecond metric for a table cell; missing -> em dash."""
+
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _certificate_model_label(report: dict[str, Any]) -> str:
+    """Best-effort model name for a certificate row.
+
+    The certificate has no explicit model field, so derive it from the source
+    export directory (e.g. ``~/.cache/tether/exports/smolvla-base`` ->
+    ``smolvla-base``). Falls back to the target, then ``unknown``.
+    """
+
+    export_dir = ((report.get("source") or {}).get("export_dir") or "").rstrip("/")
+    name = Path(export_dir).name if export_dir else ""
+    return name or (report.get("target") or "unknown")
+
+
+def format_realtime_certificates_markdown_table(
+    reports: list[dict[str, Any]],
+    *,
+    title: str = "Realtime serving latency",
+) -> str:
+    """Render multiple realtime certificates as one comparison table.
+
+    One row per certificate (model x target) with roundtrip p50/p95/p99/max and
+    the PASS/FAIL decision. Companion to :func:`format_realtime_certificate_markdown`
+    (which renders a single certificate vertically); this is the cross-run table
+    used to publish the README latency section and the Jetson latency results doc.
+    """
+
+    lines = [
+        f"## {title}",
+        "",
+        "| Model | Target | Control | p50 ms | p95 ms | p99 ms | max ms | Decision |",
+        "|---|---|---:|---:|---:|---:|---:|:--:|",
+    ]
+    for report in reports:
+        control = report.get("control_budget") or {}
+        roundtrip = (report.get("latency") or {}).get("roundtrip_ms") or {}
+        hz = control.get("control_hz")
+        control_cell = f"{float(hz):g} Hz" if hz else "—"
+        decision = report.get("decision", "FAIL")
+        lines.append(
+            f"| `{_certificate_model_label(report)}` "
+            f"| `{report.get('target') or 'unspecified'}` "
+            f"| {control_cell} "
+            f"| {_latency_cell(roundtrip.get('p50_ms'))} "
+            f"| {_latency_cell(roundtrip.get('p95_ms'))} "
+            f"| {_latency_cell(roundtrip.get('p99_ms'))} "
+            f"| {_latency_cell(roundtrip.get('max_ms'))} "
+            f"| **{decision}** |"
+        )
     return "\n".join(lines) + "\n"
 
 

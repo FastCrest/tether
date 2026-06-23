@@ -329,6 +329,126 @@ def test_rollout_gate_help():
     assert "--min-compared" in result.output
 
 
+def _write_cli_release_proof(tmp_path):
+    from tether.deploy_proof import write_deploy_proof_packet
+
+    receipt = {
+        "schema_version": 1,
+        "kind": "tether.deployment_proof",
+        "passed": True,
+        "export_dir": str(tmp_path / "export"),
+        "output_dir": str(tmp_path / "proof"),
+        "profile": {"name": "ci", "thresholds": {}},
+        "server": {"log_tail": []},
+        "security": {"enabled": True},
+        "safety_stress": {
+            "enabled": True,
+            "source": "embodiment",
+            "checks": [{"name": "guard_importable", "status": "pass"}],
+        },
+        "trace": {"record_dir": str(tmp_path / "traces"), "files": [{"path": "trace.jsonl"}]},
+        "checks": [{"name": "server_health_ready", "status": "pass"}],
+        "act_samples": [
+            {
+                "roundtrip_ms": 40.0,
+                "actions": [[0.0, 0.0], [0.04, 0.02], [0.08, 0.04]],
+                "action_execution": {
+                    "executed_horizon": 3,
+                    "adaptive_reason": "low_speed_transition",
+                    "phase_transition_indices": [2],
+                    "cache_status": "rtc_carry_hit",
+                },
+            },
+            {
+                "roundtrip_ms": 40.0,
+                "actions": [[0.09, 0.04], [0.13, 0.06], [0.17, 0.08]],
+                "action_execution": {
+                    "executed_horizon": 3,
+                    "adaptive_reason": "low_speed_transition",
+                    "phase_transition_indices": [2],
+                    "cache_status": "rtc_carry_hit",
+                },
+            },
+        ],
+        "latency": {
+            "samples": 2,
+            "roundtrip_ms": {
+                "p50_ms": 40.0,
+                "p95_ms": 40.0,
+                "p99_ms": 40.0,
+                "max_ms": 40.0,
+            },
+            "warm_roundtrip_ms": {
+                "p50_ms": 40.0,
+                "p95_ms": 40.0,
+                "p99_ms": 40.0,
+                "max_ms": 40.0,
+            },
+            "jitter": {"p95_minus_p50_ms": 0.0},
+            "control_budget": {"control_hz": 20.0, "period_ms": 50.0, "missed_samples": 0},
+            "deadline_misses": 0,
+            "act_errors": 0,
+            "guard_violations": 0,
+        },
+        "policy_diff": {
+            "enabled": True,
+            "report": {
+                "kind": "tether.policy_diff",
+                "summary": {
+                    "verdict": "pass",
+                    "action_failures": 0,
+                    "latency_regressions": 0,
+                    "guard_regressions": 0,
+                    "shape_failures": 0,
+                    "missing_candidate": 0,
+                    "shadow_pending": 0,
+                    "shadow_errors": 0,
+                },
+            },
+        },
+        "export_manifest": {"files": [{"name": "model.onnx", "sha256": "abc"}]},
+    }
+    proof_dir = tmp_path / "proof"
+    write_deploy_proof_packet(receipt, proof_dir)
+    return proof_dir
+
+
+def test_release_assure_help():
+    result = runner.invoke(app, ["release", "assure", "--help"])
+    assert result.exit_code == 0
+    assert "release assurance" in result.output.lower()
+    assert "--execution-cert" in result.output
+
+
+def test_release_assure_json_from_packet(tmp_path):
+    proof_dir = _write_cli_release_proof(tmp_path)
+    out_dir = tmp_path / "release"
+
+    result = runner.invoke(
+        app,
+        [
+            "release",
+            "assure",
+            str(proof_dir),
+            "--control-hz",
+            "20",
+            "--execution-cert",
+            "--require-phase-aware-horizon",
+            "--output-dir",
+            str(out_dir),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert body["kind"] == "tether.release_assurance"
+    assert body["decision"] == "PROMOTE"
+    assert body["realtime_certificate"]["execution_certificate"]["decision"] == "PASS"
+    assert (out_dir / "release-assurance.json").exists()
+    assert (out_dir / "release-assurance.md").exists()
+
+
 def test_policy_diff_fail_on_any_exits_three(monkeypatch):
     import tether.policy_diff as policy_diff_mod
 

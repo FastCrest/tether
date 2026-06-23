@@ -116,6 +116,23 @@ def _build_promote(p: dict[str, Any]) -> list[str]:
     return args
 
 
+def _build_release_assurance(p: dict[str, Any]) -> list[str]:
+    args = ["release", "assure", str(p["packet"])]
+    _flag(args, "profile", p.get("profile"))
+    if p.get("candidate_active") is True:
+        args.append("--candidate-active")
+    _flag(args, "control-hz", p.get("control_hz"))
+    _flag(args, "target", p.get("target"))
+    if p.get("execution_cert") is True:
+        args.append("--execution-cert")
+    _flag(args, "shadow-trace", p.get("shadow_trace"))
+    _flag(args, "min-compared", p.get("min_compared"))
+    _flag(args, "output-dir", p.get("output_dir"))
+    if p.get("json") is True:
+        args.append("--json")
+    return args
+
+
 def _build_realtime_cert(p: dict[str, Any]) -> list[str]:
     args = ["bench", "realtime", str(p["proof"])]
     _flag(args, "target", p.get("target"))
@@ -255,6 +272,7 @@ _BUILDERS = {
     "prove_deployment": _build_prove,
     "diff_policies": _build_policy_diff,
     "decide_promotion": _build_promote,
+    "assure_release": _build_release_assurance,
     "certify_realtime_serving": _build_realtime_cert,
     "show_promotion_profile": _build_show_profile,
     "benchmark": _build_bench,

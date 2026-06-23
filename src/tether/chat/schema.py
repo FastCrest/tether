@@ -127,6 +127,25 @@ TOOLS: list[dict[str, Any]] = [
         },
     ),
     _tool(
+        "assure_release",
+        "Build one release assurance report from an existing proof packet. Use this when the user asks whether a robot policy update/release should promote, hold, or roll back and may also care about realtime serving, action chunk continuity, or shadow rollout evidence.",
+        {
+            "properties": {
+                "packet": {"type": "string", "description": "Deployment proof packet directory, or deployment-proof.json path."},
+                "profile": {"type": "string", "description": "Optional built-in promotion profile name or JSON/YAML path."},
+                "candidate_active": {"type": "boolean", "description": "Return ROLLBACK instead of HOLD when gates fail for an active rollout."},
+                "control_hz": {"type": "number", "description": "Robot control rate. Setting this includes realtime evidence."},
+                "target": {"type": "string", "description": "Hardware/cell label, e.g. agx-orin-cell-a."},
+                "execution_cert": {"type": "boolean", "description": "Also certify stale action windows, chunk-boundary continuity, velocity discontinuity, and runtime attribution."},
+                "shadow_trace": {"type": "string", "description": "Optional shadow trace from `tether serve --shadow-policy --record`."},
+                "min_compared": {"type": "integer", "description": "Minimum compared shadow requests required before promotion. Default 1."},
+                "output_dir": {"type": "string", "description": "Directory for release-assurance artifacts."},
+                "json": {"type": "boolean", "description": "Emit JSON instead of human output."},
+            },
+            "required": ["packet"],
+        },
+    ),
+    _tool(
         "prove_realtime_deployment",
         "Run a deterministic realtime deployment proof chain for an export: `tether prove` into a known proof directory, then `tether bench realtime` against that same packet. Use this when the user gives an export path and asks whether it can run at 20 Hz, 50 Hz, realtime, or inside a robot control-loop budget.",
         {
