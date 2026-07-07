@@ -41,7 +41,7 @@ import hashlib
 import logging
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -174,9 +174,19 @@ class EpisodeCache:
         past_kv: list[np.ndarray],
         prefix_pad_masks: np.ndarray,
     ) -> EpisodePrefix:
-        """Insert a fresh VLM prefix for an episode. Evicts LRU if needed."""
+        """Insert a fresh VLM prefix for an episode. Evicts LRU if needed.
+
+        Safe to call for a key already present (replaces it) — the
+        existing entry's bytes are backed out first so `_total_bytes`
+        never double-counts and the capacity check below doesn't evict
+        an unrelated entry to make room that was never needed."""
         key = (episode_id, lang_hash(lang_tokens))
         now = time.monotonic_ns()
+
+        is_new_episode = key not in self._cache
+        replaced = self._cache.pop(key, None)
+        if replaced is not None:
+            self._total_bytes -= replaced.bytes_size
 
         # Evict LRU if at capacity
         while len(self._cache) >= self.max_episodes:
@@ -198,7 +208,8 @@ class EpisodeCache:
         )
         self._cache[key] = prefix
         self._total_bytes += entry_bytes
-        self.stats.episode_count += 1
+        if is_new_episode:
+            self.stats.episode_count += 1
         self._emit_bytes_metric()
         return prefix
 

@@ -7,7 +7,6 @@ Prometheus Gauge value matches `bytes_resident()` when labels are wired.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from tether.runtime.episode_cache import (
     EpisodeCache,
@@ -79,6 +78,37 @@ class TestByteTotal:
         cache.lookup("ep0", lang)
         cache.lookup("ep0", lang)
         assert cache.bytes_resident() == before
+
+    def test_reinsert_same_key_does_not_double_count_bytes(self):
+        """insert() called twice for the same (episode_id, lang) must
+        replace, not accumulate — regression test for a byte leak where
+        the old entry's bytes were never backed out of _total_bytes."""
+        cache = EpisodeCache(max_episodes=4)
+        past_kv, masks, lang = _fixture()
+        cache.insert("ep0", lang, past_kv, masks)
+        first_bytes = cache.bytes_resident()
+        cache.insert("ep0", lang, past_kv, masks)
+        assert cache.bytes_resident() == first_bytes
+        assert len(cache) == 1
+
+    def test_reinsert_same_key_does_not_inflate_episode_count(self):
+        cache = EpisodeCache(max_episodes=4)
+        past_kv, masks, lang = _fixture()
+        cache.insert("ep0", lang, past_kv, masks)
+        cache.insert("ep0", lang, past_kv, masks)
+        assert cache.stats.episode_count == 1
+
+    def test_reinsert_same_key_at_capacity_does_not_evict_others(self):
+        """Replacing an existing key while at capacity must not evict a
+        different entry to make room that was never needed."""
+        cache = EpisodeCache(max_episodes=2)
+        past_kv_a, masks_a, lang_a = _fixture()
+        past_kv_b, masks_b, lang_b = _fixture()
+        cache.insert("ep0", lang_a, past_kv_a, masks_a)
+        cache.insert("ep1", lang_b, past_kv_b, masks_b)
+        cache.insert("ep0", lang_a, past_kv_a, masks_a)  # replace, cache at capacity
+        assert cache.stats.evictions == 0
+        assert len(cache) == 2
 
 
 class TestPrometheusEmission:
