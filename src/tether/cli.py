@@ -2068,11 +2068,39 @@ def guard(
         raise typer.Exit(1)
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _warn_insecure_bind(host: str, api_key: str) -> None:
+    """Loudly warn when binding a non-loopback interface with no api_key.
+
+    The default host is 127.0.0.1 (localhost only). If an operator explicitly
+    binds 0.0.0.0 (or any non-loopback address) WITHOUT --api-key, the robot is
+    drivable by anyone on the network — surface that, don't let it pass silent.
+    """
+    if host in _LOOPBACK_HOSTS:
+        return
+    if api_key:
+        return
+    err_console.print(
+        f"[bold yellow]⚠ SECURITY:[/bold yellow] serving on [bold]{host}[/bold] "
+        f"(reachable from the network) with [bold]no --api-key[/bold]. Anyone who "
+        f"can reach this host can send /act commands to the robot.\n"
+        f"  Set [cyan]--api-key <key>[/cyan], or bind localhost only with "
+        f"[cyan]--host 127.0.0.1[/cyan] (the default).",
+        style=None, markup=True,
+    )
+
+
 @app.command()
 def serve(
     export_dir: str = typer.Argument(help="Path to exported model directory"),
     port: int = typer.Option(8000, help="Server port"),
-    host: str = typer.Option("0.0.0.0", help="Server host"),
+    host: str = typer.Option(
+        "127.0.0.1",
+        help="Server host. Defaults to localhost-only; pass 0.0.0.0 to expose "
+             "on the network (use --api-key when you do).",
+    ),
     transport: str = typer.Option(
         "http",
         "--transport",
@@ -3148,6 +3176,8 @@ def serve(
             f"[bold green]MCP server running on http://127.0.0.1:{mcp_port} "
             f"(streamable-http)[/bold green]"
         )
+
+    _warn_insecure_bind(host, api_key)
 
     if transport == "zmq":
         console.print("[bold green]Starting ZMQ server...[/bold green]")
@@ -5122,7 +5152,11 @@ def go(
         help="Where to cache weights. Default: $TETHER_HOME/models/<id>/ or ~/.cache/tether/models/<id>/",
     ),
     port: int = typer.Option(8000, "--port", help="HTTP port for /act + /health"),
-    host: str = typer.Option("0.0.0.0", "--host"),
+    host: str = typer.Option(
+        "127.0.0.1", "--host",
+        help="Server host. Defaults to localhost-only; pass 0.0.0.0 to expose "
+             "on the network (use --api-key when you do).",
+    ),
     api_key: str = typer.Option("", "--api-key", help="If set, /act requires X-Tether-Key header"),
     dry_run: bool = typer.Option(
         False,
@@ -5414,6 +5448,7 @@ def go(
         embodiment_config=embodiment_cfg,
         api_key=api_key or None,
     )
+    _warn_insecure_bind(host, api_key)
     import uvicorn
     uvicorn.run(app_instance, host=host, port=port, log_level="info")
 
