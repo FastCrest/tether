@@ -122,7 +122,7 @@ async function adminInit(request, env) {
     next_steps: [
       `1. Set the private key as a Worker Secret IMMEDIATELY:`,
       `     echo '${privB64}' | wrangler secret put PRIVATE_KEY`,
-      `2. Paste the public_key_b64 into src/reflex/pro/_public_key.py BUNDLED_PUBLIC_KEY_B64`,
+      `2. Paste the public_key_b64 into src/tether/pro/_public_key.py BUNDLED_PUBLIC_KEY_B64`,
       `3. Commit + push the public key change`,
       `4. The private key from this response is ONE-TIME — discard it after setting the Secret`,
     ],
@@ -292,7 +292,11 @@ async function postHeartbeat(request, env) {
   const body = await request.json().catch(() => ({}));
   const licenseId = String(body.license_id || "").trim();
   const hardwareFingerprint = String(body.hardware_fingerprint || "").trim();
-  const reflexVersion = String(body.reflex_version || "unknown").slice(0, 64);
+  // Accept tether_version (current clients) or reflex_version (legacy). Without
+  // this the renamed client sends tether_version and this column was recorded
+  // as all-"unknown" — silent version-analytics loss. D1 column stays
+  // reflex_version for continuity.
+  const tetherVersion = String(body.tether_version || body.reflex_version || "unknown").slice(0, 64);
   if (!licenseId || !hardwareFingerprint) {
     return jsonResponse(400, { error: "license_id_and_hardware_fingerprint_required" });
   }
@@ -322,7 +326,7 @@ async function postHeartbeat(request, env) {
     `INSERT INTO heartbeats
      (license_id, hardware_fingerprint, ip_country, reflex_version, server_timestamp)
      VALUES (?, ?, ?, ?, ?)`
-  ).bind(licenseId, hardwareFingerprint, country, reflexVersion, new Date().toISOString()).run();
+  ).bind(licenseId, hardwareFingerprint, country, tetherVersion, new Date().toISOString()).run();
 
   // Sharing-detection check (async; doesn't block response).
   detectSharing(licenseId, env).catch((e) => console.error("sharing-detect failed:", e.message));

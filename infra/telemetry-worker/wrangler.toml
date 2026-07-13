@@ -1,4 +1,4 @@
-name = "reflex-telemetry"
+name = "tether-telemetry"
 main = "worker.js"
 compatibility_date = "2026-05-01"
 
