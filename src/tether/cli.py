@@ -1,7 +1,6 @@
 """Tether CLI — deploy VLA models to edge hardware."""
 
 from __future__ import annotations
-from rich.logging import RichHandler
 
 import json
 import logging
@@ -12,6 +11,7 @@ from typing import Any, Optional
 
 import typer
 from rich.console import Console
+from rich.logging import RichHandler
 from rich.table import Table
 
 from tether import __version__
@@ -60,15 +60,18 @@ _NOARGS_SUMMARY = """[bold]tether[/bold] — deployment confidence for VLA robot
 def _setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-    level=level,
-    format="%(message)s",
-    handlers=[
-        RichHandler(
-            rich_tracebacks=True,
-            show_path=False,
-        )
-    ],
-)
+        level=level,
+        format="%(name)s: %(message)s",
+        handlers=[
+            RichHandler(
+                # stderr keeps stdout clean for `--json` consumers and shell
+                # pipelines; RichHandler's default console writes to stdout.
+                console=Console(stderr=True),
+                rich_tracebacks=True,
+                show_path=False,
+            )
+        ],
+    )
 
 
 def _tether_home() -> Path:
