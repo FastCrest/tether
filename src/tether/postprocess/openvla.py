@@ -4,8 +4,12 @@ OpenVLA emits actions as the last `action_dim` tokens of the LM output,
 which map onto the top N bins of the vocabulary via:
 
     bin_idx = vocab_size - token_id - 1
-    action_normalized = linspace(action_low, action_high, N)[bin_idx]
+    action_normalized = bin_centers[bin_idx]
     action_unnorm = unnormalize(action_normalized, norm_stats[dataset])
+
+OpenVLA's HuggingFace model computes the decode vocab as
+`text_config.vocab_size - pad_to_multiple_of` (32000 for openvla-7b), then
+uses centers between `n_action_bins` edges.
 
 This module provides the postprocessing step that wraps a standard
 Llama ONNX/PyTorch forward pass and turns its logits into actions.
@@ -41,13 +45,13 @@ def tokens_to_action_bins(
     vocab_size: int,
     n_bins: int = 256,
 ) -> np.ndarray:
-    """Convert predicted tokens to bin indices in [0, n_bins).
+    """Convert predicted tokens to bin-center indices in [0, n_bins - 2].
 
     OpenVLA assigns the top n_bins tokens of the Llama vocab to actions:
         bin_idx = vocab_size - token_id - 1
     """
     bin_idx = vocab_size - token_ids - 1
-    return np.clip(bin_idx, 0, n_bins - 1)
+    return np.clip(bin_idx, 0, n_bins - 2)
 
 
 def bins_to_normalized(
@@ -56,9 +60,15 @@ def bins_to_normalized(
     action_low: float = -1.0,
     action_high: float = 1.0,
 ) -> np.ndarray:
-    """Map bin indices to normalized actions in [action_low, action_high]."""
+    """Map bin indices to normalized action bin centers.
+
+    OpenVLA defines `n_action_bins` edges and uses the centers between them,
+    so the largest valid bin index is `n_bins - 2`.
+    """
     bins = np.linspace(action_low, action_high, n_bins, dtype=np.float32)
-    return bins[bin_idx]
+    bin_centers = (bins[:-1] + bins[1:]) / 2.0
+    safe_idx = np.clip(bin_idx, 0, bin_centers.shape[0] - 1)
+    return bin_centers[safe_idx]
 
 
 def unnormalize_actions(
@@ -100,7 +110,7 @@ def decode_actions(
     action_dim: int,
     norm_stats: dict[str, Any] | None = None,
     dataset_name: str | None = None,
-    vocab_size: int = 32064,
+    vocab_size: int = 32000,
     n_bins: int = 256,
     action_low: float = -1.0,
     action_high: float = 1.0,
