@@ -20,14 +20,14 @@ Customer prerequisites:
 - The repo cloned (so scripts/modal_libero_monolithic_onnx.py is
   reachable). Phase 2 will package this as a deployable Modal app.
 
-Phase 1 Modal runner is bounded to the smolvla_libero_monolithic
-reference export (hardcoded in the script). Arbitrary --export_dir
-support is Phase 2 (per docs/eval.md "What's deliberately NOT
-shipped Phase 1").
+Phase 1 Modal runner evaluates an export already present in the
+pi0-onnx-outputs Modal volume. The local export_dir maps to an
+ONNX subdirectory under /onnx_out; if that subdirectory has not been
+uploaded/prepared, the Modal script fails loudly instead of silently
+evaluating a reference export.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 import shutil
@@ -54,6 +54,7 @@ TASK_SUITE_MAX_STEPS: dict[str, int] = {
 
 # Path to the wrapped script, relative to repo root.
 DEFAULT_MODAL_SCRIPT = "scripts/modal_libero_monolithic_onnx.py"
+MODAL_ONNX_OUTPUT_PATH = "/onnx_out"
 
 
 class ModalNotInstalledError(RuntimeError):
@@ -106,9 +107,10 @@ def run_libero_on_modal(
     Args:
         config: LiberoSuiteConfig (tasks = suite names like
             "libero_spatial").
-        export_dir: customer's export directory. Phase 1: ignored
-            (the wrapped script targets the pre-uploaded reference
-            export). Phase 2 wires customer-arbitrary export upload.
+        export_dir: customer's export directory. The basename (or path
+            relative to /onnx_out) is forwarded as the Modal volume subdir
+            so `./my-export` evaluates `/onnx_out/my-export`, not the
+            baked-in reference export.
         repo_root: where to find scripts/. None = parent of cwd.
         modal_invoker: subprocess wrapper. None = real `modal` CLI.
         modal_binary: name of `modal` CLI. Used for PATH check.
@@ -150,6 +152,8 @@ def run_libero_on_modal(
         )
         return []
 
+    onnx_subdir = _modal_onnx_subdir_for_export(export_dir)
+
     # Per-suite invocation -- existing script handles per-task fan-out
     # within one Modal call (cheaper cold-start than per-task fan-out
     # at the Tether layer).
@@ -160,6 +164,7 @@ def run_libero_on_modal(
             modal_binary=modal_binary,
             script_path=str(abs_script),
             suite=suite,
+            onnx_subdir=onnx_subdir,
             num_episodes=config.num_episodes,
             seed=config.seed,
             timeout_s=suite_timeout_s,
@@ -170,12 +175,38 @@ def run_libero_on_modal(
     return all_episodes
 
 
+def _modal_onnx_subdir_for_export(export_dir: Path) -> str:
+    """Map the user-facing export_dir to the Modal volume subdir.
+
+    The Modal app mounts the shared ONNX volume at /onnx_out. A user may pass
+    either a path already rooted there (`/onnx_out/foo`) or the local export dir
+    they used for `tether export` (`./foo`). In both cases the wrapper must
+    forward a specific subdir; otherwise the script falls back to its legacy
+    smolvla_libero_monolithic reference export.
+    """
+    export_path = Path(export_dir).expanduser()
+    modal_root = Path(MODAL_ONNX_OUTPUT_PATH)
+    try:
+        rel = export_path.resolve(strict=False).relative_to(modal_root)
+    except ValueError:
+        rel = Path(export_path.name)
+
+    onnx_subdir = rel.as_posix()
+    if not onnx_subdir or onnx_subdir == ".":
+        raise ValueError(
+            "export_dir must identify a concrete Modal ONNX subdirectory "
+            f"under {MODAL_ONNX_OUTPUT_PATH}."
+        )
+    return onnx_subdir
+
+
 def _invoke_one_suite(
     *,
     modal_invoker: ModalInvoker,
     modal_binary: str,
     script_path: str,
     suite: str,
+    onnx_subdir: str,
     num_episodes: int,
     seed: int,
     timeout_s: float,
@@ -188,6 +219,7 @@ def _invoke_one_suite(
         "--suite", suite,
         "--num-episodes", str(num_episodes),
         "--tasks", "all",
+        "--onnx-subdir", onnx_subdir,
     ]
     t0 = time.perf_counter()
     completed = modal_invoker(cmd, timeout_s)
