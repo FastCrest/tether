@@ -2614,6 +2614,19 @@ def serve(
              "queueing. Overload records a shadow_queue_full result instead of "
              "blocking live /act responses.",
     ),
+    rollback_sensitivity: str = typer.Option(
+        "normal", "--rollback-sensitivity",
+        help="2-policy mode: consecutive post-swap-monitor trips required "
+             "before auto-rollback fires. aggressive=1 | normal=2 | tolerant=3. "
+             "Single-strike is too noisy; three-strike costs too much trust.",
+    ),
+    post_swap_baseline_clamp_rate: float = typer.Option(
+        -1.0, "--post-swap-baseline-clamp-rate",
+        help="2-policy mode: pre-swap safety-clamp rate the post-swap monitor's "
+             "T1 trip signal compares against, measured from the deployment "
+             "being replaced. Omit (-1) to default to 0.0, which makes T1 "
+             "maximally sensitive -- a warning is logged in that case.",
+    ),
     no_rtc: bool = typer.Option(
         False, "--no-rtc",
         help="Disable RTC even when --rtc was previously enabled. REQUIRED in "
@@ -3050,6 +3063,12 @@ def serve(
         policy_b_export_dir=policy_b or None,
         policy_split_a_percent=split,
         policy_crash_threshold=max_consecutive_crashes,
+        rollback_sensitivity=rollback_sensitivity,
+        post_swap_baseline_clamp_rate=(
+            post_swap_baseline_clamp_rate
+            if post_swap_baseline_clamp_rate >= 0
+            else None
+        ),
         shadow_policy=shadow_policy or None,
         shadow_sample=shadow_sample,
         shadow_queue_size=shadow_queue_size,

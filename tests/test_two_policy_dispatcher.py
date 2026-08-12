@@ -315,3 +315,94 @@ def test_dispatcher_policies_dict_returns_copy():
     snapshot = dispatcher.policies
     snapshot["a"] = None  # shouldn't propagate
     assert dispatcher.policies["a"] is not None
+
+
+# ---------------------------------------------------------------------------
+# force_drain — external override (PostSwapMonitor / rollback wiring)
+# ---------------------------------------------------------------------------
+
+
+def test_force_drain_overrides_routing_even_with_healthy_crash_counts():
+    """A force_drain() call routes traffic away from the drained slot on
+    the very next predict() — no crashes needed, unlike the organic
+    crash-count drain path. This is what a PostSwapMonitor trip relies on."""
+    dispatcher = _make_dispatcher(split_a=100)  # would otherwise route 100% to a
+    dispatcher.force_drain(slot="a", reason="post_swap_monitor_rollback")
+
+    _, decision = _run(dispatcher.predict(
+        request={}, episode_id="ep_1", request_id="req_1",
+    ))
+    assert decision.slot == "b"
+    assert decision.crash_verdict == "drain-a"
+    # Crash counters are untouched — this wasn't a crash-derived drain.
+    assert dispatcher.crash_counts() == {"a": 0, "b": 0}
+
+
+def test_force_drain_persists_across_multiple_predicts():
+    dispatcher = _make_dispatcher(split_a=100)
+    dispatcher.force_drain(slot="a", reason="test")
+    for i in range(3):
+        _, decision = _run(dispatcher.predict(
+            request={}, episode_id=f"ep_{i}", request_id=f"req_{i}",
+        ))
+        assert decision.slot == "b"
+
+
+def test_clear_forced_drain_restores_normal_routing():
+    dispatcher = _make_dispatcher(split_a=100)
+    dispatcher.force_drain(slot="a", reason="test")
+    _, d1 = _run(dispatcher.predict(
+        request={}, episode_id="ep_1", request_id="req_1",
+    ))
+    assert d1.slot == "b"
+
+    dispatcher.clear_forced_drain()
+    _, d2 = _run(dispatcher.predict(
+        request={}, episode_id="ep_2", request_id="req_2",
+    ))
+    assert d2.slot == "a"  # split_a=100, no override -> back to normal routing
+
+
+def test_force_drain_rejects_unknown_slot():
+    dispatcher = _make_dispatcher()
+    with pytest.raises(KeyError):
+        dispatcher.force_drain(slot="c", reason="test")
+
+
+def test_forced_drain_slot_property_reflects_state():
+    dispatcher = _make_dispatcher()
+    assert dispatcher.forced_drain_slot is None
+    dispatcher.force_drain(slot="b", reason="test")
+    assert dispatcher.forced_drain_slot == "b"
+    dispatcher.clear_forced_drain()
+    assert dispatcher.forced_drain_slot is None
+
+
+def test_force_drain_takes_priority_over_organic_crash_drain():
+    """If both an organic crash-count drain AND a forced drain are active
+    (e.g. slot A is both crashing AND monitor-tripped), the forced
+    override wins and its reason is surfaced, not the crash-derived one."""
+    async def _err_a(req):
+        return {"error": "boom"}
+
+    async def _ok_b(req):
+        return {"actions": [[0.0]]}
+
+    dispatcher = _make_dispatcher(
+        split_a=100, predict_a=_err_a, predict_b=_ok_b, crash_threshold=2,
+    )
+    # Drive slot A's organic crash count past threshold.
+    for i in range(2):
+        _run(dispatcher.predict(
+            request={}, episode_id=f"ep_{i}", request_id=f"req_{i}",
+        ))
+    assert dispatcher.crash_counts()["a"] >= 2
+
+    # Now also force-drain B instead — the forced override should win,
+    # even though A is the one organically crashing.
+    dispatcher.force_drain(slot="b", reason="operator_override")
+    _, decision = _run(dispatcher.predict(
+        request={}, episode_id="ep_final", request_id="req_final",
+    ))
+    assert decision.slot == "a"
+    assert decision.crash_verdict == "drain-b"

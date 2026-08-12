@@ -88,7 +88,7 @@ class PolicyCrashTracker:
         # legacy single-counter behavior)
     """
 
-    __slots__ = ("_slots", "_threshold", "_counts")
+    __slots__ = ("_slots", "_threshold", "_counts", "_forced_drain", "_forced_reason")
 
     def __init__(self, *, slots: tuple[str, ...], threshold: int):
         if not slots:
@@ -100,6 +100,14 @@ class PolicyCrashTracker:
         self._slots: tuple[str, ...] = tuple(slots)
         self._threshold = int(threshold)
         self._counts: dict[str, int] = {s: 0 for s in slots}
+        # External override (e.g. PostSwapMonitor tripping a rollback).
+        # Distinct from crash-count-derived drains so operators reading
+        # verdict.reason can tell "this slot is crashing" apart from
+        # "something outside raw request errors said drain this slot" --
+        # conflating the two into fake crash-count increments would corrupt
+        # the crash telemetry those counters are also used for.
+        self._forced_drain: str | None = None
+        self._forced_reason: str | None = None
 
     @property
     def slots(self) -> tuple[str, ...]:
@@ -142,19 +150,58 @@ class PolicyCrashTracker:
     def reset(self, *, slot: str | None = None) -> None:
         """Reset one slot's counter, or ALL slots when slot=None.
         Used after a manual operator intervention or after a successful
-        rollback completes."""
+        rollback completes. Also clears any forced-drain override --
+        callers that want the override to persist across a counter reset
+        must re-call force_drain() after."""
         if slot is None:
             for s in self._slots:
                 self._counts[s] = 0
+            self.clear_forced_drain()
             return
         if slot not in self._counts:
             raise KeyError(
                 f"slot {slot!r} not in tracker; known slots: {self._slots}"
             )
         self._counts[slot] = 0
+        if self._forced_drain == slot:
+            self.clear_forced_drain()
+
+    def force_drain(self, *, slot: str, reason: str) -> None:
+        """External override: force verdict() to report drain-<slot>
+        regardless of crash counts, until clear_forced_drain() is called.
+
+        Used by PostSwapMonitor-triggered rollback -- a monitor trip isn't
+        a raw predict() exception, so it can't go through record_crash()
+        without corrupting the crash-count telemetry those counters also
+        drive. This is a distinct signal, surfaced as its own reason.
+        """
+        if slot not in self._counts:
+            raise KeyError(
+                f"slot {slot!r} not in tracker; known slots: {self._slots}"
+            )
+        self._forced_drain = slot
+        self._forced_reason = reason
+        logger.warning(
+            "policy_crash_tracker.forced_drain slot=%s reason=%s",
+            slot, reason,
+        )
+
+    def clear_forced_drain(self) -> None:
+        """Clear any forced-drain override (e.g. after a successful
+        rollback + operator sign-off, or a fresh swap starting a new
+        window)."""
+        self._forced_drain = None
+        self._forced_reason = None
+
+    @property
+    def forced_drain_slot(self) -> str | None:
+        return self._forced_drain
 
     def verdict(self) -> CrashTrackerVerdict:
         """Compute the current verdict from per-slot counters.
+
+        A force_drain() override takes priority over crash-count-derived
+        verdicts -- checked first, unconditionally.
 
         Single-policy mode (one slot): exceeds threshold -> degraded.
         2-policy mode (two slots a + b):
@@ -163,6 +210,14 @@ class PolicyCrashTracker:
             - b exceeds, a healthy -> drain-b (route 100% to a).
             - Neither exceeds -> healthy.
         """
+        if self._forced_drain is not None:
+            snapshot = dict(self._counts)
+            return CrashTrackerVerdict(
+                verdict=f"drain-{self._forced_drain}",  # type: ignore[arg-type]
+                crash_counts=snapshot,
+                threshold=self._threshold,
+                reason=self._forced_reason or "forced drain (no reason given)",
+            )
         snapshot = dict(self._counts)
         exceeders = [s for s, c in snapshot.items() if c >= self._threshold]
 
