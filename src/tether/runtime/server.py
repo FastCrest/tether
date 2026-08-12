@@ -1789,6 +1789,14 @@ def create_app(
     policy_b_export_dir: str | None = None,  # 2-policy mode: path to slot B
     policy_split_a_percent: int = 50,  # % traffic to slot A in [0, 100]
     policy_crash_threshold: int = 5,  # per-slot circuit-breaker threshold
+    # Post-swap monitor (pro/post_swap_monitor.py + pro/rollback.py). Only
+    # active in 2-policy mode. aggressive=1 | normal=2 | tolerant=3
+    # consecutive trips before auto-rollback fires.
+    rollback_sensitivity: str = "normal",
+    # Pre-swap safety-clamp rate the T1 trip signal compares against
+    # (measured from the deployment being replaced). None -> 0.0, which
+    # makes T1 maximally sensitive; a loud warning is logged in that case.
+    post_swap_baseline_clamp_rate: float | None = None,
     shadow_policy: str | None = None,  # shadow mode: mirror sampled traffic to this export
     shadow_sample: float = 1.0,  # fraction of /act traffic mirrored to shadow_policy
     shadow_queue_size: int = 32,  # bounded pending shadow requests; 0 disables queueing
@@ -2685,6 +2693,8 @@ def create_app(
         # dispatcher instead of the single-server PolicyRuntime.
         # ---------------------------------------------------------------
         server.two_policy_state = None  # type: ignore[attr-defined]
+        server.post_swap_monitor = None  # type: ignore[attr-defined]
+        server.rollback_handler = None  # type: ignore[attr-defined]
         if policy_b_export_dir:
             from tether.runtime.two_policy_setup import setup_two_policy_serving
 
@@ -2811,6 +2821,79 @@ def create_app(
                     policy_split_a_percent, policy_crash_threshold,
                     two_state.policy_a.model_version,
                     two_state.policy_b.model_version,
+                )
+
+                # ---------------------------------------------------------
+                # Post-swap monitor + rollback wiring. Per ADR
+                # 2026-04-25-self-distilling-serve-architecture decision
+                # #4 + #7: the 9-gate eval (eval_gate.py) gates promotion,
+                # but production traffic can surface regressions the
+                # held-out eval missed. PostSwapMonitor watches the first
+                # 24h/500 episodes after a swap; a trip auto-drains the
+                # regressed slot via TwoPolicyDispatcher.force_drain (the
+                # same mechanism an organic crash-count drain already
+                # uses) and RollbackHandler records the audit trail.
+                #
+                # Convention: slot A is the newly-promoted candidate (see
+                # _two_policy_server_factory above -- "the first server
+                # ... is server A"). The monitor watches A; a trip drains
+                # A and routes 100% to B, the warm previous version.
+                # ---------------------------------------------------------
+                from tether.pro.post_swap_monitor import MonitorConfig, PostSwapMonitor
+                from tether.pro.rollback import RollbackHandler
+
+                _monitored_slot = "a"
+                _fallback_slot = "b"
+
+                if post_swap_baseline_clamp_rate is None:
+                    logger.warning(
+                        "post_swap_monitor.no_baseline_supplied -- using 0.0, "
+                        "which makes the T1 safety-clamp trip signal maximally "
+                        "sensitive (any clamping at all crosses 2x*0=0). Pass "
+                        "--post-swap-baseline-clamp-rate measured from the "
+                        "pre-swap deployment's traffic for accurate drift "
+                        "detection."
+                    )
+                _baseline_clamp = float(post_swap_baseline_clamp_rate or 0.0)
+
+                server.post_swap_monitor = PostSwapMonitor(  # type: ignore[attr-defined]
+                    config=MonitorConfig(sensitivity=rollback_sensitivity),
+                )
+                server.post_swap_monitor.start_window(
+                    baseline_clamp_rate=_baseline_clamp,
+                )
+
+                def _rollback_audit_writer(record: dict) -> None:
+                    import json as _json
+                    _audit_path = (
+                        Path(record_dir) / "rollback_audit.jsonl"
+                        if record_dir
+                        else Path.home() / ".tether" / "rollback_audit.jsonl"
+                    )
+                    _audit_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(_audit_path, "a") as _f:
+                        _f.write(_json.dumps(record) + "\n")
+
+                def _rollback_router_swap_fn(target_slot: str) -> None:
+                    # RollbackHandler calls this with the slot to swap TO.
+                    # Draining is expressed as "route 0% to the OTHER slot".
+                    _drain = _fallback_slot if target_slot == _monitored_slot else _monitored_slot
+                    two_state.dispatcher.force_drain(
+                        slot=_drain, reason="post_swap_monitor_rollback",
+                    )
+
+                server.rollback_handler = RollbackHandler(  # type: ignore[attr-defined]
+                    router_swap_fn=_rollback_router_swap_fn,
+                    active_slot_getter=lambda: _monitored_slot,
+                    audit_writer=_rollback_audit_writer,
+                )
+                logger.info(
+                    "post_swap_monitor.window_started monitored_slot=%s "
+                    "fallback_slot=%s sensitivity=%s baseline_clamp_rate=%.4f "
+                    "window_hours=%d window_episodes=%d",
+                    _monitored_slot, _fallback_slot, rollback_sensitivity,
+                    _baseline_clamp, MonitorConfig().window_duration_hours,
+                    MonitorConfig().window_episode_count,
                 )
             except Exception as exc:
                 logger.error(
@@ -3193,6 +3276,70 @@ def create_app(
                     # Stash routing decision so the response builder + headers
                     # + recorder can pick it up below.
                     _two_routing_decision = _routing
+
+                    # Post-swap monitor: only record episodes routed to the
+                    # monitored (newly-promoted) slot -- see wiring comment
+                    # at two_state setup above. A trip auto-drains that slot
+                    # and writes a rollback audit record.
+                    _monitor = getattr(server, "post_swap_monitor", None)
+                    if _monitor is not None and _routing.slot == "a" and _monitor.is_window_open:
+                        _guard_summary = (
+                            result.get("guard_summary")
+                            if isinstance(result, dict)
+                            else None
+                        )
+                        _clamp_count = (
+                            _guard_summary.get("clamp_count", 0)
+                            if isinstance(_guard_summary, dict)
+                            else 0
+                        )
+                        _safety_violations = (
+                            result.get("safety_violations", 0)
+                            if isinstance(result, dict)
+                            else 0
+                        )
+                        # T2 (action cos-similarity to the previous model) is
+                        # not wired live: computing it would mean running
+                        # both policies per request, doubling inference cost.
+                        # PostSwapMonitor treats a None sample as "T2 not
+                        # checked this episode" (documented in its docstring)
+                        # rather than silently faking a passing value.
+                        _monitor.record_episode(
+                            safety_clamp_count=_clamp_count,
+                            cos_to_previous_model=None,
+                            webhook_violations_count=_safety_violations,
+                        )
+                        _trip = _monitor.should_rollback()
+                        if _trip.should_rollback:
+                            _handler = getattr(server, "rollback_handler", None)
+                            if _handler is not None:
+                                _outcome = _handler.execute(
+                                    trigger="auto", reason=_trip.reason,
+                                )
+                                if _outcome.succeeded:
+                                    from tether.observability import inc_model_swap
+                                    try:
+                                        _emb = getattr(
+                                            getattr(server, "embodiment_config", None),
+                                            "embodiment", None,
+                                        ) or "custom"
+                                        inc_model_swap(
+                                            embodiment=_emb,
+                                            from_model=_outcome.from_slot,
+                                            to_model=_outcome.to_slot,
+                                        )
+                                    except Exception:  # noqa: BLE001
+                                        pass  # metric emission never blocks the response path
+                                logger.error(
+                                    "post_swap_monitor.rollback_fired reason=%s "
+                                    "consecutive=%d required=%d measured=%.4f "
+                                    "threshold=%.4f rollback_succeeded=%s "
+                                    "audit_id=%s",
+                                    _trip.reason, _trip.consecutive_trips,
+                                    _trip.required_trips, _trip.measured,
+                                    _trip.threshold, _outcome.succeeded,
+                                    _outcome.audit_id,
+                                )
                 else:
                     _two_routing_decision = None
                     # Single-policy mode: route through the existing

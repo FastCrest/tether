@@ -227,6 +227,23 @@ class TwoPolicyDispatcher(Generic[_PR]):
         affected policy."""
         self._tracker.reset(slot=slot)
 
+    def force_drain(self, *, slot: str, reason: str) -> None:
+        """External override: route 0% of traffic to `slot` starting on
+        the next predict() call, regardless of crash counts. Used by a
+        PostSwapMonitor trip (see pro/post_swap_monitor.py + pro/rollback.py)
+        -- a monitor trip isn't a raw predict() exception, so it's kept
+        distinct from the crash-count-derived drain path."""
+        self._tracker.force_drain(slot=slot, reason=reason)
+
+    def clear_forced_drain(self) -> None:
+        """Clear a force_drain() override (e.g. after operator sign-off
+        that the rolled-back-from slot is safe to re-enable)."""
+        self._tracker.clear_forced_drain()
+
+    @property
+    def forced_drain_slot(self) -> str | None:
+        return self._tracker.forced_drain_slot
+
 
 def _default_is_error_response(result: Any) -> bool:
     """Default error detector: result is a dict with 'error' key.
