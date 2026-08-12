@@ -34,6 +34,14 @@ jobs:
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
+          # docker/metadata-action in docker-publish.yml lowercases the
+          # image ref before pushing (GHCR/OCI requires lowercase repo
+          # names) -- ${{ github.repository }} is NOT lowercased, so a raw
+          # `docker pull ghcr.io/${{ github.repository }}` 404s whenever
+          # the GitHub org/repo has any uppercase letters (e.g.
+          # "FastCrest/tether"). Compute the same lowercased ref here so
+          # this workflow pulls the image that was actually published.
+          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -43,19 +51,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull image
-        run: docker pull ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+        run: docker pull ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }}
 
       - name: tether --help (via ENTRYPOINT)
         run: |
           # The Dockerfile has ENTRYPOINT=["tether"]. `docker run <image> --help`
           # invokes `tether --help`, which is Typer's root-help path and
           # should exit 0 with the usage printed.
-          docker run --rm ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} --help
+          docker run --rm ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }} --help
           echo "exit=$?"
 
       - name: tether targets (via ENTRYPOINT)
         run: |
-          docker run --rm ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} targets
+          docker run --rm ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }} targets
 
       - name: Runtime module imports (overriding ENTRYPOINT)
         run: |
@@ -64,7 +72,7 @@ jobs:
           # importable from a clean container — same evidence the fresh-install
           # gate gives but against the published image.
           docker run --rm --entrypoint python \
-            ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }} \
+            ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }} \
             -c "from tether.runtime.server import create_app; \
                 from tether.runtime.pi0_onnx_server import Pi0OnnxServer; \
                 from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer; \
@@ -78,7 +86,7 @@ jobs:
         if: success()
         run: |
           echo "### Docker smoke PASS" >> "$GITHUB_STEP_SUMMARY"
-          echo "Image: \`ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Image: \`${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`tether --help\` exit 0" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`tether targets\` exit 0" >> "$GITHUB_STEP_SUMMARY"
           echo "- all production modules importable" >> "$GITHUB_STEP_SUMMARY"
