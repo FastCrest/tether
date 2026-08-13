@@ -117,6 +117,96 @@ class TestActionGuard:
         assert results[1].clamped
         assert results[2].safe
 
+    def test_velocity_clamp_survives_position_violation_on_earlier_joint(self):
+        limits = SafetyLimits(
+            joint_names=["j0", "j1", "j2", "j3"],
+            position_min=[-1.0] * 4,
+            position_max=[1.0] * 4,
+            velocity_max=[10.0, 10.0, 10.0, 0.5],
+            effort_max=[50.0] * 4,
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(
+            np.array([5.0, 0.0, 0.0, 0.9]), previous_action=np.zeros(4)
+        )
+
+        assert result.safe_action[0] == 1.0
+        assert result.safe_action[3] == pytest.approx(0.5)
+        assert any("joint_3 velocity limit" in v for v in result.violations)
+
+    def test_velocity_clamp_survives_effort_violation_on_earlier_joint(self):
+        limits = SafetyLimits(
+            joint_names=["j0", "j1"],
+            position_min=[-10.0, -10.0],
+            position_max=[10.0, 10.0],
+            velocity_max=[10.0, 0.5],
+            effort_max=[2.0, 50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(
+            np.array([3.0, 0.9]), previous_action=np.zeros(2)
+        )
+
+        assert result.safe_action[0] == 2.0
+        assert result.safe_action[1] == pytest.approx(0.5)
+        assert any("joint_1 velocity limit" in v for v in result.violations)
+
+    def test_chunk_velocity_clamp_survives_position_violation_on_earlier_joint(self):
+        limits = SafetyLimits(
+            joint_names=["j0", "j1"],
+            position_min=[-1.0, -10.0],
+            position_max=[1.0, 10.0],
+            velocity_max=[10.0, 0.5],
+            effort_max=[50.0, 50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+        actions = np.array([
+            [0.0, 0.0],
+            [5.0, 0.9],
+        ])
+
+        safe_actions, results = guard.check(actions)
+
+        np.testing.assert_allclose(safe_actions[1], [1.0, 0.5])
+        assert any("joint_1 velocity limit" in v for v in results[1].violations)
+        assert results[1].clamped
+
+    def test_position_clamp_still_takes_precedence_on_the_same_joint(self):
+        limits = SafetyLimits(
+            joint_names=["j0", "j1"],
+            position_min=[-1.0, -10.0],
+            position_max=[1.0, 10.0],
+            velocity_max=[0.1, 10.0],
+            effort_max=[50.0, 50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(
+            np.array([5.0, 0.0]), previous_action=np.zeros(2)
+        )
+
+        assert result.safe_action[0] == 1.0
+        assert not any("joint_0 velocity limit" in v for v in result.violations)
+
+    def test_velocity_check_skips_joints_without_a_configured_limit(self):
+        limits = SafetyLimits(
+            joint_names=["j0", "j1"],
+            position_min=[-1.0, -10.0],
+            position_max=[1.0, 10.0],
+            velocity_max=[0.5],
+            effort_max=[50.0, 50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(
+            np.array([0.9, 8.0]), previous_action=np.zeros(2)
+        )
+
+        assert result.safe_action[0] == pytest.approx(0.5)
+        assert result.safe_action[1] == 8.0
+
     def test_workspace_limit_clamps_explicit_indices(self):
         limits = SafetyLimits(
             joint_names=["x", "unused", "z"],

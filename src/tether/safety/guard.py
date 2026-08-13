@@ -328,6 +328,10 @@ class ActionGuard:
         num_joints = min(len(action), len(self.limits.position_max))
 
         for i in range(num_joints):
+            # Marks where this joint's own violations start. The velocity gate
+            # below reads it instead of scanning the shared cross-joint list.
+            joint_violation_start = len(violations)
+
             # Position bounds
             if safe_action[i] < self.limits.position_min[i]:
                 violations.append(
@@ -361,7 +365,7 @@ class ActionGuard:
 
             if (
                 previous_action is not None
-                and not any("velocity limit" not in v for v in violations)
+                and len(violations) == joint_violation_start
                 and i < len(self.limits.velocity_max)
             ):
                 velocity_limit = self.limits.velocity_max[i]
