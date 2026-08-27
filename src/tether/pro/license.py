@@ -267,7 +267,8 @@ def load_license(
             "will require a signed license."
         )
 
-    # Refresh local heartbeat so the next validation passes for another 24h
+    # Refresh local heartbeat so the next validation passes for another 24h.
+    new_heartbeat = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     refreshed = ProLicense(
         license_version=license.license_version,
         customer_id=license.customer_id,
@@ -276,13 +277,21 @@ def load_license(
         expires_at=license.expires_at,
         hardware_binding=license.hardware_binding,
         signature=license.signature,
-        last_heartbeat_at=datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        ),
+        last_heartbeat_at=new_heartbeat,
     )
     try:
+        # Persist the FULL on-disk envelope with only last_heartbeat_at bumped.
+        # ProLicense models a subset of the license fields, so writing
+        # refreshed.to_dict() would silently DROP license_id / max_seats /
+        # key_id (and any future fields) — and since those are part of the
+        # signed payload (pro/signature.py), the NEXT load_license would fail
+        # signature verification with LicenseCorrupt: a v2 license that locks
+        # itself out on the second startup. last_heartbeat_at is NOT in the
+        # signed payload, so bumping it here never invalidates the signature.
+        persisted = dict(data)
+        persisted["last_heartbeat_at"] = new_heartbeat
         tmp = path_obj.with_suffix(path_obj.suffix + ".tmp")
-        tmp.write_text(json.dumps(refreshed.to_dict(), indent=2, sort_keys=True))
+        tmp.write_text(json.dumps(persisted, indent=2, sort_keys=True))
         tmp.replace(path_obj)
         os.chmod(path_obj, 0o600)
     except Exception as exc:  # noqa: BLE001 — heartbeat write failure shouldn't kill startup
