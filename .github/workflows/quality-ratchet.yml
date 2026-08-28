@@ -170,6 +170,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ steps.authorization.outputs.artifact_id }}
+          merge-multiple: true
           path: ${{ runner.temp }}/approval-evidence
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}

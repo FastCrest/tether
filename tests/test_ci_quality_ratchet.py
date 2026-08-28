@@ -153,6 +153,10 @@ def test_workflows_separate_ordinary_and_protected_policy_changes() -> None:
     assert '--expected-candidate-sha "$HEAD_SHA"' in ordinary
     assert '--expected-base-sha "$BASE_SHA"' in ordinary
     assert "artifact-ids: ${{ steps.authorization.outputs.artifact_id }}" in ordinary
+    approval_download = ordinary.split("- name: Download exact approval evidence", 1)[1].split(
+        "- name: Verify immutable approval evidence binding", 1
+    )[0]
+    assert "merge-multiple: true" in approval_download
     assert "Bind the event to the current protected-main tip" in ordinary
     assert "--verify-main-ref-response" in ordinary
     assert "--expected-current-main-sha" in ordinary
