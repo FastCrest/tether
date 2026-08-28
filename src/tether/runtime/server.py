@@ -171,7 +171,7 @@ async def _refresh_paid_heartbeat_once(
     from tether.pro.heartbeat import persist_verified_attestation
 
     remaining = int(previous_deadline) - int(time.time())
-    attestation = await asyncio.wait_for(
+    heartbeat_task = asyncio.create_task(
         asyncio.to_thread(
             send_heartbeat_fn,
             license_id=license_id,
@@ -181,9 +181,28 @@ async def _refresh_paid_heartbeat_once(
             # asyncio cancellation cannot stop a running worker thread. It
             # must therefore be incapable of mutating the authoritative cache.
             cache_path=None,
-        ),
-        timeout=max(0.001, remaining),
+        )
     )
+    try:
+        # Shield the thread-backed task so Python 3.10's wait_for does not
+        # wait for an uncancellable executor call before reporting timeout.
+        # The worker has no authority to update the cache or deadline, so it
+        # is safe to let it finish after the caller has failed closed.
+        attestation = await asyncio.wait_for(
+            asyncio.shield(heartbeat_task),
+            timeout=max(0.001, remaining),
+        )
+    except asyncio.TimeoutError:
+        # Retrieve any eventual exception from the detached task rather than
+        # leaving an unobserved-task warning at loop shutdown.
+        def _consume_late_result(task: asyncio.Task[Any]) -> None:
+            try:
+                task.result()
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        heartbeat_task.add_done_callback(_consume_late_result)
+        raise
     completed_at = int(time.time())
     if not _accept_heartbeat_renewal(
         server,

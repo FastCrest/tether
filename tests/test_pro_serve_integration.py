@@ -297,7 +297,9 @@ def test_timed_out_heartbeat_thread_cannot_mutate_cache_or_deadline(tmp_path):
             previous_deadline=previous,
         ))
         assert await asyncio.to_thread(started.wait, 2)
-        with pytest.raises(TimeoutError):
+        # asyncio.TimeoutError is only an alias of builtins.TimeoutError on
+        # Python 3.11+; use the asyncio spelling for the supported 3.10 job.
+        with pytest.raises(asyncio.TimeoutError):
             await refresh
         assert int(time.time()) >= previous
         release.set()
