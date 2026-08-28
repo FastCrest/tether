@@ -10,6 +10,11 @@ Design notes:
   performs file I/O so the /act event loop is not blocked by large JSONL lines.
   The worker still flushes per record, so a writer crash leaves at most one
   partial line (reader skips it per D.1.11).
+- Every live writer is tracked in a module-level weak registry and drained by
+  an `atexit` hook, so queued records reach disk even when the ASGI lifespan
+  shutdown never runs (startup crash, bare `sys.exit`, non-uvicorn embedding).
+  The worker is a daemon thread — `atexit` handlers run *before* daemon threads
+  are killed, which is what makes the drain reachable at all.
 - Disk-full → degrade silently. Catches OSError, sets `self.degraded`,
   stops writing, but lets `tether serve` continue. /health surfaces this
   via `getattr(server, '_recorder', None).degraded` if a consumer wants.
@@ -44,6 +49,7 @@ the OTel span so the two ledgers can be cross-grepped by seq.
 
 from __future__ import annotations
 
+import atexit
 import copy
 import gzip
 import hashlib
@@ -53,6 +59,7 @@ import logging
 import queue
 import threading
 import uuid
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -63,7 +70,38 @@ SCHEMA_VERSION = 1
 RECORD_QUEUE_MAXSIZE = 1000
 _QUEUE_STOP = object()
 
+# Upper bound on how long the atexit drain waits for one writer's worker to
+# finish. Unbounded would be "correct" but turns a stalled disk (NFS hang,
+# full device retrying) into a process that never exits; a lost tail of records
+# beats an unkillable `tether serve`.
+RECORD_EXIT_DRAIN_TIMEOUT = 5.0
+
 ImageRedaction = Literal["full", "hash_only", "none"]
+
+# Live writers, drained by _close_all_writers on interpreter exit. Weak so a
+# recorder that is dropped without close() can still be collected — note the
+# worker thread holds a strong ref to its writer, so entries stay alive for
+# exactly as long as there is a thread that might still have queued work.
+_active_writers: weakref.WeakSet[RecordWriter] = weakref.WeakSet()
+_active_writers_lock = threading.Lock()
+
+
+def _close_all_writers(timeout: float = RECORD_EXIT_DRAIN_TIMEOUT) -> None:
+    """Flush and close every live RecordWriter. Registered with `atexit`.
+
+    Idempotent per writer (`close()` short-circuits once closed), so this is a
+    no-op when the server's lifespan shutdown already closed the recorder.
+    """
+    with _active_writers_lock:
+        writers = list(_active_writers)
+    for writer in writers:
+        try:
+            writer.close(timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 — exit must not raise
+            logger.warning("RecordWriter atexit close failed: %s", exc)
+
+
+atexit.register(_close_all_writers)
 
 
 def _utc_now_iso() -> str:
@@ -358,6 +396,10 @@ class RecordWriter:
             daemon=True,
         )
         self._worker.start()
+        # Track for the atexit drain only once the worker is actually running —
+        # a writer with no worker has nothing to flush.
+        with _active_writers_lock:
+            _active_writers.add(self)
         # Curate dual-write: when a FreeContributorCollector is attached,
         # write_request emits to BOTH the JSONL trace (audit) AND the
         # curate queue (training corpus). Independent failure modes; if
@@ -705,10 +747,20 @@ class RecordWriter:
         }
         self._enqueue_records((record,))
 
-    def close(self) -> None:
+    def close(self, timeout: float | None = None) -> None:
+        """Drain the queue, close the file, and stop the worker.
+
+        Blocks until every record queued so far is on disk. `timeout` bounds
+        that wait in seconds (None = wait indefinitely); on expiry the
+        still-queued tail is abandoned rather than hanging the caller. Safe to
+        call twice — the second call is a no-op — and safe to call from the
+        worker thread itself, where joining would otherwise deadlock.
+        """
         if self._closed:
             return
         self._closed = True
+        with _active_writers_lock:
+            _active_writers.discard(self)
         # Stop the curate collector first so its drain has a chance to
         # flush queued events before the process exits.
         if self._curate_collector is not None:
@@ -716,13 +768,32 @@ class RecordWriter:
                 self._curate_collector.stop()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("curate_collector.stop failed: %s", exc)
-        self.flush_sync()
-        self._record_queue.put(_QUEUE_STOP)
-        self._record_queue.join()
-        if self._worker is not threading.current_thread():
-            self._worker.join(timeout=1.0)
-            if self._worker.is_alive():
-                logger.warning("RecordWriter worker did not stop cleanly")
+        if self._worker is threading.current_thread():
+            # Reached from inside the worker (e.g. a close() in a record hook).
+            # Nothing left to hand off — close the file in place.
+            self._close_file()
+            return
+        # The queue is FIFO and the worker only returns on _QUEUE_STOP, so the
+        # sentinel landing on the queue is enough to guarantee everything ahead
+        # of it is written; joining the thread is the drain.
+        try:
+            self._record_queue.put(_QUEUE_STOP, timeout=timeout)
+        except queue.Full:
+            logger.warning(
+                "RecordWriter close: queue still full after %ss — %d record(s) not flushed (%s)",
+                timeout,
+                self._record_queue.qsize(),
+                self.filepath,
+            )
+            return
+        self._worker.join(timeout=timeout)
+        if self._worker.is_alive():
+            logger.warning(
+                "RecordWriter worker did not stop cleanly within %ss — "
+                "trailing records may be missing (%s)",
+                timeout,
+                self.filepath,
+            )
 
     # ---------------------------------------------------------------
     # Convenience

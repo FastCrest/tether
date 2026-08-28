@@ -11,12 +11,16 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import tether.runtime.record as record_mod
 from tether.runtime.record import (
     SCHEMA_VERSION,
     RecordWriter,
@@ -30,22 +34,25 @@ from tether.runtime.record import (
 # ---------------------------------------------------------------------------
 
 
-def _make_writer(tmp_path: Path, **kwargs) -> RecordWriter:
+def _make_writer(tmp_path: Path, **kwargs: Any) -> RecordWriter:
     """Factory with sensible defaults for tests."""
-    defaults = dict(
-        model_hash="abc123def4567890",
-        config_hash="0123456789abcdef",
-        export_dir=str(tmp_path / "fake_export"),
-        model_type="pi0.5",
-        export_kind="monolithic",
-        providers=["CUDAExecutionProvider"],
-        gpu="test-gpu",
-        cuda_version="12.6",
-        ort_version="1.20.1",
-        embodiment="franka",
-        image_redaction="hash_only",
-        tether_version="0.0.0-test",
-    )
+    # Annotated dict[str, Any]: inference would otherwise narrow this to the
+    # join of the value types (Sequence[str]) and reject the ** unpack against
+    # RecordWriter's precisely-typed keywords.
+    defaults: dict[str, Any] = {
+        "model_hash": "abc123def4567890",
+        "config_hash": "0123456789abcdef",
+        "export_dir": str(tmp_path / "fake_export"),
+        "model_type": "pi0.5",
+        "export_kind": "monolithic",
+        "providers": ["CUDAExecutionProvider"],
+        "gpu": "test-gpu",
+        "cuda_version": "12.6",
+        "ort_version": "1.20.1",
+        "embodiment": "franka",
+        "image_redaction": "hash_only",
+        "tether_version": "0.0.0-test",
+    }
     defaults.update(kwargs)
     return RecordWriter(record_dir=tmp_path, **defaults)
 
@@ -57,17 +64,17 @@ def _read_all(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _dummy_request(rec: RecordWriter, i: int = 0, **overrides) -> int:
-    kw = dict(
-        chunk_id=i,
-        image_b64="aGVsbG8gd29ybGQ=",
-        instruction=f"test instruction {i}",
-        state=[0.1, 0.2, 0.3],
-        actions=[[0.0] * 7] * 50,
-        action_dim=7,
-        latency_total_ms=100.0 + i,
-        mode="onnx_gpu",
-    )
+def _dummy_request(rec: RecordWriter, i: int = 0, **overrides: Any) -> int:
+    kw: dict[str, Any] = {
+        "chunk_id": i,
+        "image_b64": "aGVsbG8gd29ybGQ=",
+        "instruction": f"test instruction {i}",
+        "state": [0.1, 0.2, 0.3],
+        "actions": [[0.0] * 7] * 50,
+        "action_dim": 7,
+        "latency_total_ms": 100.0 + i,
+        "mode": "onnx_gpu",
+    }
     kw.update(overrides)
     return rec.write_request(**kw)
 
@@ -488,6 +495,138 @@ class TestBackgroundWriter:
         assert requests[-1]["seq"] == 9
         assert records[-1]["kind"] == "footer"
         assert records[-1]["total_requests"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown / process exit
+# ---------------------------------------------------------------------------
+
+
+_EXIT_SCRIPT = """
+import sys
+from tether.runtime.record import RecordWriter
+
+rec = RecordWriter(
+    record_dir=sys.argv[1],
+    model_hash="abc123def4567890",
+    config_hash="0123456789abcdef",
+    export_dir=sys.argv[1] + "/fake_export",
+    model_type="pi0.5",
+    export_kind="monolithic",
+    providers=["CPUExecutionProvider"],
+    gzip_output={gzip_output},
+)
+for i in range(25):
+    rec.write_request(
+        chunk_id=i,
+        image_b64="aGVsbG8gd29ybGQ=",
+        instruction="exit test %d" % i,
+        state=[0.1, 0.2, 0.3],
+        actions=[[0.0] * 7] * 50,
+        action_dim=7,
+        latency_total_ms=1.0,
+    )
+print(rec.filepath)
+# Deliberately no close() and no lifespan shutdown — the atexit hook is the
+# only thing that can get these records onto disk before the daemon worker
+# is killed at interpreter exit.
+"""
+
+
+def _run_exit_script(tmp_path: Path, *, gzip_output: bool) -> Path:
+    """Run a child interpreter that records and exits without close()."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _EXIT_SCRIPT.format(gzip_output=gzip_output),
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,  # assert on returncode below so stderr lands in the failure
+    )
+    assert proc.returncode == 0, f"child failed: {proc.stderr}"
+    return Path(proc.stdout.strip().splitlines()[-1])
+
+
+class TestGracefulShutdown:
+    def test_atexit_flushes_records_on_process_exit(self, tmp_path):
+        """A process that exits without calling close() still lands every
+        queued record on disk, via the atexit drain."""
+        filepath = _run_exit_script(tmp_path, gzip_output=False)
+
+        records = _read_all(filepath)
+        requests = [r for r in records if r["kind"] == "request"]
+        assert records[0]["kind"] == "header"
+        assert len(requests) == 25
+        assert [r["seq"] for r in requests] == list(range(25))
+
+    def test_atexit_closes_gzip_stream_cleanly(self, tmp_path):
+        """Gzip is the strict case: a stream whose writer was killed mid-flight
+        has no trailer and fails to decompress. Reading it back proves close()
+        actually ran rather than the file merely happening to have bytes."""
+        filepath = _run_exit_script(tmp_path, gzip_output=True)
+
+        assert filepath.suffix == ".gz"
+        records = _read_all(filepath)  # raises/truncates if the trailer is missing
+        assert len([r for r in records if r["kind"] == "request"]) == 25
+
+    def test_writer_deregisters_itself_on_close(self, tmp_path):
+        """Closed writers drop out of the exit registry so the atexit hook
+        doesn't touch them (and doesn't pin them in memory)."""
+        rec = _make_writer(tmp_path, gzip_output=False)
+        assert rec in record_mod._active_writers
+
+        rec.close()
+        assert rec not in record_mod._active_writers
+
+    def test_close_all_writers_drains_a_live_writer(self, tmp_path):
+        rec = _make_writer(tmp_path, gzip_output=False)
+        for i in range(5):
+            _dummy_request(rec, i=i)
+
+        record_mod._close_all_writers()
+
+        assert rec._closed is True
+        assert len([r for r in _read_all(rec.filepath) if r["kind"] == "request"]) == 5
+
+    def test_close_is_idempotent(self, tmp_path):
+        """The lifespan shutdown and the atexit hook both call close(); the
+        second call must be a harmless no-op."""
+        rec = _make_writer(tmp_path, gzip_output=False)
+        _dummy_request(rec)
+        rec.close()
+        size_after_first = rec.filepath.stat().st_size
+
+        rec.close()  # lifespan already closed it; atexit runs anyway
+        record_mod._close_all_writers()
+
+        assert rec.filepath.stat().st_size == size_after_first
+        assert len(_read_all(rec.filepath)) == 2  # header + request
+
+    def test_close_timeout_does_not_hang_on_stuck_worker(self, tmp_path, monkeypatch):
+        """A wedged worker (stalled disk) must not make close() block forever —
+        exit gives up on the tail instead of hanging the process."""
+        rec = _make_writer(tmp_path, gzip_output=False)
+        release_emit = threading.Event()
+        original_emit = rec._emit
+
+        def blocking_emit(record):
+            release_emit.wait(30.0)
+            original_emit(record)
+
+        monkeypatch.setattr(rec, "_emit", blocking_emit)
+        _dummy_request(rec)
+
+        started_at = time.perf_counter()
+        rec.close(timeout=0.2)
+        elapsed = time.perf_counter() - started_at
+
+        assert elapsed < 5.0
+        assert rec._closed is True
+        release_emit.set()
 
 
 # ---------------------------------------------------------------------------
