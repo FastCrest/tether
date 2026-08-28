@@ -7,20 +7,23 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from tests.export_config_factory import write_test_export_config
+
 
 def _make_export_dir(tmp_path: Path, name: str) -> Path:
     export_dir = tmp_path / name
     export_dir.mkdir()
-    (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 1,
-        "chunk_size": 2,
-        "action_chunk_size": 2,
-        "action_dim": 2,
-        "max_state_dim": 4,
-    }))
+    write_test_export_config(
+        export_dir,
+        model_type="smolvla",
+        export_kind="monolithic_onnx",
+        artifacts=["model.onnx"],
+        num_denoising_steps=1,
+        action_dim=2,
+        chunk_size=2,
+        action_chunk_size=2,
+        max_state_dim=4,
+    )
     return export_dir
 
 
