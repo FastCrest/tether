@@ -15,26 +15,25 @@ Pattern mirrors ``tests/test_decomposed_per_step_parity.py``.
 Skip if the receipt doesn't exist (CI runs this; locally you fire the
 Modal job first then re-run pytest).
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
-RECEIPT = (
-    Path(__file__).parent.parent.parent
-    / "reflex_context"
-    / "per_step_overhead_last_run.json"
-).resolve()
+from receipt_test_support import receipt_path, require_receipt
+
+pytestmark = pytest.mark.receipt
+
+RECEIPT = receipt_path("per_step_overhead_last_run.json")
 
 MEDIAN_OVERHEAD_MAX = 0.20  # ≤ +20% median chunk overhead
-P99_RATIO_MAX = 1.30        # ≤ 1.30x p99
+P99_RATIO_MAX = 1.30  # ≤ 1.30x p99
 
 
-def _load_receipt() -> dict | None:
-    if not RECEIPT.exists():
-        return None
+def _load_receipt() -> dict:
+    require_receipt(RECEIPT, "scripts/modal_per_step_overhead.py")
     return json.loads(RECEIPT.read_text())
 
 
@@ -42,15 +41,10 @@ class TestPerStepOverheadReceipt:
     """Gate 4 receipt checks against the Modal-produced JSON."""
 
     def test_receipt_exists(self):
-        if not RECEIPT.exists():
-            pytest.skip(
-                f"Run scripts/modal_per_step_overhead.py to populate {RECEIPT}"
-            )
+        require_receipt(RECEIPT, "scripts/modal_per_step_overhead.py")
 
     def test_iobinding_path_passes_gate(self):
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         gate = receipt["iobinding_gate"]
         assert gate["passes_overall"], (
             f"IOBinding overhead exceeds gate: median={gate['median_overhead_pct']:.1%} "
@@ -62,8 +56,6 @@ class TestPerStepOverheadReceipt:
         """The whole point of IOBinding is to skip per-iter past_kv copies.
         If naive matches IOBinding, IOBinding refactor is dead code."""
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         naive_med = receipt["per_step_naive"]["median_ms"]
         iob_med = receipt["per_step_iobinding"]["median_ms"]
         assert iob_med < naive_med, (
@@ -76,8 +68,6 @@ class TestPerStepOverheadReceipt:
         """Both sessions must have actually used CUDAExecutionProvider, not
         silently fallen back to CPU. Mirrors gate 3 receipt's check."""
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         providers = receipt["providers"]
         assert providers["baked"] == "CUDAExecutionProvider", (
             f"Baked session used {providers['baked']!r}, not CUDA — "

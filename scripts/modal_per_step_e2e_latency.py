@@ -33,6 +33,7 @@ Cost: ~$1.50-2 Modal (2 × A100-80GB ~5 min each).
 Usage:
     HF_TOKEN=<token> modal run --detach scripts/modal_per_step_e2e_latency.py
 """
+
 from __future__ import annotations
 
 import json
@@ -91,17 +92,27 @@ image = (
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
-    .add_local_file(os.path.join(REPO_ROOT, "pyproject.toml"), remote_path="/root/tether-vla/pyproject.toml", copy=True)
-    .add_local_file(os.path.join(REPO_ROOT, "README.md"), remote_path="/root/tether-vla/README.md", copy=True)
-    .add_local_file(os.path.join(REPO_ROOT, "LICENSE"), remote_path="/root/tether-vla/LICENSE", copy=True)
+    .add_local_file(
+        os.path.join(REPO_ROOT, "pyproject.toml"),
+        remote_path="/root/tether-vla/pyproject.toml",
+        copy=True,
+    )
+    .add_local_file(
+        os.path.join(REPO_ROOT, "README.md"), remote_path="/root/tether-vla/README.md", copy=True
+    )
+    .add_local_file(
+        os.path.join(REPO_ROOT, "LICENSE"), remote_path="/root/tether-vla/LICENSE", copy=True
+    )
     .run_commands(
         f'echo "build_bust={_BUST}"',
         'pip install -e "/root/tether-vla[monolithic]"',
     )
-    .env({
-        "HF_HOME": HF_CACHE,
-        "TRANSFORMERS_CACHE": f"{HF_CACHE}/transformers",
-    })
+    .env(
+        {
+            "HF_HOME": HF_CACHE,
+            "TRANSFORMERS_CACHE": f"{HF_CACHE}/transformers",
+        }
+    )
 )
 
 
@@ -116,17 +127,59 @@ N_BENCH = 200
     volumes={HF_CACHE: hf_cache, ONNX_OUT: onnx_output},
     secrets=[_hf_secret()],
 )
-def bench_one(export_dir: str, label: str) -> dict:
+def bench_one(
+    export_dir: str,
+    label: str,
+    receipt_namespace: str = "",
+    source_repository: str = "",
+    source_sha: str = "",
+    workflow_run_id: int = 0,
+    workflow_run_attempt: int = 0,
+) -> dict:
     """Bench exactly ONE Pi05DecomposedInference instance. Each invocation
     is a fresh GPU rental → clean L2 cache → no cross-session contention."""
     import logging
     import time
     import numpy as np
 
-    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
+    from tether.receipt_provenance import (
+        hash_export_set,
+        receipt_mode_binding,
+        receipt_run_dir,
+        require_cuda_provider_lists,
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     log = logging.getLogger(__name__)
+
+    namespace_binding = receipt_mode_binding(
+        receipt_namespace=receipt_namespace,
+        repository=source_repository,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+    )
+    if namespace_binding is not None:
+        relative_dirs = {
+            "baked": "per_step_parity/pi05_teacher_n10_baked",
+            "per_step": "per_step_parity/pi05_teacher_n10_per_step",
+        }
+        if label not in relative_dirs:
+            raise ValueError(f"unsupported receipt benchmark label: {label!r}")
+        namespace = str(namespace_binding["value"])
+        expected_dir = receipt_run_dir(Path(ONNX_OUT), namespace) / relative_dirs[label]
+        if Path(export_dir) != expected_dir:
+            raise ValueError(
+                f"receipt benchmark export directory must be {expected_dir}, got {export_dir}"
+            )
+        cache_root = receipt_run_dir(Path(HF_CACHE), namespace)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        os.environ["HF_HOME"] = str(cache_root)
+        os.environ["TRANSFORMERS_CACHE"] = str(cache_root / "transformers")
+
+    # The runtime imports Transformers, which reads its cache configuration
+    # during import. Receipt mode must configure the immutable cache first.
+    from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
     if not (Path(export_dir) / "expert_denoise.onnx").exists():
         raise FileNotFoundError(f"Export missing at {export_dir}. Run gate 3 first.")
@@ -142,7 +195,14 @@ def bench_one(export_dir: str, label: str) -> dict:
         "CPUExecutionProvider",
     ]
     inf = Pi05DecomposedInference(
-        export_dir=export_dir, cache_level="none", providers=providers,
+        export_dir=export_dir,
+        cache_level="none",
+        providers=providers,
+    )
+    prefix_session = getattr(inf._sess_prefix, "session", inf._sess_prefix)
+    expert_session = getattr(inf._sess_expert, "session", inf._sess_expert)
+    prefix_providers, expert_providers = require_cuda_provider_lists(
+        list(prefix_session.get_providers()), list(expert_session.get_providers())
     )
 
     B = 1
@@ -214,33 +274,78 @@ def bench_one(export_dir: str, label: str) -> dict:
     total_stats = stats(totals)
     vlm_stats = stats(vlms)
     expert_stats = stats(experts)
-    log.info("[%s] E2E    median=%.2fms p99=%.2fms", label, total_stats["median_ms"], total_stats["p99_ms"])
-    log.info("[%s] vlm    median=%.2fms p99=%.2fms", label, vlm_stats["median_ms"], vlm_stats["p99_ms"])
-    log.info("[%s] expert median=%.2fms p99=%.2fms", label, expert_stats["median_ms"], expert_stats["p99_ms"])
+    log.info(
+        "[%s] E2E    median=%.2fms p99=%.2fms",
+        label,
+        total_stats["median_ms"],
+        total_stats["p99_ms"],
+    )
+    log.info(
+        "[%s] vlm    median=%.2fms p99=%.2fms", label, vlm_stats["median_ms"], vlm_stats["p99_ms"]
+    )
+    log.info(
+        "[%s] expert median=%.2fms p99=%.2fms",
+        label,
+        expert_stats["median_ms"],
+        expert_stats["p99_ms"],
+    )
 
-    return {
+    result = {
         "label": label,
+        "export": hash_export_set(Path(export_dir)),
+        "providers": {
+            "vlm_prefix": prefix_providers,
+            "expert_denoise": expert_providers,
+        },
         "n_warmup": N_WARMUP,
         "n_bench": N_BENCH,
         "total": total_stats,
         "vlm": vlm_stats,
         "expert": expert_stats,
     }
+    if namespace_binding is not None:
+        result["receipt_namespace"] = namespace_binding
+    return result
 
 
 @app.local_entrypoint()
-def main():
+def main(
+    receipt_namespace: str = "",
+    source_repository: str = "",
+    source_sha: str = "",
+    workflow_run_id: int = 0,
+    workflow_run_attempt: int = 0,
+):
+    from tether.receipt_provenance import receipt_mode_binding, receipt_run_dir
+
+    namespace_binding = receipt_mode_binding(
+        receipt_namespace=receipt_namespace,
+        repository=source_repository,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+    )
     print("=" * 60)
     print("Per-step E2E chunk-latency bench (gate 5, isolated invocations)")
     print("=" * 60)
 
-    baked_dir = f"{ONNX_OUT}/per_step_parity/pi05_teacher_n10_baked"
-    per_step_dir = f"{ONNX_OUT}/per_step_parity/pi05_teacher_n10_per_step"
+    onnx_root = Path(ONNX_OUT)
+    if namespace_binding is not None:
+        onnx_root = receipt_run_dir(onnx_root, str(namespace_binding["value"]))
+    baked_dir = str(onnx_root / "per_step_parity/pi05_teacher_n10_baked")
+    per_step_dir = str(onnx_root / "per_step_parity/pi05_teacher_n10_per_step")
 
-    print(f"\nFiring baked bench (sequential, isolated GPU rental)...")
-    baked = bench_one.remote(baked_dir, "baked")
-    print(f"\nFiring per-step bench (sequential, isolated GPU rental)...")
-    per_step = bench_one.remote(per_step_dir, "per_step")
+    print("\nFiring baked bench (sequential, isolated GPU rental)...")
+    remote_args = (
+        receipt_namespace,
+        source_repository,
+        source_sha,
+        workflow_run_id,
+        workflow_run_attempt,
+    )
+    baked = bench_one.remote(baked_dir, "baked", *remote_args)
+    print("\nFiring per-step bench (sequential, isolated GPU rental)...")
+    per_step = bench_one.remote(per_step_dir, "per_step", *remote_args)
 
     median_pct = (per_step["total"]["median_ms"] / baked["total"]["median_ms"]) - 1.0
     p99_ratio = per_step["total"]["p99_ms"] / baked["total"]["p99_ms"]
@@ -254,9 +359,13 @@ def main():
         "passes_overall": passes_overall,
         "thresholds": {"median_overhead_pct_max": 0.20, "p99_ratio_max": 1.30},
     }
+    if namespace_binding is not None:
+        result["receipt_namespace"] = namespace_binding
 
-    receipt_path = Path(REPO_ROOT) / ".." / "reflex_context" / "per_step_e2e_latency_last_run.json"
-    receipt_path = receipt_path.resolve()
+    receipt_root = (Path(REPO_ROOT) / ".." / "reflex_context").resolve()
+    if namespace_binding is not None:
+        receipt_root = receipt_run_dir(receipt_root, str(namespace_binding["value"]))
+    receipt_path = receipt_root / "per_step_e2e_latency_last_run.json"
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(result, indent=2))
     print(f"\nReceipt: {receipt_path}")
@@ -265,8 +374,14 @@ def main():
     print("RESULTS (isolated invocations — production-relevant)")
     print("=" * 60)
     for label, r in [("baked", baked), ("per-step", per_step)]:
-        print(f"  {label:9} E2E    median={r['total']['median_ms']:.2f}ms  p99={r['total']['p99_ms']:.2f}ms")
-        print(f"  {label:9} vlm    median={r['vlm']['median_ms']:.2f}ms  p99={r['vlm']['p99_ms']:.2f}ms")
-        print(f"  {label:9} expert median={r['expert']['median_ms']:.2f}ms  p99={r['expert']['p99_ms']:.2f}ms")
+        print(
+            f"  {label:9} E2E    median={r['total']['median_ms']:.2f}ms  p99={r['total']['p99_ms']:.2f}ms"
+        )
+        print(
+            f"  {label:9} vlm    median={r['vlm']['median_ms']:.2f}ms  p99={r['vlm']['p99_ms']:.2f}ms"
+        )
+        print(
+            f"  {label:9} expert median={r['expert']['median_ms']:.2f}ms  p99={r['expert']['p99_ms']:.2f}ms"
+        )
     print(f"\n  E2E overhead: median {median_pct * 100:+.1f}%  p99 {p99_ratio:.2f}x")
     print(f"  Overall: {'PASS' if passes_overall else 'FAIL'} (median≤+20%, p99≤1.30x)")

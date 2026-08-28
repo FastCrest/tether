@@ -4,12 +4,11 @@ Per ADR 2026-04-25-self-distilling-serve-architecture decision #1: data
 collection is EXPLICIT opt-in via TTY prompt; non-interactive contexts
 without an existing receipt fail loud.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import stat
-from pathlib import Path
 
 import pytest
 
@@ -133,7 +132,7 @@ def test_consent_raises_required_on_decline(tmp_path):
 
 
 def test_consent_writes_receipt_on_accept(tmp_path):
-    consent = ProConsent.load_or_prompt(
+    ProConsent.load_or_prompt(
         customer_id="acme",
         pii_options=_mk_pii(),
         path=tmp_path / "consent.json",
@@ -160,7 +159,7 @@ def test_consent_silent_pass_on_existing_valid_receipt(tmp_path):
         return True
 
     # First call — prompt fires
-    consent1 = ProConsent.load_or_prompt(
+    ProConsent.load_or_prompt(
         customer_id="acme",
         pii_options=_mk_pii(),
         path=tmp_path / "consent.json",
@@ -231,17 +230,21 @@ def test_consent_mismatch_on_corrupted_receipt(tmp_path):
 def test_consent_mismatch_on_consent_version_drift(tmp_path):
     """Old-version receipt → re-prompt required."""
     path = tmp_path / "consent.json"
-    path.write_text(json.dumps({
-        "consent_version": 99,  # future version
-        "customer_id": "acme",
-        "accepted_at": "2026-04-25T10:00:00Z",
-        "accepted_terms_version": "old",
-        "pii_options": {
-            "face_blur_mode": "blur",
-            "instruction_mode": "hashed",
-            "state_mode": "raw",
-        },
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "consent_version": 99,  # future version
+                "customer_id": "acme",
+                "accepted_at": "2026-04-25T10:00:00Z",
+                "accepted_terms_version": "old",
+                "pii_options": {
+                    "face_blur_mode": "blur",
+                    "instruction_mode": "hashed",
+                    "state_mode": "raw",
+                },
+            }
+        )
+    )
     with pytest.raises(ConsentMismatch, match="consent_version"):
         ProConsent.load_or_prompt(
             customer_id="acme",

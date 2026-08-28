@@ -355,4 +355,5 @@ asyncio_mode = "strict"
 markers = [
     "asyncio: mark a coroutine test for pytest-asyncio (strict mode)",
     "hardware: requires a physical robot wired in; skipped unless RUN_HARDWARE_TESTS=1",
+    "receipt: validates a signed or provenance-bound operational receipt",
 ]

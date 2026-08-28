@@ -17,23 +17,22 @@ Pattern mirrors ``tests/test_cuda_runtime_parity.py:17``.
 Skip if the receipt doesn't exist (CI runs this; locally you fire the
 Modal job first then re-run pytest).
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
-RECEIPT = (
-    Path(__file__).parent.parent.parent
-    / "reflex_context"
-    / "per_step_parity_last_run.json"
-).resolve()
+from receipt_test_support import receipt_path, require_receipt
+
+pytestmark = pytest.mark.receipt
+
+RECEIPT = receipt_path("per_step_parity_last_run.json")
 
 
-def _load_receipt() -> dict | None:
-    if not RECEIPT.exists():
-        return None
+def _load_receipt() -> dict:
+    require_receipt(RECEIPT, "scripts/modal_per_step_parity.py")
     return json.loads(RECEIPT.read_text())
 
 
@@ -45,28 +44,17 @@ class TestPerStepParityReceipt:
     """Per-cell + overall gate checks against the Modal-produced receipt."""
 
     def test_receipt_exists(self):
-        if not RECEIPT.exists():
-            pytest.skip(
-                f"Run scripts/modal_per_step_parity.py to populate {RECEIPT}"
-            )
+        require_receipt(RECEIPT, "scripts/modal_per_step_parity.py")
 
     def test_all_cells_pass_overall_gate(self):
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
-        failed = [
-            label for label, r in receipt["cells"].items()
-            if not r["passes_overall"]
-        ]
+        failed = [label for label, r in receipt["cells"].items() if not r["passes_overall"]]
         assert not failed, (
-            f"Per-step parity failed for cells: {failed}. "
-            f"See {RECEIPT} for cos / max_abs values."
+            f"Per-step parity failed for cells: {failed}. See {RECEIPT} for cos / max_abs values."
         )
 
     def test_thresholds_are_correct(self):
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         # The receipt must have used the tightened gates from research
         # sidecar Lens 5 — not the spec's looser cos≥0.999.
         assert receipt["thresholds"]["cos_min"] == COS_MIN, (
@@ -75,13 +63,17 @@ class TestPerStepParityReceipt:
         )
         assert receipt["thresholds"]["max_abs_max"] == MAX_ABS_MAX
 
+    def test_exact_required_cell_set(self):
+        receipt = _load_receipt()
+        assert set(receipt["cells"]) == {
+            "pi05_teacher_n10",
+            "pi05_teacher_n1",
+        }
+
     @pytest.mark.parametrize("expected_cell", ["pi05_teacher_n10", "pi05_teacher_n1"])
     def test_per_cell_cos(self, expected_cell):
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
-        if expected_cell not in receipt["cells"]:
-            pytest.skip(f"Cell {expected_cell} not in receipt")
+        assert expected_cell in receipt["cells"], f"required cell {expected_cell} missing"
         cell = receipt["cells"][expected_cell]
         assert cell["cos"] >= COS_MIN, (
             f"{expected_cell}: cos {cell['cos']} below threshold {COS_MIN}. "
@@ -92,10 +84,7 @@ class TestPerStepParityReceipt:
     @pytest.mark.parametrize("expected_cell", ["pi05_teacher_n10", "pi05_teacher_n1"])
     def test_per_cell_max_abs(self, expected_cell):
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
-        if expected_cell not in receipt["cells"]:
-            pytest.skip(f"Cell {expected_cell} not in receipt")
+        assert expected_cell in receipt["cells"], f"required cell {expected_cell} missing"
         cell = receipt["cells"][expected_cell]
         assert cell["max_abs"] <= MAX_ABS_MAX, (
             f"{expected_cell}: max_abs {cell['max_abs']:.3e} above threshold "
@@ -108,8 +97,6 @@ class TestPerStepParityReceipt:
         silently fallen back to CPU. Mirrors the existing parity-test
         provider check at tests/test_cuda_runtime_parity.py."""
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         for label, cell in receipt["cells"].items():
             assert cell["used_provider_baked"] == "CUDAExecutionProvider", (
                 f"{label}: baked session used {cell['used_provider_baked']}, "
