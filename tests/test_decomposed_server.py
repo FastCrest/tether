@@ -9,7 +9,6 @@ create_app + the existing /act handler + all wedges.
 These tests stub Pi05DecomposedInference so they don't require ORT or
 GPU; they exercise the prep + dispatch contract.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -88,7 +87,6 @@ def _make_export_dir(
 def _make_b64_image(width: int = 100, height: int = 80) -> str:
     """Generate a synthetic JPEG-encoded base64 image."""
     from PIL import Image
-
     arr = (np.random.rand(height, width, 3) * 255).astype(np.uint8)
     img = Image.fromarray(arr)
     buf = io.BytesIO()
@@ -266,9 +264,7 @@ def test_predict_handles_missing_image(tmp_path, monkeypatch):
     camera convention used by SmolVLA training)."""
     server = _build_loaded_server(tmp_path, monkeypatch)
     result = server.predict_from_base64(
-        image_b64=None,
-        instruction="x",
-        state=None,
+        image_b64=None, instruction="x", state=None,
     )
     # Doesn't error -- pads + still returns actions
     assert "actions" in result
@@ -327,13 +323,9 @@ def test_predict_state_truncated_when_too_long(tmp_path, monkeypatch):
 
 def test_predict_from_base64_async_returns_same_shape(tmp_path, monkeypatch):
     server = _build_loaded_server(tmp_path, monkeypatch)
-    result = asyncio.run(
-        server.predict_from_base64_async(
-            image_b64=_make_b64_image(),
-            instruction="x",
-            state=None,
-        )
-    )
+    result = asyncio.run(server.predict_from_base64_async(
+        image_b64=_make_b64_image(), instruction="x", state=None,
+    ))
     assert "actions" in result
     assert len(result["actions"]) == 50
 

@@ -16,7 +16,6 @@ Usage::
         output_dir="./dreamzero_export/",
     )
 """
-
 from __future__ import annotations
 
 import logging
@@ -60,23 +59,14 @@ def export_dreamzero(
     logger.info("DreamZero export — checkpoint=%s, output=%s", checkpoint_path, output_dir)
 
     # Build the tether_config.json (describes the export for `tether serve`)
-    config = {
-        "schema_version": 1,
-        "model_id": str(checkpoint_path),
-        "model_type": "dreamzero",
-        "export_kind": "config_only",
+    metadata = {
         "model_family": "dreamzero",
         "architecture": "world_action_model",
-        "action_dim": action_dim,
         "max_action_dim": max_action_dim,
         "action_horizon": action_horizon,
         "num_frames": num_frames,
         "image_size": image_size,
         "num_inference_steps": 4,
-        "num_denoising_steps": 4,
-        "opset": opset_version,
-        "artifacts": [],
-        "io_contract": {"inputs": [], "outputs": []},
         "components": {
             "vlm_backbone": "wan_backbone",
             "vla_head": "dreamzero_head",
@@ -85,7 +75,18 @@ def export_dreamzero(
         "requires_video_input": True,
     }
 
-    from tether.export_config import write_tether_config
+    from tether.export_config import build_producer_config, write_tether_config
+
+    config = build_producer_config(
+        output_dir,
+        producer="dreamzero",
+        model_id=str(checkpoint_path),
+        model_type="dreamzero",
+        action_dim=action_dim,
+        num_denoising_steps=4,
+        opset=opset_version,
+        metadata=metadata,
+    )
 
     config_path = write_tether_config(output_dir, config)
     logger.info("Wrote tether_config.json")
@@ -121,7 +122,6 @@ def export_dreamzero(
 def validate_dreamzero_registry() -> bool:
     """Check that the DreamZero registry entry resolves."""
     from tether.registry.data import REGISTRY
-
     for entry in REGISTRY:
         if entry.model_id == "pi05-libero10-fluxvla":
             return True

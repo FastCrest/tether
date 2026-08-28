@@ -92,7 +92,9 @@ class ONNXBackend:
         self.model_type: str = model_type
 
         expert_meta = config.get("expert", {}) or {}
-        self.action_dim: int = int(config.get("action_dim", expert_meta.get("action_dim", 0)))
+        self.action_dim: int = int(
+            config.get("action_dim", expert_meta.get("action_dim", 0))
+        )
         self.chunk_size: int = int(config.get("action_chunk_size", 50))
         # Default step counts: 4 for gr00t (per gr00t_exporter), 10 elsewhere.
         default_steps = 4 if model_type == "gr00t" else 10
@@ -114,7 +116,7 @@ class ONNXBackend:
     def forward(
         self,
         image: np.ndarray,  # noqa: ARG002 - reserved for v2 full-stack path
-        prompt: str,  # noqa: ARG002 - reserved for v2 full-stack path
+        prompt: str,        # noqa: ARG002 - reserved for v2 full-stack path
         state: np.ndarray,  # noqa: ARG002 - reserved for v2 full-stack path
         initial_noise: np.ndarray,
     ) -> np.ndarray:
@@ -129,7 +131,9 @@ class ONNXBackend:
         backend; this is the seed bridge.
         """
         if not isinstance(initial_noise, np.ndarray):
-            raise TypeError(f"initial_noise must be a numpy array; got {type(initial_noise)!r}")
+            raise TypeError(
+                f"initial_noise must be a numpy array; got {type(initial_noise)!r}"
+            )
 
         # Normalize to float32 + add batch dim if missing.
         noise = initial_noise
@@ -168,14 +172,13 @@ class ONNXBackend:
         if feed_vlm_kv:
             # Read the actual dim from the ONNX input shape (expert.vlm_kv_dim),
             # NOT the VLM hidden_size — they differ (320 vs 960 for SmolVLA).
-            vlm_kv_shape = [inp.shape for inp in self.session.get_inputs() if inp.name == "vlm_kv"][
-                0
-            ]
+            vlm_kv_shape = [
+                inp.shape for inp in self.session.get_inputs()
+                if inp.name == "vlm_kv"
+            ][0]
             vlm_kv_dim = vlm_kv_shape[-1] if isinstance(vlm_kv_shape[-1], int) else 320
             vlm_kv = np.zeros((b, 1, vlm_kv_dim), dtype=np.float32)
-            logger.debug(
-                "Expert expects vlm_kv input (dim=%d); feeding zeros for validation", vlm_kv_dim
-            )
+            logger.debug("Expert expects vlm_kv input (dim=%d); feeding zeros for validation", vlm_kv_dim)
 
         dt = -1.0 / float(self.num_steps)
         for step in range(self.num_steps):
@@ -229,27 +232,28 @@ def load_onnx_backend(export_dir: Path, device: str = "cpu") -> ONNXBackend:
     config_path = export_dir / "tether_config.json"
     if not config_path.exists():
         raise FileNotFoundError(f"Missing tether_config.json in export dir: {export_dir}")
-    from tether.export_config import load_tether_config, require_supported_export_kind
+    from tether.export_config import (
+        UnsupportedExportPipelineError,
+        decomposed_layout,
+        load_tether_config,
+        require_supported_export_kind,
+        require_supported_pipeline,
+    )
 
     config = load_tether_config(config_path)
     require_supported_export_kind(
         config,
-        {"monolithic_onnx", "decomposed_onnx"},
+        {"decomposed_onnx"},
         "ONNX round-trip reader",
     )
+    require_supported_pipeline(config, set(), "ONNX round-trip reader")
+    layout = decomposed_layout(config)
+    if layout not in {"expert_stack", "smolvla_full_bundle"}:
+        raise UnsupportedExportPipelineError(
+            f"ONNX round-trip reader supports only the expert_stack family, got {layout!r}"
+        )
 
-    onnx_artifacts = [
-        item
-        for item in config["artifacts"]
-        if item["role"] == "model" and str(item["path"]).endswith(".onnx")
-    ]
-    if not onnx_artifacts:
-        raise FileNotFoundError(f"No model-role ONNX artifact declared in {config_path}")
-    preferred = next(
-        (item for item in onnx_artifacts if Path(item["path"]).name == "expert_stack.onnx"),
-        onnx_artifacts[0],
-    )
-    onnx_path = export_dir / preferred["path"]
+    onnx_path = export_dir / "expert_stack.onnx"
 
     if device.lower() != "cpu":
         logger.info(
@@ -262,10 +266,13 @@ def load_onnx_backend(export_dir: Path, device: str = "cpu") -> ONNXBackend:
         import onnxruntime as ort  # type: ignore[import-not-found]
     except ImportError as e:
         raise ImportError(
-            "onnxruntime is required for `tether validate`. Install with: pip install onnxruntime"
+            "onnxruntime is required for `tether validate`. "
+            "Install with: pip install onnxruntime"
         ) from e
 
-    session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    session = ort.InferenceSession(
+        str(onnx_path), providers=["CPUExecutionProvider"]
+    )
     active_providers = session.get_providers()
     active = active_providers[0] if active_providers else "<none>"
     if active != "CPUExecutionProvider":  # pragma: no cover - defensive

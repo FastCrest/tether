@@ -12,24 +12,21 @@ TetherServer so we don't need ONNX runtime or a real export.
 """
 from __future__ import annotations
 
-import json
 
 import pytest
+
+from tests.export_config_factory import write_test_export_config
 
 
 @pytest.fixture
 def stub_export_dir(tmp_path):
     """Minimal export dir — tether_config.json + stub onnx file."""
-    cfg = {
-        "model_id": "lerobot/smolvla_base",
-        "model_type": "smolvla",
-        "target": "desktop",
-        "action_chunk_size": 50,
-        "action_dim": 32,
-        "expert": {"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
-    }
-    (tmp_path / "tether_config.json").write_text(json.dumps(cfg))
-    (tmp_path / "model.onnx").write_bytes(b"\x00\x01\x02\x03")
+    write_test_export_config(
+        tmp_path,
+        model_type="smolvla",
+        action_chunk_size=50,
+        expert={"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
+    )
     return tmp_path
 
 

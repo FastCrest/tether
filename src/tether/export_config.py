@@ -32,6 +32,48 @@ _LEGACY_KINDS = {
     "decomposed": "decomposed_onnx",
 }
 
+PRODUCER_LAYOUTS: dict[str, dict[str, Any]] = {
+    "monolithic": {
+        "export_kind": "monolithic_onnx",
+        "artifacts": (("model.onnx", "model"),),
+    },
+    "pi05_split": {
+        "export_kind": "decomposed_onnx",
+        "artifacts": (
+            ("vlm_prefix.onnx", "model"),
+            ("expert_denoise.onnx", "model"),
+        ),
+    },
+    "expert_stack": {
+        "export_kind": "decomposed_onnx",
+        "artifacts": (("expert_stack.onnx", "model"),),
+    },
+    "pi0_prefix": {
+        "export_kind": "decomposed_onnx",
+        "pipeline": "prefix_optimum + expert_custom",
+        "artifacts": (
+            ("vision_encoder/model.onnx", "model"),
+            ("multi_modal_projector.onnx", "model"),
+            ("text_embedder.onnx", "model"),
+            ("decoder_prefill/model.onnx", "model"),
+            ("expert_stack.onnx", "model"),
+        ),
+    },
+    "dreamzero": {
+        "export_kind": "config_only",
+        "artifacts": (),
+    },
+}
+
+SMOLVLA_VLM_MODEL_PATHS = (
+    "vision_encoder.onnx",
+    "text_embedder.onnx",
+    "decoder_prefill.onnx",
+)
+SMOLVLA_FULL_BUNDLE_MODEL_PATHS = frozenset(
+    ("expert_stack.onnx", *SMOLVLA_VLM_MODEL_PATHS)
+)
+
 
 class ExportConfigError(ValueError):
     """The export config is malformed or inconsistent with its artifacts."""
@@ -39,6 +81,10 @@ class ExportConfigError(ValueError):
 
 class UnsupportedExportKindError(ExportConfigError):
     """The config is valid but the selected operation cannot use its layout."""
+
+
+class UnsupportedExportPipelineError(ExportConfigError):
+    """The config declares a pipeline that the selected operation cannot execute."""
 
 
 def _positive_int(value: Any, field: str) -> int:
@@ -287,7 +333,9 @@ def _onnx_metadata(
     for graph_index, path in enumerate(onnx_paths):
         model = onnx.load(str(path), load_external_data=False)
         opsets.extend(int(item.version) for item in model.opset_import if not item.domain)
-        prefix = f"{path.stem}:" if len(onnx_paths) > 1 else ""
+        prefix = (
+            f"{path.relative_to(root).as_posix()}:" if len(onnx_paths) > 1 else ""
+        )
         initializers = {item.name for item in model.graph.initializer}
         for value in model.graph.input:
             if value.name not in initializers:
@@ -301,6 +349,178 @@ def _onnx_metadata(
     return (max(opsets) if opsets else None), {"inputs": inputs, "outputs": outputs}
 
 
+def _onnx_external_artifacts(root: Path, model_paths: list[str]) -> list[tuple[str, str]]:
+    """Return only external files referenced by the declared ONNX graphs."""
+    try:
+        import onnx  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ExportConfigError("onnx is required to build a canonical ONNX manifest") from exc
+
+    discovered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for model_path in model_paths:
+        model = onnx.load(str(root / model_path), load_external_data=False)
+        model_parent = PurePosixPath(model_path).parent
+        for tensor in model.graph.initializer:
+            if tensor.data_location != onnx.TensorProto.EXTERNAL:
+                continue
+            location = next(
+                (entry.value for entry in tensor.external_data if entry.key == "location"),
+                None,
+            )
+            if not location:
+                raise ExportConfigError(
+                    f"ONNX initializer {tensor.name!r} has no external-data location"
+                )
+            candidate = (root / model_parent / PurePosixPath(location)).resolve()
+            try:
+                relative = candidate.relative_to(root.resolve()).as_posix()
+            except ValueError as exc:
+                raise ExportConfigError(
+                    f"external data for {model_path} resolves outside the export directory"
+                ) from exc
+            relative = _artifact_path(relative, f"external data for {model_path}")
+            if relative not in seen:
+                discovered.append((relative, "weights"))
+                seen.add(relative)
+    return discovered
+
+
+def build_onnx_artifacts(
+    output_dir: str | Path,
+    model_paths: list[str] | tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Build an exact manifest for declared ONNX graphs and their external data."""
+    root = Path(output_dir)
+    normalized = [_artifact_path(path, "declared ONNX artifact") for path in model_paths]
+    if len(normalized) != len(set(normalized)):
+        raise ExportConfigError("declared ONNX artifact paths must be unique")
+    for path in normalized:
+        if not (root / path).is_file():
+            raise ExportConfigError(f"declared ONNX artifact is missing: {path}")
+    artifacts = [{"path": path, "role": "model"} for path in normalized]
+    artifacts.extend(
+        {"path": path, "role": role}
+        for path, role in _onnx_external_artifacts(root, normalized)
+    )
+    return artifacts
+
+
+def replace_owned_onnx_artifacts(
+    output_dir: str | Path,
+    artifacts: list[Mapping[str, Any]],
+    *,
+    model_paths: list[str] | tuple[str, ...],
+    previously_owned_paths: list[str] | tuple[str, ...] = (),
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Replace one producer component's manifest entries declaratively.
+
+    ``previously_owned_paths`` is persisted by the producer, so rerunning an
+    export removes external-data files that a newly written graph no longer
+    references. Other producers' entries are preserved verbatim.
+    """
+    current = build_onnx_artifacts(output_dir, model_paths)
+    owned = {
+        _artifact_path(path, "previously owned artifact")
+        for path in (*previously_owned_paths, *model_paths)
+    }
+    owned.update(item["path"] for item in current)
+    retained = [dict(item) for item in artifacts if item.get("path") not in owned]
+    current_paths = [item["path"] for item in current]
+    return retained + current, current_paths
+
+
+def build_producer_config(
+    output_dir: str | Path,
+    *,
+    producer: str,
+    model_id: str,
+    model_type: str,
+    action_dim: int,
+    num_denoising_steps: int,
+    opset: int,
+    optional_artifacts: list[tuple[str, str]] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a canonical config from one producer's declared layout.
+
+    Unlike legacy normalization, this function never scans ``output_dir``.
+    External weights are included only when a declared ONNX graph references
+    them, and optional assets must be passed explicitly by the producer.
+    """
+    if producer not in PRODUCER_LAYOUTS:
+        raise ExportConfigError(f"unknown config producer {producer!r}")
+    root = Path(output_dir)
+    layout = PRODUCER_LAYOUTS[producer]
+    declared = list(layout["artifacts"])
+    model_paths = [path for path, role in declared if role == "model" and path.endswith(".onnx")]
+    if model_paths:
+        onnx_artifacts = build_onnx_artifacts(root, model_paths)
+        declared = [(item["path"], item["role"]) for item in onnx_artifacts]
+        inspected_opset, io_contract = _onnx_metadata(
+            root,
+            [{"path": path, "role": role} for path, role in declared if role == "model"],
+        )
+        if io_contract is None:
+            raise ExportConfigError("could not inspect the declared ONNX I/O contract")
+        if inspected_opset is not None and inspected_opset != opset:
+            raise ExportConfigError(
+                f"declared opset {opset} does not match ONNX opset {inspected_opset}"
+            )
+    else:
+        io_contract = {"inputs": [], "outputs": []}
+
+    for artifact in optional_artifacts or []:
+        if artifact not in declared:
+            declared.append(artifact)
+
+    config: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "model_id": model_id,
+        "model_type": model_type,
+        "action_dim": action_dim,
+        "num_denoising_steps": num_denoising_steps,
+        "opset": opset,
+        "export_kind": layout["export_kind"],
+        "artifacts": [{"path": path, "role": role} for path, role in declared],
+        "io_contract": io_contract,
+    }
+    if "pipeline" in layout:
+        config["pipeline"] = layout["pipeline"]
+    if metadata:
+        for key, value in metadata.items():
+            if key not in config:
+                config[key] = value
+    return validate_tether_config(config, root=root, inspect_artifacts=True)
+
+
+def decomposed_layout(config: Mapping[str, Any]) -> str:
+    """Classify a canonical decomposed layout without guessing compatibility."""
+    if config.get("export_kind") != "decomposed_onnx":
+        raise UnsupportedExportKindError(
+            f"decomposed layout requires export_kind='decomposed_onnx', "
+            f"got {config.get('export_kind')!r}"
+        )
+    if config.get("pipeline") is not None:
+        raise UnsupportedExportPipelineError(
+            f"unsupported decomposed pipeline {config.get('pipeline')!r}"
+        )
+    paths = {
+        str(item["path"])
+        for item in config.get("artifacts", [])
+        if item.get("role") == "model" and str(item.get("path", "")).endswith(".onnx")
+    }
+    if paths == {"vlm_prefix.onnx", "expert_denoise.onnx"}:
+        return "pi05_split"
+    if paths == {"expert_stack.onnx"}:
+        return "expert_stack"
+    if config.get("model_type") == "smolvla" and paths == SMOLVLA_FULL_BUNDLE_MODEL_PATHS:
+        return "smolvla_full_bundle"
+    raise UnsupportedExportPipelineError(
+        f"unsupported decomposed artifact layout: {sorted(paths)}"
+    )
+
+
 def normalize_legacy_tether_config(payload: Mapping[str, Any], root: str | Path) -> dict[str, Any]:
     """Normalize a legacy config using only present metadata/artifact inspection."""
     config = dict(payload)
@@ -309,6 +529,11 @@ def normalize_legacy_tether_config(payload: Mapping[str, Any], root: str | Path)
         return config
     config["schema_version"] = SCHEMA_VERSION
     config["export_kind"] = _LEGACY_KINDS.get(config.get("export_kind"), config.get("export_kind"))
+    if (
+        not config.get("export_kind")
+        and config.get("export_format") == "dreamzero_decomposed"
+    ):
+        config["export_kind"] = "config_only"
     if not config.get("model_id"):
         for key in ("checkpoint_path", "checkpoint", "source_model"):
             if isinstance(config.get(key), str) and config[key]:
@@ -321,15 +546,44 @@ def normalize_legacy_tether_config(payload: Mapping[str, Any], root: str | Path)
         if isinstance(expert, Mapping) and expert.get("action_dim"):
             config["action_dim"] = expert["action_dim"]
     if not config.get("num_denoising_steps"):
+        if config.get("num_inference_steps"):
+            config["num_denoising_steps"] = config["num_inference_steps"]
         for container_name in ("expert", "decomposed"):
+            if config.get("num_denoising_steps"):
+                break
             container = config.get(container_name)
             if isinstance(container, Mapping) and container.get("num_denoising_steps"):
                 config["num_denoising_steps"] = container["num_denoising_steps"]
                 break
+    if config.get("opset") is None and config.get("opset_version") is not None:
+        config["opset"] = config["opset_version"]
     artifacts = config.get("artifacts")
     if not isinstance(artifacts, list):
-        artifacts = _legacy_artifacts(config, root_path)
+        artifacts = (
+            []
+            if config.get("export_kind") == "config_only"
+            else _legacy_artifacts(config, root_path)
+        )
         config["artifacts"] = artifacts
+    if not config.get("export_kind"):
+        model_paths = {
+            str(item.get("path"))
+            for item in artifacts
+            if isinstance(item, Mapping)
+            and item.get("role") == "model"
+            and str(item.get("path", "")).endswith(".onnx")
+        }
+        if model_paths == {"model.onnx"}:
+            config["export_kind"] = "monolithic_onnx"
+        elif model_paths == {"expert_stack.onnx"} or model_paths == {
+            "vlm_prefix.onnx",
+            "expert_denoise.onnx",
+        }:
+            config["export_kind"] = "decomposed_onnx"
+    if config.get("export_kind") == "config_only" and not isinstance(
+        config.get("io_contract"), Mapping
+    ):
+        config["io_contract"] = {"inputs": [], "outputs": []}
     if config.get("opset") is None or not isinstance(config.get("io_contract"), Mapping):
         inspected_opset, inspected_io = _onnx_metadata(root_path, artifacts)
         if config.get("opset") is None and inspected_opset is not None:
@@ -396,17 +650,47 @@ def require_supported_export_kind(
     return kind
 
 
+def require_supported_pipeline(
+    config: Mapping[str, Any], supported: set[str], operation: str
+) -> str | None:
+    """Reject a declared component pipeline unless the operation supports it.
+
+    A missing pipeline denotes the canonical layout for ``export_kind``.  A
+    producer that declares a custom component pipeline must be opted into by
+    name so readers never guess that it is compatible from one shared file.
+    """
+    pipeline = config.get("pipeline")
+    if pipeline is None:
+        return None
+    pipeline_name = _nonempty_string(pipeline, "pipeline")
+    if pipeline_name not in supported:
+        raise UnsupportedExportPipelineError(
+            f"{operation} does not support pipeline={pipeline_name!r}; "
+            f"supported: {sorted(supported)}"
+        )
+    return pipeline_name
+
+
 __all__ = [
     "ARTIFACT_ROLES",
     "CONFIG_FILENAME",
     "DTYPES",
     "EXPORT_KINDS",
+    "PRODUCER_LAYOUTS",
+    "SMOLVLA_FULL_BUNDLE_MODEL_PATHS",
+    "SMOLVLA_VLM_MODEL_PATHS",
     "ExportConfigError",
     "SCHEMA_VERSION",
     "UnsupportedExportKindError",
+    "UnsupportedExportPipelineError",
+    "build_producer_config",
+    "build_onnx_artifacts",
+    "decomposed_layout",
     "load_tether_config",
     "normalize_legacy_tether_config",
     "require_supported_export_kind",
+    "require_supported_pipeline",
+    "replace_owned_onnx_artifacts",
     "validate_tether_config",
     "write_tether_config",
 ]

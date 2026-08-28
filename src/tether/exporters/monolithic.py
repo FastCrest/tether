@@ -21,7 +21,6 @@ scripts produce. See
 https://github.com/FastCrest/reflex-vault/blob/main/reflex_vla/measured_numbers.md
 for the parity rows this export is responsible for.
 """
-
 from __future__ import annotations
 
 import logging
@@ -94,7 +93,6 @@ def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
     try:
         from transformers import AutoTokenizer
         from tether.runtime.tokenizers import tokenizer_offline_enabled
-
         tok = AutoTokenizer.from_pretrained(
             tokenizer_ref,
             local_files_only=tokenizer_offline_enabled(),
@@ -102,11 +100,15 @@ def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
         if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
             tok.pad_token = tok.eos_token
         tok_dir = output_dir / "tokenizer"
-        tok.save_pretrained(tok_dir)
+        saved_paths = tok.save_pretrained(tok_dir)
         meta.update(
             {
                 "tokenizer_path": "tokenizer",
                 "tokenizer_bundled": True,
+                "_artifact_paths": [
+                    Path(path).resolve().relative_to(output_dir.resolve()).as_posix()
+                    for path in saved_paths
+                ],
             }
         )
     except Exception as exc:
@@ -130,7 +132,6 @@ def _require_monolithic_deps() -> None:
     missing = []
     try:
         import transformers
-
         if transformers.__version__ != "5.3.0":
             raise ImportError(
                 f"transformers {transformers.__version__} detected; the "
@@ -196,7 +197,8 @@ def _raise_if_smolvla_export_patches_failed() -> None:
         "SmolVLA monolithic export patches failed to install. This usually "
         "means the lerobot/transformers export stack does not match the pinned "
         "monolithic environment; install with: pip install "
-        "'fastcrest-tether[monolithic]'.\n  - " + details
+        "'fastcrest-tether[monolithic]'.\n  - "
+        + details
     )
 
 
@@ -227,16 +229,12 @@ def apply_export_patches() -> None:
         from transformers.models.mamba.modeling_mamba import MambaCache  # noqa
     except ImportError:
         import transformers.cache_utils as _cu
-
         if not hasattr(_cu, "MambaCache"):
-
             class _MambaCacheStub:
                 pass
-
             _cu.MambaCache = _MambaCacheStub
             try:
                 import transformers.models.mamba.modeling_mamba as _mm
-
                 if not hasattr(_mm, "MambaCache"):
                     _mm.MambaCache = _MambaCacheStub
             except ImportError:
@@ -265,7 +263,6 @@ def apply_export_patches() -> None:
     masking_utils.create_causal_mask = _ccm_shim
     try:
         from lerobot.policies import pi_gemma as _pg
-
         if hasattr(_pg, "create_causal_mask"):
             _pg.create_causal_mask = _ccm_shim
     except ImportError:
@@ -282,7 +279,6 @@ def apply_export_patches() -> None:
         from lerobot.policies.smolvla import modeling_smolvla as _smolvla
 
         if not getattr(_smolvla.SmolVLMWithExpertModel.embed_image, "_tether_patched", False):
-
             def _embed_image_with_explicit_patch_mask(self, image):
                 patch_size = self.get_vlm_model().vision_model.patch_size
                 patch_attention_mask = torch.ones(
@@ -316,25 +312,16 @@ def apply_export_patches() -> None:
         from transformers.models.smolvlm import modeling_smolvlm as _smolvlm
 
         if not getattr(_smolvlm.SmolVLMVisionAttention.forward, "_tether_patched", False):
-
-            def _vision_attention_forward_no_dense_mask(
-                self, hidden_states, attention_mask=None, **kwargs
-            ):
+            def _vision_attention_forward_no_dense_mask(self, hidden_states, attention_mask=None, **kwargs):
                 batch_size, seq_length, embed_dim = hidden_states.shape
 
                 queries = self.q_proj(hidden_states)
                 keys = self.k_proj(hidden_states)
                 values = self.v_proj(hidden_states)
 
-                queries = queries.view(
-                    batch_size, seq_length, self.num_heads, self.head_dim
-                ).transpose(1, 2)
-                keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(
-                    1, 2
-                )
-                values = values.view(
-                    batch_size, seq_length, self.num_heads, self.head_dim
-                ).transpose(1, 2)
+                queries = queries.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+                keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+                values = values.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
 
                 attention_interface = _smolvlm.ALL_ATTENTION_FUNCTIONS.get_interface(
                     self.config._attn_implementation,
@@ -368,11 +355,9 @@ def apply_export_patches() -> None:
 
     def _safe_deepcopy(obj, *args, **kwargs):
         from transformers.cache_utils import DynamicCache
-
         if isinstance(obj, DynamicCache):
             return obj
         return _orig_deepcopy(obj, *args, **kwargs)
-
     copy.deepcopy = _safe_deepcopy
 
     # SmolVLA pad_tensor/pad_vector: replace slice-assign with torch.cat so
@@ -386,13 +371,10 @@ def apply_export_patches() -> None:
                 return tensor[:, :max_len]
             pad_shape = (b, max_len - d, *tensor.shape[2:])
             pad = torch.full(
-                pad_shape,
-                float(pad_value),
-                dtype=tensor.dtype,
-                device=tensor.device,
+                pad_shape, float(pad_value),
+                dtype=tensor.dtype, device=tensor.device,
             )
             return torch.cat([tensor, pad], dim=1)
-
         _smv.pad_tensor = _safe_pad_tensor
 
         def _safe_pad_vector(vector, new_dim):
@@ -402,7 +384,6 @@ def apply_export_patches() -> None:
             pad_shape = (*vector.shape[:-1], new_dim - current_dim)
             pad = torch.zeros(pad_shape, dtype=vector.dtype, device=vector.device)
             return torch.cat([vector, pad], dim=-1)
-
         _smv.pad_vector = _safe_pad_vector
     except ImportError:
         pass
@@ -413,10 +394,8 @@ def apply_export_patches() -> None:
 
     def _safe_where(condition, x=None, y=None, *args, **kwargs):
         if (
-            x is not None
-            and y is not None
-            and hasattr(x, "dtype")
-            and hasattr(y, "dtype")
+            x is not None and y is not None
+            and hasattr(x, "dtype") and hasattr(y, "dtype")
             and x.dtype != y.dtype
         ):
             common = torch.promote_types(x.dtype, y.dtype)
@@ -425,7 +404,6 @@ def apply_export_patches() -> None:
             if y.dtype != common:
                 y = y.to(common)
         return _orig_where(condition, x, y, *args, **kwargs)
-
     torch.where = _safe_where
 
     # pi0-specific: PaliGemmaWithExpertModel.embed_image image_outputs extraction
@@ -439,11 +417,10 @@ def apply_export_patches() -> None:
                 image = image.to(_t.float32)
             out = self.paligemma.model.get_image_features(image)
             features = out.pooler_output if hasattr(out, "pooler_output") else out
-            features = features * self.paligemma.config.text_config.hidden_size**0.5
+            features = features * self.paligemma.config.text_config.hidden_size ** 0.5
             if features.dtype != out_dtype:
                 features = features.to(out_dtype)
             return features
-
         modeling_pi0.PaliGemmaWithExpertModel.embed_image = _patched_embed_image
     except ImportError:
         pass
@@ -494,20 +471,15 @@ def apply_export_patches() -> None:
                     new_v = torch.cat([past_v, value_states], dim=-2)
                     return new_k, new_v
             return _orig_layer_update(self, key_states, value_states, cache_kwargs)
-
         _DL.update = _frozen_layer_update
 
         def _patched_denoise_step(self, state, prefix_pad_masks, past_key_values, x_t, timestep):
             suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
-                state,
-                x_t,
-                timestep,
+                state, x_t, timestep,
             )
             suffix_len = suffix_pad_masks.shape[1]
             batch_size = prefix_pad_masks.shape[0]
-            cached_prefix_len = (
-                past_key_values.get_seq_length() if past_key_values is not None else 0
-            )
+            cached_prefix_len = past_key_values.get_seq_length() if past_key_values is not None else 0
             prefix_len = max(cached_prefix_len, prefix_pad_masks.shape[1])
 
             pad_deficit = prefix_len - prefix_pad_masks.shape[1]
@@ -515,9 +487,7 @@ def apply_export_patches() -> None:
             if pad_deficit > 0:
                 prefix_pad_masks_extended = _F.pad(prefix_pad_masks, (0, pad_deficit), value=True)
 
-            prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(
-                batch_size, suffix_len, prefix_len
-            )
+            prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(batch_size, suffix_len, prefix_len)
             suffix_att_2d_masks = _make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 
             prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
@@ -539,7 +509,7 @@ def apply_export_patches() -> None:
                 adarms_cond=[None, adarms_cond],
             )
             suffix_out = outputs_embeds[1]
-            suffix_out = suffix_out[:, -self.config.chunk_size :]
+            suffix_out = suffix_out[:, -self.config.chunk_size:]
             suffix_out = suffix_out.to(dtype=torch.float32)
             return self.action_out_proj(suffix_out)
 
@@ -579,14 +549,12 @@ def _fix_onnx_where_dtype_mismatches(onnx_path: Path) -> int:
     from onnx import helper, TensorProto
 
     model = onnx.load(str(onnx_path), load_external_data=False)
-    shape_info = onnx.shape_inference.infer_shapes(model, check_type=False, strict_mode=False)
+    shape_info = onnx.shape_inference.infer_shapes(
+        model, check_type=False, strict_mode=False
+    )
 
     name_dtype: dict[str, int] = {}
-    for vi in (
-        list(shape_info.graph.value_info)
-        + list(shape_info.graph.input)
-        + list(shape_info.graph.output)
-    ):
+    for vi in list(shape_info.graph.value_info) + list(shape_info.graph.input) + list(shape_info.graph.output):
         if vi.type.tensor_type.elem_type:
             name_dtype[vi.name] = vi.type.tensor_type.elem_type
     for init in shape_info.graph.initializer:
@@ -616,22 +584,16 @@ def _fix_onnx_where_dtype_mismatches(onnx_path: Path) -> int:
         if x_dt != target_dt:
             cast_out = f"{node.name}__cast_x"
             cast_node = helper.make_node(
-                "Cast",
-                [x_name],
-                [cast_out],
-                name=f"{node.name}__cast_x_node",
-                to=target_dt,
+                "Cast", [x_name], [cast_out],
+                name=f"{node.name}__cast_x_node", to=target_dt,
             )
             fixes_this.append(cast_node)
             node.input[1] = cast_out
         if y_dt != target_dt:
             cast_out = f"{node.name}__cast_y"
             cast_node = helper.make_node(
-                "Cast",
-                [y_name],
-                [cast_out],
-                name=f"{node.name}__cast_y_node",
-                to=target_dt,
+                "Cast", [y_name], [cast_out],
+                name=f"{node.name}__cast_y_node", to=target_dt,
             )
             fixes_this.append(cast_node)
             node.input[2] = cast_out
@@ -640,11 +602,7 @@ def _fix_onnx_where_dtype_mismatches(onnx_path: Path) -> int:
         fixes += 1
         logger.info(
             "fixed Where node %s (X=%s, Y=%s, out_decl=%s -> target=%s)",
-            node.name,
-            x_dt,
-            y_dt,
-            out_dt,
-            target_dt,
+            node.name, x_dt, y_dt, out_dt, target_dt,
         )
 
     if fixes > 0:
@@ -688,7 +646,6 @@ def export_smolvla_monolithic(
 
     logger.info("[smolvla] Loading %s", model_id)
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
-
     t0 = time.time()
     policy = SmolVLAPolicy.from_pretrained(model_id)
     policy.eval().to("cpu").to(torch.float32)
@@ -703,26 +660,15 @@ def export_smolvla_monolithic(
 
         def forward(
             self,
-            img_cam1,
-            img_cam2,
-            img_cam3,
-            mask_cam1,
-            mask_cam2,
-            mask_cam3,
-            lang_tokens,
-            lang_masks,
-            state,
-            noise,
+            img_cam1, img_cam2, img_cam3,
+            mask_cam1, mask_cam2, mask_cam3,
+            lang_tokens, lang_masks,
+            state, noise,
         ):
             images = [img_cam1, img_cam2, img_cam3]
             img_masks = [mask_cam1, mask_cam2, mask_cam3]
             return self.model.sample_actions(
-                images,
-                img_masks,
-                lang_tokens,
-                lang_masks,
-                state,
-                noise=noise,
+                images, img_masks, lang_tokens, lang_masks, state, noise=noise,
             )
 
     wrapper = SmolVLAMonolithicWrapper(policy.model).eval()
@@ -753,21 +699,16 @@ def export_smolvla_monolithic(
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
         ep = torch.export.export(
-            wrapper,
-            tuple(dummy.values()),
-            dynamic_shapes=None,
-            strict=False,
+            wrapper, tuple(dummy.values()),
+            dynamic_shapes=None, strict=False,
         )
     logger.info("[smolvla] torch.export: %.1fs", time.time() - t0)
 
     logger.info("[smolvla] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
-        ep,
-        tuple(dummy.values()),
-        str(onnx_path),
-        input_names=list(dummy.keys()),
-        output_names=["actions"],
+        ep, tuple(dummy.values()), str(onnx_path),
+        input_names=list(dummy.keys()), output_names=["actions"],
         opset_version=19,
     )
     logger.info("[smolvla] ONNX conversion: %.1fs", time.time() - t0)
@@ -776,12 +717,8 @@ def export_smolvla_monolithic(
     logger.info("[smolvla] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
-        output_dir,
-        policy.config,
-        num_steps=num_steps,
-        model_id=model_id,
-        model_type="smolvla",
-        target=target,
+        output_dir, policy.config, num_steps=num_steps,
+        model_id=model_id, model_type="smolvla", target=target,
     )
 
     size_mb = onnx_path.stat().st_size / 1e6
@@ -819,14 +756,13 @@ def export_pi0_monolithic(
 
     logger.info("[pi0] Loading %s", model_id)
     from lerobot.policies.pi0.modeling_pi0 import PI0Policy
-
     t0 = time.time()
     # Block torch.compile during from_pretrained — see pi05 branch for the
     # "Guard failed on same frame" bug. pi0_base defaults to False so this
     # is a no-op for canonical exports, but any fine-tuned pi0 config with
     # compile_model=True (common pattern) would otherwise break the trace.
     _orig_compile = torch.compile
-    torch.compile = lambda fn=None, *a, **kw: fn if fn is not None else (lambda f: f)
+    torch.compile = lambda fn=None, *a, **kw: (fn if fn is not None else (lambda f: f))
     try:
         policy = PI0Policy.from_pretrained(model_id)
     finally:
@@ -846,27 +782,16 @@ def export_pi0_monolithic(
 
         def forward(
             self,
-            img_base,
-            img_wrist_l,
-            img_wrist_r,
-            mask_base,
-            mask_wrist_l,
-            mask_wrist_r,
-            lang_tokens,
-            lang_masks,
-            state,
-            noise,
+            img_base, img_wrist_l, img_wrist_r,
+            mask_base, mask_wrist_l, mask_wrist_r,
+            lang_tokens, lang_masks,
+            state, noise,
         ):
             images = [img_base, img_wrist_l, img_wrist_r]
             img_masks = [mask_base, mask_wrist_l, mask_wrist_r]
             return self.model.sample_actions(
-                images,
-                img_masks,
-                lang_tokens,
-                lang_masks,
-                state,
-                noise=noise,
-                num_steps=self.n_steps,
+                images, img_masks, lang_tokens, lang_masks, state,
+                noise=noise, num_steps=self.n_steps,
             )
 
     wrapper = Pi0MonolithicWrapper(policy.model, num_steps).eval()
@@ -897,21 +822,16 @@ def export_pi0_monolithic(
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
         ep = torch.export.export(
-            wrapper,
-            tuple(dummy.values()),
-            dynamic_shapes=None,
-            strict=False,
+            wrapper, tuple(dummy.values()),
+            dynamic_shapes=None, strict=False,
         )
     logger.info("[pi0] torch.export: %.1fs", time.time() - t0)
 
     logger.info("[pi0] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
-        ep,
-        tuple(dummy.values()),
-        str(onnx_path),
-        input_names=list(dummy.keys()),
-        output_names=["actions"],
+        ep, tuple(dummy.values()), str(onnx_path),
+        input_names=list(dummy.keys()), output_names=["actions"],
         opset_version=19,
     )
     logger.info("[pi0] ONNX conversion: %.1fs", time.time() - t0)
@@ -920,12 +840,8 @@ def export_pi0_monolithic(
     logger.info("[pi0] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
-        output_dir,
-        policy.config,
-        num_steps=num_steps,
-        model_id=model_id,
-        model_type="pi0",
-        target=target,
+        output_dir, policy.config, num_steps=num_steps,
+        model_id=model_id, model_type="pi0", target=target,
     )
 
     size_mb = onnx_path.stat().st_size / 1e6
@@ -950,6 +866,9 @@ def _write_tether_config(
 ) -> None:
     """Write `tether_config.json` + seed a VERIFICATION.md receipt."""
     tokenizer_meta = _bundle_tokenizer(output_dir, model_type)
+    tokenizer_artifacts = [
+        (path, "tokenizer") for path in tokenizer_meta.pop("_artifact_paths", [])
+    ]
     cfg_dict = {
         "model_id": model_id,
         "model_type": model_type,
@@ -964,9 +883,20 @@ def _write_tether_config(
         "notes": _CCM_NONE_RATIONALE if num_steps > 1 else None,
         **tokenizer_meta,
     }
-    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+    from tether.export_config import build_producer_config, write_tether_config
 
-    write_tether_config(output_dir, normalize_legacy_tether_config(cfg_dict, output_dir))
+    canonical = build_producer_config(
+        output_dir,
+        producer="monolithic",
+        model_id=model_id,
+        model_type=model_type,
+        action_dim=cfg_dict["action_dim"],
+        num_denoising_steps=num_steps,
+        opset=19,
+        optional_artifacts=tokenizer_artifacts,
+        metadata=cfg_dict,
+    )
+    write_tether_config(output_dir, canonical)
 
     # Seed VERIFICATION.md at export time — every export ships a receipt,
     # even before `tether validate` fills in the parity numbers. Callers
@@ -975,7 +905,6 @@ def _write_tether_config(
     # actual export (the ONNX is already on disk by this point).
     try:
         from tether.verification_report import write_verification_report
-
         write_verification_report(output_dir, parity=None)
     except Exception:
         pass
@@ -1009,7 +938,6 @@ def export_pi05_monolithic(
 
     logger.info("[pi05] Loading %s", model_id)
     from lerobot.policies.pi05.modeling_pi05 import PI05Policy
-
     t0 = time.time()
     # Block torch.compile during from_pretrained: LIBERO-finetuned configs
     # (e.g. lerobot/pi05_libero_finetuned_v044) ship with compile_model=True,
@@ -1018,7 +946,7 @@ def export_pi05_monolithic(
     # raise "Guard failed on same frame it was created" during export. Disable
     # the compile step for the duration of the load.
     _orig_compile = torch.compile
-    torch.compile = lambda fn=None, *a, **kw: fn if fn is not None else (lambda f: f)
+    torch.compile = lambda fn=None, *a, **kw: (fn if fn is not None else (lambda f: f))
     try:
         policy = PI05Policy.from_pretrained(model_id)
     finally:
@@ -1048,26 +976,17 @@ def export_pi05_monolithic(
 
         def forward(
             self,
-            img_base,
-            img_wrist_l,
-            img_wrist_r,
-            mask_base,
-            mask_wrist_l,
-            mask_wrist_r,
-            lang_tokens,
-            lang_masks,
+            img_base, img_wrist_l, img_wrist_r,
+            mask_base, mask_wrist_l, mask_wrist_r,
+            lang_tokens, lang_masks,
             noise,
         ):
             # pi0.5: no state arg (state is in lang_tokens).
             images = [img_base, img_wrist_l, img_wrist_r]
             img_masks = [mask_base, mask_wrist_l, mask_wrist_r]
             return self.model.sample_actions(
-                images,
-                img_masks,
-                lang_tokens,
-                lang_masks,
-                noise=noise,
-                num_steps=self.n_steps,
+                images, img_masks, lang_tokens, lang_masks,
+                noise=noise, num_steps=self.n_steps,
             )
 
     wrapper = Pi05MonolithicWrapper(policy.model, num_steps).eval()
@@ -1096,21 +1015,16 @@ def export_pi05_monolithic(
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
         ep = torch.export.export(
-            wrapper,
-            tuple(dummy.values()),
-            dynamic_shapes=None,
-            strict=False,
+            wrapper, tuple(dummy.values()),
+            dynamic_shapes=None, strict=False,
         )
     logger.info("[pi05] torch.export: %.1fs", time.time() - t0)
 
     logger.info("[pi05] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
-        ep,
-        tuple(dummy.values()),
-        str(onnx_path),
-        input_names=list(dummy.keys()),
-        output_names=["actions"],
+        ep, tuple(dummy.values()), str(onnx_path),
+        input_names=list(dummy.keys()), output_names=["actions"],
         opset_version=19,
     )
     logger.info("[pi05] ONNX conversion: %.1fs", time.time() - t0)
@@ -1119,12 +1033,8 @@ def export_pi05_monolithic(
     logger.info("[pi05] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
-        output_dir,
-        policy.config,
-        num_steps=num_steps,
-        model_id=model_id,
-        model_type="pi05",
-        target=target,
+        output_dir, policy.config, num_steps=num_steps,
+        model_id=model_id, model_type="pi05", target=target,
     )
 
     size_mb = onnx_path.stat().st_size / 1e6
@@ -1161,14 +1071,11 @@ def _apply_pi05_denoise_step_patch() -> None:
         def _patched(self, prefix_pad_masks, past_key_values, x_t, timestep):
             # pi0.5: NO state arg (tokenized into language upstream).
             suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
-                x_t,
-                timestep,
+                x_t, timestep,
             )
             suffix_len = suffix_pad_masks.shape[1]
             batch_size = prefix_pad_masks.shape[0]
-            cached_prefix_len = (
-                past_key_values.get_seq_length() if past_key_values is not None else 0
-            )
+            cached_prefix_len = past_key_values.get_seq_length() if past_key_values is not None else 0
             prefix_len = max(cached_prefix_len, prefix_pad_masks.shape[1])
 
             pad_deficit = prefix_len - prefix_pad_masks.shape[1]
@@ -1176,9 +1083,7 @@ def _apply_pi05_denoise_step_patch() -> None:
             if pad_deficit > 0:
                 prefix_pad_masks_extended = _F.pad(prefix_pad_masks, (0, pad_deficit), value=True)
 
-            prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(
-                batch_size, suffix_len, prefix_len
-            )
+            prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(batch_size, suffix_len, prefix_len)
             suffix_att_2d_masks = _make(suffix_pad_masks, suffix_att_masks)
 
             prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
@@ -1200,7 +1105,7 @@ def _apply_pi05_denoise_step_patch() -> None:
                 adarms_cond=[None, adarms_cond],
             )
             suffix_out = outputs_embeds[1]
-            suffix_out = suffix_out[:, -self.config.chunk_size :]
+            suffix_out = suffix_out[:, -self.config.chunk_size:]
             suffix_out = suffix_out.to(dtype=torch.float32)
             return self.action_out_proj(suffix_out)
 
@@ -1271,7 +1176,8 @@ def export_snapflow_student_monolithic(
 
     if not (is_pi05 or is_pi0):
         raise TypeError(
-            f"SnapFlow export supports pi0 / pi0.5 students only; got {type(policy.model).__name__}"
+            f"SnapFlow export supports pi0 / pi0.5 students only; got "
+            f"{type(policy.model).__name__}"
         )
 
     # Monkey-patch the SnapFlow denoise_step to drop detach+deepcopy for
@@ -1285,7 +1191,6 @@ def export_snapflow_student_monolithic(
     logger.info("[snapflow-export] Family=%s, wrapping for export", family)
 
     if is_pi05:
-
         class SnapFlowStudentWrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
@@ -1293,25 +1198,17 @@ def export_snapflow_student_monolithic(
 
             def forward(
                 self,
-                img_base,
-                img_wrist_l,
-                img_wrist_r,
-                mask_base,
-                mask_wrist_l,
-                mask_wrist_r,
-                lang_tokens,
-                lang_masks,
+                img_base, img_wrist_l, img_wrist_r,
+                mask_base, mask_wrist_l, mask_wrist_r,
+                lang_tokens, lang_masks,
                 noise,
             ):
                 return self.model.sample_actions_1step(
                     [img_base, img_wrist_l, img_wrist_r],
                     [mask_base, mask_wrist_l, mask_wrist_r],
-                    lang_tokens,
-                    lang_masks,
-                    noise=noise,
+                    lang_tokens, lang_masks, noise=noise,
                 )
     else:
-
         class SnapFlowStudentWrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
@@ -1319,24 +1216,15 @@ def export_snapflow_student_monolithic(
 
             def forward(
                 self,
-                img_cam1,
-                img_cam2,
-                img_cam3,
-                mask_cam1,
-                mask_cam2,
-                mask_cam3,
-                lang_tokens,
-                lang_masks,
-                state,
-                noise,
+                img_cam1, img_cam2, img_cam3,
+                mask_cam1, mask_cam2, mask_cam3,
+                lang_tokens, lang_masks,
+                state, noise,
             ):
                 return self.model.sample_actions_1step(
                     [img_cam1, img_cam2, img_cam3],
                     [mask_cam1, mask_cam2, mask_cam3],
-                    lang_tokens,
-                    lang_masks,
-                    state,
-                    noise=noise,
+                    lang_tokens, lang_masks, state, noise=noise,
                 )
 
     wrapper = SnapFlowStudentWrapper(policy.model).eval()
@@ -1380,21 +1268,16 @@ def export_snapflow_student_monolithic(
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
         ep = torch.export.export(
-            wrapper,
-            tuple(dummy.values()),
-            dynamic_shapes=None,
-            strict=False,
+            wrapper, tuple(dummy.values()),
+            dynamic_shapes=None, strict=False,
         )
     logger.info("[snapflow-export] torch.export: %.1fs", time.time() - t0)
 
     logger.info("[snapflow-export] torch.onnx.export ...")
     t0 = time.time()
     torch.onnx.export(
-        ep,
-        tuple(dummy.values()),
-        str(onnx_path),
-        input_names=list(dummy.keys()),
-        output_names=["actions"],
+        ep, tuple(dummy.values()), str(onnx_path),
+        input_names=list(dummy.keys()), output_names=["actions"],
         opset_version=19,
     )
     logger.info("[snapflow-export] ONNX conversion: %.1fs", time.time() - t0)
@@ -1403,11 +1286,8 @@ def export_snapflow_student_monolithic(
     logger.info("[snapflow-export] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
-        output_dir,
-        policy.config,
-        num_steps=1,
-        model_id=str(checkpoint_path),
-        model_type=f"{family}_snapflow",
+        output_dir, policy.config, num_steps=1,
+        model_id=str(checkpoint_path), model_type=f"{family}_snapflow",
         target=target,
     )
 
@@ -1440,23 +1320,17 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
         from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks
 
     if is_pi05:
-
-        def _export_denoise_step(
-            self, prefix_pad_masks, past_key_values, x_t, timestep, target_time=None, state=None
-        ):
+        def _export_denoise_step(self, prefix_pad_masks, past_key_values, x_t,
+                                 timestep, target_time=None, state=None):
             suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
-                x_t,
-                timestep,
-                target_time=target_time,
+                x_t, timestep, target_time=target_time,
             )
             suffix_len = suffix_pad_masks.shape[1]
             batch_size = prefix_pad_masks.shape[0]
             prefix_len = prefix_pad_masks.shape[1]
 
             prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(
-                batch_size,
-                suffix_len,
-                prefix_len,
+                batch_size, suffix_len, prefix_len,
             )
             suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
             prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
@@ -1476,28 +1350,21 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
                 use_cache=False,
                 adarms_cond=[None, adarms_cond],
             )
-            suffix_out = outputs_embeds[1][:, -self.config.chunk_size :]
+            suffix_out = outputs_embeds[1][:, -self.config.chunk_size:]
             suffix_out = suffix_out.to(dtype=self.action_out_proj.weight.dtype)
             return self.action_out_proj(suffix_out)
     else:
-
-        def _export_denoise_step(
-            self, state, prefix_pad_masks, past_key_values, x_t, timestep, target_time=None
-        ):
+        def _export_denoise_step(self, state, prefix_pad_masks, past_key_values,
+                                 x_t, timestep, target_time=None):
             suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
-                state,
-                x_t,
-                timestep,
-                target_time=target_time,
+                state, x_t, timestep, target_time=target_time,
             )
             suffix_len = suffix_pad_masks.shape[1]
             batch_size = prefix_pad_masks.shape[0]
             prefix_len = prefix_pad_masks.shape[1]
 
             prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(
-                batch_size,
-                suffix_len,
-                prefix_len,
+                batch_size, suffix_len, prefix_len,
             )
             suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
             prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
@@ -1517,7 +1384,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
                 use_cache=False,
                 adarms_cond=[None, adarms_cond],
             )
-            suffix_out = outputs_embeds[1][:, -self.config.chunk_size :]
+            suffix_out = outputs_embeds[1][:, -self.config.chunk_size:]
             suffix_out = suffix_out.to(dtype=self.action_out_proj.weight.dtype)
             return self.action_out_proj(suffix_out)
 
@@ -1565,12 +1432,9 @@ def export_gr00t_monolithic(
     t0 = time.time()
     full, meta = build_gr00t_full_stack(state_dict, embodiment_id=embodiment_id)
     full.eval()
-    logger.info(
-        "[gr00t] Built in %.1fs — raw_action_dim=%d, params=%.1fM",
-        time.time() - t0,
-        meta["raw_action_dim"],
-        meta["full_stack_params_m"],
-    )
+    logger.info("[gr00t] Built in %.1fs — raw_action_dim=%d, params=%.1fM",
+                time.time() - t0, meta["raw_action_dim"],
+                meta["full_stack_params_m"])
 
     raw_action_dim = meta["raw_action_dim"]
     chunk = 50
@@ -1603,15 +1467,11 @@ def export_gr00t_monolithic(
 
     _write_tether_config(
         output_dir,
-        type(
-            "GR00TConfig",
-            (),
-            {
-                "chunk_size": chunk,
-                "max_action_dim": raw_action_dim,
-                "num_steps": num_steps,
-            },
-        )(),
+        type("GR00TConfig", (), {
+            "chunk_size": chunk,
+            "max_action_dim": raw_action_dim,
+            "num_steps": num_steps,
+        })(),
         num_steps=num_steps,
         model_id=model_id,
         model_type="gr00t",
@@ -1666,7 +1526,11 @@ def _model_type_from_local_config(model_id: str) -> str | None:
     # lerobot policy convention: 'policy_type' field.
     # SnapFlow checkpoint convention: 'type' field
     # (e.g., 'pi05', 'smolvla'). Caught by 2026-04-25 distill smoke v2.
-    raw = cfg.get("model_type") or cfg.get("policy_type") or cfg.get("type")
+    raw = (
+        cfg.get("model_type")
+        or cfg.get("policy_type")
+        or cfg.get("type")
+    )
     if not isinstance(raw, str):
         return None
     raw = raw.lower()
@@ -1735,7 +1599,9 @@ def export_monolithic(
         gr00t_steps = 4 if num_steps == 10 else num_steps
         result = export_gr00t_monolithic(model_id, output_dir, num_steps=gr00t_steps, target=target)
     else:
-        raise ValueError(f"Monolithic export for model_type={model_type!r} not yet supported.")
+        raise ValueError(
+            f"Monolithic export for model_type={model_type!r} not yet supported."
+        )
 
     # Post-export weight fusion pass (lifted from dexmal/realtime-vla MIT).
     # Fuses RMSNorm scales into MatMul weights, folds Euler dt into output
@@ -1744,7 +1610,6 @@ def export_monolithic(
     if onnx_path:
         try:
             from tether.exporters.weight_fusion import fuse_weights
-
             fused_path = fuse_weights(onnx_path, num_steps=num_steps)
             logger.info("Weight fusion pass complete: %s", fused_path)
         except Exception as e:

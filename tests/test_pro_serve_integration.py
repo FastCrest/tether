@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -13,16 +12,13 @@ import pytest
 
 from tether.pro.license import LicenseCorrupt, LicenseHeartbeatStale, issue_dev_license
 from tether.runtime import server as runtime_server
+from tests.export_config_factory import write_test_export_config
 
 
 def _export_dir(tmp_path):
     path = tmp_path / "export"
     path.mkdir()
-    (path / "model.onnx").write_bytes(b"stub")
-    (path / "tether_config.json").write_text(json.dumps({
-        "model_type": "gr00t",
-        "action_dim": 7,
-    }))
+    write_test_export_config(path, model_type="gr00t", action_dim=7)
     return path
 
 

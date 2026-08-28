@@ -17,7 +17,6 @@ Cost: loads both ORT sessions (~6.5 GB model weights) and runs one synthetic
 forward each. Typically 15-30s on GPU; skipped without CUDA. Users can skip
 explicitly via `tether doctor --skip cuda_graphs`.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -50,12 +49,13 @@ def _run(*, model_path: str, embodiment_name: str, rtc: bool) -> CheckResult:
             f"no tether_config.json at {export}",
         )
 
-    from tether.export_config import ExportConfigError, load_tether_config
+    from tether.export_config import ExportConfigError, decomposed_layout, load_tether_config
 
     try:
         cfg = load_tether_config(cfg_path)
     except (ExportConfigError, FileNotFoundError) as exc:
         return CheckResult(
+            check_id=_CHECK_ID,
             name=_CHECK_NAME,
             status="fail",
             expected="valid Export Config v1",
@@ -67,6 +67,15 @@ def _run(*, model_path: str, embodiment_name: str, rtc: bool) -> CheckResult:
         return _skip(
             "cuda-graphs applies only to decomposed exports",
             f"export_kind={cfg.get('export_kind')!r}",
+        )
+    try:
+        layout = decomposed_layout(cfg)
+    except ExportConfigError as exc:
+        return _skip("supported decomposed CUDA-graphs layout", str(exc))
+    if layout != "pi05_split":
+        return _skip(
+            "pi05 split layout (vlm_prefix.onnx + expert_denoise.onnx)",
+            f"layout={layout!r}; CUDA-graphs diagnostic does not support this pipeline",
         )
 
     try:
@@ -96,8 +105,9 @@ def _run(*, model_path: str, embodiment_name: str, rtc: bool) -> CheckResult:
             duration_ms=0.0,
         )
 
-    prefix_path = export / cfg["decomposed"]["vlm_prefix_onnx"]
-    expert_path = export / cfg["decomposed"]["expert_denoise_onnx"]
+    declared_paths = {str(item["path"]) for item in cfg["artifacts"]}
+    prefix_path = export / next(path for path in declared_paths if path == "vlm_prefix.onnx")
+    expert_path = export / next(path for path in declared_paths if path == "expert_denoise.onnx")
 
     def _build_prefix(cg_enabled: bool) -> "ort.InferenceSession":
         return ort.InferenceSession(
@@ -189,12 +199,10 @@ def _run(*, model_path: str, embodiment_name: str, rtc: bool) -> CheckResult:
     )
 
 
-register(
-    Check(
-        check_id=_CHECK_ID,
-        name=_CHECK_NAME,
-        severity="warn",
-        github_issue=None,
-        run_fn=_run,
-    )
-)
+register(Check(
+    check_id=_CHECK_ID,
+    name=_CHECK_NAME,
+    severity="warn",
+    github_issue=None,
+    run_fn=_run,
+))

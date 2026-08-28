@@ -832,10 +832,11 @@ class TetherServer:
         self._replan_threshold: float = 0.5
 
     def _load_config(self) -> dict[str, Any]:
-        config_path = self.export_dir / "tether_config.json"
-        if config_path.exists():
-            return json.loads(config_path.read_text())
-        return {}
+        from tether.export_config import load_tether_config, require_supported_pipeline
+
+        config = load_tether_config(self.export_dir)
+        require_supported_pipeline(config, set(), "TetherServer")
+        return config
 
     def configure_replan(
         self,
@@ -966,7 +967,7 @@ class TetherServer:
         start = time.perf_counter()
 
         expert_meta = self.config.get("expert", {})
-        self.action_dim = self.config.get("action_dim", expert_meta.get("action_dim", 32))
+        self.action_dim = int(self.config["action_dim"])
         self.chunk_size = self.config.get(
             "action_chunk_size",
             self.config.get("chunk_size", 50),
@@ -2003,29 +2004,36 @@ def create_app(
 
     # Dispatch order:
     #   1. TETHER_NATIVE=1 — SmolVLANativeServer (PyTorch native path)
-    #   2. tether_config.json export_kind == "monolithic" → model-specific
+    #   2. tether_config.json export_kind == "monolithic_onnx" → model-specific
     #      monolithic server (Pi0OnnxServer / SmolVLAOnnxServer). This is
     #      the cos=1.0 verified production path as of 2026-04-18.
     #   3. Default: TetherServer (legacy decomposed path).
     _config_path = Path(export_dir) / "tether_config.json"
-    _monolithic_cfg = {}
-    if _config_path.exists():
-        try:
-            _monolithic_cfg = json.loads(_config_path.read_text())
-        except Exception:
-            _monolithic_cfg = {}
+    from tether.export_config import decomposed_layout, load_tether_config
+
+    _monolithic_cfg = load_tether_config(_config_path)
+
+    def _decomposed_layout(config: dict[str, Any]) -> str:
+        return decomposed_layout(config)
+
+    def _require_native_smolvla(config: dict[str, Any], label: str) -> None:
+        if (
+            config.get("model_type") != "smolvla"
+            or config.get("export_kind") != "decomposed_onnx"
+            or _decomposed_layout(config) not in {"expert_stack", "smolvla_full_bundle"}
+        ):
+            raise ValueError(
+                f"TETHER_NATIVE=1 requires a SmolVLA expert_stack/full-bundle decomposed export; "
+                f"{label} declares model_type={config.get('model_type')!r}, "
+                f"export_kind={config.get('export_kind')!r}"
+            )
 
     def _build_shadow_server(shadow_export_dir: str | Path) -> Any:
         shadow_export_dir = Path(shadow_export_dir)
-        shadow_cfg_path = shadow_export_dir / "tether_config.json"
-        shadow_cfg: dict[str, Any] = {}
-        if shadow_cfg_path.exists():
-            try:
-                shadow_cfg = json.loads(shadow_cfg_path.read_text())
-            except Exception:
-                shadow_cfg = {}
+        shadow_cfg = load_tether_config(shadow_export_dir)
 
         if _os.environ.get("TETHER_NATIVE", "0") == "1":
+            _require_native_smolvla(shadow_cfg, "shadow export")
             from tether.runtime.smolvla_native import SmolVLANativeServer
             shadow_srv = SmolVLANativeServer(
                 shadow_export_dir,
@@ -2039,7 +2047,10 @@ def create_app(
                 max_batch=max_batch,
                 batch_timeout_ms=batch_timeout_ms,
             )
-        elif shadow_cfg.get("export_kind") == "decomposed":
+        elif (
+            shadow_cfg.get("export_kind") == "decomposed_onnx"
+            and _decomposed_layout(shadow_cfg) == "pi05_split"
+        ):
             from tether.runtime.decomposed_server import Pi05DecomposedServer
             shadow_srv = Pi05DecomposedServer(
                 shadow_export_dir,
@@ -2055,8 +2066,26 @@ def create_app(
                 action_similarity_threshold=action_similarity_threshold,
                 max_similar_skips=max_similar_skips,
             )
-        elif shadow_cfg.get("export_kind") == "monolithic":
-            model_type = shadow_cfg.get("model_type", "smolvla")
+        elif (
+            shadow_cfg.get("export_kind") == "decomposed_onnx"
+            and _decomposed_layout(shadow_cfg) in {"expert_stack", "smolvla_full_bundle"}
+        ):
+            shadow_srv = TetherServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+                inference_executor_workers=inference_executor_workers,
+                inference_executor_queue=inference_executor_queue,
+            )
+        elif shadow_cfg.get("export_kind") == "monolithic_onnx":
+            model_type = shadow_cfg["model_type"]
             if model_type == "pi0":
                 from tether.runtime.pi0_onnx_server import Pi0OnnxServer
                 shadow_srv = Pi0OnnxServer(
@@ -2104,25 +2133,15 @@ def create_app(
                     f"Shadow runtime for model_type={model_type!r} is not supported"
                 )
         else:
-            shadow_srv = TetherServer(
-                shadow_export_dir,
-                device=device,
-                providers=providers,
-                strict_providers=strict_providers,
-                safety_config=safety_config,
-                adaptive_steps=adaptive_steps,
-                cloud_fallback_url=cloud_fallback_url,
-                deadline_ms=deadline_ms,
-                max_batch=max_batch,
-                batch_timeout_ms=batch_timeout_ms,
-                inference_executor_workers=inference_executor_workers,
-                inference_executor_queue=inference_executor_queue,
+            raise ValueError(
+                f"Shadow serving does not support export_kind={shadow_cfg.get('export_kind')!r}"
             )
         shadow_srv.embodiment_config = embodiment_config
         shadow_srv._inference_policy_slot = "shadow"  # type: ignore[attr-defined]
         return shadow_srv
 
     if _os.environ.get("TETHER_NATIVE", "0") == "1":
+        _require_native_smolvla(_monolithic_cfg, "primary export")
         from tether.runtime.smolvla_native import SmolVLANativeServer
         server = SmolVLANativeServer(
             export_dir,
@@ -2136,7 +2155,10 @@ def create_app(
             max_batch=max_batch,
             batch_timeout_ms=batch_timeout_ms,
         )
-    elif _monolithic_cfg.get("export_kind") == "decomposed":
+    elif (
+        _monolithic_cfg.get("export_kind") == "decomposed_onnx"
+        and _decomposed_layout(_monolithic_cfg) == "pi05_split"
+    ):
         # Per ADR 2026-04-25-decomposed-dispatch-via-tether-serve: the
         # decomposed export (vlm_prefix.onnx + expert_denoise.onnx) needs
         # the wrapper around Pi05DecomposedInference, NOT the legacy
@@ -2158,8 +2180,26 @@ def create_app(
             action_similarity_threshold=action_similarity_threshold,
             max_similar_skips=max_similar_skips,
         )
-    elif _monolithic_cfg.get("export_kind") == "monolithic":
-        _model_type = _monolithic_cfg.get("model_type", "smolvla")
+    elif (
+        _monolithic_cfg.get("export_kind") == "decomposed_onnx"
+        and _decomposed_layout(_monolithic_cfg) in {"expert_stack", "smolvla_full_bundle"}
+    ):
+        server = TetherServer(
+            export_dir,
+            device=device,
+            providers=providers,
+            strict_providers=strict_providers,
+            safety_config=safety_config,
+            adaptive_steps=adaptive_steps,
+            cloud_fallback_url=cloud_fallback_url,
+            deadline_ms=deadline_ms,
+            max_batch=max_batch,
+            batch_timeout_ms=batch_timeout_ms,
+            inference_executor_workers=inference_executor_workers,
+            inference_executor_queue=inference_executor_queue,
+        )
+    elif _monolithic_cfg.get("export_kind") == "monolithic_onnx":
+        _model_type = _monolithic_cfg["model_type"]
         if _model_type == "pi0":
             from tether.runtime.pi0_onnx_server import Pi0OnnxServer
             server = Pi0OnnxServer(
@@ -2208,19 +2248,8 @@ def create_app(
                 f"supported. v0.2 covers smolvla, pi0, pi05, and gr00t."
             )
     else:
-        server = TetherServer(
-            export_dir,
-            device=device,
-            providers=providers,
-            strict_providers=strict_providers,
-            safety_config=safety_config,
-            adaptive_steps=adaptive_steps,
-            cloud_fallback_url=cloud_fallback_url,
-            deadline_ms=deadline_ms,
-            max_batch=max_batch,
-            batch_timeout_ms=batch_timeout_ms,
-            inference_executor_workers=inference_executor_workers,
-            inference_executor_queue=inference_executor_queue,
+        raise ValueError(
+            f"Serving does not support export_kind={_monolithic_cfg.get('export_kind')!r}"
         )
 
     # Paid mode is explicit and is validated before the app/lifespan exists.

@@ -1027,6 +1027,47 @@ def publish_latency_cmd(
             )
 
 
+def _build_benchmark_server(
+    export_dir: str | Path, export_config: dict[str, Any], device: str
+) -> Any:
+    """Construct only a reader declared compatible with this export layout."""
+    from tether.export_config import decomposed_layout
+
+    kind = export_config.get("export_kind")
+    if kind == "monolithic_onnx":
+        model_type = export_config["model_type"]
+        if model_type == "pi0":
+            from tether.runtime.pi0_onnx_server import Pi0OnnxServer
+
+            return Pi0OnnxServer(export_dir, device=device, max_batch=1, strict_providers=False)
+        if model_type == "pi05":
+            from tether.runtime.pi05_onnx_server import Pi05OnnxServer
+
+            return Pi05OnnxServer(export_dir, device=device, max_batch=1, strict_providers=False)
+        if model_type == "smolvla":
+            from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+
+            return SmolVLAOnnxServer(
+                export_dir, device=device, max_batch=1, strict_providers=False
+            )
+        if model_type == "gr00t":
+            from tether.runtime.server import TetherServer
+
+            return TetherServer(export_dir, device=device, strict_providers=False)
+        raise ValueError(f"Benchmark does not support monolithic model_type={model_type!r}")
+    if kind == "decomposed_onnx":
+        layout = decomposed_layout(export_config)
+        if layout == "pi05_split":
+            from tether.runtime.decomposed_server import Pi05DecomposedServer
+
+            return Pi05DecomposedServer(export_dir, device=device, strict_providers=False)
+        if layout in {"expert_stack", "smolvla_full_bundle"}:
+            from tether.runtime.server import TetherServer
+
+            return TetherServer(export_dir, device=device, strict_providers=False)
+    raise ValueError(f"Benchmark does not support export_kind={kind!r}")
+
+
 @app.command(name="bench", hidden=True)
 def benchmark_cmd(
     export_dir: str = typer.Argument(
@@ -1252,52 +1293,15 @@ def benchmark_cmd(
     if benchmark:
         console.print(f"  Benchmark: [cyan]{benchmark}[/cyan] ({episodes_per_task} eps/task)")
 
-    config_path = export_path / "tether_config.json"
-    export_config = {}
-    if config_path.exists():
-        try:
-            export_config = json.loads(config_path.read_text())
-        except Exception:
-            export_config = {}
+    from tether.export_config import ExportConfigError, load_tether_config
 
-    server: Any
-    if export_config.get("export_kind") == "monolithic":
-        model_type = export_config.get("model_type", "smolvla")
-        if model_type == "pi0":
-            from tether.runtime.pi0_onnx_server import Pi0OnnxServer
-            server = Pi0OnnxServer(
-                export_dir,
-                device=device,
-                max_batch=1,
-                strict_providers=False,
-            )
-        elif model_type == "pi05":
-            from tether.runtime.pi05_onnx_server import Pi05OnnxServer
-            server = Pi05OnnxServer(
-                export_dir,
-                device=device,
-                max_batch=1,
-                strict_providers=False,
-            )
-        elif model_type == "smolvla":
-            from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
-            server = SmolVLAOnnxServer(
-                export_dir,
-                device=device,
-                max_batch=1,
-                strict_providers=False,
-            )
-        elif model_type == "gr00t":
-            from tether.runtime.server import TetherServer
-            server = TetherServer(export_dir, device=device, strict_providers=False)
-        else:
-            err_console.print(
-                f"[red]Benchmark does not support monolithic model_type={model_type!r} yet.[/red]"
-            )
-            raise typer.Exit(2)
-    else:
-        from tether.runtime.server import TetherServer
-        server = TetherServer(export_dir, device=device, strict_providers=False)
+    export_config = load_tether_config(export_path)
+
+    try:
+        server = _build_benchmark_server(export_dir, export_config, device)
+    except (ExportConfigError, ValueError) as exc:
+        err_console.print(f"[red]{exc}.[/red]")
+        raise typer.Exit(2)
     console.print("[dim]Loading model...[/dim]")
     t0 = _t.perf_counter()
     server.load()

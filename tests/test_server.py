@@ -1,6 +1,5 @@
 """Tests for the VLA inference server."""
 
-import json
 import time
 from unittest.mock import patch, MagicMock
 
@@ -8,23 +7,25 @@ import numpy as np
 import pytest
 
 from tether.runtime.server import TetherServer
+from tests.export_config_factory import write_test_export_config
 
 
 @pytest.fixture
 def mock_export_dir(tmp_path):
     """Create a mock export directory with config."""
-    config = {
-        "model_id": "lerobot/smolvla_base",
-        "target": "desktop",
-        "action_chunk_size": 50,
-        "expert": {
+    write_test_export_config(
+        tmp_path,
+        model_type="smolvla",
+        model_id="lerobot/smolvla_base",
+        export_kind="decomposed_onnx",
+        artifacts=["expert_stack.onnx"],
+        action_chunk_size=50,
+        expert={
             "expert_hidden": 720,
             "action_dim": 32,
             "num_layers": 16,
         },
-    }
-    config_path = tmp_path / "tether_config.json"
-    config_path.write_text(json.dumps(config))
+    )
     return tmp_path
 
 
@@ -44,9 +45,9 @@ class TestTetherServer:
         assert "error" in result
 
     def test_loads_with_missing_onnx(self, mock_export_dir):
-        server = TetherServer(mock_export_dir, device="cpu")
-        server.load()
-        assert not server.ready  # No ONNX file, so not ready
+        (mock_export_dir / "expert_stack.onnx").unlink()
+        with pytest.raises(ValueError, match="is missing"):
+            TetherServer(mock_export_dir, device="cpu")
 
 
 class TestTetherServerWithMockORT:
@@ -276,6 +277,108 @@ class TestCreateApp:
             assert app.title == "Tether VLA Server"
         except ImportError:
             pytest.skip("fastapi not installed")
+
+    def test_native_override_rejects_non_smolvla_layout(self, tmp_path, monkeypatch):
+        from tether.runtime.server import create_app
+
+        write_test_export_config(
+            tmp_path,
+            model_type="pi0",
+            export_kind="monolithic_onnx",
+            artifacts=["model.onnx"],
+        )
+        monkeypatch.setenv("TETHER_NATIVE", "1")
+
+        with pytest.raises(ValueError, match="requires a SmolVLA expert_stack"):
+            create_app(str(tmp_path), device="cpu")
+
+    def test_split_layout_dispatches_to_pi05_server(self, tmp_path, monkeypatch):
+        from tether.runtime.decomposed_server import Pi05DecomposedServer
+        from tether.runtime.server import create_app
+
+        monkeypatch.delenv("TETHER_NATIVE", raising=False)
+        write_test_export_config(
+            tmp_path,
+            model_type="pi05_decomposed",
+            export_kind="decomposed_onnx",
+            artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
+        )
+
+        app = create_app(str(tmp_path), device="cpu")
+
+        assert isinstance(app.state.tether_server, Pi05DecomposedServer)
+
+    def test_smolvla_full_bundle_dispatches_to_tether_server(self, tmp_path, monkeypatch):
+        from tether.runtime.server import TetherServer, create_app
+
+        monkeypatch.delenv("TETHER_NATIVE", raising=False)
+        write_test_export_config(
+            tmp_path,
+            model_type="smolvla",
+            export_kind="decomposed_onnx",
+            artifacts=[
+                "expert_stack.onnx",
+                "vision_encoder.onnx",
+                "text_embedder.onnx",
+                "decoder_prefill.onnx",
+            ],
+        )
+
+        app = create_app(str(tmp_path), device="cpu")
+
+        assert isinstance(app.state.tether_server, TetherServer)
+
+    def test_native_override_accepts_smolvla_full_bundle(self, tmp_path, monkeypatch):
+        from tether.runtime.server import create_app
+        from tether.runtime.smolvla_native import SmolVLANativeServer
+
+        monkeypatch.setenv("TETHER_NATIVE", "1")
+        write_test_export_config(
+            tmp_path,
+            model_type="smolvla",
+            export_kind="decomposed_onnx",
+            artifacts=[
+                "expert_stack.onnx",
+                "vision_encoder.onnx",
+                "text_embedder.onnx",
+                "decoder_prefill.onnx",
+            ],
+        )
+
+        app = create_app(str(tmp_path), device="cpu")
+
+        assert isinstance(app.state.tether_server, SmolVLANativeServer)
+
+    def test_monolithic_gr00t_dispatches_to_tether_server(self, tmp_path, monkeypatch):
+        from tether.runtime.server import TetherServer, create_app
+
+        monkeypatch.delenv("TETHER_NATIVE", raising=False)
+        write_test_export_config(
+            tmp_path,
+            model_type="gr00t",
+            export_kind="monolithic_onnx",
+            artifacts=["model.onnx"],
+        )
+
+        app = create_app(str(tmp_path), device="cpu")
+
+        assert isinstance(app.state.tether_server, TetherServer)
+
+    def test_custom_decomposed_pipeline_is_rejected(self, tmp_path, monkeypatch):
+        from tether.export_config import UnsupportedExportPipelineError
+        from tether.runtime.server import create_app
+
+        monkeypatch.delenv("TETHER_NATIVE", raising=False)
+        write_test_export_config(
+            tmp_path,
+            model_type="pi0",
+            export_kind="decomposed_onnx",
+            artifacts=["expert_stack.onnx"],
+            pipeline="prefix_optimum + expert_custom",
+        )
+
+        with pytest.raises(UnsupportedExportPipelineError, match="unsupported decomposed"):
+            create_app(str(tmp_path), device="cpu")
 
 
 class TestStrictProviderMode:

@@ -41,7 +41,13 @@ import numpy as np
 import torch
 
 from tether.fixtures.vla_fixtures import load_fixtures
-from tether.export_config import load_tether_config, require_supported_export_kind
+from tether.export_config import (
+    UnsupportedExportPipelineError,
+    decomposed_layout,
+    load_tether_config,
+    require_supported_export_kind,
+    require_supported_pipeline,
+)
 from tether.validate import ValidationResult, validate_outputs
 
 # Backends from Issues 4/5 — required at import time now.
@@ -52,7 +58,8 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_MODEL_TYPES: tuple[str, ...] = ("smolvla", "pi0", "gr00t")
 UNSUPPORTED_MODEL_MESSAGE = (
-    "tether validate v1 supports smolvla, pi0, gr00t. For pi0.5 / openvla see roadmap."
+    "tether validate v1 supports smolvla, pi0, gr00t. "
+    "For pi0.5 / openvla see roadmap."
 )
 
 
@@ -110,21 +117,35 @@ class ValidateRoundTrip:
         self.device: str = device
 
         if self.num_test_cases < 1:
-            raise ValueError(f"num_test_cases must be >= 1, got {self.num_test_cases}")
+            raise ValueError(
+                f"num_test_cases must be >= 1, got {self.num_test_cases}"
+            )
         if self.threshold <= 0:
-            raise ValueError(f"threshold must be > 0, got {self.threshold}")
+            raise ValueError(
+                f"threshold must be > 0, got {self.threshold}"
+            )
 
         if not self.export_dir.exists():
-            raise FileNotFoundError(f"Export directory does not exist: {self.export_dir}")
+            raise FileNotFoundError(
+                f"Export directory does not exist: {self.export_dir}"
+            )
         if not self.export_dir.is_dir():
-            raise ValueError(f"Export path is not a directory: {self.export_dir}")
+            raise ValueError(
+                f"Export path is not a directory: {self.export_dir}"
+            )
 
         self.config = load_tether_config(self.export_dir)
         require_supported_export_kind(
             self.config,
-            {"monolithic_onnx", "decomposed_onnx"},
+            {"decomposed_onnx"},
             "tether validate",
         )
+        require_supported_pipeline(self.config, set(), "tether validate")
+        layout = decomposed_layout(self.config)
+        if layout not in {"expert_stack", "smolvla_full_bundle"}:
+            raise UnsupportedExportPipelineError(
+                f"tether validate supports only the expert_stack family, got {layout!r}"
+            )
         model_type = self.config["model_type"]
 
         if model_type not in SUPPORTED_MODEL_TYPES:
@@ -184,7 +205,9 @@ class ValidateRoundTrip:
     def _generate_initial_noise(self, rng: torch.Generator) -> np.ndarray:
         """Generate the initial-noise tensor shared by both backends."""
         chunk_size = int(
-            self.config.get("action_chunk_size") or self.config.get("chunk_size") or 50
+            self.config.get("action_chunk_size")
+            or self.config.get("chunk_size")
+            or 50
         )
         action_dim = int(self.config["action_dim"])
         noise = torch.randn((chunk_size, action_dim), generator=rng).numpy().astype(np.float32)
@@ -196,7 +219,9 @@ class ValidateRoundTrip:
         onnx_out: np.ndarray,
     ) -> dict[str, Any]:
         """Compare a single fixture's PyTorch and ONNX outputs."""
-        result = validate_outputs(pytorch_out, onnx_out, threshold=self.threshold, name="roundtrip")
+        result = validate_outputs(
+            pytorch_out, onnx_out, threshold=self.threshold, name="roundtrip"
+        )
         return result.to_dict()
 
     def _aggregate(
@@ -208,9 +233,7 @@ class ValidateRoundTrip:
             max_abs = max(float(r["max_abs_diff"]) for r in per_fixture_results)
         else:
             max_abs = 0.0
-        passed = (
-            all(bool(r["passed"]) for r in per_fixture_results) if per_fixture_results else False
-        )
+        passed = all(bool(r["passed"]) for r in per_fixture_results) if per_fixture_results else False
 
         return {
             "model_type": self.model_type,

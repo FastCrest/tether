@@ -92,8 +92,12 @@ def _patch_backends(
 
     # Patch at the validate_roundtrip module level — that's where the
     # orchestrator imports the loaders from.
-    monkeypatch.setattr(validate_roundtrip, "load_pytorch_backend", fake_load_pytorch)
-    monkeypatch.setattr(validate_roundtrip, "load_onnx_backend", fake_load_onnx)
+    monkeypatch.setattr(
+        validate_roundtrip, "load_pytorch_backend", fake_load_pytorch
+    )
+    monkeypatch.setattr(
+        validate_roundtrip, "load_onnx_backend", fake_load_onnx
+    )
     return pt_stub, onnx_stub
 
 
@@ -157,7 +161,9 @@ def test_threshold_pass(tmp_path, monkeypatch):
     out = np.zeros((50, 6), dtype=np.float32)
     _patch_backends(monkeypatch, pytorch_out=out, onnx_out=out)
 
-    harness = ValidateRoundTrip(export_dir=tmp_path, num_test_cases=2, seed=0, threshold=1e-4)
+    harness = ValidateRoundTrip(
+        export_dir=tmp_path, num_test_cases=2, seed=0, threshold=1e-4
+    )
     result = harness.run()
 
     assert result["summary"]["passed"] is True
@@ -173,7 +179,9 @@ def test_threshold_fail(tmp_path, monkeypatch):
     onnx_out = np.ones((50, 6), dtype=np.float32)
     _patch_backends(monkeypatch, pytorch_out=pt_out, onnx_out=onnx_out)
 
-    harness = ValidateRoundTrip(export_dir=tmp_path, num_test_cases=2, seed=0, threshold=1e-4)
+    harness = ValidateRoundTrip(
+        export_dir=tmp_path, num_test_cases=2, seed=0, threshold=1e-4
+    )
     result = harness.run()
 
     assert result["summary"]["passed"] is False
@@ -187,8 +195,12 @@ def test_threshold_fail_then_pass_with_loose_threshold(tmp_path, monkeypatch):
     onnx_out = np.full((50, 6), 1e-5, dtype=np.float32)
     _patch_backends(monkeypatch, pytorch_out=pt_out, onnx_out=onnx_out)
 
-    strict = ValidateRoundTrip(export_dir=tmp_path, num_test_cases=1, seed=0, threshold=1e-7).run()
-    loose = ValidateRoundTrip(export_dir=tmp_path, num_test_cases=1, seed=0, threshold=1e-3).run()
+    strict = ValidateRoundTrip(
+        export_dir=tmp_path, num_test_cases=1, seed=0, threshold=1e-7
+    ).run()
+    loose = ValidateRoundTrip(
+        export_dir=tmp_path, num_test_cases=1, seed=0, threshold=1e-3
+    ).run()
 
     assert strict["summary"]["passed"] is False
     assert loose["summary"]["passed"] is True
@@ -252,10 +264,14 @@ def test_seed_bridge_in_orchestrator(tmp_path, monkeypatch):
     out = np.zeros((50, 6), dtype=np.float32)
 
     pt1, onnx1 = _patch_backends(monkeypatch, pytorch_out=out, onnx_out=out)
-    ValidateRoundTrip(export_dir=tmp_path, num_test_cases=2, seed=123).run()
+    ValidateRoundTrip(
+        export_dir=tmp_path, num_test_cases=2, seed=123
+    ).run()
 
     pt2, onnx2 = _patch_backends(monkeypatch, pytorch_out=out, onnx_out=out)
-    ValidateRoundTrip(export_dir=tmp_path, num_test_cases=2, seed=123).run()
+    ValidateRoundTrip(
+        export_dir=tmp_path, num_test_cases=2, seed=123
+    ).run()
 
     # PyTorch and ONNX backends must have received the identical noise array
     # within a single run.

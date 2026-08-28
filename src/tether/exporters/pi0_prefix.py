@@ -40,7 +40,6 @@ Each stage verified independently at cos >= 0.9999:
 
 See https://github.com/FastCrest/reflex-vault/blob/main/reflex_vla/03_research/pi0_empirical_derisk_findings.md
 """
-
 from __future__ import annotations
 
 import json
@@ -143,13 +142,11 @@ def build_siglip_dir(state: dict[str, torch.Tensor], out_dir: Path) -> Path:
     sd = {}
     for k, v in state.items():
         if k.startswith(PI0_VISION_PREFIX):
-            sd[k[len(PI0_VISION_PREFIX) :]] = v
+            sd[k[len(PI0_VISION_PREFIX):]] = v
     missing, unexpected = model.load_state_dict(sd, strict=False)
     logger.info(
         "SigLIP: loaded %d keys, missing=%d unexpected=%d",
-        len(sd),
-        len(missing),
-        len(unexpected),
+        len(sd), len(missing), len(unexpected),
     )
     # Missing keys expected: vision_model.head.* (attention-pool head,
     # unused by PaliGemma)
@@ -157,19 +154,17 @@ def build_siglip_dir(state: dict[str, torch.Tensor], out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out_dir)
     (out_dir / "preprocessor_config.json").write_text(
-        json.dumps(
-            {
-                "do_normalize": True,
-                "do_rescale": True,
-                "do_resize": True,
-                "image_mean": [0.5, 0.5, 0.5],
-                "image_std": [0.5, 0.5, 0.5],
-                "rescale_factor": 1 / 255.0,
-                "resample": 3,
-                "size": {"height": 224, "width": 224},
-                "image_processor_type": "SiglipImageProcessor",
-            }
-        )
+        json.dumps({
+            "do_normalize": True,
+            "do_rescale": True,
+            "do_resize": True,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "rescale_factor": 1 / 255.0,
+            "resample": 3,
+            "size": {"height": 224, "width": 224},
+            "image_processor_type": "SiglipImageProcessor",
+        })
     )
     return out_dir
 
@@ -188,7 +183,7 @@ def build_expert_dir(state: dict[str, torch.Tensor], out_dir: Path) -> Path:
     for k in state:
         if k.startswith(PI0_EXPERT_PREFIX + "layers."):
             try:
-                idx = int(k[len(PI0_EXPERT_PREFIX + "layers.") :].split(".")[0])
+                idx = int(k[len(PI0_EXPERT_PREFIX + "layers."):].split(".")[0])
                 layer_ids.add(idx)
             except ValueError:
                 continue
@@ -203,23 +198,20 @@ def build_expert_dir(state: dict[str, torch.Tensor], out_dir: Path) -> Path:
     sd = {}
     for k, v in state.items():
         if k.startswith(PI0_EXPERT_PREFIX):
-            sd[k[len(PI0_EXPERT_PREFIX) :]] = v
+            sd[k[len(PI0_EXPERT_PREFIX):]] = v
     missing, unexpected = model.model.load_state_dict(sd, strict=False)
-    logger.info(
-        "Expert: loaded %d keys, missing=%d unexpected=%d", len(sd), len(missing), len(unexpected)
-    )
+    logger.info("Expert: loaded %d keys, missing=%d unexpected=%d",
+                len(sd), len(missing), len(unexpected))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out_dir)
     (out_dir / "tokenizer_config.json").write_text(
-        json.dumps(
-            {
-                "tokenizer_class": "GemmaTokenizer",
-                "bos_token": "<bos>",
-                "eos_token": "<eos>",
-                "pad_token": "<pad>",
-            }
-        )
+        json.dumps({
+            "tokenizer_class": "GemmaTokenizer",
+            "bos_token": "<bos>",
+            "eos_token": "<eos>",
+            "pad_token": "<pad>",
+        })
     )
     return out_dir
 
@@ -238,14 +230,13 @@ def build_gemma_dir(state: dict[str, torch.Tensor], out_dir: Path) -> Path:
     sd = {}
     for k, v in state.items():
         if k.startswith(PI0_LANGUAGE_PREFIX):
-            sd[k[len(PI0_LANGUAGE_PREFIX) :]] = v
+            sd[k[len(PI0_LANGUAGE_PREFIX):]] = v
     # Also load embed_tokens from lm_head (tied weights in Gemma)
     if PI0_LM_HEAD_KEY in state:
         sd["embed_tokens.weight"] = state[PI0_LM_HEAD_KEY].clone()
         logger.info(
             "Using tied lm_head (%s) as embed_tokens, shape %s",
-            PI0_LM_HEAD_KEY,
-            tuple(state[PI0_LM_HEAD_KEY].shape),
+            PI0_LM_HEAD_KEY, tuple(state[PI0_LM_HEAD_KEY].shape),
         )
 
     missing, unexpected = model.model.load_state_dict(sd, strict=False)
@@ -254,22 +245,18 @@ def build_gemma_dir(state: dict[str, torch.Tensor], out_dir: Path) -> Path:
         model.lm_head.weight = nn.Parameter(state[PI0_LM_HEAD_KEY].clone())
     logger.info(
         "Gemma: loaded %d keys, missing=%d unexpected=%d",
-        len(sd),
-        len(missing),
-        len(unexpected),
+        len(sd), len(missing), len(unexpected),
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(out_dir)
     (out_dir / "tokenizer_config.json").write_text(
-        json.dumps(
-            {
-                "tokenizer_class": "GemmaTokenizer",
-                "bos_token": "<bos>",
-                "eos_token": "<eos>",
-                "pad_token": "<pad>",
-            }
-        )
+        json.dumps({
+            "tokenizer_class": "GemmaTokenizer",
+            "bos_token": "<bos>",
+            "eos_token": "<eos>",
+            "pad_token": "<pad>",
+        })
     )
     return out_dir
 
@@ -351,11 +338,8 @@ def build_and_export_gemma_from_embeds(
             "inputs_embeds": {0: "batch", 1: "seq"},
             "attention_mask": {0: "batch", 1: "seq"},
             "last_hidden_state": {0: "batch", 1: "seq"},
-            **{
-                f"present.{i}.{kv}": {0: "batch", 2: "seq"}
-                for i in range(num_layers)
-                for kv in ("key", "value")
-            },
+            **{f"present.{i}.{kv}": {0: "batch", 2: "seq"}
+               for i in range(num_layers) for kv in ("key", "value")},
         },
         opset_version=19,
     )
@@ -392,9 +376,8 @@ class GemmaExpertFromEmbeds(nn.Module):
         from transformers.cache_utils import DynamicCache
 
         num_layers = self.model.config.num_hidden_layers
-        assert len(past_key_values_flat) == 2 * num_layers, (
-            f"expected {2 * num_layers} past_kv tensors, got {len(past_key_values_flat)}"
-        )
+        assert len(past_key_values_flat) == 2 * num_layers, \
+            f"expected {2*num_layers} past_kv tensors, got {len(past_key_values_flat)}"
 
         cache = DynamicCache()
         for i in range(num_layers):
@@ -493,7 +476,6 @@ class Pi0ExpertStackWithPrefix(nn.Module):
     ):
         super().__init__()
         from tether.decompose import DecomposedRMSNorm
-
         self.layers = nn.ModuleList(layers)
         self.expert_hidden = expert_hidden
 
@@ -559,9 +541,7 @@ class Pi0ExpertStackWithPrefix(nn.Module):
         return self.action_out_proj(x)
 
 
-def build_pi0_expert_with_prefix(
-    state_dict: dict[str, torch.Tensor],
-) -> tuple[Pi0ExpertStackWithPrefix, dict]:
+def build_pi0_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[Pi0ExpertStackWithPrefix, dict]:
     """Build pi0's expert stack wired for per-layer prefix-KV concat.
 
     Reuses the existing pi0_exporter.build_pi0_expert_stack to create individual
@@ -579,7 +559,6 @@ def build_pi0_expert_with_prefix(
 
     # Weights for suffix/time MLP + action projections from PI0_ACTION_KEYS
     from tether.exporters.pi0 import PI0_ACTION_KEYS
-
     suffix = {
         "in_w": state_dict[PI0_ACTION_KEYS["in_w"]],
         "in_b": state_dict[PI0_ACTION_KEYS["in_b"]],
@@ -596,9 +575,7 @@ def build_pi0_expert_with_prefix(
     # so pre-transform stored weight: `w_decomposed = 1 + w_gemma`. Matches
     # the per-layer norm convention in pi0_exporter.py:148-150.
     base_prefix = "paligemma_with_expert.gemma_expert.model."
-    final_norm_w_raw = state_dict.get(
-        f"{base_prefix}norm.weight", torch.zeros(meta["expert_hidden"])
-    )
+    final_norm_w_raw = state_dict.get(f"{base_prefix}norm.weight", torch.zeros(meta["expert_hidden"]))
     final_norm_w = final_norm_w_raw + 1.0
 
     stack = Pi0ExpertStackWithPrefix(
@@ -647,10 +624,7 @@ def export_projector_onnx(projector: MultiModalProjector, out_path: Path) -> Pat
         out_path,
         input_names=["vision_features"],
         output_names=["projected_features"],
-        dynamic_axes={
-            "vision_features": {0: "batch", 1: "seq"},
-            "projected_features": {0: "batch", 1: "seq"},
-        },
+        dynamic_axes={"vision_features": {0: "batch", 1: "seq"}, "projected_features": {0: "batch", 1: "seq"}},
         opset_version=19,
     )
     logger.info("Exported projector ONNX: %s", out_path)
@@ -709,15 +683,10 @@ def optimum_export_onnx(model_dir: Path, task: str, out_dir: Path) -> Path:
     venv_cli = Path(".venv/bin/optimum-cli")
     cli = str(venv_cli) if venv_cli.exists() else "optimum-cli"
     cmd = [
-        cli,
-        "export",
-        "onnx",
-        "--model",
-        str(model_dir),
-        "--task",
-        task,
-        "--framework",
-        "pt",
+        cli, "export", "onnx",
+        "--model", str(model_dir),
+        "--task", task,
+        "--framework", "pt",
         str(out_dir),
     ]
     logger.info("Running: %s", " ".join(cmd))
@@ -836,11 +805,8 @@ def export_pi0_prefix(
             (dummy_actions, dummy_time, dummy_pos, dummy_prefix_k, dummy_prefix_v),
             expert_onnx,
             input_names=[
-                "noisy_actions",
-                "timestep",
-                "position_ids",
-                "prefix_k",
-                "prefix_v",
+                "noisy_actions", "timestep", "position_ids",
+                "prefix_k", "prefix_v",
             ],
             output_names=["velocity"],
             dynamic_axes={
@@ -873,11 +839,19 @@ def export_pi0_prefix(
         "components": result["files"],
         "metadata": result["metadata"],
     }
-    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+    from tether.export_config import build_producer_config, write_tether_config
 
-    config_path = write_tether_config(
-        output_dir, normalize_legacy_tether_config(config, output_dir)
+    canonical = build_producer_config(
+        output_dir,
+        producer="pi0_prefix",
+        model_id=model_id,
+        model_type="pi0",
+        action_dim=action_dim,
+        num_denoising_steps=10,
+        opset=19,
+        metadata=config,
     )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
 
     logger.info("pi0 prefix export complete: %d components", len(result["files"]))
@@ -924,7 +898,6 @@ class Pi05ExpertStackWithPrefix(nn.Module):
     ):
         super().__init__()
         from tether.decompose import DecomposedAdaRMSNorm, DecomposedRMSNorm
-
         self.layers = nn.ModuleList(layers)
         self.expert_hidden = expert_hidden
 
@@ -982,13 +955,10 @@ class Pi05ExpertStackWithPrefix(nn.Module):
         t_emb = F.silu(self.time_mlp_out(F.silu(self.time_mlp_in(t_emb_raw))))
 
         from tether.models.heads.expert_stack import Pi05ExpertGQALayer as _Pi05Layer
-
         for i, layer in enumerate(self.layers):
             _Pi05Layer.debug_layer_id = i
             x = layer(
-                x,
-                position_ids,
-                t_emb,
+                x, position_ids, t_emb,
                 prefix_k_concat=prefix_k[i],
                 prefix_v_concat=prefix_v[i],
                 attn_mask=attn_mask,
@@ -1002,9 +972,7 @@ class Pi05ExpertStackWithPrefix(nn.Module):
         return self.action_out_proj(x)
 
 
-def build_pi05_expert_with_prefix(
-    state_dict: dict[str, torch.Tensor],
-) -> tuple[Pi05ExpertStackWithPrefix, dict]:
+def build_pi05_expert_with_prefix(state_dict: dict[str, torch.Tensor]) -> tuple[Pi05ExpertStackWithPrefix, dict]:
     """Build pi0.5's expert stack wired for per-layer prefix-KV concat.
 
     Reuses the existing pi0_exporter.build_pi05_expert_stack to validate
@@ -1039,12 +1007,8 @@ def build_pi05_expert_with_prefix(
         layer_sd = {
             "input_layernorm.dense.weight": state_dict[f"{prefix}.input_layernorm.dense.weight"],
             "input_layernorm.dense.bias": state_dict[f"{prefix}.input_layernorm.dense.bias"],
-            "post_attention_layernorm.dense.weight": state_dict[
-                f"{prefix}.post_attention_layernorm.dense.weight"
-            ],
-            "post_attention_layernorm.dense.bias": state_dict[
-                f"{prefix}.post_attention_layernorm.dense.bias"
-            ],
+            "post_attention_layernorm.dense.weight": state_dict[f"{prefix}.post_attention_layernorm.dense.weight"],
+            "post_attention_layernorm.dense.bias": state_dict[f"{prefix}.post_attention_layernorm.dense.bias"],
             "q_proj.weight": state_dict[f"{prefix}.self_attn.q_proj.weight"],
             "k_proj.weight": state_dict[f"{prefix}.self_attn.k_proj.weight"],
             "v_proj.weight": state_dict[f"{prefix}.self_attn.v_proj.weight"],

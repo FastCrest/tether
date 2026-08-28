@@ -12,12 +12,13 @@ was enabled (EpisodeCache._emit_bytes_metric is a no-op unless both are set).
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+
+from tests.export_config_factory import write_test_export_config
 
 
 def _stub_ort_session_with_io(input_names: list[str], output_shape=(1, 50, 7)):
@@ -42,23 +43,22 @@ def decomposed_export_dir(tmp_path: Path) -> Path:
     """Minimal decomposed export dir Pi05DecomposedInference.__init__ accepts."""
     export_dir = tmp_path / "export"
     export_dir.mkdir()
-    (export_dir / "vlm_prefix.onnx").write_bytes(b"stub-prefix")
-    (export_dir / "expert_denoise.onnx").write_bytes(b"stub-expert")
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "model_type": "pi05",
-        "export_kind": "decomposed",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 7,
-        "max_state_dim": 32,
-        "decomposed": {
+    write_test_export_config(
+        export_dir,
+        model_type="pi05",
+        export_kind="decomposed_onnx",
+        action_dim=7,
+        artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+        decomposed={
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
             "past_kv_tensor_names": [f"past_kv_{i}" for i in range(2)],
             "paligemma_layers": 2,
         },
-    }))
+    )
     return export_dir
 
 

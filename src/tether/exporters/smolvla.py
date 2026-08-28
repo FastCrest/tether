@@ -31,10 +31,7 @@ from tether.exporters.trt_build import build_engine, check_trtexec
 # sunset. External callers still doing ``from tether.exporters.smolvla import
 # ExpertGQALayer`` keep working through this surface.
 from tether.models.heads.expert_stack import (  # noqa: F401
-    ExpertGQALayer,
-    ExpertStack,
-    _DecomposedRoPE,
-    _sinusoidal_pos_embedding,
+    ExpertGQALayer, ExpertStack, _DecomposedRoPE, _sinusoidal_pos_embedding,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +70,6 @@ def build_expert_stack(
 
     try:
         from transformers import AutoConfig
-
         vlm_cfg = AutoConfig.from_pretrained("HuggingFaceTB/SmolVLM2-500M-Video-Instruct")
         nq = int(vlm_cfg.text_config.num_attention_heads)
         nkv = int(vlm_cfg.text_config.num_key_value_heads)
@@ -86,12 +82,7 @@ def build_expert_stack(
     logger.info(
         "[expert-stack] expert_hidden=%d, num_q_heads=%d, num_kv_heads=%d, "
         "expert_head_dim=%d (vlm head_dim=%d), intermediate=%d",
-        expert_hidden,
-        nq,
-        nkv,
-        expert_head_dim,
-        head_dim,
-        inter,
+        expert_hidden, nq, nkv, expert_head_dim, head_dim, inter,
     )
     head_dim = expert_head_dim
 
@@ -107,18 +98,12 @@ def build_expert_stack(
             vlm_kv_dim = kv_in
 
         layer = ExpertGQALayer(
-            expert_hidden,
-            nq,
-            nkv,
-            head_dim,
-            inter,
+            expert_hidden, nq, nkv, head_dim, inter,
             kv_in=kv_in if is_cross else None,
         )
         layer_sd = {
             "input_layernorm.weight": state_dict[f"{prefix}.input_layernorm.weight"],
-            "post_attention_layernorm.weight": state_dict[
-                f"{prefix}.post_attention_layernorm.weight"
-            ],
+            "post_attention_layernorm.weight": state_dict[f"{prefix}.post_attention_layernorm.weight"],
             "q_proj.weight": state_dict[f"{prefix}.self_attn.q_proj.weight"],
             "k_proj.weight": state_dict[f"{prefix}.self_attn.k_proj.weight"],
             "v_proj.weight": state_dict[f"{prefix}.self_attn.v_proj.weight"],
@@ -227,9 +212,7 @@ def export_smolvla(
     result["metadata"]["expert"] = expert_meta
     logger.info(
         "Expert: %d layers, %.1fM params, cross_attn=%s",
-        expert_meta["num_layers"],
-        expert_meta["total_params_m"],
-        expert_meta["cross_attn_layers"],
+        expert_meta["num_layers"], expert_meta["total_params_m"], expert_meta["cross_attn_layers"],
     )
 
     # 3. Export expert stack to ONNX — identical shape to the legacy path.
@@ -250,29 +233,14 @@ def export_smolvla(
     logger.info("Exporting expert stack to ONNX: %s", expert_onnx)
     export_module_to_onnx(
         expert_stack,
-        (
-            dummy_actions,
-            dummy_time,
-            dummy_pos,
-            dummy_vlm_k,
-            dummy_vlm_v,
-            dummy_prefix_offset,
-            dummy_kv_mask,
-        ),
+        (dummy_actions, dummy_time, dummy_pos, dummy_vlm_k, dummy_vlm_v,
+         dummy_prefix_offset, dummy_kv_mask),
         expert_onnx,
-        input_names=[
-            "noisy_actions",
-            "timestep",
-            "position_ids",
-            "vlm_k",
-            "vlm_v",
-            "prefix_offset",
-            "kv_mask",
-        ],
+        input_names=["noisy_actions", "timestep", "position_ids", "vlm_k", "vlm_v",
+                     "prefix_offset", "kv_mask"],
         output_names=["velocity"],
         dynamic_axes={
-            "noisy_actions": {0: "batch"},
-            "timestep": {0: "batch"},
+            "noisy_actions": {0: "batch"}, "timestep": {0: "batch"},
             "position_ids": {0: "batch"},
             "vlm_k": {1: "batch", 2: "seq"},
             "vlm_v": {1: "batch", 2: "seq"},
@@ -292,41 +260,23 @@ def export_smolvla(
             import numpy as np
 
             sess = ort.InferenceSession(str(expert_onnx))
-            ort_out = sess.run(
-                None,
-                {
-                    "noisy_actions": dummy_actions.numpy(),
-                    "timestep": dummy_time.numpy(),
-                    "position_ids": dummy_pos.numpy().astype(np.int64),
-                    "vlm_k": dummy_vlm_k.numpy(),
-                    "vlm_v": dummy_vlm_v.numpy(),
-                    "prefix_offset": dummy_prefix_offset.numpy(),
-                    "kv_mask": dummy_kv_mask.numpy(),
-                },
-            )[0]
-            torch_out = (
-                expert_stack(
-                    dummy_actions,
-                    dummy_time,
-                    dummy_pos,
-                    dummy_vlm_k,
-                    dummy_vlm_v,
-                    dummy_prefix_offset,
-                    dummy_kv_mask,
-                )
-                .detach()
-                .numpy()
-            )
+            ort_out = sess.run(None, {
+                "noisy_actions": dummy_actions.numpy(),
+                "timestep": dummy_time.numpy(),
+                "position_ids": dummy_pos.numpy().astype(np.int64),
+                "vlm_k": dummy_vlm_k.numpy(),
+                "vlm_v": dummy_vlm_v.numpy(),
+                "prefix_offset": dummy_prefix_offset.numpy(),
+                "kv_mask": dummy_kv_mask.numpy(),
+            })[0]
+            torch_out = expert_stack(
+                dummy_actions, dummy_time, dummy_pos,
+                dummy_vlm_k, dummy_vlm_v, dummy_prefix_offset, dummy_kv_mask
+            ).detach().numpy()
             max_diff = float(np.abs(ort_out - torch_out).max())
-            result["metadata"]["onnx_validation"] = {
-                "max_diff": max_diff,
-                "passed": max_diff < 0.01,
-            }
-            logger.info(
-                "ONNX validation: max_diff=%.2e (%s)",
-                max_diff,
-                "PASS" if max_diff < 0.01 else "FAIL",
-            )
+            result["metadata"]["onnx_validation"] = {"max_diff": max_diff, "passed": max_diff < 0.01}
+            logger.info("ONNX validation: max_diff=%.2e (%s)",
+                        max_diff, "PASS" if max_diff < 0.01 else "FAIL")
         except ImportError:
             logger.warning("onnxruntime not installed, skipping validation")
 
@@ -361,11 +311,23 @@ def export_smolvla(
         "vlm_kv_dim": vlm_kv_dim,
         "spine_path": True,
     }
-    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+    from tether.export_config import build_producer_config, write_tether_config
 
-    config_path = write_tether_config(
-        output_dir, normalize_legacy_tether_config(export_config, output_dir)
+    optional_artifacts = []
+    if "expert_trt" in result["files"]:
+        optional_artifacts.append(("expert_stack.trt", "engine"))
+    canonical = build_producer_config(
+        output_dir,
+        producer="expert_stack",
+        model_id=config.model_id,
+        model_type="smolvla",
+        action_dim=action_dim,
+        num_denoising_steps=config.num_denoising_steps,
+        opset=config.opset,
+        optional_artifacts=optional_artifacts,
+        metadata=export_config,
     )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
 
     logger.info("Export complete: %s", output_dir)

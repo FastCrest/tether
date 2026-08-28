@@ -15,10 +15,46 @@ from tether.smoke import (
 )
 
 
-def test_create_smoke_export_has_model_config_and_tokenizer(tmp_path):
-    pytest.importorskip("onnx")
-    pytest.importorskip("tokenizers")
-    pytest.importorskip("transformers")
+def _install_fake_tokenizer_dependencies(monkeypatch):
+    import numpy as np
+
+    onnx = pytest.importorskip("onnx")
+
+    class Tokenizer:
+        def __init__(self, _model):
+            self.pre_tokenizer = None
+
+    class WordLevel:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    class Whitespace:
+        pass
+
+    class PreTrainedTokenizerFast:
+        def __init__(self, **_kwargs):
+            pass
+
+        def save_pretrained(self, directory):
+            target = directory / "tokenizer.json"
+            target.write_text("{}")
+            return (str(target),)
+
+    monkeypatch.setattr(
+        "tether.smoke._require_smoke_export_deps",
+        lambda: (
+            np,
+            onnx,
+            Tokenizer,
+            WordLevel,
+            Whitespace,
+            PreTrainedTokenizerFast,
+        ),
+    )
+
+
+def test_create_smoke_export_has_model_config_and_tokenizer(tmp_path, monkeypatch):
+    _install_fake_tokenizer_dependencies(monkeypatch)
 
     export_dir = create_smoke_export(tmp_path / "export")
 
@@ -30,7 +66,25 @@ def test_create_smoke_export_has_model_config_and_tokenizer(tmp_path):
     assert config["smoke_export"] is True
     assert config["chunk_size"] == 50
     assert config["action_dim"] == 32
+    assert config["export_kind"] == "monolithic_onnx"
+    assert {item["path"] for item in config["artifacts"]} >= {
+        "model.onnx",
+        "tokenizer/tokenizer.json",
+    }
+    assert "stale.onnx" not in {item["path"] for item in config["artifacts"]}
     assert find_bundled_tokenizer_path(export_dir, config) == export_dir / "tokenizer"
+
+
+def test_smoke_export_does_not_manifest_stale_files(tmp_path, monkeypatch):
+    _install_fake_tokenizer_dependencies(monkeypatch)
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    (export_dir / "stale.onnx").write_bytes(b"stale")
+
+    create_smoke_export(export_dir)
+
+    config = json.loads((export_dir / "tether_config.json").read_text())
+    assert "stale.onnx" not in {item["path"] for item in config["artifacts"]}
 
 
 def test_smoke_formatters_report_key_receipt_fields():

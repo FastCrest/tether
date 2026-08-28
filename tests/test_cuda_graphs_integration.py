@@ -23,13 +23,14 @@ and are skipped in local dev environments.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+
+from tests.export_config_factory import write_test_export_config
 
 
 # ---------------------------------------------------------------------------
@@ -51,23 +52,22 @@ def decomposed_export_dir(tmp_path: Path) -> Path:
     Pi05DecomposedInference's __init__ will accept."""
     export_dir = tmp_path / "export"
     export_dir.mkdir()
-    (export_dir / "vlm_prefix.onnx").write_bytes(b"stub-prefix")
-    (export_dir / "expert_denoise.onnx").write_bytes(b"stub-expert")
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "model_type": "pi05",
-        "export_kind": "decomposed",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 7,
-        "max_state_dim": 32,
-        "decomposed": {
+    write_test_export_config(
+        export_dir,
+        model_type="pi05",
+        export_kind="decomposed_onnx",
+        action_dim=7,
+        artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+        decomposed={
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
             "past_kv_tensor_names": [f"past_kv_{i}" for i in range(2)],
             "paligemma_layers": 2,
         },
-    }))
+    )
     return export_dir
 
 
@@ -104,16 +104,14 @@ def test_create_app_propagates_cuda_graphs_enabled_to_server_attr(tmp_path, monk
 
     monolithic_export = tmp_path / "export"
     monolithic_export.mkdir()
-    (monolithic_export / "model.onnx").write_bytes(b"stub")
-    (monolithic_export / "tether_config.json").write_text(json.dumps({
-        "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 7,
-        "max_state_dim": 32,
-    }))
+    write_test_export_config(
+        monolithic_export,
+        model_type="smolvla",
+        action_dim=7,
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+    )
 
     from tether.runtime.server import create_app
 
@@ -132,16 +130,14 @@ def test_create_app_default_cuda_graphs_disabled(tmp_path, monkeypatch):
 
     monolithic_export = tmp_path / "export"
     monolithic_export.mkdir()
-    (monolithic_export / "model.onnx").write_bytes(b"stub")
-    (monolithic_export / "tether_config.json").write_text(json.dumps({
-        "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 7,
-        "max_state_dim": 32,
-    }))
+    write_test_export_config(
+        monolithic_export,
+        model_type="smolvla",
+        action_dim=7,
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+    )
 
     from tether.runtime.server import create_app
 
@@ -167,15 +163,16 @@ def test_legacy_tether_server_logs_noop_warning_when_cuda_graphs_set(
 
     legacy_export = tmp_path / "export"
     legacy_export.mkdir()
-    (legacy_export / "expert_stack.onnx").write_bytes(b"stub")
-    (legacy_export / "tether_config.json").write_text(json.dumps({
-        "model_type": "pi05",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 7,
-        "max_state_dim": 32,
-    }))
+    write_test_export_config(
+        legacy_export,
+        model_type="pi05",
+        export_kind="decomposed_onnx",
+        action_dim=7,
+        artifacts=["expert_stack.onnx"],
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+    )
 
     from tether.runtime.server import create_app
 
@@ -297,16 +294,14 @@ def test_metrics_endpoint_includes_cuda_graph_counter_names(tmp_path, monkeypatc
 
     export_dir = tmp_path / "export"
     export_dir.mkdir()
-    (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 7,
-        "max_state_dim": 32,
-    }))
+    write_test_export_config(
+        export_dir,
+        model_type="smolvla",
+        action_dim=7,
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+    )
 
     from tether.runtime.cuda_graphs import CudaGraphWrapper
 
