@@ -284,6 +284,10 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
+          # artifact-ids still create an artifact-name subdirectory by default.
+          # Merge into the exact evidence directory so the fixed trusted path
+          # below cannot be redirected through a candidate-controlled name.
+          merge-multiple: true
 
       - name: Verify validation evidence without loading candidate content
         shell: bash
