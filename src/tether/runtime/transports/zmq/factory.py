@@ -12,6 +12,7 @@ Usage::
     server = create_zmq_server(runtime, port=5555)
     server.run()  # blocks
 """
+
 from __future__ import annotations
 
 import io
@@ -31,11 +32,12 @@ logger = logging.getLogger(__name__)
 def create_zmq_server(
     runtime: Any,
     *,
-    host: str = "*",
+    host: str = "127.0.0.1",
     port: int = 5555,
     curve_server_cert: str | Path | None = None,
     curve_client_cert_dir: str | Path | None = None,
     control_token: str | None = None,
+    allow_insecure: bool = False,
 ) -> PolicyServer:
     """Create a ZMQ server that wraps a tether PolicyRuntime.
 
@@ -51,11 +53,14 @@ def create_zmq_server(
     Args:
         runtime: A tether ``PolicyRuntime`` or any object with a
             ``predict_action_chunk`` / ``predict_async`` method.
-        host: Bind address.
+        host: Bind address. Defaults to loopback.
         port: Bind port.
         curve_server_cert: Optional pyzmq CURVE server secret certificate.
         curve_client_cert_dir: Directory of allowed client public certificates.
-        control_token: Optional token required for built-in control endpoints.
+        control_token: Token that enables and authenticates the built-in
+            control endpoints. Without one, ``ping`` and ``kill`` are disabled.
+        allow_insecure: Allow an incompletely protected non-loopback bind.
+            Intended only for isolated lab networks; emits a warning.
 
     Returns:
         A configured ``PolicyServer`` ready to ``run()``.
@@ -72,6 +77,7 @@ def create_zmq_server(
 
         if hasattr(runtime, "predict_async"):
             import asyncio
+
             loop = asyncio.new_event_loop()
             try:
                 result = loop.run_until_complete(runtime.predict_async(kwargs))
@@ -104,13 +110,15 @@ def create_zmq_server(
             total_requests += 1
             total_infer_time += infer_time
             n = total_requests
-            should_log = (n % 50 == 0)
+            should_log = n % 50 == 0
             avg = total_infer_time / n if should_log else 0.0
 
         if should_log:
             logger.info(
                 "ZMQ req=%d infer=%.1fms avg=%.1fms",
-                n, infer_time * 1000, avg * 1000,
+                n,
+                infer_time * 1000,
+                avg * 1000,
             )
 
         return {
@@ -138,6 +146,7 @@ def create_zmq_server(
         curve_server_cert=curve_server_cert,
         curve_client_cert_dir=curve_client_cert_dir,
         control_token=control_token,
+        allow_insecure=allow_insecure,
     )
     server.register_endpoint("predict_action", predict_action)
     server.register_endpoint("reset", reset, requires_input=False)
