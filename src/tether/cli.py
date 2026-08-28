@@ -2479,9 +2479,9 @@ def serve(
         "--a2c2-checkpoint",
         help="Path to a trained A2C2 correction-head checkpoint (.npz). When "
              "set, the server applies per-step A2C2 corrections on the action "
-             "chunk after the policy returns it. Auto-skipped at low latency "
-             "(p95 < 40ms) or high success rate (>90%) — no overhead when not "
-             "needed. Per a2c2-correction execution plan B.5. Train with "
+             "chunk after the policy returns it. By default it auto-skips only "
+             "at low latency (p95 < 40ms); no robot task-success signal is "
+             "inferred from HTTP responses. Train with "
              "scripts/train_a2c2_lerobot.py (Modal A100; user-authorized).",
     ),
     a2c2_latency_threshold_ms: float = typer.Option(
@@ -2493,13 +2493,13 @@ def serve(
              "measurement under --inject-latency-ms).",
     ),
     a2c2_success_threshold: float = typer.Option(
-        0.90,
+        1.01,
         "--a2c2-success-threshold",
-        help="A2C2 hook auto-skips when /act success rate > this (0..1). "
-             "NOTE: 'success' here is /act error-rate (server crash) NOT "
-             "task-success — without task feedback wired in, leave at 0.90 "
-             "for default behavior or set to 1.01 to disable success-skip "
-             "for measurement runs.",
+        help="Advanced request-health gate: auto-skip when the fraction of "
+             "error-free /act responses exceeds this threshold. Default 1.01 "
+             "disables the gate, leaving latency-only behavior. Values from "
+             "0 (inclusive) to 1 (exclusive) enable it; 1.0 and above disable "
+             "it. This is HTTP request health, not robot task success.",
     ),
     bid_n_candidates: int = typer.Option(
         0,

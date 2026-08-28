@@ -2,15 +2,17 @@
 
 Wraps the inference-time A2C2Head (kernels/a2c2_correction.py) with:
 - Latency tracker — rolling-window p95 of recent /act latencies
-- Success-rate tracker — rolling-window fraction of "good" recent acts
-- Auto-skip logic — apply correction only when latency p95 >= threshold
-  AND success rate <= threshold (correction has positive marginal value)
+- Request-health tracker — rolling-window fraction of /act responses without errors
+- Auto-skip logic — apply correction when latency p95 >= threshold by default;
+  an advanced compatibility gate can also skip on healthy HTTP traffic
 - Prometheus metrics — `tether_a2c2_applied_total` + `tether_a2c2_skipped_total`
 
 Per a2c2-correction execution plan B.5 Day 3:
-- Auto-disable: if `latency_p95 < 40 ms` OR `success_rate > 90%`, skip
-  the A2C2 forward pass — A2C2 only adds value at high-latency low-success
-  regimes; otherwise it's pure overhead.
+- Auto-disable by default when `latency_p95 < 40 ms`. The runtime has no robot
+  task-outcome signal, so ordinary successful HTTP responses must not suppress
+  correction at high latency.
+- Operators may explicitly set `success_threshold < 1.0` to restore the
+  legacy request-health skip. This measures /act errors, not task success.
 - Per-act logging via structured fields (a2c2_applied, latency_p95_ms,
   correction_magnitude) — picked up by the existing JSONL recorder.
 
@@ -35,14 +37,15 @@ logger = logging.getLogger(__name__)
 
 
 # Default thresholds per a2c2-correction execution plan B.5 acceptance
-# criteria. Customers tune these via tether.yaml or `--a2c2-*` CLI flags.
+# criteria. 1.01 disables the optional request-health skip, leaving latency as
+# the only steady-state gate until a real robot task-outcome provider exists.
 _DEFAULT_LATENCY_THRESHOLD_MS = 40.0
-_DEFAULT_SUCCESS_THRESHOLD = 0.90
+_DEFAULT_REQUEST_SUCCESS_THRESHOLD = 1.01
 
 # Rolling-window sizes — match webhooks + slo conventions (~10s of traffic
 # at 10 QPS). Longer = more stable thresholds but slower adaptation.
 _DEFAULT_LATENCY_WINDOW = 100
-_DEFAULT_SUCCESS_WINDOW = 50
+_DEFAULT_REQUEST_SUCCESS_WINDOW = 50
 
 # Cold-start: until we have N samples, skip A2C2 (insufficient signal to
 # decide whether it's needed). 5 is enough for a stable p95 in practice.
@@ -55,9 +58,9 @@ class A2C2HookConfig:
     create_app time; immutable thereafter."""
 
     latency_threshold_ms: float = _DEFAULT_LATENCY_THRESHOLD_MS
-    success_threshold: float = _DEFAULT_SUCCESS_THRESHOLD
+    success_threshold: float = _DEFAULT_REQUEST_SUCCESS_THRESHOLD
     latency_window: int = _DEFAULT_LATENCY_WINDOW
-    success_window: int = _DEFAULT_SUCCESS_WINDOW
+    success_window: int = _DEFAULT_REQUEST_SUCCESS_WINDOW
     min_samples_for_decision: int = _MIN_SAMPLES_FOR_DECISION
 
     def __post_init__(self) -> None:
@@ -66,13 +69,13 @@ class A2C2HookConfig:
                 f"latency_threshold_ms must be positive, got "
                 f"{self.latency_threshold_ms}"
             )
-        # Allow values > 1.0 as a documented "never skip due to success" sentinel
-        # (e.g., 1.01 disables success-based skip — useful for measurement runs
-        # where the success metric is /act error rate, not task success).
+        # Values >= 1.0 disable request-health skipping because a rate cannot
+        # exceed 1.0. The default 1.01 remains the explicit sentinel: this
+        # window measures /act errors, not robot task outcomes.
         # Hard cap at 2.0 to catch typos like 100 instead of 1.0.
         if not (0.0 <= self.success_threshold <= 2.0):
             raise ValueError(
-                f"success_threshold must be in [0, 2.0] (1.01+ disables skip), got "
+                f"success_threshold must be in [0, 2.0] (1.0+ disables skip), got "
                 f"{self.success_threshold}"
             )
         if self.latency_window < 1:
@@ -98,12 +101,12 @@ class A2C2Decision:
     apply: bool
     reason: str  # bounded enum: "applied" | "cold_start" | "low_latency" | "high_success"
     latency_p95_ms: float
-    success_rate: float
+    success_rate: float  # Compatibility field: HTTP request-success rate.
     samples: int
 
 
 class A2C2Hook:
-    """Stateful wrapper around A2C2Head with latency + success tracking.
+    """Stateful wrapper around A2C2Head with latency + request-health tracking.
 
     Thread-safe: trackers protected by a single lock; rare contention since
     the only writer is the /act handler (one event loop) and reads are
@@ -112,7 +115,7 @@ class A2C2Hook:
 
     __slots__ = (
         "_head", "_config",
-        "_latency_window", "_success_window", "_lock",
+        "_latency_window", "_request_success_window", "_lock",
         "_applied_total", "_skipped_total",
     )
 
@@ -126,7 +129,7 @@ class A2C2Hook:
         self._latency_window: collections.deque[float] = collections.deque(
             maxlen=self._config.latency_window
         )
-        self._success_window: collections.deque[bool] = collections.deque(
+        self._request_success_window: collections.deque[bool] = collections.deque(
             maxlen=self._config.success_window
         )
         self._lock = threading.Lock()
@@ -153,13 +156,16 @@ class A2C2Hook:
         return self._skipped_total
 
     def record_outcome(self, latency_ms: float, success: bool) -> None:
-        """Record one /act outcome. Called by the serve runtime after every
-        act completes. Updates both rolling windows."""
+        """Record one /act outcome for latency and HTTP request health.
+
+        ``success`` means the handler returned no error; it is not a robot
+        task-success observation. Called by the serve runtime after every act.
+        """
         if latency_ms <= 0 or latency_ms != latency_ms:  # rejects NaN + non-positive
             return
         with self._lock:
             self._latency_window.append(float(latency_ms))
-            self._success_window.append(bool(success))
+            self._request_success_window.append(bool(success))
 
     def latency_p95_ms(self) -> float:
         """Current p95 latency from the rolling window. Returns 0.0 when
@@ -170,38 +176,41 @@ class A2C2Hook:
             return 0.0
         return float(np.percentile(samples, 95))
 
-    def success_rate(self) -> float:
-        """Current success rate from the rolling window. Returns 1.0 when
-        no samples yet (we assume things are working until proven otherwise
-        — cold-start path is gated by min_samples in should_apply)."""
+    def request_success_rate(self) -> float:
+        """Return the fraction of /act responses that completed without errors."""
         with self._lock:
-            samples = list(self._success_window)
+            samples = list(self._request_success_window)
         if not samples:
             return 1.0
         return float(np.mean(samples))
 
+    def success_rate(self) -> float:
+        """Compatibility alias for :meth:`request_success_rate`."""
+        return self.request_success_rate()
+
     def sample_count(self) -> tuple[int, int]:
-        """Returns (n_latency, n_success). Used by cold-start gate."""
+        """Return ``(n_latency, n_request_health)`` for the cold-start gate."""
         with self._lock:
-            return len(self._latency_window), len(self._success_window)
+            return len(self._latency_window), len(self._request_success_window)
 
     def should_apply(self) -> A2C2Decision:
         """Decide whether to invoke the head this /act.
 
         Cold-start: skip until we have min_samples in BOTH windows.
-        Steady-state: apply when latency_p95 >= threshold AND
-        success_rate <= threshold (i.e., latency is high AND success is
-        not great — A2C2 has positive marginal value).
+        Steady-state defaults to latency-only: apply when latency p95 is at or
+        above the threshold. If an operator explicitly configures a request
+        success threshold below 1.0, healthy HTTP traffic may also skip
+        correction for backward compatibility.
         """
         n_lat, n_succ = self.sample_count()
         latency_p95 = self.latency_p95_ms()
-        success_rate = self.success_rate()
+        request_success_rate = self.request_success_rate()
         cfg = self._config
 
         if n_lat < cfg.min_samples_for_decision or n_succ < cfg.min_samples_for_decision:
             return A2C2Decision(
                 apply=False, reason="cold_start",
-                latency_p95_ms=latency_p95, success_rate=success_rate,
+                latency_p95_ms=latency_p95, success_rate=request_success_rate,
                 samples=min(n_lat, n_succ),
             )
 
@@ -209,21 +218,25 @@ class A2C2Hook:
         if latency_p95 < cfg.latency_threshold_ms:
             return A2C2Decision(
                 apply=False, reason="low_latency",
-                latency_p95_ms=latency_p95, success_rate=success_rate,
+                latency_p95_ms=latency_p95, success_rate=request_success_rate,
                 samples=min(n_lat, n_succ),
             )
 
-        # Skip when success is high (correction not needed)
-        if success_rate > cfg.success_threshold:
+        # Optional compatibility gate. This is HTTP request health, not robot
+        # task success; the default sentinel (1.01) makes this branch inert.
+        if (
+            cfg.success_threshold < 1.0
+            and request_success_rate > cfg.success_threshold
+        ):
             return A2C2Decision(
                 apply=False, reason="high_success",
-                latency_p95_ms=latency_p95, success_rate=success_rate,
+                latency_p95_ms=latency_p95, success_rate=request_success_rate,
                 samples=min(n_lat, n_succ),
             )
 
         return A2C2Decision(
             apply=True, reason="applied",
-            latency_p95_ms=latency_p95, success_rate=success_rate,
+            latency_p95_ms=latency_p95, success_rate=request_success_rate,
             samples=min(n_lat, n_succ),
         )
 
