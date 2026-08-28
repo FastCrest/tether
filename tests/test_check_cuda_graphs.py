@@ -3,6 +3,7 @@
 Covers the skip / pass / warn / fail branches of the check without
 requiring a real GPU — all ORT session construction + capture is mocked.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,21 @@ from tether.diagnostics.check_cuda_graphs import _run as check_run
 
 def _decomposed_config() -> dict:
     return {
-        "export_kind": "decomposed",
+        "schema_version": 1,
+        "model_id": "test/pi05",
+        "model_type": "pi05_decomposed",
+        "action_dim": 7,
+        "num_denoising_steps": 10,
+        "opset": 19,
+        "export_kind": "decomposed_onnx",
+        "artifacts": [
+            {"path": "vlm_prefix.onnx", "role": "model"},
+            {"path": "expert_denoise.onnx", "role": "model"},
+        ],
+        "io_contract": {
+            "inputs": [{"name": "noise", "dtype": "float32", "shape": [1, 50, 32]}],
+            "outputs": [{"name": "actions", "dtype": "float32", "shape": [1, 50, 32]}],
+        },
         "decomposed": {
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
@@ -28,7 +43,10 @@ def _decomposed_config() -> dict:
 
 
 def _monolithic_config() -> dict:
-    return {"export_kind": "monolithic"}
+    config = _decomposed_config()
+    config["export_kind"] = "monolithic_onnx"
+    config["artifacts"] = [{"path": "model.onnx", "role": "model"}]
+    return config
 
 
 def _write_export(tmp_path: Path, config: dict) -> Path:
@@ -37,6 +55,7 @@ def _write_export(tmp_path: Path, config: dict) -> Path:
     # Create empty onnx files for path existence
     (tmp_path / "vlm_prefix.onnx").write_bytes(b"\x00")
     (tmp_path / "expert_denoise.onnx").write_bytes(b"\x00")
+    (tmp_path / "model.onnx").write_bytes(b"\x00")
     return tmp_path
 
 
@@ -64,6 +83,7 @@ def test_skip_when_onnxruntime_not_importable(tmp_path):
     orig_ort = sys.modules.pop("onnxruntime", None)
     try:
         import importlib
+
         # Insert a dummy that raises ImportError on attribute access
         fake = MagicMock()
         fake.get_available_providers = MagicMock(side_effect=ImportError("mock no ort"))
@@ -93,10 +113,12 @@ def _patched_ort_with_providers(providers: list[str]):
     mock_input.name = "img_base"
     mock_input.shape = [1, 3, 224, 224]
     mock_input.type = "tensor(float)"
-    fake.InferenceSession = MagicMock(return_value=MagicMock(
-        get_inputs=MagicMock(return_value=[mock_input]),
-        run=MagicMock(return_value=[[]]),
-    ))
+    fake.InferenceSession = MagicMock(
+        return_value=MagicMock(
+            get_inputs=MagicMock(return_value=[mock_input]),
+            run=MagicMock(return_value=[[]]),
+        )
+    )
     return fake
 
 
@@ -104,7 +126,14 @@ def test_pass_when_both_sessions_capture(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
     # Mock try_capture_or_fall_back to return CudaGraphWrapper (captured=True) for both
-    with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
+    with patch.dict(
+        sys.modules,
+        {
+            "onnxruntime": _patched_ort_with_providers(
+                ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            )
+        },
+    ):
         with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             mock_wrapper = MagicMock()
             mock_wrapper.captured = True
@@ -118,7 +147,14 @@ def test_pass_when_both_sessions_capture(tmp_path):
 def test_warn_when_only_expert_captures(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
-    with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
+    with patch.dict(
+        sys.modules,
+        {
+            "onnxruntime": _patched_ort_with_providers(
+                ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            )
+        },
+    ):
         with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             # First call (vlm_prefix): eager fallback (captured=False)
             # Second call (expert_denoise): captured=True
@@ -138,7 +174,14 @@ def test_warn_when_only_expert_captures(tmp_path):
 def test_fail_when_neither_captures(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
-    with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
+    with patch.dict(
+        sys.modules,
+        {
+            "onnxruntime": _patched_ort_with_providers(
+                ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            )
+        },
+    ):
         with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             prefix_wrapper = MagicMock()
             prefix_wrapper.captured = False

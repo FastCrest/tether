@@ -33,7 +33,6 @@ into the following process exit codes:
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -41,27 +40,19 @@ from typing import Any
 import numpy as np
 import torch
 
-from tether.checkpoint import detect_model_type, load_checkpoint
 from tether.fixtures.vla_fixtures import load_fixtures
+from tether.export_config import load_tether_config, require_supported_export_kind
 from tether.validate import ValidationResult, validate_outputs
 
 # Backends from Issues 4/5 — required at import time now.
 from tether._pytorch_backend import load_pytorch_backend
 from tether._onnx_backend import load_onnx_backend
 
-# Per-model action_dim fallback when tether_config.json doesn't specify it.
-_ACTION_DIM_FALLBACK: dict[str, int] = {
-    "smolvla": 6,
-    "pi0": 14,
-    "gr00t": 64,
-}
-
 logger = logging.getLogger(__name__)
 
 SUPPORTED_MODEL_TYPES: tuple[str, ...] = ("smolvla", "pi0", "gr00t")
 UNSUPPORTED_MODEL_MESSAGE = (
-    "tether validate v1 supports smolvla, pi0, gr00t. "
-    "For pi0.5 / openvla see roadmap."
+    "tether validate v1 supports smolvla, pi0, gr00t. For pi0.5 / openvla see roadmap."
 )
 
 
@@ -119,53 +110,22 @@ class ValidateRoundTrip:
         self.device: str = device
 
         if self.num_test_cases < 1:
-            raise ValueError(
-                f"num_test_cases must be >= 1, got {self.num_test_cases}"
-            )
+            raise ValueError(f"num_test_cases must be >= 1, got {self.num_test_cases}")
         if self.threshold <= 0:
-            raise ValueError(
-                f"threshold must be > 0, got {self.threshold}"
-            )
+            raise ValueError(f"threshold must be > 0, got {self.threshold}")
 
         if not self.export_dir.exists():
-            raise FileNotFoundError(
-                f"Export directory does not exist: {self.export_dir}"
-            )
+            raise FileNotFoundError(f"Export directory does not exist: {self.export_dir}")
         if not self.export_dir.is_dir():
-            raise ValueError(
-                f"Export path is not a directory: {self.export_dir}"
-            )
+            raise ValueError(f"Export path is not a directory: {self.export_dir}")
 
-        config_path = self.export_dir / "tether_config.json"
-        if not config_path.exists():
-            raise ValueError(
-                f"Missing tether_config.json in export dir: {self.export_dir}"
-            )
-        try:
-            self.config: dict[str, Any] = json.loads(config_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Malformed tether_config.json at {config_path}: {exc}"
-            ) from exc
-
-        num_steps = self.config.get("num_denoising_steps", 10)
-        if not isinstance(num_steps, int) or num_steps < 1:
-            raise ValueError(
-                f"num_denoising_steps in tether_config.json must be a positive "
-                f"integer, got {num_steps!r}"
-            )
-
-        model_type = self.config.get("model_type")
-        if not model_type:
-            logger.debug("model_type missing from tether_config.json; detecting from checkpoint")
-            ref_id = self.model_id or self.config.get("model_id")
-            if ref_id is None:
-                raise ValueError(
-                    "Cannot detect model_type: tether_config.json has no "
-                    "model_type or model_id field, and --model was not passed."
-                )
-            state_dict, _ = load_checkpoint(ref_id, device="cpu")
-            model_type = detect_model_type(state_dict)
+        self.config = load_tether_config(self.export_dir)
+        require_supported_export_kind(
+            self.config,
+            {"monolithic_onnx", "decomposed_onnx"},
+            "tether validate",
+        )
+        model_type = self.config["model_type"]
 
         if model_type not in SUPPORTED_MODEL_TYPES:
             raise ValueError(UNSUPPORTED_MODEL_MESSAGE)
@@ -224,14 +184,9 @@ class ValidateRoundTrip:
     def _generate_initial_noise(self, rng: torch.Generator) -> np.ndarray:
         """Generate the initial-noise tensor shared by both backends."""
         chunk_size = int(
-            self.config.get("action_chunk_size")
-            or self.config.get("chunk_size")
-            or 50
+            self.config.get("action_chunk_size") or self.config.get("chunk_size") or 50
         )
-        action_dim = int(
-            self.config.get("action_dim")
-            or _ACTION_DIM_FALLBACK.get(self.model_type, 6)
-        )
+        action_dim = int(self.config["action_dim"])
         noise = torch.randn((chunk_size, action_dim), generator=rng).numpy().astype(np.float32)
         return noise
 
@@ -241,9 +196,7 @@ class ValidateRoundTrip:
         onnx_out: np.ndarray,
     ) -> dict[str, Any]:
         """Compare a single fixture's PyTorch and ONNX outputs."""
-        result = validate_outputs(
-            pytorch_out, onnx_out, threshold=self.threshold, name="roundtrip"
-        )
+        result = validate_outputs(pytorch_out, onnx_out, threshold=self.threshold, name="roundtrip")
         return result.to_dict()
 
     def _aggregate(
@@ -255,7 +208,9 @@ class ValidateRoundTrip:
             max_abs = max(float(r["max_abs_diff"]) for r in per_fixture_results)
         else:
             max_abs = 0.0
-        passed = all(bool(r["passed"]) for r in per_fixture_results) if per_fixture_results else False
+        passed = (
+            all(bool(r["passed"]) for r in per_fixture_results) if per_fixture_results else False
+        )
 
         return {
             "model_type": self.model_type,

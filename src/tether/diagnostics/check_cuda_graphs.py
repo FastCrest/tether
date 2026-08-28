@@ -17,9 +17,9 @@ Cost: loads both ORT sessions (~6.5 GB model weights) and runs one synthetic
 forward each. Typically 15-30s on GPU; skipped without CUDA. Users can skip
 explicitly via `tether doctor --skip cuda_graphs`.
 """
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from tether.diagnostics import Check, CheckResult, register
@@ -50,8 +50,20 @@ def _run(*, model_path: str, embodiment_name: str, rtc: bool) -> CheckResult:
             f"no tether_config.json at {export}",
         )
 
-    cfg = json.loads(cfg_path.read_text())
-    if cfg.get("export_kind") != "decomposed":
+    from tether.export_config import ExportConfigError, load_tether_config
+
+    try:
+        cfg = load_tether_config(cfg_path)
+    except (ExportConfigError, FileNotFoundError) as exc:
+        return CheckResult(
+            name=_CHECK_NAME,
+            status="fail",
+            expected="valid Export Config v1",
+            actual=str(exc),
+            remediation="Re-export the model with a current Tether exporter.",
+            duration_ms=0.0,
+        )
+    if cfg.get("export_kind") != "decomposed_onnx":
         return _skip(
             "cuda-graphs applies only to decomposed exports",
             f"export_kind={cfg.get('export_kind')!r}",
@@ -177,10 +189,12 @@ def _run(*, model_path: str, embodiment_name: str, rtc: bool) -> CheckResult:
     )
 
 
-register(Check(
-    check_id=_CHECK_ID,
-    name=_CHECK_NAME,
-    severity="warn",
-    github_issue=None,
-    run_fn=_run,
-))
+register(
+    Check(
+        check_id=_CHECK_ID,
+        name=_CHECK_NAME,
+        severity="warn",
+        github_issue=None,
+        run_fn=_run,
+    )
+)

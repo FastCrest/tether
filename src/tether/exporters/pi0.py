@@ -14,16 +14,12 @@ Key differences from SmolVLA:
 
 from __future__ import annotations
 
-import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.nn as nn
-
-import math
 
 import torch.nn.functional as F
 
@@ -31,7 +27,9 @@ from tether.config import ExportConfig, get_hardware_profile
 from tether.checkpoint import load_checkpoint
 from tether.exporters.onnx_export import export_module_to_onnx, optimize_onnx
 from tether.models.heads.expert_stack import (
-    ExpertGQALayer, ExpertStack, Pi05ExpertGQALayer, _DecomposedRoPE,
+    ExpertGQALayer,
+    ExpertStack,
+    Pi05ExpertGQALayer,
     _sinusoidal_pos_embedding,
 )
 from tether.exporters.trt_build import build_engine, check_trtexec
@@ -97,7 +95,7 @@ def build_pi0_expert_stack(
     for k in state_dict.keys():
         if not k.startswith(base_prefix + "layers."):
             continue
-        parts = k[len(base_prefix):].split(".")
+        parts = k[len(base_prefix) :].split(".")
         if len(parts) >= 2 and parts[0] == "layers" and parts[1].isdigit():
             layer_indices.add(int(parts[1]))
     if not layer_indices:
@@ -114,7 +112,13 @@ def build_pi0_expert_stack(
 
     logger.info(
         "pi0 expert: %d layers, hidden=%d, nq=%d, nkv=%d, head_dim=%d, inter=%d, action_dim=%d",
-        num_layers, expert_hidden, nq, nkv, head_dim, inter, action_dim,
+        num_layers,
+        expert_hidden,
+        nq,
+        nkv,
+        head_dim,
+        inter,
+        action_dim,
     )
 
     # 5. Build layers — pi0 expert does NOT use cross-attention (unlike SmolVLA)
@@ -136,7 +140,11 @@ def build_pi0_expert_stack(
         # Without this override RoPE frequencies are ~10x too small → positions
         # barely affect attention → expert output insensitive to position_ids.
         layer = ExpertGQALayer(
-            expert_hidden, nq, nkv, head_dim, inter,
+            expert_hidden,
+            nq,
+            nkv,
+            head_dim,
+            inter,
             kv_in=kv_in if is_cross else None,
             rope_theta=10000.0,
         )
@@ -247,7 +255,11 @@ def export_pi0(
         expert_onnx,
         input_names=["noisy_actions", "timestep", "position_ids"],
         output_names=["velocity"],
-        dynamic_axes={"noisy_actions": {0: "batch"}, "timestep": {0: "batch"}, "position_ids": {0: "batch"}},
+        dynamic_axes={
+            "noisy_actions": {0: "batch"},
+            "timestep": {0: "batch"},
+            "position_ids": {0: "batch"},
+        },
         opset_version=config.opset,
     )
     optimize_onnx(expert_onnx)
@@ -261,15 +273,25 @@ def export_pi0(
             import numpy as np
 
             sess = ort.InferenceSession(str(expert_onnx))
-            ort_out = sess.run(None, {
-                "noisy_actions": dummy_actions.numpy(),
-                "timestep": dummy_time.numpy(),
-                "position_ids": dummy_pos.numpy().astype(np.int64),
-            })[0]
+            ort_out = sess.run(
+                None,
+                {
+                    "noisy_actions": dummy_actions.numpy(),
+                    "timestep": dummy_time.numpy(),
+                    "position_ids": dummy_pos.numpy().astype(np.int64),
+                },
+            )[0]
             torch_out = expert_stack(dummy_actions, dummy_time, dummy_pos).detach().numpy()
             max_diff = float(np.abs(ort_out - torch_out).max())
-            result["metadata"]["onnx_validation"] = {"max_diff": max_diff, "passed": max_diff < 0.01}
-            logger.info("ONNX validation: max_diff=%.2e (%s)", max_diff, "PASS" if max_diff < 0.01 else "FAIL")
+            result["metadata"]["onnx_validation"] = {
+                "max_diff": max_diff,
+                "passed": max_diff < 0.01,
+            }
+            logger.info(
+                "ONNX validation: max_diff=%.2e (%s)",
+                max_diff,
+                "PASS" if max_diff < 0.01 else "FAIL",
+            )
         except ImportError:
             logger.warning("onnxruntime not installed, skipping validation")
 
@@ -287,6 +309,7 @@ def export_pi0(
     export_config = {
         "model_id": config.model_id,
         "model_type": "pi0",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
@@ -301,8 +324,11 @@ def export_pi0(
         },
         "expert": expert_meta,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+
+    config_path = write_tether_config(
+        output_dir, normalize_legacy_tether_config(export_config, output_dir)
+    )
     result["files"]["config"] = str(config_path)
     return result
 
@@ -317,8 +343,16 @@ def export_pi0(
 class Pi05ExpertStack(nn.Module):
     """Expert stack for pi0.5 — time embedding flows through every layer."""
 
-    def __init__(self, layers, expert_hidden, action_dim, time_mlp_weights,
-                 action_proj_weights, in_proj_weights, final_norm_weights):
+    def __init__(
+        self,
+        layers,
+        expert_hidden,
+        action_dim,
+        time_mlp_weights,
+        action_proj_weights,
+        in_proj_weights,
+        final_norm_weights,
+    ):
         super().__init__()
         self.layers = nn.ModuleList(layers)
         self.expert_hidden = expert_hidden
@@ -389,7 +423,7 @@ def build_pi05_expert_stack(
     for k in state_dict.keys():
         if not k.startswith(base_prefix + "layers."):
             continue
-        parts = k[len(base_prefix):].split(".")
+        parts = k[len(base_prefix) :].split(".")
         if len(parts) >= 2 and parts[0] == "layers" and parts[1].isdigit():
             layer_indices.add(int(parts[1]))
     if not layer_indices:
@@ -406,7 +440,13 @@ def build_pi05_expert_stack(
 
     logger.info(
         "pi0.5 expert: %d layers, hidden=%d, nq=%d, nkv=%d, head_dim=%d, inter=%d, action_dim=%d",
-        num_layers, expert_hidden, nq, nkv, head_dim, inter, action_dim,
+        num_layers,
+        expert_hidden,
+        nq,
+        nkv,
+        head_dim,
+        inter,
+        action_dim,
     )
 
     # 5. Build layers with AdaRMSNorm
@@ -420,8 +460,12 @@ def build_pi05_expert_stack(
         layer_sd = {
             "input_layernorm.dense.weight": state_dict[f"{prefix}.input_layernorm.dense.weight"],
             "input_layernorm.dense.bias": state_dict[f"{prefix}.input_layernorm.dense.bias"],
-            "post_attention_layernorm.dense.weight": state_dict[f"{prefix}.post_attention_layernorm.dense.weight"],
-            "post_attention_layernorm.dense.bias": state_dict[f"{prefix}.post_attention_layernorm.dense.bias"],
+            "post_attention_layernorm.dense.weight": state_dict[
+                f"{prefix}.post_attention_layernorm.dense.weight"
+            ],
+            "post_attention_layernorm.dense.bias": state_dict[
+                f"{prefix}.post_attention_layernorm.dense.bias"
+            ],
             "q_proj.weight": state_dict[f"{prefix}.self_attn.q_proj.weight"],
             "k_proj.weight": state_dict[f"{prefix}.self_attn.k_proj.weight"],
             "v_proj.weight": state_dict[f"{prefix}.self_attn.v_proj.weight"],
@@ -515,7 +559,11 @@ def export_pi05(
         expert_onnx,
         input_names=["noisy_actions", "timestep", "position_ids"],
         output_names=["velocity"],
-        dynamic_axes={"noisy_actions": {0: "batch"}, "timestep": {0: "batch"}, "position_ids": {0: "batch"}},
+        dynamic_axes={
+            "noisy_actions": {0: "batch"},
+            "timestep": {0: "batch"},
+            "position_ids": {0: "batch"},
+        },
         opset_version=config.opset,
     )
     optimize_onnx(expert_onnx)
@@ -525,16 +573,27 @@ def export_pi05(
         try:
             import onnxruntime as ort
             import numpy as np
+
             sess = ort.InferenceSession(str(expert_onnx))
-            ort_out = sess.run(None, {
-                "noisy_actions": dummy_actions.numpy(),
-                "timestep": dummy_time.numpy(),
-                "position_ids": dummy_pos.numpy().astype(np.int64),
-            })[0]
+            ort_out = sess.run(
+                None,
+                {
+                    "noisy_actions": dummy_actions.numpy(),
+                    "timestep": dummy_time.numpy(),
+                    "position_ids": dummy_pos.numpy().astype(np.int64),
+                },
+            )[0]
             torch_out = expert_stack(dummy_actions, dummy_time, dummy_pos).detach().numpy()
             max_diff = float(np.abs(ort_out - torch_out).max())
-            result["metadata"]["onnx_validation"] = {"max_diff": max_diff, "passed": max_diff < 0.01}
-            logger.info("ONNX validation: max_diff=%.2e (%s)", max_diff, "PASS" if max_diff < 0.01 else "FAIL")
+            result["metadata"]["onnx_validation"] = {
+                "max_diff": max_diff,
+                "passed": max_diff < 0.01,
+            }
+            logger.info(
+                "ONNX validation: max_diff=%.2e (%s)",
+                max_diff,
+                "PASS" if max_diff < 0.01 else "FAIL",
+            )
         except ImportError:
             logger.warning("onnxruntime not installed, skipping validation")
 
@@ -549,6 +608,7 @@ def export_pi05(
     export_config = {
         "model_id": config.model_id,
         "model_type": "pi05",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
@@ -563,7 +623,10 @@ def export_pi05(
         },
         "expert": expert_meta,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+
+    config_path = write_tether_config(
+        output_dir, normalize_legacy_tether_config(export_config, output_dir)
+    )
     result["files"]["config"] = str(config_path)
     return result

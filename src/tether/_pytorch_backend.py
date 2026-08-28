@@ -45,8 +45,7 @@ from tether.checkpoint import detect_model_type, load_checkpoint
 logger = logging.getLogger("tether.validate.pytorch")
 
 UNSUPPORTED_MODEL_MESSAGE = (
-    "tether validate v1 supports smolvla, pi0, gr00t. "
-    "For pi0.5 / openvla see roadmap."
+    "tether validate v1 supports smolvla, pi0, gr00t. For pi0.5 / openvla see roadmap."
 )
 
 # Per-model default denoise step counts. Overridden by tether_config.json
@@ -91,17 +90,19 @@ def load_pytorch_backend(
     export_dir = Path(export_dir)
     config_path = export_dir / "tether_config.json"
     if not config_path.exists():
-        raise FileNotFoundError(
-            f"Missing tether_config.json in export dir: {export_dir}"
-        )
-    import json
+        raise FileNotFoundError(f"Missing tether_config.json in export dir: {export_dir}")
+    from tether.export_config import load_tether_config, require_supported_export_kind
 
-    config: dict[str, Any] = json.loads(config_path.read_text())
+    config = load_tether_config(config_path)
+    require_supported_export_kind(
+        config,
+        {"monolithic_onnx", "decomposed_onnx"},
+        "PyTorch round-trip reference",
+    )
     resolved_id = model_id or config.get("model_id")
     if resolved_id is None:
         raise ValueError(
-            "Cannot resolve checkpoint: pass model_id or include 'model_id' "
-            "in tether_config.json."
+            "Cannot resolve checkpoint: pass model_id or include 'model_id' in tether_config.json."
         )
 
     logger.info(
@@ -150,13 +151,8 @@ def _build_decomposed_model(
         try:  # pragma: no cover - defensive, mirrors smolvla_exporter
             from transformers import AutoConfig
 
-            vlm_cfg = AutoConfig.from_pretrained(
-                "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
-            )
-            head_dim = (
-                vlm_cfg.text_config.hidden_size
-                // vlm_cfg.text_config.num_attention_heads
-            )
+            vlm_cfg = AutoConfig.from_pretrained("HuggingFaceTB/SmolVLM2-500M-Video-Instruct")
+            head_dim = vlm_cfg.text_config.hidden_size // vlm_cfg.text_config.num_attention_heads
         except Exception as exc:  # pragma: no cover - defensive
             logging.getLogger(__name__).warning(
                 "Could not fetch SmolVLM2 head_dim from HF (%s); "
@@ -216,9 +212,7 @@ class PyTorchBackend:
         self.num_steps: int = int(
             self.config.get("num_denoising_steps", _DEFAULT_STEPS[model_type])
         )
-        self.chunk_size: int = int(
-            self.config.get("action_chunk_size", _DEFAULT_CHUNK_SIZE)
-        )
+        self.chunk_size: int = int(self.config.get("action_chunk_size", _DEFAULT_CHUNK_SIZE))
         # action_dim is the *input/output* feature dim the ONNX accepts. For
         # GR00T full-stack it is the raw DoF dim; for SmolVLA / pi0 it is the
         # native action dim. The exporter writes this into tether_config.json.
@@ -227,9 +221,7 @@ class PyTorchBackend:
             expert_meta = self.config.get("expert", {})
             action_dim = expert_meta.get("action_dim")
         if action_dim is None:
-            raise ValueError(
-                "tether_config.json missing 'action_dim'; cannot shape noise."
-            )
+            raise ValueError("tether_config.json missing 'action_dim'; cannot shape noise.")
         self.action_dim: int = int(action_dim)
 
     def forward(
@@ -265,9 +257,7 @@ class PyTorchBackend:
         elif initial_noise.ndim == 3:
             noise = initial_noise
         else:
-            raise ValueError(
-                f"initial_noise must be 2D or 3D, got shape {initial_noise.shape}"
-            )
+            raise ValueError(f"initial_noise must be 2D or 3D, got shape {initial_noise.shape}")
 
         if noise.shape[-2] != self.chunk_size or noise.shape[-1] != self.action_dim:
             raise ValueError(

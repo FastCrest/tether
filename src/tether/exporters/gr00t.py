@@ -17,7 +17,6 @@ lands the export refactor in the same PR as the spine composition.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from pathlib import Path
@@ -94,17 +93,27 @@ def export_gr00t(
         try:
             import onnxruntime as ort
             import numpy as np
+
             sess = ort.InferenceSession(str(expert_onnx))
-            ort_out = sess.run(None, {
-                "noisy_actions": dummy_action_tokens.numpy(),
-                "timestep": dummy_time.numpy(),
-                "position_ids": dummy_pos.numpy().astype(np.int64),
-            })[0]
+            ort_out = sess.run(
+                None,
+                {
+                    "noisy_actions": dummy_action_tokens.numpy(),
+                    "timestep": dummy_time.numpy(),
+                    "position_ids": dummy_pos.numpy().astype(np.int64),
+                },
+            )[0]
             torch_out = dit_stack(dummy_action_tokens, dummy_time, dummy_pos).detach().numpy()
             max_diff = float(np.abs(ort_out - torch_out).max())
-            result["metadata"]["onnx_validation"] = {"max_diff": max_diff, "passed": max_diff < 0.01}
-            logger.info("ONNX validation: max_diff=%.2e (%s)",
-                        max_diff, "PASS" if max_diff < 0.01 else "FAIL")
+            result["metadata"]["onnx_validation"] = {
+                "max_diff": max_diff,
+                "passed": max_diff < 0.01,
+            }
+            logger.info(
+                "ONNX validation: max_diff=%.2e (%s)",
+                max_diff,
+                "PASS" if max_diff < 0.01 else "FAIL",
+            )
         except ImportError:
             logger.warning("onnxruntime not installed, skipping validation")
 
@@ -117,20 +126,21 @@ def export_gr00t(
             logger.warning("TRT build failed: %s", e)
 
     meta_with_action_dim = dict(meta)
-    meta_with_action_dim["action_dim"] = hidden
+    meta_with_action_dim["action_dim"] = meta["output_dim"]
     export_config = {
         "model_id": config.model_id,
         "model_type": "gr00t",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
         "num_denoising_steps": 4,
         "action_chunk_size": chunk_size,
-        "action_dim": hidden,
+        "action_dim": meta["output_dim"],
         "hidden": hidden,
         "output_dim": meta["output_dim"],
         "note": "expert accepts action tokens (hidden-dim), emits velocity tokens (output_dim). "
-                "action_decoder (per-embodiment) needed downstream to recover native actions.",
+        "action_decoder (per-embodiment) needed downstream to recover native actions.",
         "hardware": {
             "name": hardware.name,
             "memory_gb": hardware.memory_gb,
@@ -140,8 +150,11 @@ def export_gr00t(
         "expert": meta_with_action_dim,
         "spine_path": True,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+
+    config_path = write_tether_config(
+        output_dir, normalize_legacy_tether_config(export_config, output_dir)
+    )
     result["files"]["config"] = str(config_path)
     return result
 
@@ -201,17 +214,27 @@ def export_gr00t_full(
         try:
             import onnxruntime as ort
             import numpy as np
+
             sess = ort.InferenceSession(str(expert_onnx))
-            ort_out = sess.run(None, {
-                "noisy_actions": dummy_actions.numpy(),
-                "timestep": dummy_time.numpy(),
-                "position_ids": dummy_pos.numpy().astype(np.int64),
-            })[0]
+            ort_out = sess.run(
+                None,
+                {
+                    "noisy_actions": dummy_actions.numpy(),
+                    "timestep": dummy_time.numpy(),
+                    "position_ids": dummy_pos.numpy().astype(np.int64),
+                },
+            )[0]
             torch_out = full(dummy_actions, dummy_time, dummy_pos).detach().numpy()
             max_diff = float(np.abs(ort_out - torch_out).max())
-            result["metadata"]["onnx_validation"] = {"max_diff": max_diff, "passed": max_diff < 0.01}
-            logger.info("ONNX validation: max_diff=%.2e (%s)",
-                        max_diff, "PASS" if max_diff < 0.01 else "FAIL")
+            result["metadata"]["onnx_validation"] = {
+                "max_diff": max_diff,
+                "passed": max_diff < 0.01,
+            }
+            logger.info(
+                "ONNX validation: max_diff=%.2e (%s)",
+                max_diff,
+                "PASS" if max_diff < 0.01 else "FAIL",
+            )
         except ImportError:
             logger.warning("onnxruntime not installed, skipping validation")
 
@@ -228,6 +251,7 @@ def export_gr00t_full(
     export_config = {
         "model_id": config.model_id,
         "model_type": "gr00t",
+        "export_kind": "decomposed_onnx",
         "full_stack": True,
         "embodiment_id": embodiment_id,
         "target": config.target,
@@ -247,8 +271,11 @@ def export_gr00t_full(
         "expert": meta_with_action_dim,
         "spine_path": True,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import normalize_legacy_tether_config, write_tether_config
+
+    config_path = write_tether_config(
+        output_dir, normalize_legacy_tether_config(export_config, output_dir)
+    )
     result["files"]["config"] = str(config_path)
     return result
 
@@ -276,7 +303,6 @@ __all__ = [
 # preserved verbatim; the only change is the home address. Per the lift #1
 # plan, the spine is now the single source of truth for these classes.
 # ════════════════════════════════════════════════════════════════════════
-
 
 
 GR00T_BLOCK_PREFIX = "action_head.model.transformer_blocks."
@@ -323,6 +349,7 @@ def _sinusoidal_timestep(t: torch.Tensor, dim: int = 256) -> torch.Tensor:
     args = t.float().unsqueeze(-1) * freqs.unsqueeze(0)
     return torch.cat([torch.cos(args), torch.sin(args)], dim=-1).to(t.dtype)
 
+
 class GR00TDiTBlock(nn.Module):
     """One DiT block: AdaLN → (cross-attn or self-attn) → residual →
     LayerNorm(non-affine) → GEGLU-FF → residual.
@@ -331,8 +358,9 @@ class GR00TDiTBlock(nn.Module):
     self-attn blocks always use kv_in == hidden.
     """
 
-    def __init__(self, hidden: int, num_heads: int, head_dim: int, ff_inner: int,
-                 kv_in: int, is_cross: bool):
+    def __init__(
+        self, hidden: int, num_heads: int, head_dim: int, ff_inner: int, kv_in: int, is_cross: bool
+    ):
         super().__init__()
         self.hidden = hidden
         self.num_heads = num_heads
@@ -352,8 +380,9 @@ class GR00TDiTBlock(nn.Module):
         self.ff_net_0_proj = nn.Linear(hidden, ff_inner, bias=True)
         self.ff_net_2 = nn.Linear(ff_inner, hidden, bias=True)
 
-    def forward(self, x: torch.Tensor, temb: torch.Tensor,
-                encoder_kv: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, temb: torch.Tensor, encoder_kv: torch.Tensor | None = None
+    ) -> torch.Tensor:
         b, s, _ = x.shape
 
         # AdaLN pre-attn modulation
@@ -378,9 +407,7 @@ class GR00TDiTBlock(nn.Module):
         k = k.view(b, seq_kv, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(b, seq_kv, self.num_heads, self.head_dim).transpose(1, 2)
 
-        attn = F.softmax(
-            torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim), dim=-1
-        )
+        attn = F.softmax(torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim), dim=-1)
         attn_out = torch.matmul(attn, v).transpose(1, 2).contiguous().view(b, s, -1)
         x = x + self.to_out_0(attn_out)
 
@@ -407,13 +434,17 @@ class GR00TExpertStack(nn.Module):
     emit velocities in the same space via the per-embodiment encoder/decoder.
     """
 
-    def __init__(self, blocks: list[GR00TDiTBlock], hidden: int,
-                 pos_embed_weight: torch.Tensor,
-                 timestep_mlp_weights: dict,
-                 proj_out_weights: dict,
-                 vlln_weights: dict,
-                 vlm_kv_dim: int = 2048,
-                 output_dim: int = 1024):
+    def __init__(
+        self,
+        blocks: list[GR00TDiTBlock],
+        hidden: int,
+        pos_embed_weight: torch.Tensor,
+        timestep_mlp_weights: dict,
+        proj_out_weights: dict,
+        vlln_weights: dict,
+        vlm_kv_dim: int = 2048,
+        output_dim: int = 1024,
+    ):
         super().__init__()
         self.blocks = nn.ModuleList(blocks)
         self.hidden = hidden
@@ -425,10 +456,14 @@ class GR00TExpertStack(nn.Module):
         # Timestep MLP (256-dim sinusoidal → linear_1 → silu → linear_2)
         self.sinusoidal_dim = timestep_mlp_weights["in_dim"]
         self.timestep_linear_1 = nn.Linear(
-            timestep_mlp_weights["in_dim"], timestep_mlp_weights["mid_dim"], bias=True,
+            timestep_mlp_weights["in_dim"],
+            timestep_mlp_weights["mid_dim"],
+            bias=True,
         )
         self.timestep_linear_2 = nn.Linear(
-            timestep_mlp_weights["mid_dim"], hidden, bias=True,
+            timestep_mlp_weights["mid_dim"],
+            hidden,
+            bias=True,
         )
         self.timestep_linear_1.weight = nn.Parameter(timestep_mlp_weights["l1_w"])
         self.timestep_linear_1.bias = nn.Parameter(timestep_mlp_weights["l1_b"])
@@ -449,10 +484,14 @@ class GR00TExpertStack(nn.Module):
         self.vlln.weight = nn.Parameter(vlln_weights["w"])
         self.vlln.bias = nn.Parameter(vlln_weights["b"])
 
-    def forward(self, action_tokens: torch.Tensor, timestep: torch.Tensor,
-                position_ids: torch.Tensor,
-                vlm_kv: torch.Tensor | None = None,
-                add_pos_embed: bool = True) -> torch.Tensor:
+    def forward(
+        self,
+        action_tokens: torch.Tensor,
+        timestep: torch.Tensor,
+        position_ids: torch.Tensor,
+        vlm_kv: torch.Tensor | None = None,
+        add_pos_embed: bool = True,
+    ) -> torch.Tensor:
         b, s, _ = action_tokens.shape
 
         # Add position embeddings when caller hasn't pre-added them.
@@ -491,6 +530,8 @@ class GR00TExpertStack(nn.Module):
 
         # Output projection
         return self.proj_out_2(x)
+
+
 def build_gr00t_expert_stack(
     state_dict: dict[str, torch.Tensor],
     embodiment_id: int = 0,
@@ -508,7 +549,7 @@ def build_gr00t_expert_stack(
     for k in state_dict.keys():
         if not k.startswith(GR00T_BLOCK_PREFIX):
             continue
-        rest = k[len(GR00T_BLOCK_PREFIX):]
+        rest = k[len(GR00T_BLOCK_PREFIX) :]
         parts = rest.split(".")
         if parts and parts[0].isdigit():
             layer_indices.add(int(parts[0]))
@@ -519,16 +560,13 @@ def build_gr00t_expert_stack(
     # 2. Infer shapes from block 0
     q_w = state_dict[f"{GR00T_BLOCK_PREFIX}0.attn1.to_q.weight"]
     hidden = q_w.shape[1]  # input dim of to_q = hidden
-    num_q = q_w.shape[0]   # output = num_heads * head_dim
+    num_q = q_w.shape[0]  # output = num_heads * head_dim
 
     # Block 0 is a cross-attn block (even idx); its to_k kv_in reveals vlm_kv_dim
     k_w_0 = state_dict[f"{GR00T_BLOCK_PREFIX}0.attn1.to_k.weight"]
     vlm_kv_dim = k_w_0.shape[1]  # for cross-attn block
 
     # Block 1 is self-attn (odd idx); kv_in == hidden
-    k_w_1 = state_dict[f"{GR00T_BLOCK_PREFIX}1.attn1.to_k.weight"]
-    self_kv_in = k_w_1.shape[1]
-
     # Infer num_heads by factoring num_q; head_dim=48 is the convention from config
     head_dim = 48
     num_heads = num_q // head_dim
@@ -545,13 +583,18 @@ def build_gr00t_expert_stack(
 
     logger.info(
         "GR00T DiT: %d blocks, hidden=%d, heads=%d × hd=%d, ff_inner=%d, vlm_kv_dim=%d",
-        num_layers, hidden, num_heads, head_dim, ff_inner, vlm_kv_dim,
+        num_layers,
+        hidden,
+        num_heads,
+        head_dim,
+        ff_inner,
+        vlm_kv_dim,
     )
 
     # 3. Build blocks with proper kv_in per block
     blocks = []
     for i in range(num_layers):
-        is_cross = (i % 2 == 0)  # even = cross-attn
+        is_cross = i % 2 == 0  # even = cross-attn
         kv_in = vlm_kv_dim if is_cross else hidden
         block = GR00TDiTBlock(hidden, num_heads, head_dim, ff_inner, kv_in, is_cross)
         prefix = f"{GR00T_BLOCK_PREFIX}{i}"
@@ -637,6 +680,8 @@ def build_gr00t_expert_stack(
         "total_params_m": sum(p.numel() for p in stack.parameters()) / 1e6,
     }
     return stack, metadata
+
+
 class GR00TActionEncoder(nn.Module):
     """3-linear action token encoder, pinned to one embodiment.
 
@@ -649,8 +694,7 @@ class GR00TActionEncoder(nn.Module):
     F.linear needs transpose at call time.
     """
 
-    def __init__(self, raw_action_dim: int, hidden: int, weights: dict,
-                 embodiment_id: int = 0):
+    def __init__(self, raw_action_dim: int, hidden: int, weights: dict, embodiment_id: int = 0):
         super().__init__()
         self.raw_action_dim = raw_action_dim
         self.hidden = hidden
@@ -670,10 +714,10 @@ class GR00TActionEncoder(nn.Module):
         h1 = F.silu(F.linear(actions, self.W1_w, self.W1_b))  # [b, chunk, hidden]
 
         t = time_emb.unsqueeze(1).expand(-1, chunk, -1)  # [b, chunk, hidden]
-        cat = torch.cat([h1, t], dim=-1)                 # [b, chunk, 2*hidden]
-        h2 = F.silu(F.linear(cat, self.W2_w, self.W2_b)) # [b, chunk, hidden]
+        cat = torch.cat([h1, t], dim=-1)  # [b, chunk, 2*hidden]
+        h2 = F.silu(F.linear(cat, self.W2_w, self.W2_b))  # [b, chunk, hidden]
 
-        out = F.linear(h2 + h1, self.W3_w, self.W3_b)    # residual + projection
+        out = F.linear(h2 + h1, self.W3_w, self.W3_b)  # residual + projection
         return out
 
 
@@ -695,8 +739,14 @@ class GR00TStateEncoder(nn.Module):
     with no state awareness. This class closes that gap.
     """
 
-    def __init__(self, raw_state_dim: int, hidden_mid: int, hidden_out: int,
-                 weights: dict, embodiment_id: int = 0):
+    def __init__(
+        self,
+        raw_state_dim: int,
+        hidden_mid: int,
+        hidden_out: int,
+        weights: dict,
+        embodiment_id: int = 0,
+    ):
         super().__init__()
         self.raw_state_dim = raw_state_dim
         self.hidden_mid = hidden_mid
@@ -711,7 +761,7 @@ class GR00TStateEncoder(nn.Module):
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         # state: [b, raw_state_dim] → state_token [b, 1, hidden_out]
         h = F.silu(F.linear(state, self.L1_w, self.L1_b))  # [b, hidden_mid]
-        out = F.linear(h, self.L2_w, self.L2_b)            # [b, hidden_out]
+        out = F.linear(h, self.L2_w, self.L2_b)  # [b, hidden_out]
         return out.unsqueeze(1)  # [b, 1, hidden_out] — one state token
 
 
@@ -723,8 +773,7 @@ class GR00TActionDecoder(nn.Module):
         layer2.W [32, 1024, 128]   -- final → raw action dim
     """
 
-    def __init__(self, in_dim: int, raw_action_dim: int, weights: dict,
-                 embodiment_id: int = 0):
+    def __init__(self, in_dim: int, raw_action_dim: int, weights: dict, embodiment_id: int = 0):
         super().__init__()
         self.in_dim = in_dim
         self.raw_action_dim = raw_action_dim
@@ -737,7 +786,7 @@ class GR00TActionDecoder(nn.Module):
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         # tokens: [b, chunk, in_dim=1024]
         h = F.silu(F.linear(tokens, self.L1_w, self.L1_b))  # [b, chunk, 1024]
-        return F.linear(h, self.L2_w, self.L2_b)            # [b, chunk, raw_action_dim]
+        return F.linear(h, self.L2_w, self.L2_b)  # [b, chunk, raw_action_dim]
 
 
 class GR00TFullStack(nn.Module):
@@ -792,7 +841,7 @@ class GR00TFullStack(nn.Module):
             action_pos = self.dit.pos_embed[action_pos_ids].unsqueeze(0)
             action_tokens = action_tokens + action_pos
 
-            state_token = self.state_encoder(state)                  # [b, 1, 1536]
+            state_token = self.state_encoder(state)  # [b, 1, 1536]
             tokens = torch.cat([state_token, action_tokens], dim=1)  # [b, chunk+1, 1536]
             action_start = 1
             # Pass a position_ids tensor that — combined with the DiT's
@@ -813,7 +862,10 @@ class GR00TFullStack(nn.Module):
             # Skip DiT's internal pos_embed by passing `add_pos_embed=False`.
             # (The DiT.forward signature was extended to accept this flag.)
             velocity_tokens = self.dit(
-                tokens, timestep, position_ids, vlm_kv=vlm_kv,
+                tokens,
+                timestep,
+                position_ids,
+                vlm_kv=vlm_kv,
                 add_pos_embed=False,
             )
 
@@ -821,8 +873,10 @@ class GR00TFullStack(nn.Module):
         if action_start > 0:
             velocity_tokens = velocity_tokens[:, action_start:, :]
 
-        velocity_raw = self.action_decoder(velocity_tokens)    # [b, chunk, raw_action_dim]
+        velocity_raw = self.action_decoder(velocity_tokens)  # [b, chunk, raw_action_dim]
         return velocity_raw
+
+
 def build_gr00t_full_stack(
     state_dict: dict[str, torch.Tensor],
     embodiment_id: int = 0,
@@ -839,7 +893,7 @@ def build_gr00t_full_stack(
         "W3_W": state_dict[GR00T_META_KEYS["action_enc_W3_W"]].float(),
         "W3_b": state_dict[GR00T_META_KEYS["action_enc_W3_b"]].float(),
     }
-    raw_action_dim = enc_weights["W1_W"].shape[1]   # [32, 128, 1536] → 128
+    raw_action_dim = enc_weights["W1_W"].shape[1]  # [32, 128, 1536] → 128
     hidden = enc_weights["W1_W"].shape[2]
 
     action_encoder = GR00TActionEncoder(
@@ -856,7 +910,7 @@ def build_gr00t_full_stack(
         "L2_W": state_dict[GR00T_META_KEYS["action_dec_2_W"]].float(),
         "L2_b": state_dict[GR00T_META_KEYS["action_dec_2_b"]].float(),
     }
-    output_token_dim = dec_weights["L1_W"].shape[1]   # [32, 1024, 1024] → 1024
+    output_token_dim = dec_weights["L1_W"].shape[1]  # [32, 1024, 1024] → 1024
 
     action_decoder = GR00TActionDecoder(
         in_dim=output_token_dim,
@@ -876,7 +930,7 @@ def build_gr00t_full_stack(
             "L2_W": state_dict[GR00T_META_KEYS["state_enc_2_W"]].float(),
             "L2_b": state_dict[GR00T_META_KEYS["state_enc_2_b"]].float(),
         }
-        raw_state_dim = state_enc_weights["L1_W"].shape[1]    # (32, 128, 1024) → 128
+        raw_state_dim = state_enc_weights["L1_W"].shape[1]  # (32, 128, 1024) → 128
         state_hidden_mid = state_enc_weights["L1_W"].shape[2]  # → 1024
         state_hidden_out = state_enc_weights["L2_W"].shape[2]  # (32, 1024, 1536) → 1536
         state_encoder = GR00TStateEncoder(
@@ -890,8 +944,7 @@ def build_gr00t_full_stack(
         raw_state_dim = None
         state_hidden_out = None
 
-    full = GR00TFullStack(dit, action_encoder, action_decoder,
-                           state_encoder=state_encoder)
+    full = GR00TFullStack(dit, action_encoder, action_decoder, state_encoder=state_encoder)
     full = full.float()
     full.eval()
 

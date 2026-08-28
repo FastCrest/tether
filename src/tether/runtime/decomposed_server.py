@@ -19,6 +19,7 @@ Scope per the ADR:
 - Modal validation: filed as follow-up experiments (see ADR §"Validation
   experiments to file")
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -87,9 +88,7 @@ class Pi05DecomposedServer:
         self._requested_device = device
         self._requested_providers = providers
         self._strict_providers = strict_providers
-        self._safety_config_path = (
-            Path(safety_config) if safety_config else None
-        )
+        self._safety_config_path = Path(safety_config) if safety_config else None
         self._adaptive_steps = adaptive_steps
         self._cloud_fallback_url = cloud_fallback_url
         self._deadline_ms = deadline_ms
@@ -166,13 +165,9 @@ class Pi05DecomposedServer:
 
     def _load_config(self) -> dict[str, Any]:
         """Read tether_config.json from the export dir."""
-        config_path = self.export_dir / "tether_config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"tether_config.json not found in {self.export_dir}. "
-                f"Decomposed exports must include the config sibling."
-            )
-        return json.loads(config_path.read_text())
+        from tether.export_config import load_tether_config
+
+        return load_tether_config(self.export_dir)
 
     def load(self) -> None:
         """Load the decomposed inference + tokenizer + tether_config."""
@@ -186,24 +181,23 @@ class Pi05DecomposedServer:
 
         # Pull canonical fields from config; validate export_kind.
         export_kind = self.config.get("export_kind", "")
-        if export_kind != "decomposed":
+        if export_kind != "decomposed_onnx":
             raise ValueError(
-                f"Pi05DecomposedServer requires export_kind='decomposed', "
+                f"Pi05DecomposedServer requires export_kind='decomposed_onnx', "
                 f"got {export_kind!r}. Use the matching server class for "
                 f"this export type (monolithic -> Pi0OnnxServer / "
                 f"SmolVLAOnnxServer; legacy decomposed -> TetherServer)."
             )
 
-        self.action_dim = int(self.config.get("action_dim", 7))
+        self.action_dim = int(self.config["action_dim"])
         self.chunk_size = int(
-            self.config.get("chunk_size") or self.config.get("action_chunk_size", DEFAULT_CHUNK_SIZE)
+            self.config.get("chunk_size")
+            or self.config.get("action_chunk_size", DEFAULT_CHUNK_SIZE)
         )
         # max_action_dim is the export's padded action dim (usually 32 for pi05).
         # Read from `decomposed.max_action_dim` if present; default to 32.
         decomposed_block = self.config.get("decomposed", {})
-        self.max_action_dim = int(
-            decomposed_block.get("max_action_dim", DEFAULT_MAX_ACTION_DIM)
-        )
+        self.max_action_dim = int(decomposed_block.get("max_action_dim", DEFAULT_MAX_ACTION_DIM))
 
         # Build providers list.
         providers = self._requested_providers or (
@@ -215,8 +209,11 @@ class Pi05DecomposedServer:
         logger.info(
             "Pi05DecomposedServer loading from %s (action_dim=%d, "
             "chunk_size=%d, max_action_dim=%d, providers=%s)",
-            self.export_dir, self.action_dim, self.chunk_size,
-            self.max_action_dim, providers,
+            self.export_dir,
+            self.action_dim,
+            self.chunk_size,
+            self.max_action_dim,
+            providers,
         )
 
         # Instantiate the inference primitive. Default cache config keeps
@@ -249,9 +246,9 @@ class Pi05DecomposedServer:
                         if len(shape) >= 2 and isinstance(shape[1], int):
                             self.lang_seq_len = int(shape[1])
                             logger.info(
-                                "Pi05DecomposedServer lang_seq_len=%d "
-                                "(probed from %s)",
-                                self.lang_seq_len, sess_attr,
+                                "Pi05DecomposedServer lang_seq_len=%d (probed from %s)",
+                                self.lang_seq_len,
+                                sess_attr,
                             )
                             break
                 if self.lang_seq_len != DEFAULT_LANG_SEQ_LEN:
@@ -259,7 +256,8 @@ class Pi05DecomposedServer:
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "lang_seq_len probe failed (%s); using default %d",
-                exc, self.lang_seq_len,
+                exc,
+                self.lang_seq_len,
             )
 
         # Try to load the HF tokenizer from the export. For decomposed
@@ -278,6 +276,7 @@ class Pi05DecomposedServer:
         if self._safety_config_path is not None:
             try:
                 from tether.safety import ActionGuard, SafetyLimits
+
                 limits = SafetyLimits.from_json(self._safety_config_path)
                 self._action_guard = ActionGuard(limits=limits, mode="clamp")
                 logger.info(
@@ -316,6 +315,7 @@ class Pi05DecomposedServer:
             if teacher_ref:
                 try:
                     from huggingface_hub import snapshot_download
+
                     teacher_path = snapshot_download(
                         teacher_ref,
                         allow_patterns=[
@@ -328,9 +328,9 @@ class Pi05DecomposedServer:
                         source = f"hf-teacher:{teacher_ref}"
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "Pi05DecomposedServer normalizer fetch from teacher %r "
-                        "failed: %s",
-                        teacher_ref, exc,
+                        "Pi05DecomposedServer normalizer fetch from teacher %r failed: %s",
+                        teacher_ref,
+                        exc,
                     )
 
         if "action_mean" in stats and "action_std" in stats:
@@ -342,8 +342,7 @@ class Pi05DecomposedServer:
 
         if self._action_mean is not None or self._state_mean is not None:
             logger.info(
-                "Pi05DecomposedServer normalizer loaded from %s "
-                "(action=%s, state=%s)",
+                "Pi05DecomposedServer normalizer loaded from %s (action=%s, state=%s)",
                 source,
                 "on" if self._action_mean is not None else "off",
                 "on" if self._state_mean is not None else "off",
@@ -379,11 +378,7 @@ class Pi05DecomposedServer:
             try:
                 prov = json.loads(prov_path.read_text())
                 teacher = prov.get("teacher_export", "")
-                if (
-                    isinstance(teacher, str)
-                    and "/" in teacher
-                    and not teacher.startswith("/")
-                ):
+                if isinstance(teacher, str) and "/" in teacher and not teacher.startswith("/"):
                     return teacher
             except Exception:  # noqa: BLE001
                 pass
@@ -409,6 +404,7 @@ class Pi05DecomposedServer:
             return
 
         from transformers import AutoTokenizer
+
         tried: list[str] = []
         last_exc: Exception | None = None
 
@@ -437,11 +433,7 @@ class Pi05DecomposedServer:
             try:
                 prov = json.loads(prov_path.read_text())
                 teacher = prov.get("teacher_export", "")
-                if (
-                    isinstance(teacher, str)
-                    and "/" in teacher
-                    and not teacher.startswith("/")
-                ):
+                if isinstance(teacher, str) and "/" in teacher and not teacher.startswith("/"):
                     candidates.append(teacher)
             except Exception:  # noqa: BLE001
                 pass
@@ -456,8 +448,9 @@ class Pi05DecomposedServer:
                 tok = AutoTokenizer.from_pretrained(cand)
                 self._tokenizer = tok
                 logger.info(
-                    "Pi05DecomposedServer tokenizer loaded from %r "
-                    "(vocab_size=%d)", cand, tok.vocab_size,
+                    "Pi05DecomposedServer tokenizer loaded from %r (vocab_size=%d)",
+                    cand,
+                    tok.vocab_size,
                 )
                 return
             except Exception as exc:  # noqa: BLE001
@@ -466,8 +459,10 @@ class Pi05DecomposedServer:
                 continue
 
         logger.error(
-            "Pi05DecomposedServer tokenizer load failed; tried %d sources: "
-            "%r. Last error: %s", len(tried), tried, last_exc,
+            "Pi05DecomposedServer tokenizer load failed; tried %d sources: %r. Last error: %s",
+            len(tried),
+            tried,
+            last_exc,
         )
         raise RuntimeError(
             f"No tokenizer found for {self.export_dir}. Tried {len(tried)} "
@@ -498,7 +493,9 @@ class Pi05DecomposedServer:
                 return image_wrist
 
         return self._predict(
-            image=image, instruction=instruction or "", state=state,
+            image=image,
+            instruction=instruction or "",
+            state=state,
             image_wrist=image_wrist,
         )
 
@@ -509,6 +506,7 @@ class Pi05DecomposedServer:
             return None
         try:
             from PIL import Image
+
             img_bytes = base64.b64decode(b64)
             img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
             return np.array(img)
@@ -529,8 +527,10 @@ class Pi05DecomposedServer:
         return await loop.run_in_executor(
             None,
             lambda: self.predict_from_base64(
-                image_b64=image_b64, instruction=instruction,
-                state=state, image_wrist_b64=image_wrist_b64,
+                image_b64=image_b64,
+                instruction=instruction,
+                state=state,
+                image_wrist_b64=image_wrist_b64,
             ),
         )
 
@@ -563,6 +563,7 @@ class Pi05DecomposedServer:
         any exception in the standard error dict (so /act returns a clean
         envelope; circuit breaker fires on the dict-with-error key)."""
         import time
+
         if not self._ready or self._inference is None:
             return {"error": "server not ready -- load() not called"}
 
@@ -605,14 +606,20 @@ class Pi05DecomposedServer:
                 rng = np.random.default_rng()  # nondeterministic per call
 
                 def _sample_one(_i: int) -> np.ndarray:
-                    noise_i = rng.standard_normal(
-                        (1, self.chunk_size, self.max_action_dim)
-                    ).astype(np.float32)
+                    noise_i = rng.standard_normal((1, self.chunk_size, self.max_action_dim)).astype(
+                        np.float32
+                    )
                     out = self._inference.predict_action_chunk(
-                        img_base=img_base, img_wrist_l=img_wrist_l, img_wrist_r=img_pad,
-                        mask_base=mask_base, mask_wrist_l=mask_wrist_l, mask_wrist_r=mask_pad,
-                        lang_tokens=lang_tokens, lang_masks=lang_masks,
-                        noise=noise_i, state=state_arr,
+                        img_base=img_base,
+                        img_wrist_l=img_wrist_l,
+                        img_wrist_r=img_pad,
+                        mask_base=mask_base,
+                        mask_wrist_l=mask_wrist_l,
+                        mask_wrist_r=mask_pad,
+                        lang_tokens=lang_tokens,
+                        lang_masks=lang_masks,
+                        noise=noise_i,
+                        state=state_arr,
                     )
                     if out.ndim == 3:
                         out = out[0]
@@ -631,13 +638,21 @@ class Pi05DecomposedServer:
             else:
                 # Single-sample (default).
                 noise = np.random.randn(
-                    1, self.chunk_size, self.max_action_dim,
+                    1,
+                    self.chunk_size,
+                    self.max_action_dim,
                 ).astype(np.float32)
                 actions_padded = self._inference.predict_action_chunk(
-                    img_base=img_base, img_wrist_l=img_wrist_l, img_wrist_r=img_pad,
-                    mask_base=mask_base, mask_wrist_l=mask_wrist_l, mask_wrist_r=mask_pad,
-                    lang_tokens=lang_tokens, lang_masks=lang_masks,
-                    noise=noise, state=state_arr,
+                    img_base=img_base,
+                    img_wrist_l=img_wrist_l,
+                    img_wrist_r=img_pad,
+                    mask_base=mask_base,
+                    mask_wrist_l=mask_wrist_l,
+                    mask_wrist_r=mask_pad,
+                    lang_tokens=lang_tokens,
+                    lang_masks=lang_masks,
+                    noise=noise,
+                    state=state_arr,
                 )
 
             # 5b. A2C2 hook -- applied in NORMALIZED action space (between
@@ -664,12 +679,10 @@ class Pi05DecomposedServer:
                 a_std = self._action_std
                 ad = actions_padded.shape[-1]
                 if a_mean.shape[0] < ad:
-                    a_mean = np.concatenate([
-                        a_mean, np.zeros(ad - a_mean.shape[0], dtype=np.float32)
-                    ])
-                    a_std = np.concatenate([
-                        a_std, np.ones(ad - a_std.shape[0], dtype=np.float32)
-                    ])
+                    a_mean = np.concatenate(
+                        [a_mean, np.zeros(ad - a_mean.shape[0], dtype=np.float32)]
+                    )
+                    a_std = np.concatenate([a_std, np.ones(ad - a_std.shape[0], dtype=np.float32)])
                 elif a_mean.shape[0] > ad:
                     a_mean = a_mean[:ad]
                     a_std = a_std[:ad]
@@ -724,7 +737,9 @@ class Pi05DecomposedServer:
             logger.info(
                 "Pi05DecomposedServer A2C2 hook bound INTERNALLY (applied in "
                 "normalized action space before denorm). action_dim=%d, "
-                "obs_dim=%d", hook.head.config.action_dim, hook.head.config.obs_dim,
+                "obs_dim=%d",
+                hook.head.config.action_dim,
+                hook.head.config.obs_dim,
             )
 
     def set_bid_config(self, config: Any) -> None:
@@ -749,9 +764,10 @@ class Pi05DecomposedServer:
                 )
                 self._a2c2_hook = None
             logger.info(
-                "Pi05DecomposedServer BID enabled: n_candidates=%d, "
-                "coherence_window=%d, metric=%s",
-                config.n_candidates, config.coherence_window, config.coherence_metric,
+                "Pi05DecomposedServer BID enabled: n_candidates=%d, coherence_window=%d, metric=%s",
+                config.n_candidates,
+                config.coherence_window,
+                config.coherence_metric,
             )
 
     def reset_bid_state(self) -> None:
@@ -782,8 +798,8 @@ class Pi05DecomposedServer:
                 has_batch = False
             hook_dim = self._a2c2_hook.head.config.action_dim
             actions_for_hook = chunk[:, :hook_dim].copy()
-            corrected, decision, magnitude = (
-                self._a2c2_hook.maybe_apply_to_chunk(actions=actions_for_hook)
+            corrected, decision, magnitude = self._a2c2_hook.maybe_apply_to_chunk(
+                actions=actions_for_hook
             )
             if decision.apply:
                 if has_batch:
@@ -804,7 +820,8 @@ class Pi05DecomposedServer:
             }
 
     def _prep_image(
-        self, image: np.ndarray | None,
+        self,
+        image: np.ndarray | None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Resize/pad an HxWx3 uint8 image to (1, 3, R, R) float32 [0, 1] +
         a (1,) bool mask. When image is None, returns a -1 padding image +
@@ -816,22 +833,25 @@ class Pi05DecomposedServer:
             return img, mask
 
         if image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError(
-                f"image must be HxWx3 uint8, got shape {image.shape}"
-            )
+            raise ValueError(f"image must be HxWx3 uint8, got shape {image.shape}")
 
         # Resize-with-pad to RxR (preserves aspect; pads short side).
         from PIL import Image
+
         h, w = image.shape[:2]
         if h > w:
             pad = (h - w) // 2
             image = np.pad(
-                image, [(0, 0), (pad, h - w - pad), (0, 0)], mode="constant",
+                image,
+                [(0, 0), (pad, h - w - pad), (0, 0)],
+                mode="constant",
             )
         elif w > h:
             pad = (w - h) // 2
             image = np.pad(
-                image, [(pad, w - h - pad), (0, 0), (0, 0)], mode="constant",
+                image,
+                [(pad, w - h - pad), (0, 0), (0, 0)],
+                mode="constant",
             )
         pil = Image.fromarray(image)
         pil = pil.resize((R, R), Image.BILINEAR)
@@ -899,9 +919,12 @@ class Pi05DecomposedServer:
         if arr.shape[0] > self.max_action_dim:
             arr = arr[: self.max_action_dim]
         elif arr.shape[0] < self.max_action_dim:
-            arr = np.concatenate([
-                arr, np.zeros(self.max_action_dim - arr.shape[0], dtype=np.float32),
-            ])
+            arr = np.concatenate(
+                [
+                    arr,
+                    np.zeros(self.max_action_dim - arr.shape[0], dtype=np.float32),
+                ]
+            )
         return arr[np.newaxis, ...]
 
 

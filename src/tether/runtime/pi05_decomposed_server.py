@@ -21,6 +21,7 @@ The class exposes the same ``predict_action_chunk`` contract as
 ``Pi0OnnxServer.predict`` so downstream harnesses don't need to know
 which export pattern is active.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -39,12 +40,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CacheEntry:
     """One VLM output we keep around for potential reuse."""
-    past_kv: list[np.ndarray]            # flat [k_0, v_0, ..., k_17, v_17]
+
+    past_kv: list[np.ndarray]  # flat [k_0, v_0, ..., k_17, v_17]
     prefix_pad_masks: np.ndarray
-    image_phashes: tuple[bytes, ...]     # per-camera perceptual hash
-    lang_hash: bytes                     # exact md5 of language tokens
-    timestamp: float                     # wall-clock time (for TTL-sec path)
-    step_index: int                      # predict_action_chunk call number (for step-count path)
+    image_phashes: tuple[bytes, ...]  # per-camera perceptual hash
+    lang_hash: bytes  # exact md5 of language tokens
+    timestamp: float  # wall-clock time (for TTL-sec path)
+    step_index: int  # predict_action_chunk call number (for step-count path)
 
 
 @dataclass
@@ -55,6 +57,7 @@ class ActionCacheEntry:
     across calls — but for a SnapFlow 1-NFE student at target_time=1
     the noise dependence is minimal, so reusing a cached chunk on a
     matching obs is effectively zero-cost."""
+
     image_phashes: tuple[bytes, ...]
     lang_hash: bytes
     state_signature: np.ndarray | None
@@ -66,6 +69,7 @@ class ActionCacheEntry:
 class CacheStats:
     """Cumulative cache metrics — exposed via get_stats() so callers
     can log hit rate alongside LIBERO task success."""
+
     hits: int = 0
     misses: int = 0
     evictions_ttl: int = 0
@@ -200,6 +204,7 @@ class Pi05DecomposedInference:
         self._call_index: int = 0  # monotonic call counter for step-count TTL
         self._action_cache: ActionCacheEntry | None = None
         from tether.runtime.temporal_vla_cache import TemporalVLAReusePolicy
+
         self._temporal_reuse_policy = TemporalVLAReusePolicy(
             phash_hamming_threshold=phash_hamming_threshold,
         )
@@ -209,6 +214,7 @@ class Pi05DecomposedInference:
         # existing behavior is unchanged unless --action-similarity-threshold
         # is set on the CLI.
         from tether.runtime.action_fast_path import ActionFastPath
+
         self._fast_path = ActionFastPath(
             threshold=float(action_similarity_threshold),
             max_skips=int(max_similar_skips),
@@ -227,6 +233,7 @@ class Pi05DecomposedInference:
         self._cuda_graphs_model_id = cuda_graphs_model_id
         if cuda_graphs_enabled:
             from tether.runtime.cuda_graphs import build_cuda_graph_providers
+
             if providers is not None:
                 logger.warning(
                     "cuda_graphs_enabled=True overrides user-provided providers=%s",
@@ -236,14 +243,14 @@ class Pi05DecomposedInference:
         else:
             self._providers = providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
+        from tether.export_config import load_tether_config
+
         cfg_path = self.export_dir / "tether_config.json"
-        if not cfg_path.exists():
-            raise FileNotFoundError(f"tether_config.json missing in {self.export_dir}")
-        self.config: dict[str, Any] = json.loads(cfg_path.read_text())
-        if self.config.get("export_kind") != "decomposed":
+        self.config = load_tether_config(cfg_path)
+        if self.config.get("export_kind") != "decomposed_onnx":
             raise ValueError(
                 f"{cfg_path} has export_kind={self.config.get('export_kind')!r}; "
-                "Pi05DecomposedInference requires 'decomposed'"
+                "Pi05DecomposedInference requires 'decomposed_onnx'"
             )
         self._past_kv_names: list[str] = self.config["decomposed"]["past_kv_tensor_names"]
         self._n_layers: int = self.config["decomposed"]["paligemma_layers"]
@@ -252,14 +259,13 @@ class Pi05DecomposedInference:
         # (x_t, t, past_kv) → v_t and we drive the Euler loop in Python.
         # When False (default), it's the baked-loop shape (noise → actions,
         # single call). Spec: features/03_export/per-step-expert-export.md.
-        self._per_step_expert: bool = bool(
-            self.config["decomposed"].get("per_step_expert", False)
-        )
-        self._num_steps: int = int(self.config.get("num_denoising_steps", 1))
+        self._per_step_expert: bool = bool(self.config["decomposed"].get("per_step_expert", False))
+        self._num_steps = int(self.config["num_denoising_steps"])
         if self._per_step_expert:
             logger.info(
                 "Pi05DecomposedInference: per-step expert path active "
-                "(num_steps=%d, Python Euler loop)", self._num_steps,
+                "(num_steps=%d, Python Euler loop)",
+                self._num_steps,
             )
 
         prefix_path = self.export_dir / self.config["decomposed"]["vlm_prefix_onnx"]
@@ -276,7 +282,8 @@ class Pi05DecomposedInference:
         # captures cleanly on both A10G + A100; vlm_prefix captures on A100+
         # only (per ADR 2026-04-24 Day-0 spike findings).
         cuda_required = self._providers[0] == "CUDAExecutionProvider" or (
-            isinstance(self._providers[0], tuple) and self._providers[0][0] == "CUDAExecutionProvider"
+            isinstance(self._providers[0], tuple)
+            and self._providers[0][0] == "CUDAExecutionProvider"
         )
 
         if cuda_graphs_enabled:
@@ -333,8 +340,10 @@ class Pi05DecomposedInference:
             logger.info(
                 "cuda-graphs enabled: vlm_prefix.captured=%s, expert_denoise.captured=%s "
                 "(embodiment=%s, model_id=%s)",
-                self._sess_prefix.captured, self._sess_expert.captured,
-                cuda_graphs_embodiment, cuda_graphs_model_id,
+                self._sess_prefix.captured,
+                self._sess_expert.captured,
+                cuda_graphs_embodiment,
+                cuda_graphs_model_id,
             )
         else:
             logger.info("loading vlm_prefix: %s", prefix_path)
@@ -371,6 +380,7 @@ class Pi05DecomposedInference:
         self._episode_cache = None
         if cache_level == "episode":
             from tether.runtime.episode_cache import EpisodeCache
+
             # Reuse the embodiment/model_id already threaded in for CUDA
             # graph metrics — same process, same labels — so the
             # tether_episode_cache_bytes_total gauge actually emits instead
@@ -437,10 +447,16 @@ class Pi05DecomposedInference:
                 )
             return self._predict_with_episode_cache(
                 episode_id=episode_id,
-                img_base=img_base, img_wrist_l=img_wrist_l, img_wrist_r=img_wrist_r,
-                mask_base=mask_base, mask_wrist_l=mask_wrist_l, mask_wrist_r=mask_wrist_r,
-                lang_tokens=lang_tokens, lang_masks=lang_masks,
-                noise=noise, state=state,
+                img_base=img_base,
+                img_wrist_l=img_wrist_l,
+                img_wrist_r=img_wrist_r,
+                mask_base=mask_base,
+                mask_wrist_l=mask_wrist_l,
+                mask_wrist_r=mask_wrist_r,
+                lang_tokens=lang_tokens,
+                lang_masks=lang_masks,
+                noise=noise,
+                state=state,
             )
 
         image_phashes = (
@@ -522,6 +538,7 @@ class Pi05DecomposedInference:
                 # so unit tests without the prometheus extra don't fail.
                 try:
                     from tether.observability.prometheus import inc_action_skip
+
                     inc_action_skip()
                 except Exception:  # noqa: BLE001
                     pass
@@ -578,6 +595,7 @@ class Pi05DecomposedInference:
         # overhead, passes gate 4 (≤20% median, ≤1.30x p99). See
         # 03_experiments/2026-04-30-per-step-overhead-modal-a100.md.
         import onnxruntime as ort
+
         n = self._num_steps
         dt = -1.0 / n
         x_t = noise.astype(np.float32, copy=False)
@@ -634,10 +652,16 @@ class Pi05DecomposedInference:
         self,
         *,
         episode_id: str,
-        img_base, img_wrist_l, img_wrist_r,
-        mask_base, mask_wrist_l, mask_wrist_r,
-        lang_tokens, lang_masks,
-        noise, state,
+        img_base,
+        img_wrist_l,
+        img_wrist_r,
+        mask_base,
+        mask_wrist_l,
+        mask_wrist_r,
+        lang_tokens,
+        lang_masks,
+        noise,
+        state,
     ) -> np.ndarray:
         """Episode-keyed cache path. Looks up (episode_id, lang_hash);
         on hit reuses cached past_kv + prefix_pad_masks (skips VLM).
@@ -651,9 +675,14 @@ class Pi05DecomposedInference:
         else:
             # Cache miss — run the VLM forward
             prefix_feed: dict[str, np.ndarray] = {
-                "img_base": img_base, "img_wrist_l": img_wrist_l, "img_wrist_r": img_wrist_r,
-                "mask_base": mask_base, "mask_wrist_l": mask_wrist_l, "mask_wrist_r": mask_wrist_r,
-                "lang_tokens": lang_tokens, "lang_masks": lang_masks,
+                "img_base": img_base,
+                "img_wrist_l": img_wrist_l,
+                "img_wrist_r": img_wrist_r,
+                "mask_base": mask_base,
+                "mask_wrist_l": mask_wrist_l,
+                "mask_wrist_r": mask_wrist_r,
+                "lang_tokens": lang_tokens,
+                "lang_masks": lang_masks,
             }
             prefix_feed = {k: v for k, v in prefix_feed.items() if k in self._prefix_input_names}
             prefix_out = self._sess_prefix.run(self._prefix_output_names, prefix_feed)
@@ -692,9 +721,14 @@ class Pi05DecomposedInference:
     def _get_or_run_prefix(
         self,
         *,
-        img_base, img_wrist_l, img_wrist_r,
-        mask_base, mask_wrist_l, mask_wrist_r,
-        lang_tokens, lang_masks,
+        img_base,
+        img_wrist_l,
+        img_wrist_r,
+        mask_base,
+        mask_wrist_l,
+        mask_wrist_r,
+        lang_tokens,
+        lang_masks,
         image_phashes: tuple[bytes, ...],
         lang_hash: bytes,
     ) -> tuple[list[np.ndarray], np.ndarray]:
@@ -787,7 +821,7 @@ class Pi05DecomposedInference:
         step_h = max(1, h // cls.PHASH_SIZE)
         step_w = max(1, w // cls.PHASH_SIZE)
         # Integer downsample — coarse but fast + dependency-free
-        small = gray[:step_h * cls.PHASH_SIZE, :step_w * cls.PHASH_SIZE]
+        small = gray[: step_h * cls.PHASH_SIZE, : step_w * cls.PHASH_SIZE]
         small = small.reshape(cls.PHASH_SIZE, step_h, cls.PHASH_SIZE, step_w).mean(axis=(1, 3))
         bits = small > small.mean()
         bits_flat = bits.flatten()
