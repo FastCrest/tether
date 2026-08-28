@@ -89,7 +89,12 @@ jobs:
             --validate-policy-syntax "$CANDIDATE_POLICY"
           git worktree add --detach "$CANDIDATE_DIR" "${{ steps.candidate.outputs.sha }}"
           trap 'git worktree remove --force "$CANDIDATE_DIR"' EXIT
-          PROTECTED_POLICY="$CANDIDATE_DIR/.protected-base-pyproject.toml"
+          PROTECTED_POLICY_DIR="$RUNNER_TEMP/protected-base-policy"
+          mkdir -p "$PROTECTED_POLICY_DIR"
+          # Ruff recognizes a complete project configuration only when it is
+          # named pyproject.toml. A renamed file is parsed as ruff.toml and
+          # rejects standard tables such as [build-system].
+          PROTECTED_POLICY="$PROTECTED_POLICY_DIR/pyproject.toml"
           rm -f -- "$CANDIDATE_DIR/pyproject.toml"
           git show "$GITHUB_SHA:pyproject.toml" > "$PROTECTED_POLICY"
           python -I -m ruff check \
