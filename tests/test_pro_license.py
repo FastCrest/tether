@@ -1,22 +1,18 @@
-"""Tests for src/tether/pro/license.py — Phase 1 self-distilling-serve Day 2.
-
-Per ADR 2026-04-25-self-distilling-serve-architecture decision #5: HW-bound
-JWT at ~/.tether/pro.license + 24h heartbeat. Phase 1 ships substrate
-(format + validation) without cryptographic verification — Phase 1.5 wires
-actual signing. License absence = exit 1, NEVER silent degrade.
-"""
+"""Security-focused tests for signed v2 license loading."""
 from __future__ import annotations
 
+import base64
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from tether.pro import heartbeat, signature
+from tether.pro.heartbeat import HeartbeatAttestation, HeartbeatNetworkError
 from tether.pro.license import (
-    DEFAULT_LICENSE_PATH,
-    HEARTBEAT_FRESHNESS_S,
     LICENSE_VERSION,
     HardwareFingerprintLite,
     LicenseCorrupt,
@@ -31,301 +27,221 @@ from tether.pro.license import (
 
 
 def _mk_hw(**overrides) -> HardwareFingerprintLite:
-    defaults = dict(
-        gpu_uuid="GPU-abc-123",
-        gpu_name="NVIDIA A10G",
-        cpu_count=8,
+    values = {"gpu_uuid": "GPU-abc-123", "gpu_name": "NVIDIA A10G", "cpu_count": 8}
+    values.update(overrides)
+    return HardwareFingerprintLite(**values)
+
+
+@pytest.fixture
+def signing_key(monkeypatch: pytest.MonkeyPatch) -> Ed25519PrivateKey:
+    private = Ed25519PrivateKey.generate()
+    public_b64 = base64.b64encode(private.public_key().public_bytes_raw()).decode("ascii")
+    trusted = {"key_test": public_b64}
+    monkeypatch.setattr(signature, "TRUSTED_PUBLIC_KEYS_B64", trusted)
+    monkeypatch.setattr(heartbeat, "TRUSTED_PUBLIC_KEYS_B64", trusted)
+    return private
+
+
+def _signed_license(private: Ed25519PrivateKey, **overrides) -> dict:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "license_version": 2,
+        "license_id": "lic_test",
+        "customer_id": "acme",
+        "tier": "pro",
+        "issued_at": (now - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (now + timedelta(days=30)).isoformat().replace("+00:00", "Z"),
+        "max_seats": 1,
+        "hardware_binding": {
+            "gpu_uuid": "GPU-abc-123", "gpu_name": "NVIDIA A10G", "cpu_count": 8,
+        },
+    }
+    payload.update(overrides)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        **payload,
+        "signature": base64.b64encode(private.sign(canonical)).decode("ascii"),
+        "key_id": "key_test",
+    }
+
+
+def _active_attestation(*, license_id: str = "lic_test", valid_until: int | None = None):
+    now = int(time.time())
+    return HeartbeatAttestation(
+        domain="tether.license.heartbeat",
+        issued_at=now,
+        key_id="key_test",
+        license_id=license_id,
+        request_nonce="AAAAAAAAAAAAAAAAAAAAAA",
+        status="active",
+        v=1,
+        valid_until=valid_until or now + 3600,
+        signature="A" * 86,
     )
-    defaults.update(overrides)
-    return HardwareFingerprintLite(**defaults)
 
 
-# ---------------------------------------------------------------------------
-# HardwareFingerprintLite.matches
-# ---------------------------------------------------------------------------
+def _signed_attestation(private: Ed25519PrivateKey, *, valid_until: int) -> dict:
+    now = int(time.time())
+    payload = {
+        "domain": "tether.license.heartbeat",
+        "issued_at": now,
+        "key_id": "key_test",
+        "license_id": "lic_test",
+        "request_nonce": base64.urlsafe_b64encode(b"0123456789abcdef").decode().rstrip("="),
+        "status": "active",
+        "v": 1,
+        "valid_until": valid_until,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        **payload,
+        "signature": base64.urlsafe_b64encode(private.sign(canonical)).decode().rstrip("="),
+    }
 
 
-def test_hw_matches_identical():
+def _write(path, value: dict) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True))
+
+
+def _mock_online(monkeypatch: pytest.MonkeyPatch, attestation=None) -> None:
+    monkeypatch.setattr(
+        heartbeat,
+        "send_heartbeat",
+        lambda **_kwargs: attestation or _active_attestation(),
+    )
+
+
+def test_hardware_matching_is_exact():
     assert _mk_hw().matches(_mk_hw())
-
-
-def test_hw_mismatch_on_gpu_uuid():
     assert not _mk_hw(gpu_uuid="A").matches(_mk_hw(gpu_uuid="B"))
-
-
-def test_hw_mismatch_on_cpu_count():
     assert not _mk_hw(cpu_count=8).matches(_mk_hw(cpu_count=16))
 
 
-def test_hw_mismatch_on_gpu_name():
-    assert not _mk_hw(gpu_name="A100").matches(_mk_hw(gpu_name="A10G"))
-
-
-# ---------------------------------------------------------------------------
-# ProLicense roundtrip + expiration
-# ---------------------------------------------------------------------------
-
-
-def test_license_to_from_dict_roundtrip():
+def test_v2_round_trip_shape():
     license = ProLicense(
         license_version=LICENSE_VERSION,
+        license_id="lic_test",
         customer_id="acme",
         tier="pro",
         issued_at="2026-04-25T00:00:00Z",
         expires_at="2027-04-25T00:00:00Z",
+        max_seats=1,
         hardware_binding=_mk_hw(),
-        signature="sig123",
-        last_heartbeat_at="2026-04-25T10:00:00Z",
+        signature="sig",
+        key_id="key_test",
     )
-    d = license.to_dict()
-    license2 = ProLicense.from_dict(d)
-    assert license == license2
+    assert ProLicense.from_dict(license.to_dict()) == license
 
 
-def test_license_is_expired_in_past():
-    past = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
-    license = ProLicense(
-        license_version=1, customer_id="acme", tier="pro",
-        issued_at="2026-04-01T00:00:00Z", expires_at=past,
-        hardware_binding=_mk_hw(),
-    )
-    assert license.is_expired()
-
-
-def test_license_is_not_expired_in_future():
-    future = (datetime.now(timezone.utc) + timedelta(days=30)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
-    license = ProLicense(
-        license_version=1, customer_id="acme", tier="pro",
-        issued_at="2026-04-01T00:00:00Z", expires_at=future,
-        hardware_binding=_mk_hw(),
-    )
-    assert not license.is_expired()
-
-
-def test_license_is_expired_on_unparseable_timestamp():
-    license = ProLicense(
-        license_version=1, customer_id="acme", tier="pro",
-        issued_at="2026-04-01T00:00:00Z", expires_at="not-an-iso-date",
-        hardware_binding=_mk_hw(),
-    )
-    assert license.is_expired()
-
-
-def test_license_heartbeat_age_inf_when_unset():
-    license = ProLicense(
-        license_version=1, customer_id="acme", tier="pro",
-        issued_at="2026-04-01T00:00:00Z", expires_at="2027-04-25T00:00:00Z",
-        hardware_binding=_mk_hw(),
-        last_heartbeat_at="",
-    )
-    assert license.heartbeat_age_s() == float("inf")
-
-
-def test_license_heartbeat_age_recent_when_just_now():
-    license = ProLicense(
-        license_version=1, customer_id="acme", tier="pro",
-        issued_at="2026-04-01T00:00:00Z", expires_at="2027-04-25T00:00:00Z",
-        hardware_binding=_mk_hw(),
-        last_heartbeat_at=datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        ),
-    )
-    assert license.heartbeat_age_s() < 60
-
-
-def test_license_heartbeat_stale_after_25h():
-    old = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
-    license = ProLicense(
-        license_version=1, customer_id="acme", tier="pro",
-        issued_at="2026-04-01T00:00:00Z", expires_at="2027-04-25T00:00:00Z",
-        hardware_binding=_mk_hw(),
-        last_heartbeat_at=old,
-    )
-    assert license.is_heartbeat_stale()
-
-
-# ---------------------------------------------------------------------------
-# load_license — error paths
-# ---------------------------------------------------------------------------
-
-
-def test_load_raises_missing_when_file_absent(tmp_path):
+def test_load_missing_and_corrupt(tmp_path):
     with pytest.raises(LicenseMissing):
-        load_license(
-            path=tmp_path / "no_such.license",
-            current_hardware=_mk_hw(),
-        )
-
-
-def test_load_raises_corrupt_on_bad_json(tmp_path):
-    path = tmp_path / "pro.license"
+        load_license(path=tmp_path / "missing", current_hardware=_mk_hw())
+    path = tmp_path / "bad"
     path.write_text("not json")
     with pytest.raises(LicenseCorrupt):
         load_license(path=path, current_hardware=_mk_hw())
 
 
-def test_load_raises_corrupt_on_missing_required_fields(tmp_path):
-    path = tmp_path / "pro.license"
-    path.write_text(json.dumps({"license_version": 1}))  # missing other fields
-    with pytest.raises(LicenseCorrupt):
+def test_unsigned_v1_is_always_rejected_even_with_dev_env(tmp_path, monkeypatch):
+    path = tmp_path / "legacy.license"
+    issue_dev_license(customer_id="acme", hardware=_mk_hw(), path=path)
+    monkeypatch.setenv("TETHER_DEV", "1")
+    with pytest.raises(LicenseCorrupt, match="require signed version 2"):
         load_license(path=path, current_hardware=_mk_hw())
 
 
-def test_load_raises_corrupt_on_future_license_version(tmp_path):
+def test_valid_signed_v2_requires_server_and_never_rewrites_license(
+    tmp_path, monkeypatch, signing_key,
+):
     path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
-    )
-    # Tamper with the file to bump the license_version
-    data = json.loads(path.read_text())
-    data["license_version"] = LICENSE_VERSION + 99
-    path.write_text(json.dumps(data))
-    with pytest.raises(LicenseCorrupt, match="license version"):
+    value = _signed_license(signing_key)
+    _write(path, value)
+    before = path.read_bytes()
+    _mock_online(monkeypatch)
+
+    loaded = load_license(path=path, current_hardware=_mk_hw())
+
+    assert loaded.license_id == "lic_test"
+    assert loaded.attestation_valid_until > int(time.time())
+    assert path.read_bytes() == before
+
+
+def test_tampered_or_unsigned_v2_is_rejected(tmp_path, signing_key):
+    path = tmp_path / "pro.license"
+    value = _signed_license(signing_key)
+    value["tier"] = "enterprise"
+    _write(path, value)
+    with pytest.raises(LicenseCorrupt, match="signature verification"):
         load_license(path=path, current_hardware=_mk_hw())
 
 
-def test_load_raises_expired_on_past_expires_at(tmp_path):
-    path = tmp_path / "pro.license"
-    # Issue with valid_for_days but immediately tamper to past
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
+def test_expired_and_hardware_mismatch_fail_before_heartbeat(tmp_path, signing_key):
+    expired_path = tmp_path / "expired"
+    _write(
+        expired_path,
+        _signed_license(
+            signing_key,
+            expires_at=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        ),
     )
-    data = json.loads(path.read_text())
-    data["expires_at"] = "2020-01-01T00:00:00Z"
-    path.write_text(json.dumps(data))
     with pytest.raises(LicenseExpired):
+        load_license(path=expired_path, current_hardware=_mk_hw())
+
+    mismatch_path = tmp_path / "mismatch"
+    _write(mismatch_path, _signed_license(signing_key))
+    with pytest.raises(LicenseHardwareMismatch):
+        load_license(path=mismatch_path, current_hardware=_mk_hw(gpu_uuid="other"))
+
+
+def test_first_use_network_failure_fails_closed_without_cache(
+    tmp_path, monkeypatch, signing_key,
+):
+    path = tmp_path / "pro.license"
+    _write(path, _signed_license(signing_key))
+    monkeypatch.setattr(
+        heartbeat,
+        "send_heartbeat",
+        lambda **_kwargs: (_ for _ in ()).throw(HeartbeatNetworkError("offline")),
+    )
+    with pytest.raises(LicenseHeartbeatStale, match="no usable signed heartbeat cache"):
         load_license(path=path, current_hardware=_mk_hw())
 
 
-def test_load_raises_hardware_mismatch_on_different_gpu(tmp_path):
+def test_network_failure_uses_only_a_verified_cache_inside_grace(
+    tmp_path, monkeypatch, signing_key,
+):
     path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(gpu_uuid="GPU-A"),
-        valid_for_days=30, path=path,
+    _write(path, _signed_license(signing_key))
+    cache_path = path.with_suffix(".license.heartbeat")
+    _write(cache_path, _signed_attestation(signing_key, valid_until=int(time.time()) + 60))
+    monkeypatch.setattr(
+        heartbeat,
+        "send_heartbeat",
+        lambda **_kwargs: (_ for _ in ()).throw(HeartbeatNetworkError("offline")),
     )
-    with pytest.raises(LicenseHardwareMismatch):
-        load_license(
-            path=path,
-            current_hardware=_mk_hw(gpu_uuid="GPU-B"),
-        )
+    loaded = load_license(path=path, current_hardware=_mk_hw())
+    assert loaded.attestation_valid_until > int(time.time())
 
 
-def test_load_raises_heartbeat_stale_after_25h(tmp_path):
+def test_network_failure_rejects_verified_cache_after_grace(
+    tmp_path, monkeypatch, signing_key,
+):
     path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
+    _write(path, _signed_license(signing_key))
+    cache_path = path.with_suffix(".license.heartbeat")
+    _write(cache_path, _signed_attestation(signing_key, valid_until=int(time.time()) - 301))
+    monkeypatch.setattr(
+        heartbeat,
+        "send_heartbeat",
+        lambda **_kwargs: (_ for _ in ()).throw(HeartbeatNetworkError("offline")),
     )
-    # Tamper the heartbeat to 25h ago
-    data = json.loads(path.read_text())
-    old = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
-    data["last_heartbeat_at"] = old
-    path.write_text(json.dumps(data))
     with pytest.raises(LicenseHeartbeatStale):
         load_license(path=path, current_hardware=_mk_hw())
 
 
-def test_load_skip_heartbeat_check_succeeds_with_stale_heartbeat(tmp_path):
-    """skip_heartbeat_check=True bypasses the freshness gate (used in tests
-    + first-run scenarios)."""
-    path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
-    )
-    data = json.loads(path.read_text())
-    data["last_heartbeat_at"] = "2020-01-01T00:00:00Z"
-    path.write_text(json.dumps(data))
-    license = load_license(
-        path=path, current_hardware=_mk_hw(), skip_heartbeat_check=True,
-    )
-    assert license.customer_id == "acme"
-
-
-# ---------------------------------------------------------------------------
-# load_license — happy path + heartbeat refresh
-# ---------------------------------------------------------------------------
-
-
-def test_load_succeeds_on_fresh_license(tmp_path):
-    path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
-    )
-    license = load_license(path=path, current_hardware=_mk_hw())
-    assert license.customer_id == "acme"
-    assert license.tier == "pro"
-
-
-def test_load_refreshes_heartbeat_on_success(tmp_path):
-    path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
-    )
-    # Tamper the heartbeat to be within tolerance but old
-    data = json.loads(path.read_text())
-    old_hb = (datetime.now(timezone.utc) - timedelta(hours=12)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
-    data["last_heartbeat_at"] = old_hb
-    path.write_text(json.dumps(data))
-    # Load — should succeed AND refresh heartbeat to now
-    load_license(path=path, current_hardware=_mk_hw())
-    new_data = json.loads(path.read_text())
-    assert new_data["last_heartbeat_at"] != old_hb
-    # New heartbeat is recent
-    new_hb = datetime.fromisoformat(
-        new_data["last_heartbeat_at"].replace("Z", "+00:00")
-    )
-    assert (datetime.now(timezone.utc) - new_hb).total_seconds() < 60
-
-
-# ---------------------------------------------------------------------------
-# issue_dev_license
-# ---------------------------------------------------------------------------
-
-
-def test_issue_dev_writes_file_at_path(tmp_path):
-    path = tmp_path / "pro.license"
-    license = issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
-    )
-    assert path.exists()
-    # Permissions are 0o600
-    mode = os.stat(path).st_mode & 0o777
-    assert mode == 0o600
-    assert license.customer_id == "acme"
-    assert license.signature == ""  # Phase 1 dev license is unsigned
-
-
-def test_issue_dev_round_trip_via_load_license(tmp_path):
-    path = tmp_path / "pro.license"
-    issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        valid_for_days=30, path=path,
-    )
-    loaded = load_license(path=path, current_hardware=_mk_hw())
-    assert loaded.customer_id == "acme"
-    assert loaded.tier == "pro"
-
-
-def test_issue_dev_supports_custom_tier(tmp_path):
-    path = tmp_path / "pro.license"
-    license = issue_dev_license(
-        customer_id="acme", hardware=_mk_hw(),
-        tier="enterprise", valid_for_days=30, path=path,
-    )
-    assert license.tier == "enterprise"
+def test_legacy_dev_file_has_private_permissions_but_cannot_unlock(tmp_path):
+    path = tmp_path / "legacy.license"
+    issue_dev_license(customer_id="acme", hardware=_mk_hw(), path=path)
+    assert os.stat(path).st_mode & 0o777 == 0o600
+    with pytest.raises(LicenseCorrupt):
+        load_license(path=path, current_hardware=_mk_hw())

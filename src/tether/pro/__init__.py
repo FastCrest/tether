@@ -105,8 +105,12 @@ from tether.pro.activate import (
     probe_hardware_binding,
 )
 from tether.pro.heartbeat import (
+    HeartbeatAttestation,
+    HeartbeatNetworkError,
+    HeartbeatProtocolError,
     LicenseExpiredAtServer,
     LicenseRevokedError,
+    LicenseSuspendedError,
     send_heartbeat,
 )
 
@@ -125,6 +129,9 @@ __all__ = [
     "GateThresholds",
     "HardwareFingerprintLite",
     "HeartbeatPayload",
+    "HeartbeatAttestation",
+    "HeartbeatNetworkError",
+    "HeartbeatProtocolError",
     "HfHubAuthFailure",
     "HfHubClient",
     "HfHubDown",
@@ -161,6 +168,7 @@ __all__ = [
     "ActivationNetworkError",
     "LicenseExpiredAtServer",
     "LicenseRevokedError",
+    "LicenseSuspendedError",
     "LicenseSignatureError",
     "activate_license",
     "build_telemetry_payload",

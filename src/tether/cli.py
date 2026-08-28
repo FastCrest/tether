@@ -2633,6 +2633,19 @@ def serve(
              "2-policy mode (--policy-b set) per ADR "
              "2026-04-25-policy-versioning-architecture.",
     ),
+    pro: bool = typer.Option(
+        False,
+        "--pro",
+        help="Enable paid serving. Requires a valid signed v2 license and a "
+             "fresh server-signed heartbeat before startup.",
+    ),
+    pro_license: str = typer.Option(
+        "",
+        "--pro-license",
+        envvar="TETHER_PRO_LICENSE",
+        help="Path to the signed v2 Pro license. Used only with --pro; defaults "
+             "to ~/.tether/pro.license.",
+    ),
     verbose: bool = typer.Option(False, help="Verbose logging"),
 ):
     """Start a VLA inference server. POST /act with image + instruction → actions.
@@ -2646,6 +2659,28 @@ def serve(
     if not export_path.exists():
         err_console.print(f"[red]Export directory not found: {export_dir}[/red]")
         console.print(f"[dim]Run 'tether export' first to create an export.[/dim]")
+        raise typer.Exit(1)
+
+    if pro_license and not pro:
+        err_console.print("[red]--pro-license/TETHER_PRO_LICENSE requires --pro.[/red]")
+        raise typer.Exit(1)
+    if pro and ros2:
+        err_console.print(
+            "[red]--pro cannot be combined with --ros2; ROS2 serving does not "
+            "yet enforce the signed-license lease.[/red]"
+        )
+        raise typer.Exit(1)
+    if pro and mcp:
+        err_console.print(
+            "[red]--pro cannot be combined with --mcp; MCP serving does not "
+            "yet enforce the signed-license lease.[/red]"
+        )
+        raise typer.Exit(1)
+    if pro and transport != "http":
+        err_console.print(
+            "[red]--pro currently supports only --transport http; the ZMQ "
+            "transport has no signed-lease admission gate.[/red]"
+        )
         raise typer.Exit(1)
 
     onnx_files = list(export_path.glob("*.onnx"))
@@ -3072,9 +3107,13 @@ def serve(
         shadow_policy=shadow_policy or None,
         shadow_sample=shadow_sample,
         shadow_queue_size=shadow_queue_size,
+        pro=pro,
+        pro_license=pro_license or None,
     )
     if api_key:
         composed.append("[cyan]api-key-auth[/cyan]")
+    if pro:
+        composed.append("[cyan]pro-license[/cyan]")
     if replan_hz > 0:
         composed.append(
             f"[cyan]replan[/cyan]={replan_hz:g}Hz/execute={execute_hz:g}Hz"

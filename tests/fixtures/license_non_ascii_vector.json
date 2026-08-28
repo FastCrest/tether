@@ -1,0 +1,20 @@
+{
+  "key_id": "key_unicode_vector",
+  "public_key_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "payload": {
+    "license_version": 2,
+    "license_id": "lic_unicode",
+    "customer_id": "客户 É",
+    "tier": "pro",
+    "issued_at": "2026-08-28T00:00:00Z",
+    "expires_at": "2026-08-29T00:00:00Z",
+    "max_seats": 1,
+    "hardware_binding": {
+      "gpu_uuid": "GPU-一",
+      "gpu_name": "Éclair GPU",
+      "cpu_count": 8
+    }
+  },
+  "canonical_utf8_b64": "eyJjdXN0b21lcl9pZCI6IuWuouaItyDDiSIsImV4cGlyZXNfYXQiOiIyMDI2LTA4LTI5VDAwOjAwOjAwWiIsImhhcmR3YXJlX2JpbmRpbmciOnsiY3B1X2NvdW50Ijo4LCJncHVfbmFtZSI6IsOJY2xhaXIgR1BVIiwiZ3B1X3V1aWQiOiJHUFUt5LiAIn0sImlzc3VlZF9hdCI6IjIwMjYtMDgtMjhUMDA6MDA6MDBaIiwibGljZW5zZV9pZCI6ImxpY191bmljb2RlIiwibGljZW5zZV92ZXJzaW9uIjoyLCJtYXhfc2VhdHMiOjEsInRpZXIiOiJwcm8ifQ==",
+  "signature_b64": "lGrDyqTdD8RSwG7droLDyVcZBVMv+HRwP3K46DxypukXdUyTWyJKQG2KjEr1k25OY0gOMlvFJiYmUzthM6csCQ=="
+}

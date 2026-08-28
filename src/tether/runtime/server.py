@@ -82,6 +82,7 @@ logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
 REQUEST_ID_HEADER = "X-Tether-Request-ID"
 REQUEST_ID_ALIASES = (REQUEST_ID_HEADER, "X-Request-ID")
+LICENSE_HEARTBEAT_REFRESH_MARGIN_S = 30
 _request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "tether_request_id",
     default="",
@@ -91,6 +92,129 @@ try:
     from tether import __version__ as _TETHER_VERSION
 except ImportError:
     _TETHER_VERSION = ""
+
+
+def _paid_license_deadline(pro_license: Any) -> int:
+    from datetime import datetime
+    from tether.pro.heartbeat import HEARTBEAT_CLOCK_SKEW_S
+
+    return min(
+        int(pro_license.attestation_valid_until) + HEARTBEAT_CLOCK_SKEW_S,
+        int(datetime.fromisoformat(
+            pro_license.expires_at.replace("Z", "+00:00")
+        ).timestamp()),
+    )
+
+
+def _paid_license_admitted(server: Any, *, now_s: int | None = None) -> bool:
+    """Synchronous paid-request gate; event-loop timing cannot bypass it."""
+    if getattr(server, "pro_license", None) is None:
+        return True
+    current = int(time.time()) if now_s is None else int(now_s)
+    deadline = int(getattr(server, "_pro_license_deadline", 0))
+    if current >= deadline:
+        server.health_state = "degraded"
+        return False
+    return True
+
+
+def _accept_heartbeat_renewal(
+    server: Any,
+    attestation: Any,
+    *,
+    previous_deadline: int,
+    completed_at_s: int,
+) -> bool:
+    """Install a renewal only when it completed strictly before old expiry."""
+    if (
+        completed_at_s >= previous_deadline
+        or int(getattr(server, "_pro_license_deadline", 0)) != previous_deadline
+    ):
+        server.health_state = "degraded"
+        return False
+    new_deadline = _paid_license_deadline(
+        SimpleNamespace(
+            attestation_valid_until=attestation.valid_until,
+            expires_at=server.pro_license.expires_at,
+        )
+    )
+    if new_deadline <= completed_at_s:
+        server.health_state = "degraded"
+        return False
+    server._pro_license_deadline = new_deadline
+    return True
+
+
+def _heartbeat_refresh_delay(*, deadline_s: int, now_s: int) -> int:
+    from tether.pro.heartbeat import HEARTBEAT_RETRY_S
+
+    return min(
+        HEARTBEAT_RETRY_S,
+        max(0, int(deadline_s) - int(now_s) - LICENSE_HEARTBEAT_REFRESH_MARGIN_S),
+    )
+
+
+async def _refresh_paid_heartbeat_once(
+    server: Any,
+    *,
+    send_heartbeat_fn: Any,
+    license_id: str,
+    hardware_fingerprint: str,
+    tether_version: str,
+    license_expires_at: str,
+    cache_path: str | Path,
+    previous_deadline: int,
+) -> bool:
+    """Refresh without granting a timed-out worker thread local authority."""
+    import asyncio
+
+    from tether.pro.heartbeat import persist_verified_attestation
+
+    remaining = int(previous_deadline) - int(time.time())
+    heartbeat_task = asyncio.create_task(
+        asyncio.to_thread(
+            send_heartbeat_fn,
+            license_id=license_id,
+            hardware_fingerprint=hardware_fingerprint,
+            tether_version=tether_version,
+            license_expires_at=license_expires_at,
+            # asyncio cancellation cannot stop a running worker thread. It
+            # must therefore be incapable of mutating the authoritative cache.
+            cache_path=None,
+        )
+    )
+    try:
+        # Shield the thread-backed task so Python 3.10's wait_for does not
+        # wait for an uncancellable executor call before reporting timeout.
+        # The worker has no authority to update the cache or deadline, so it
+        # is safe to let it finish after the caller has failed closed.
+        attestation = await asyncio.wait_for(
+            asyncio.shield(heartbeat_task),
+            timeout=max(0.001, remaining),
+        )
+    except asyncio.TimeoutError:
+        # Retrieve any eventual exception from the detached task rather than
+        # leaving an unobserved-task warning at loop shutdown.
+        def _consume_late_result(task: asyncio.Task[Any]) -> None:
+            try:
+                task.result()
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        heartbeat_task.add_done_callback(_consume_late_result)
+        raise
+    completed_at = int(time.time())
+    if not _accept_heartbeat_renewal(
+        server,
+        attestation,
+        previous_deadline=previous_deadline,
+        completed_at_s=completed_at,
+    ):
+        return False
+    # Only the event-loop owner may persist, and only after the old lease and
+    # concurrent-deadline checks accepted this exact verified result.
+    persist_verified_attestation(attestation, cache_path=cache_path)
+    return True
 
 
 def _coerce_optional_float(value: Any) -> float | None:
@@ -1800,6 +1924,8 @@ def create_app(
     shadow_policy: str | None = None,  # shadow mode: mirror sampled traffic to this export
     shadow_sample: float = 1.0,  # fraction of /act traffic mirrored to shadow_policy
     shadow_queue_size: int = 32,  # bounded pending shadow requests; 0 disables queueing
+    pro: bool = False,
+    pro_license: str | Path | None = None,
 ) -> Any:
     """Create a FastAPI app for serving VLA predictions.
 
@@ -1837,6 +1963,12 @@ def create_app(
     server.health_state flips to "degraded" — /health returns 503 and
     /act returns 503 with Retry-After: 60. Successful /act resets the
     counter. Default 5. Set to 0 to disable.
+
+    pro: explicit paid-serving mode. When True, ``pro_license`` (or
+    ``TETHER_PRO_LICENSE`` / the default path) is loaded, signature-checked,
+    and heartbeat-confirmed synchronously before the app is returned. Any
+    failure aborts startup. Passing ``pro_license`` without ``pro=True`` is an
+    error.
 
     inference_executor_workers / inference_executor_queue: bounded async
     offload capacity for synchronous predict work. Saturation returns an
@@ -2088,6 +2220,33 @@ def create_app(
             inference_executor_workers=inference_executor_workers,
             inference_executor_queue=inference_executor_queue,
         )
+
+    # Paid mode is explicit and is validated before the app/lifespan exists.
+    # A missing, invalid, revoked, or offline-first license aborts startup.
+    if pro_license is not None and not pro:
+        raise ValueError("pro_license requires pro=True (CLI: --pro)")
+    server.pro_license = None  # type: ignore[attr-defined]
+    server._pro_license_deadline = 0  # type: ignore[attr-defined]
+    if pro:
+        from tether.pro.activate import probe_hardware_binding
+        from tether.pro.license import (
+            DEFAULT_LICENSE_PATH,
+            HardwareFingerprintLite,
+            load_license,
+        )
+
+        configured_path = (
+            pro_license
+            or _os.environ.get("TETHER_PRO_LICENSE")
+            or DEFAULT_LICENSE_PATH
+        )
+        hardware = HardwareFingerprintLite(**probe_hardware_binding())
+        loaded_license = load_license(
+            path=configured_path,
+            current_hardware=hardware,
+        )
+        server.pro_license = loaded_license  # type: ignore[attr-defined]
+        server._pro_license_deadline = _paid_license_deadline(loaded_license)  # type: ignore[attr-defined]
 
     # Attach embodiment config (B.1) — optional, downstream consumers
     # (RTC adapter, action denormalization, tether doctor) read via
@@ -2962,8 +3121,9 @@ def create_app(
                 "uses direct predict_from_base64_async path",
                 type(server).__name__,
             )
-        # Pro tier: start daily heartbeat background task if a Pro license is
-        # loaded. The task runs send_heartbeat() every 24h until cancellation.
+        # Pro tier: refresh the signed heartbeat lease in the background and
+        # fail /act closed when revocation, suspension, expiry, or the bounded
+        # offline grace deadline is reached.
         # Defensive — does nothing on free tier where server.pro_license is None.
         _heartbeat_task = None
         _pro_license = getattr(server, "pro_license", None)
@@ -2973,44 +3133,67 @@ def create_app(
                 from tether.pro.heartbeat import (
                     LicenseExpiredAtServer,
                     LicenseRevokedError,
+                    LicenseSuspendedError,
                     send_heartbeat,
                 )
                 _hb_fp = heartbeat_fingerprint()
-                _hb_license_id = _pro_license.customer_id  # license dict / dataclass — has customer_id
+                _hb_license_id = _pro_license.license_id
                 _hb_version = getattr(server, "_tether_version", None) or "unknown"
 
                 async def _heartbeat_loop():
                     import asyncio as _asyncio_hb
+                    import time as _time_hb
                     while True:
+                        previous_deadline = int(server._pro_license_deadline)  # type: ignore[attr-defined]
+                        seconds_left = previous_deadline - int(_time_hb.time())
+                        if seconds_left <= 0:
+                            logger.error("Pro heartbeat lease expired; refusing new requests")
+                            server.health_state = "degraded"  # type: ignore[attr-defined]
+                            break
+                        sleep_for = _heartbeat_refresh_delay(
+                            deadline_s=previous_deadline,
+                            now_s=int(_time_hb.time()),
+                        )
+                        if sleep_for:
+                            await _asyncio_hb.sleep(sleep_for)
+                        # Recheck immediately before network I/O. Admission also
+                        # checks synchronously on every /act request.
+                        if not _paid_license_admitted(server):
+                            logger.error("Pro heartbeat lease expired before refresh")
+                            break
+                        previous_deadline = int(server._pro_license_deadline)  # type: ignore[attr-defined]
                         try:
-                            send_heartbeat(
+                            if not await _refresh_paid_heartbeat_once(
+                                server,
+                                send_heartbeat_fn=send_heartbeat,
                                 license_id=_hb_license_id,
                                 hardware_fingerprint=_hb_fp,
                                 tether_version=_hb_version,
-                            )
+                                license_expires_at=_pro_license.expires_at,
+                                cache_path=_pro_license.heartbeat_cache_file,
+                                previous_deadline=previous_deadline,
+                            ):
+                                logger.error("Discarded heartbeat renewal completed after lease deadline")
+                                break
                             logger.debug("Pro heartbeat sent for %s", _hb_license_id)
-                        except LicenseRevokedError as exc:
-                            logger.error("Pro license revoked: %s. Server will refuse new requests.", exc)
+                        except (LicenseRevokedError, LicenseExpiredAtServer, LicenseSuspendedError) as exc:
+                            logger.error("Pro license is no longer active: %s", exc)
                             server.health_state = "degraded"  # type: ignore[attr-defined]
                             break
-                        except LicenseExpiredAtServer as exc:
-                            logger.error("Pro license expired at server: %s.", exc)
-                            server.health_state = "degraded"  # type: ignore[attr-defined]
-                            break
-                        except Exception as exc:  # noqa: BLE001 — soft failure, retry next tick
-                            logger.debug("Heartbeat soft failure (will retry): %s", exc)
-                        # 24h interval. Cached license stays valid until
-                        # HEARTBEAT_FRESHNESS_S elapses since the last successful
-                        # heartbeat (handled in pro/license.py at next startup).
-                        await _asyncio_hb.sleep(24 * 3600)
+                        except Exception as exc:  # noqa: BLE001
+                            if not _paid_license_admitted(server):
+                                logger.error("Pro heartbeat failed past grace deadline: %s", exc)
+                                break
+                            logger.warning("Pro heartbeat unavailable; retrying within signed lease: %s", exc)
 
                 import asyncio as _asyncio_lifespan
                 _heartbeat_task = _asyncio_lifespan.create_task(_heartbeat_loop())
                 logger.info(
-                    "Pro daily heartbeat started for license %s", _hb_license_id,
+                    "Pro signed-heartbeat monitor started for license %s", _hb_license_id,
                 )
-            except Exception as exc:  # noqa: BLE001 — never block startup on heartbeat scaffolding
-                logger.warning("Pro heartbeat scaffolding failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Pro heartbeat monitor failed to start: %s", exc)
+                server.health_state = "degraded"  # type: ignore[attr-defined]
 
         # Curate uploader scaffolding — daily background upload of the
         # contribution queue at ~/.tether/contribute/queue/. Posts to the
@@ -3160,6 +3343,7 @@ def create_app(
         # skip the server during warmup, on warmup failure, and after
         # circuit-breaker degradation. Body always returns the granular state
         # for human debugging.
+        _paid_license_admitted(server)
         state = getattr(server, "health_state", "initializing")
         body = {
             "status": "ok" if state == "ready" else "not_ready",
@@ -3188,6 +3372,15 @@ def create_app(
 
     @app.post("/act")
     async def act(request: PredictRequest, _auth: None = Depends(_require_api_key)):
+        if not _paid_license_admitted(server):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "pro-license-lease-expired",
+                    "hint": "paid serving failed closed at the signed heartbeat deadline",
+                },
+                headers={"Retry-After": "60"},
+            )
         # Circuit breaker: refuse traffic when the consecutive-crash threshold
         # has tripped. Operators must restart the server to clear "degraded".
         # Returns 503 + Retry-After=60 so well-behaved clients back off.

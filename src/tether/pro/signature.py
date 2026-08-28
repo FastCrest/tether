@@ -2,15 +2,15 @@
 
 License signatures are produced by the deployed license worker
 (``infra/license-worker/worker.js``) using its master Ed25519 private key.
-Customers verify signatures offline using the public key bundled in
-``tether.pro._public_key.BUNDLED_PUBLIC_KEY_B64``.
+Customers verify signatures offline using the overlapping trusted-key set in
+``tether.pro._public_key.TRUSTED_PUBLIC_KEYS_B64``.
 
 The canonical-bytes format must match the worker's ``canonicalJson()``
 function exactly: object keys sorted lexicographically, no whitespace,
 JSON-serialized scalars. Any deviation breaks verification.
 
 Failure modes (all raise ``LicenseSignatureError``):
-- Bundled public key is empty (deploy not yet completed)
+- Trusted public-key set is empty (deploy not yet completed)
 - License is missing required fields
 - Signature is malformed or doesn't match
 - License was signed with a key whose key_id doesn't match the bundled one
@@ -24,7 +24,7 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from tether.pro._public_key import BUNDLED_KEY_ID, BUNDLED_PUBLIC_KEY_B64
+from tether.pro._public_key import TRUSTED_PUBLIC_KEYS_B64
 
 
 class LicenseSignatureError(Exception):
@@ -37,7 +37,13 @@ def _canonical_json(obj: Any) -> bytes:
     Equivalent to ``json.dumps(obj, sort_keys=True, separators=(',', ':'))``
     encoded as UTF-8.
     """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
 
 
 def _signed_payload_fields() -> tuple[str, ...]:
@@ -76,9 +82,12 @@ def verify_license_signature(license_dict: dict[str, Any]) -> None:
         If verification fails for any reason. The error message identifies
         the specific failure mode for operator debugging.
     """
-    if not BUNDLED_PUBLIC_KEY_B64:
+    if license_dict.get("license_version") != 2:
+        raise LicenseSignatureError("Only signed license_version=2 is accepted.")
+
+    if not TRUSTED_PUBLIC_KEYS_B64:
         raise LicenseSignatureError(
-            "BUNDLED_PUBLIC_KEY_B64 is empty in src/tether/pro/_public_key.py. "
+            "TRUSTED_PUBLIC_KEYS_B64 is empty in src/tether/pro/_public_key.py. "
             "The license worker has not been deployed yet, or the public key "
             "wasn't pasted in after running POST /admin/init. See "
             "infra/license-worker/README.md for deploy steps."
@@ -89,11 +98,11 @@ def verify_license_signature(license_dict: dict[str, Any]) -> None:
         raise LicenseSignatureError("License has no signature field.")
 
     license_key_id = license_dict.get("key_id", "")
-    if BUNDLED_KEY_ID and license_key_id and license_key_id != BUNDLED_KEY_ID:
+    public_key_b64 = TRUSTED_PUBLIC_KEYS_B64.get(str(license_key_id))
+    if not public_key_b64:
         raise LicenseSignatureError(
-            f"License signed with key_id={license_key_id!r} but bundled key is "
-            f"{BUNDLED_KEY_ID!r}. Either the license was issued by a different "
-            f"deployment, or the bundled key is stale (run tether pro upgrade)."
+            f"License signed with unknown or retired key_id={license_key_id!r}. "
+            f"Upgrade Tether to obtain the current trusted-key set."
         )
 
     # Reconstruct the canonical payload that the worker signed.
@@ -105,7 +114,7 @@ def verify_license_signature(license_dict: dict[str, Any]) -> None:
     canonical = _canonical_json(payload)
 
     try:
-        pub_raw = base64.b64decode(BUNDLED_PUBLIC_KEY_B64)
+        pub_raw = base64.b64decode(public_key_b64, validate=True)
         pubkey = Ed25519PublicKey.from_public_bytes(pub_raw)
     except (ValueError, Exception) as exc:
         raise LicenseSignatureError(
