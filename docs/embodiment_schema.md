@@ -1,6 +1,6 @@
 # Embodiment config schema (v1)
 
-`tether serve --embodiment <name>` reads a per-robot config from `configs/embodiments/<name>.json`. Three presets ship out of the box: **franka**, **so100**, **ur5**. You can also point at a custom config with `--custom-embodiment-config <path>`.
+`tether serve --embodiment <name>` loads a per-robot config by name. Four presets ship out of the box: **franka**, **so100**, **ur5**, **quadcopter**. The canonical preset files live inside the package at `src/tether/embodiments/presets/<name>.json`; the copies in `configs/embodiments/` are editable dev fallbacks (checked only if the in-package presets are missing). You can also point at a custom config with `--custom-embodiment-config <path>`.
 
 The authoritative schema is at `src/tether/embodiments/schema.json` (JSON Schema draft-07). This doc is a human-readable mirror — if they drift, the JSON is canonical.
 
@@ -83,10 +83,11 @@ List of camera streams the model expects (1–8 cameras).
 |---|---|---|---|
 | `frequency_hz` | float | 0–1000 (exclusive 0) | Robot control loop rate. |
 | `chunk_size` | int | 1–200 | Actions in a single inference chunk. |
-| `rtc_execution_horizon` | float | 0–5.0 (exclusive 0) | Seconds of chunk to execute before requesting next inference. |
+| `rtc_execution_horizon` | int | 1–`chunk_size` | Integer count of actions to lock during RTC replan. Legacy fractional values (0 < v < 1) auto-migrate to `int(v × chunk_size)` at load with a one-time deprecation warning; schema v2 will reject them. |
 
-**Cross-field rule (warning, not blocking):**
-- `frequency_hz × rtc_execution_horizon ≥ 1` (else `rtc-horizon-too-short` warning — RTC degenerates if the horizon is shorter than one control step).
+**Cross-field rules (warnings, not blocking):**
+- `rtc_execution_horizon < 1` (else `rtc-horizon-too-short` warning — RTC degenerates below one action)
+- `rtc_execution_horizon > chunk_size` (else `rtc-horizon-exceeds-chunk` warning — can't lock more actions than the chunk holds)
 
 ## `constraints`
 

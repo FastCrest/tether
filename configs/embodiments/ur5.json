@@ -82,7 +82,7 @@
   "control": {
     "frequency_hz": 20.0,
     "chunk_size": 50,
-    "rtc_execution_horizon": 0.5
+    "rtc_execution_horizon": 25
   },
   "constraints": {
     "max_ee_velocity": 1.0,
