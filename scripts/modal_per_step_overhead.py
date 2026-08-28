@@ -35,6 +35,7 @@ Usage:
     modal profile activate suranjana-jain
     HF_TOKEN=<token> modal run --detach scripts/modal_per_step_overhead.py
 """
+
 from __future__ import annotations
 
 import json
@@ -116,10 +117,12 @@ image = (
         f'echo "build_bust={_BUST}"',
         'pip install -e "/root/tether-vla[monolithic]"',
     )
-    .env({
-        "HF_HOME": HF_CACHE,
-        "TRANSFORMERS_CACHE": f"{HF_CACHE}/transformers",
-    })
+    .env(
+        {
+            "HF_HOME": HF_CACHE,
+            "TRANSFORMERS_CACHE": f"{HF_CACHE}/transformers",
+        }
+    )
 )
 
 
@@ -135,11 +138,43 @@ NUM_STEPS = 10  # baked loop steps == per-step Python loop iters
     volumes={HF_CACHE: hf_cache, ONNX_OUT: onnx_output},
     secrets=[_hf_secret()],
 )
-def overhead_bench() -> dict:
+def overhead_bench(
+    receipt_namespace: str = "",
+    source_repository: str = "",
+    source_sha: str = "",
+    workflow_run_id: int = 0,
+    workflow_run_attempt: int = 0,
+) -> dict:
     import logging
     import time
     import numpy as np
     import onnxruntime as ort
+
+    from tether.receipt_provenance import (
+        hash_export_set,
+        receipt_mode_binding,
+        receipt_run_dir,
+    )
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    log = logging.getLogger(__name__)
+
+    namespace_binding = receipt_mode_binding(
+        receipt_namespace=receipt_namespace,
+        repository=source_repository,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+    )
+    if namespace_binding is None:
+        onnx_root = Path(ONNX_OUT)
+    else:
+        namespace = str(namespace_binding["value"])
+        onnx_root = receipt_run_dir(Path(ONNX_OUT), namespace)
+        cache_root = receipt_run_dir(Path(HF_CACHE), namespace)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        os.environ["HF_HOME"] = str(cache_root)
+        os.environ["TRANSFORMERS_CACHE"] = str(cache_root / "transformers")
 
     from tether.exporters.decomposed import (
         PI05_HEAD_DIM,
@@ -147,11 +182,10 @@ def overhead_bench() -> dict:
         PI05_PALIGEMMA_LAYERS,
     )
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    log = logging.getLogger(__name__)
-
-    baked_path = Path(ONNX_OUT) / "per_step_parity/pi05_teacher_n10_baked/expert_denoise.onnx"
-    per_step_path = Path(ONNX_OUT) / "per_step_parity/pi05_teacher_n10_per_step/expert_denoise.onnx"
+    baked_dir = onnx_root / "per_step_parity/pi05_teacher_n10_baked"
+    per_step_dir = onnx_root / "per_step_parity/pi05_teacher_n10_per_step"
+    baked_path = baked_dir / "expert_denoise.onnx"
+    per_step_path = per_step_dir / "expert_denoise.onnx"
 
     if not baked_path.exists():
         raise FileNotFoundError(f"Baked ONNX missing: {baked_path}. Re-run gate 3 first.")
@@ -317,21 +351,37 @@ def overhead_bench() -> dict:
     naive_gate = gate_eval(naive_stats)
     iob_gate = gate_eval(iob_stats)
 
-    log.info("BAKED                median=%.2fms p99=%.2fms", baked_stats["median_ms"], baked_stats["p99_ms"])
-    log.info("PER-STEP NAIVE       median=%.2fms p99=%.2fms (overhead %+.1f%%, p99 %.2fx, gate %s)",
-             naive_stats["median_ms"], naive_stats["p99_ms"],
-             naive_gate["median_overhead_pct"] * 100, naive_gate["p99_ratio"],
-             "PASS" if naive_gate["passes_overall"] else "FAIL")
-    log.info("PER-STEP IOBINDING   median=%.2fms p99=%.2fms (overhead %+.1f%%, p99 %.2fx, gate %s)",
-             iob_stats["median_ms"], iob_stats["p99_ms"],
-             iob_gate["median_overhead_pct"] * 100, iob_gate["p99_ratio"],
-             "PASS" if iob_gate["passes_overall"] else "FAIL")
+    log.info(
+        "BAKED                median=%.2fms p99=%.2fms",
+        baked_stats["median_ms"],
+        baked_stats["p99_ms"],
+    )
+    log.info(
+        "PER-STEP NAIVE       median=%.2fms p99=%.2fms (overhead %+.1f%%, p99 %.2fx, gate %s)",
+        naive_stats["median_ms"],
+        naive_stats["p99_ms"],
+        naive_gate["median_overhead_pct"] * 100,
+        naive_gate["p99_ratio"],
+        "PASS" if naive_gate["passes_overall"] else "FAIL",
+    )
+    log.info(
+        "PER-STEP IOBINDING   median=%.2fms p99=%.2fms (overhead %+.1f%%, p99 %.2fx, gate %s)",
+        iob_stats["median_ms"],
+        iob_stats["p99_ms"],
+        iob_gate["median_overhead_pct"] * 100,
+        iob_gate["p99_ratio"],
+        "PASS" if iob_gate["passes_overall"] else "FAIL",
+    )
 
-    return {
+    result = {
         "n_warmup": N_WARMUP,
         "n_bench": N_BENCH,
         "num_steps": NUM_STEPS,
         "providers": {"baked": actual_baked, "per_step": actual_per_step},
+        "exports": {
+            "baked": hash_export_set(baked_dir),
+            "per_step": hash_export_set(per_step_dir),
+        },
         "baked": baked_stats,
         "per_step_naive": naive_stats,
         "per_step_iobinding": iob_stats,
@@ -342,17 +392,43 @@ def overhead_bench() -> dict:
         # what production runtime should adopt if it passes.
         "passes_overall": iob_gate["passes_overall"],
     }
+    if namespace_binding is not None:
+        result["receipt_namespace"] = namespace_binding
+    return result
 
 
 @app.local_entrypoint()
-def main():
+def main(
+    receipt_namespace: str = "",
+    source_repository: str = "",
+    source_sha: str = "",
+    workflow_run_id: int = 0,
+    workflow_run_attempt: int = 0,
+):
+    from tether.receipt_provenance import receipt_mode_binding, receipt_run_dir
+
+    namespace_binding = receipt_mode_binding(
+        receipt_namespace=receipt_namespace,
+        repository=source_repository,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+    )
     print("=" * 60)
     print("Per-step ORT call overhead bench (gate 4)")
     print("=" * 60)
-    result = overhead_bench.remote()
+    result = overhead_bench.remote(
+        receipt_namespace,
+        source_repository,
+        source_sha,
+        workflow_run_id,
+        workflow_run_attempt,
+    )
 
-    receipt_path = Path(REPO_ROOT) / ".." / "reflex_context" / "per_step_overhead_last_run.json"
-    receipt_path = receipt_path.resolve()
+    receipt_root = (Path(REPO_ROOT) / ".." / "reflex_context").resolve()
+    if namespace_binding is not None:
+        receipt_root = receipt_run_dir(receipt_root, str(namespace_binding["value"]))
+    receipt_path = receipt_root / "per_step_overhead_last_run.json"
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(result, indent=2))
     print(f"\nReceipt: {receipt_path}")
@@ -362,11 +438,17 @@ def main():
     print("=" * 60)
     b, n_, i_ = result["baked"], result["per_step_naive"], result["per_step_iobinding"]
     print(f"  baked              median={b['median_ms']:.2f}ms  p99={b['p99_ms']:.2f}ms")
-    print(f"  per-step naive     median={n_['median_ms']:.2f}ms  p99={n_['p99_ms']:.2f}ms  "
-          f"({result['naive_gate']['median_overhead_pct'] * 100:+.1f}%, p99 {result['naive_gate']['p99_ratio']:.2f}x) "
-          f"{'PASS' if result['naive_gate']['passes_overall'] else 'FAIL'}")
-    print(f"  per-step IOBinding median={i_['median_ms']:.2f}ms  p99={i_['p99_ms']:.2f}ms  "
-          f"({result['iobinding_gate']['median_overhead_pct'] * 100:+.1f}%, p99 {result['iobinding_gate']['p99_ratio']:.2f}x) "
-          f"{'PASS' if result['iobinding_gate']['passes_overall'] else 'FAIL'}")
-    print(f"\n  Production-relevant gate (IOBinding): "
-          f"{'PASS' if result['passes_overall'] else 'FAIL'} (median≤+20%, p99≤1.30x)")
+    print(
+        f"  per-step naive     median={n_['median_ms']:.2f}ms  p99={n_['p99_ms']:.2f}ms  "
+        f"({result['naive_gate']['median_overhead_pct'] * 100:+.1f}%, p99 {result['naive_gate']['p99_ratio']:.2f}x) "
+        f"{'PASS' if result['naive_gate']['passes_overall'] else 'FAIL'}"
+    )
+    print(
+        f"  per-step IOBinding median={i_['median_ms']:.2f}ms  p99={i_['p99_ms']:.2f}ms  "
+        f"({result['iobinding_gate']['median_overhead_pct'] * 100:+.1f}%, p99 {result['iobinding_gate']['p99_ratio']:.2f}x) "
+        f"{'PASS' if result['iobinding_gate']['passes_overall'] else 'FAIL'}"
+    )
+    print(
+        f"\n  Production-relevant gate (IOBinding): "
+        f"{'PASS' if result['passes_overall'] else 'FAIL'} (median≤+20%, p99≤1.30x)"
+    )

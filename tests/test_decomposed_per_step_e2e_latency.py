@@ -11,26 +11,25 @@ Acceptance (matches gate 4):
 
 Pattern mirrors ``tests/test_decomposed_per_step_parity.py``.
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
-RECEIPT = (
-    Path(__file__).parent.parent.parent
-    / "reflex_context"
-    / "per_step_e2e_latency_last_run.json"
-).resolve()
+from receipt_test_support import receipt_path, require_receipt
+
+pytestmark = pytest.mark.receipt
+
+RECEIPT = receipt_path("per_step_e2e_latency_last_run.json")
 
 MEDIAN_OVERHEAD_MAX = 0.20
 P99_RATIO_MAX = 1.30
 
 
-def _load_receipt() -> dict | None:
-    if not RECEIPT.exists():
-        return None
+def _load_receipt() -> dict:
+    require_receipt(RECEIPT, "scripts/modal_per_step_e2e_latency.py")
     return json.loads(RECEIPT.read_text())
 
 
@@ -38,15 +37,10 @@ class TestPerStepE2ELatencyReceipt:
     """Gate 5 receipt checks against the Modal-produced JSON."""
 
     def test_receipt_exists(self):
-        if not RECEIPT.exists():
-            pytest.skip(
-                f"Run scripts/modal_per_step_e2e_latency.py to populate {RECEIPT}"
-            )
+        require_receipt(RECEIPT, "scripts/modal_per_step_e2e_latency.py")
 
     def test_e2e_passes_gate(self):
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         assert receipt["passes_overall"], (
             f"E2E overhead exceeds gate: "
             f"median={receipt['median_overhead_pct']:.1%} "
@@ -62,8 +56,6 @@ class TestPerStepE2ELatencyReceipt:
         diverges by 2x without cudnn_conv_algo_search=HEURISTIC pinning —
         if this assertion fails, the bench was likely run without the pin."""
         receipt = _load_receipt()
-        if receipt is None:
-            pytest.skip("No receipt — run Modal job")
         baked_vlm = receipt["baked"]["vlm"]["median_ms"]
         per_step_vlm = receipt["per_step"]["vlm"]["median_ms"]
         ratio = max(baked_vlm, per_step_vlm) / max(min(baked_vlm, per_step_vlm), 1e-9)
@@ -74,3 +66,10 @@ class TestPerStepE2ELatencyReceipt:
             f"cudnn_conv_algo_search wasn't pinned to HEURISTIC. See gate-5 "
             f"experiment note."
         )
+
+    def test_both_conditions_use_cuda_for_prefix_and_expert(self):
+        receipt = _load_receipt()
+        for condition in ("baked", "per_step"):
+            providers = receipt[condition]["providers"]
+            assert providers["vlm_prefix"][0] == "CUDAExecutionProvider"
+            assert providers["expert_denoise"][0] == "CUDAExecutionProvider"
