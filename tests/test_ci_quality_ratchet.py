@@ -136,6 +136,7 @@ def test_workflows_separate_ordinary_and_protected_policy_changes() -> None:
     protected = (workflows / "quality-baseline-update.yml").read_text()
     assert 'PROTECTED_POLICY="$PROTECTED_POLICY_DIR/pyproject.toml"' in protected
     assert ".protected-base-pyproject.toml" not in protected
+    assert "merge-multiple: true" in protected
 
     assert "pull_request_target:" in ordinary
     assert "${BASE_SHA}:scripts/ci_quality_ratchet.py" in ordinary
