@@ -371,7 +371,15 @@ class Pi05DecomposedInference:
         self._episode_cache = None
         if cache_level == "episode":
             from tether.runtime.episode_cache import EpisodeCache
-            self._episode_cache = EpisodeCache(max_episodes=episode_cache_max_episodes)
+            # Reuse the embodiment/model_id already threaded in for CUDA
+            # graph metrics — same process, same labels — so the
+            # tether_episode_cache_bytes_total gauge actually emits instead
+            # of silently no-opping (EpisodeCache requires both to be set).
+            self._episode_cache = EpisodeCache(
+                max_episodes=episode_cache_max_episodes,
+                embodiment=cuda_graphs_embodiment,
+                model_id=cuda_graphs_model_id,
+            )
             logger.info(
                 "[decomposed] episode cache enabled (max_episodes=%d)",
                 episode_cache_max_episodes,
