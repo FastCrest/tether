@@ -39,10 +39,14 @@ from __future__ import annotations
 
 import logging
 import math
-import statistics
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Mapping, cast
+
+from tether.verification_evidence import (
+    EvidenceValue,
+    first_unavailable,
+    serialize_evidence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,22 +144,18 @@ class GateThresholds:
 class EvalSample:
     """One episode's eval data — input to the gate.
 
-    All fields required even when the customer-suite source doesn't
-    populate everything (e.g., teacher_action_trajectory only present
-    in held-out evals). Use sentinel values when unknown:
-    - safety_clamp_count = 0
-    - inference_latency_p99_ms = 0.0
-    - per_joint_velocity = []
-    - action_trajectory = []
-    - teacher_action_trajectory = None
+    Existing callers may continue to provide concrete values directly. Verify
+    uses ``None`` for an unavailable channel and supplies the corresponding
+    typed availability map to :meth:`EvalGate.evaluate`; it never substitutes
+    a measured-looking zero or empty collection for missing evidence.
     """
 
     task_id: str
-    success: bool
-    safety_clamp_count: int  # action_guard trips this episode
-    inference_latency_p99_ms: float
-    per_joint_velocity: list[float]  # flattened per-joint per-step velocities
-    action_trajectory: list[list[float]]  # per-step action chunk
+    success: bool | None
+    safety_clamp_count: int | None  # action_guard trips this episode
+    inference_latency_p99_ms: float | None
+    per_joint_velocity: list[float] | None  # flattened per-joint per-step velocities
+    action_trajectory: list[list[float]] | None  # per-step action chunk
     teacher_action_trajectory: list[list[float]] | None  # held-out only
 
 
@@ -167,7 +167,7 @@ class GateResult:
     gate_id: str  # one of ALL_GATE_IDS
     gate_class: Literal["safety", "performance"]
     passed: bool
-    measured: float
+    measured: float | EvidenceValue[float]
     threshold: float
     message: str
 
@@ -196,6 +196,7 @@ class EvalReport:
     n_candidate_episodes: int
     n_baseline_episodes: int
     is_libero_suite: bool
+    evidence: Mapping[str, EvidenceValue[Any]] = field(default_factory=dict)
 
     @property
     def all_gates(self) -> tuple[GateResult, ...]:
@@ -215,6 +216,9 @@ class EvalReport:
             "n_candidate_episodes": self.n_candidate_episodes,
             "n_baseline_episodes": self.n_baseline_episodes,
             "is_libero_suite": self.is_libero_suite,
+            "evidence": {
+                name: value.to_dict() for name, value in self.evidence.items()
+            },
         }
 
 
@@ -342,11 +346,16 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 def _safety_clamp_rate(samples: list[EvalSample]) -> float:
     if not samples:
         return 0.0
-    return sum(s.safety_clamp_count for s in samples) / len(samples)
+    values = [s.safety_clamp_count for s in samples]
+    if any(value is None for value in values):
+        raise ValueError("safety_clamp_count is unavailable without evidence preflight")
+    return sum(cast(int, value) for value in values) / len(samples)
 
 
 def _aggregate_success_rate(samples: list[EvalSample]) -> tuple[int, int]:
     """Returns (n_success, n_total)."""
+    if any(s.success is None for s in samples):
+        raise ValueError("success is unavailable without evidence preflight")
     return (sum(1 for s in samples if s.success), len(samples))
 
 
@@ -365,6 +374,8 @@ def _per_task_success_counts(
 def _flatten_velocities(samples: list[EvalSample]) -> list[float]:
     out: list[float] = []
     for s in samples:
+        if s.per_joint_velocity is None:
+            raise ValueError("per_joint_velocity is unavailable without evidence preflight")
         out.extend(s.per_joint_velocity)
     return out
 
@@ -372,7 +383,14 @@ def _flatten_velocities(samples: list[EvalSample]) -> list[float]:
 def _avg_latency_p99(samples: list[EvalSample]) -> float:
     if not samples:
         return 0.0
-    vals = [s.inference_latency_p99_ms for s in samples if s.inference_latency_p99_ms > 0]
+    if any(s.inference_latency_p99_ms is None for s in samples):
+        raise ValueError("latency is unavailable without evidence preflight")
+    vals = [
+        float(s.inference_latency_p99_ms)
+        for s in samples
+        if s.inference_latency_p99_ms is not None
+        and s.inference_latency_p99_ms > 0
+    ]
     if not vals:
         return 0.0
     return sum(vals) / len(vals)
@@ -490,9 +508,11 @@ def _gate_p2_latency(
 
 
 def _gate_p3_memory(
-    candidate_memory_bytes: float, baseline_memory_bytes: float,
+    candidate_memory_bytes: float | None, baseline_memory_bytes: float | None,
     thresholds: GateThresholds,
 ) -> GateResult:
+    if candidate_memory_bytes is None or baseline_memory_bytes is None:
+        raise ValueError("memory is unavailable without evidence preflight")
     threshold = baseline_memory_bytes * thresholds.p3_memory_max_relative
     passed = candidate_memory_bytes <= threshold
     return GateResult(
@@ -582,8 +602,16 @@ def _gate_p6_safety_reset_rate(
     success; P6 enforces that the candidate is not RESETTING more
     aggressively (which could mask the success rate via aggressive
     abort-and-retry behavior)."""
-    cand_resets = sum(1 for s in candidate if not s.success and s.safety_clamp_count > 0)
-    base_resets = sum(1 for s in baseline if not s.success and s.safety_clamp_count > 0)
+    cand_resets = sum(
+        1 for s in candidate
+        if not s.success and s.safety_clamp_count is not None
+        and s.safety_clamp_count > 0
+    )
+    base_resets = sum(
+        1 for s in baseline
+        if not s.success and s.safety_clamp_count is not None
+        and s.safety_clamp_count > 0
+    )
     cand_rate = cand_resets / max(1, len(candidate))
     base_rate = base_resets / max(1, len(baseline))
     threshold = base_rate * thresholds.p6_max_reset_rate_relative
@@ -603,6 +631,60 @@ def _gate_p6_safety_reset_rate(
 # ---------------------------------------------------------------------------
 
 
+_GATE_EVIDENCE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "S1": ("safety_clamps", "executed_actions"),
+    "S2": ("joint_velocity",),
+    "S3": ("success",),
+    "P1": ("success",),
+    "P2": ("latency",),
+    "P3": ("memory",),
+    "P4": ("executed_actions", "teacher_trajectory"),
+    "P5": ("success",),
+    "P6": ("success", "safety_clamps"),
+}
+
+
+def _unavailable_gate(
+    gate_id: str,
+    gate_class: Literal["safety", "performance"],
+    threshold: float,
+    channel: str,
+    evidence: EvidenceValue[Any],
+) -> GateResult:
+    assert evidence.reason is not None
+    return GateResult(
+        gate_id=gate_id,
+        gate_class=gate_class,
+        passed=False,
+        measured=EvidenceValue.unavailable(evidence.reason),
+        threshold=threshold,
+        message=(
+            f"{channel} evidence unavailable: {evidence.reason.value}; "
+            f"{gate_id} fails closed"
+        ),
+    )
+
+
+def _evaluate_with_evidence(
+    *,
+    gate_id: str,
+    gate_class: Literal["safety", "performance"],
+    threshold: float,
+    evidence: Mapping[str, EvidenceValue[Any]] | None,
+    evaluate: Callable[[], GateResult],
+) -> GateResult:
+    if evidence is not None:
+        unavailable = first_unavailable(
+            evidence, _GATE_EVIDENCE_REQUIREMENTS[gate_id]
+        )
+        if unavailable is not None:
+            channel, value = unavailable
+            return _unavailable_gate(
+                gate_id, gate_class, threshold, channel, value
+            )
+    return evaluate()
+
+
 class EvalGate:
     """The 9-gate evaluator. Pure function via classmethod — no instance state."""
 
@@ -612,12 +694,13 @@ class EvalGate:
         *,
         candidate_samples: list[EvalSample],
         baseline_samples: list[EvalSample],
-        candidate_memory_bytes: float,
-        baseline_memory_bytes: float,
+        candidate_memory_bytes: float | None,
+        baseline_memory_bytes: float | None,
         thresholds: GateThresholds | None = None,
         is_libero_suite: bool = False,
         pro_force: bool = False,
         bypass_audit: str | None = None,
+        evidence: Mapping[str, EvidenceValue[Any]] | None = None,
     ) -> EvalReport:
         """Run all 9 gates. Returns EvalReport with first-failing-gate
         precedence — first SAFETY failure wins; perf failures only count
@@ -645,9 +728,33 @@ class EvalGate:
         # Run safety gates first — first failure wins regardless of
         # performance gates OR --pro-force.
         safety_results = (
-            _gate_s1_safety_clamp_rate(candidate_samples, baseline_samples, thresholds),
-            _gate_s2_velocity_wasserstein(candidate_samples, baseline_samples, thresholds),
-            _gate_s3_per_task_cliff(candidate_samples, baseline_samples, thresholds),
+            _evaluate_with_evidence(
+                gate_id="S1",
+                gate_class="safety",
+                threshold=thresholds.s1_clamp_rate_absolute_cap,
+                evidence=evidence,
+                evaluate=lambda: _gate_s1_safety_clamp_rate(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
+            _evaluate_with_evidence(
+                gate_id="S2",
+                gate_class="safety",
+                threshold=thresholds.s2_wasserstein_max,
+                evidence=evidence,
+                evaluate=lambda: _gate_s2_velocity_wasserstein(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
+            _evaluate_with_evidence(
+                gate_id="S3",
+                gate_class="safety",
+                threshold=thresholds.s3_per_task_cliff_pp,
+                evidence=evidence,
+                evaluate=lambda: _gate_s3_per_task_cliff(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
         )
         first_safety_fail = next((g for g in safety_results if not g.passed), None)
 
@@ -659,12 +766,60 @@ class EvalGate:
         # Performance gates run regardless so we can report all numbers,
         # but the swap decision still anchors on safety.
         perf_results = (
-            _gate_p1_aggregate_success(candidate_samples, baseline_samples, thresholds),
-            _gate_p2_latency(candidate_samples, baseline_samples, thresholds),
-            _gate_p3_memory(candidate_memory_bytes, baseline_memory_bytes, thresholds),
-            _gate_p4_action_cos(candidate_samples, thresholds),
-            _gate_p5_per_task_wilson(candidate_samples, baseline_samples, thresholds),
-            _gate_p6_safety_reset_rate(candidate_samples, baseline_samples, thresholds),
+            _evaluate_with_evidence(
+                gate_id="P1",
+                gate_class="performance",
+                threshold=thresholds.p1_min_success_rate or 0.0,
+                evidence=evidence,
+                evaluate=lambda: _gate_p1_aggregate_success(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
+            _evaluate_with_evidence(
+                gate_id="P2",
+                gate_class="performance",
+                threshold=thresholds.p2_latency_max_relative,
+                evidence=evidence,
+                evaluate=lambda: _gate_p2_latency(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
+            _evaluate_with_evidence(
+                gate_id="P3",
+                gate_class="performance",
+                threshold=thresholds.p3_memory_max_relative,
+                evidence=evidence,
+                evaluate=lambda: _gate_p3_memory(
+                    candidate_memory_bytes,
+                    baseline_memory_bytes,
+                    thresholds,
+                ),
+            ),
+            _evaluate_with_evidence(
+                gate_id="P4",
+                gate_class="performance",
+                threshold=thresholds.p4_min_cos_similarity,
+                evidence=evidence,
+                evaluate=lambda: _gate_p4_action_cos(candidate_samples, thresholds),
+            ),
+            _evaluate_with_evidence(
+                gate_id="P5",
+                gate_class="performance",
+                threshold=thresholds.p5_per_task_wilson_drop_pp,
+                evidence=evidence,
+                evaluate=lambda: _gate_p5_per_task_wilson(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
+            _evaluate_with_evidence(
+                gate_id="P6",
+                gate_class="performance",
+                threshold=thresholds.p6_max_reset_rate_relative,
+                evidence=evidence,
+                evaluate=lambda: _gate_p6_safety_reset_rate(
+                    candidate_samples, baseline_samples, thresholds
+                ),
+            ),
         )
         first_perf_fail = next((g for g in perf_results if not g.passed), None)
 
@@ -704,6 +859,7 @@ class EvalGate:
             n_candidate_episodes=len(candidate_samples),
             n_baseline_episodes=len(baseline_samples),
             is_libero_suite=is_libero_suite,
+            evidence=dict(evidence or {}),
         )
 
 
@@ -712,7 +868,7 @@ def _gate_to_dict(g: GateResult) -> dict[str, Any]:
         "gate_id": g.gate_id,
         "gate_class": g.gate_class,
         "passed": g.passed,
-        "measured": g.measured,
+        "measured": serialize_evidence(g.measured),
         "threshold": g.threshold,
         "message": g.message,
     }

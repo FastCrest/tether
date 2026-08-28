@@ -13,7 +13,9 @@ Locks the two load-bearing properties:
 from __future__ import annotations
 
 import base64
+import itertools
 import json
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -25,6 +27,9 @@ from tether.verify import (
     run_verify,
 )
 from tether.pro.eval_gate import EvalReport, InsufficientEpisodes
+
+
+_MEMORY_PID = itertools.count(10_000)
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +53,16 @@ def _rollout_results(
     total_eps = 0
     for task_idx, successes in task_success.items():
         episodes = [
-            {"ep": i, "success": s, "steps": 100} for i, s in enumerate(successes)
+            {
+                "ep": i,
+                "success": s,
+                "steps": 100,
+                "actions": [[0.1] * 7, [0.2] * 7],
+                "action_timestamps_s": [0.0, 1.0],
+                "inference_latency_ms": [10.0, 11.0],
+                "safety_clamp_count": 0,
+            }
+            for i, s in enumerate(successes)
         ]
         n_succ = sum(1 for s in successes if s)
         per_task.append({
@@ -60,17 +74,53 @@ def _rollout_results(
         })
         total_success += n_succ
         total_eps += len(successes)
+    memory_pid = next(_MEMORY_PID)
+    memory_samples = [
+        {
+            "scheduled_monotonic_s": timestamp,
+            "captured_monotonic_s": timestamp,
+            "process_rss_bytes": 100_000_000,
+            "device_allocated_bytes": 0,
+        }
+        for timestamp in (1.0, 1.1, 1.2)
+    ]
+    memory = {
+        "sample_hz": 10.0,
+        "backend": "cpu",
+        "process_identity": {
+            "pid": memory_pid,
+            "capture_id": f"capture-{memory_pid}",
+        },
+        "window": {
+            "started_monotonic_s": 1.0,
+            "ended_monotonic_s": 1.2,
+            "duration_s": 0.2,
+            "expected_samples": 3,
+            "captured_samples": 3,
+            "max_gap_s": 0.1,
+        },
+        "samples": memory_samples,
+        "process_rss": {"peak_bytes": 100_000_000, "p95_bytes": 100_000_000},
+        "device_allocated": {"peak_bytes": 0, "p95_bytes": 0},
+        "combined": {"peak_bytes": 100_000_000, "p95_bytes": 100_000_000},
+    }
     return {
         "model": label,
         "suite": suite,
         "num_episodes_per_task": max((len(v) for v in task_success.values()), default=0),
         "seed": seed,
+        "verification_device": "cpu",
         "per_task": per_task,
         "total_success": total_success,
         "total_eps": total_eps,
         "success_rate_pct": (100.0 * total_success / total_eps) if total_eps else 0.0,
         "cache_stats": {},
         "errors": [],
+        "safety_evidence": {
+            "status": "available",
+            "value": {"config": "test"},
+        },
+        "memory_evidence": {"status": "available", "value": memory},
     }
 
 
@@ -107,9 +157,10 @@ def test_adapter_maps_episodes_to_samples():
     # task_id is stringified task_idx; success preserved
     assert {s.task_id for s in samples} == {"0", "1"}
     assert sum(1 for s in samples if s.success) == 2
-    # Sentinels populated per the EvalSample contract
+    # Captured evidence is preserved; no sentinels are invented.
     assert all(s.safety_clamp_count == 0 for s in samples)
-    assert all(s.per_joint_velocity == [] for s in samples)
+    assert all(s.per_joint_velocity for s in samples)
+    assert all(s.inference_latency_p99_ms == 11.0 for s in samples)
     assert all(s.teacher_action_trajectory is None for s in samples)
 
 
@@ -146,6 +197,206 @@ def test_identical_pair_passes():
     assert verdict.original_success_rate == pytest.approx(1.0)
     assert verdict.optimized_success_rate == pytest.approx(1.0)
     assert verdict.success_rate_delta == pytest.approx(0.0)
+
+
+def test_public_cuda_device_is_forwarded_and_rollout_label_must_match():
+    original = _rollout_results(task_success=_all_success(), label="ORIGINAL")
+    optimized = _rollout_results(task_success=_all_success(), label="OPTIMIZED")
+    for results in (original, optimized):
+        results["verification_device"] = "cuda"
+        results["memory_evidence"]["value"]["backend"] = "cuda"
+    captured = {}
+
+    def gather(**kwargs):
+        captured.update(kwargs)
+        return original, optimized
+
+    verdict = run_verify(
+        optimized_ref="/fake/export",
+        verification_device="cuda",
+        num_episodes=_EPS,
+        gather_fn=gather,
+    )
+    assert captured["verification_device"] == "cuda"
+    assert verdict.passed is True
+
+    original["verification_device"] = "cpu"
+    with pytest.raises(ValueError, match="original rollout device mismatch"):
+        run_verify(
+            optimized_ref="/fake/export",
+            verification_device="cuda",
+            num_episodes=_EPS,
+            gather_fn=gather,
+        )
+
+
+@pytest.mark.parametrize("queue_error", [KeyboardInterrupt(), EOFError(), OSError()])
+def test_isolated_arm_cleans_up_child_on_queue_failure(monkeypatch, queue_error):
+    import multiprocessing
+    import tether.verify as verify
+
+    class FakeProcess:
+        exitcode = None
+
+        def __init__(self):
+            self.alive = True
+            self.terminated = 0
+            self.killed = 0
+            self.joins = 0
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.terminated += 1
+            self.alive = False
+
+        def kill(self):
+            self.killed += 1
+            self.alive = False
+
+        def join(self, timeout=None):
+            self.joins += 1
+
+    process = FakeProcess()
+
+    class FakeQueue:
+        def get(self, timeout=None):
+            raise queue_error
+
+        def close(self):
+            return None
+
+        def join_thread(self):
+            return None
+
+    context = SimpleNamespace(
+        Queue=lambda maxsize: FakeQueue(),
+        Process=lambda **kwargs: process,
+    )
+    monkeypatch.setattr(multiprocessing, "get_context", lambda _method: context)
+    with pytest.raises(type(queue_error)):
+        verify._run_isolated_verification_arm(arm="original")
+    assert process.alive is False
+    assert process.terminated == 1
+    assert process.joins >= 1
+
+
+def test_isolated_arm_kills_child_that_ignores_terminate(monkeypatch):
+    import multiprocessing
+    import tether.verify as verify
+
+    class StubbornProcess:
+        exitcode = None
+
+        def __init__(self):
+            self.alive = True
+            self.killed = 0
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            self.killed += 1
+            self.alive = False
+
+        def join(self, timeout=None):
+            return None
+
+    process = StubbornProcess()
+    queue = SimpleNamespace(
+        get=lambda timeout=None: (_ for _ in ()).throw(EOFError()),
+        close=lambda: None,
+        join_thread=lambda: None,
+    )
+    context = SimpleNamespace(
+        Queue=lambda maxsize: queue,
+        Process=lambda **kwargs: process,
+    )
+    monkeypatch.setattr(multiprocessing, "get_context", lambda _method: context)
+    with pytest.raises(EOFError):
+        verify._run_isolated_verification_arm(arm="optimized")
+    assert process.alive is False
+    assert process.killed == 1
+
+
+def test_isolated_arm_has_no_live_child_when_queue_close_fails(monkeypatch):
+    import multiprocessing
+    import tether.verify as verify
+
+    class CompletedProcess:
+        exitcode = 0
+
+        def __init__(self):
+            self.alive = True
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.alive = False
+
+        def kill(self):
+            self.alive = False
+
+        def join(self, timeout=None):
+            self.alive = False
+
+    process = CompletedProcess()
+
+    class CloseErrorQueue:
+        def get(self, timeout=None):
+            return "ok", {}
+
+        def close(self):
+            raise OSError("queue pipe closed")
+
+        def join_thread(self):
+            return None
+
+    context = SimpleNamespace(
+        Queue=lambda maxsize: CloseErrorQueue(),
+        Process=lambda **kwargs: process,
+    )
+    monkeypatch.setattr(multiprocessing, "get_context", lambda _method: context)
+    with pytest.raises(OSError, match="queue pipe closed"):
+        verify._run_isolated_verification_arm(arm="optimized")
+    assert process.alive is False
+
+
+def test_isolated_arm_closes_queue_when_process_construction_fails(monkeypatch):
+    import multiprocessing
+    import tether.verify as verify
+
+    closed = []
+    queue = SimpleNamespace(
+        close=lambda: closed.append("close"),
+        join_thread=lambda: closed.append("join_thread"),
+    )
+
+    def fail_process(**_kwargs):
+        raise OSError("cannot construct child")
+
+    context = SimpleNamespace(
+        Queue=lambda maxsize: queue,
+        Process=fail_process,
+    )
+    monkeypatch.setattr(multiprocessing, "get_context", lambda _method: context)
+    with pytest.raises(OSError, match="cannot construct child"):
+        verify._run_isolated_verification_arm(arm="optimized")
+    assert closed == ["close", "join_thread"]
 
 
 def test_divergent_pair_fails_on_success_cliff():
@@ -264,7 +515,7 @@ def test_parity_report_renders_verdict():
     assert "# Tether Action-Parity Verification" in md
     assert "**Verdict: PASS**" in md
     assert "Gate detail" in md
-    assert "TODO(tether-verify)" in md  # the v0-scope disclosure
+    assert "Verification Evidence v1" in md
     # Every gate id should appear in the detail table.
     for g in verdict.eval_report.all_gates:
         assert g.gate_id in md

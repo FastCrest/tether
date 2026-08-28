@@ -11,6 +11,7 @@ from tether.export_config import build_producer_config, write_tether_config
 from tether.runtime.verify_inference import (
     MonolithicOnnxVerificationAdapter,
     UnsupportedVerificationBackend,
+    _require_session_device,
     load_verification_inference,
 )
 
@@ -217,6 +218,17 @@ def test_pi05_secondary_paths_must_match_hashed_manifest(tmp_path):
         load_verification_inference(root)
 
 
+def test_verification_session_rejects_cpu_cuda_backend_mismatch():
+    cpu = SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"])
+    cuda = SimpleNamespace(get_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"])
+    _require_session_device(cpu, device="cpu", name="test")
+    _require_session_device(cuda, device="cuda", name="test")
+    with pytest.raises(UnsupportedVerificationBackend, match="device mismatch"):
+        _require_session_device(cpu, device="cuda", name="test")
+    with pytest.raises(UnsupportedVerificationBackend, match="device mismatch"):
+        _require_session_device(cuda, device="cpu", name="test")
+
+
 def test_expert_stack_is_rejected_until_conditioning_is_preserved(tmp_path):
     root = tmp_path / "expert-stack"
     root.mkdir()
@@ -388,7 +400,11 @@ def test_gather_uses_config_model_id_and_never_native_optimized_factory(tmp_path
         else:
             noise = np.arange(4, dtype=np.float32).reshape(1, 2, 2)
             calls["optimized_actions"] = inference.predict_action_chunk(**_protocol_inputs(noise))
-        return {"per_task": []}
+        return {
+            "per_task": [],
+            "seed": kwargs["seed"],
+            "seed_protocol": "sha256-v1",
+        }
 
     monkeypatch.setattr(rollout, "load_pi05_policy_and_processors", fake_load)
     monkeypatch.setattr(rollout, "run_libero_rollout", fake_rollout)
@@ -407,6 +423,7 @@ def test_gather_uses_config_model_id_and_never_native_optimized_factory(tmp_path
         task_indices=[0],
         seed=1,
         verification_device="cpu",
+        isolate_processes=False,
     )
 
     assert calls["student_checkpoint"] == "org/native-reference"
@@ -448,7 +465,11 @@ def test_gather_accepts_real_pi05_producer_model_types(tmp_path, monkeypatch, pr
             inference.predict_action_chunk(
                 **_protocol_inputs(np.zeros((1, 2, 2), dtype=np.float32))
             )
-        return {"per_task": []}
+        return {
+            "per_task": [],
+            "seed": kwargs["seed"],
+            "seed_protocol": "sha256-v1",
+        }
 
     monkeypatch.setattr(rollout, "load_pi05_policy_and_processors", fake_load)
     monkeypatch.setattr(rollout, "run_libero_rollout", fake_rollout)
@@ -461,8 +482,195 @@ def test_gather_accepts_real_pi05_producer_model_types(tmp_path, monkeypatch, pr
         task_indices=[0],
         seed=1,
         verification_device="cpu",
+        isolate_processes=False,
     )
 
     assert calls["student_checkpoint"] == config["model_id"]
     assert calls["model_type"] == producer_model_type
     assert calls["require_exact_checkpoint"] is True
+
+
+def test_isolated_optimized_arm_loads_no_native_policy(monkeypatch):
+    import tether.eval.libero_rollout as rollout
+    import tether.export_config as export_config
+    import tether.runtime.verify_inference as verify_inference
+    from tether.verify import _execute_verification_arm
+
+    calls = []
+    context = SimpleNamespace(config=SimpleNamespace())
+
+    monkeypatch.setattr(
+        export_config,
+        "load_tether_config",
+        lambda *_args, **_kwargs: {"model_type": "pi05"},
+    )
+    monkeypatch.setattr(
+        rollout,
+        "load_pi05_policy_and_processors",
+        lambda **_kwargs: pytest.fail("optimized arm loaded baseline weights"),
+    )
+
+    def load_context(**kwargs):
+        calls.append(("context", kwargs["device"]))
+        return context, "pre", "post"
+
+    monkeypatch.setattr(rollout, "load_verification_policy_context_and_processors", load_context)
+    monkeypatch.setattr(
+        verify_inference,
+        "load_verification_inference",
+        lambda _ref, device: calls.append(("artifact", device)) or "inference",
+    )
+
+    def fake_rollout(**kwargs):
+        calls.append(("rollout", kwargs["verification_device"]))
+        assert kwargs["policy"] is context
+        assert kwargs["use_native"] is False
+        return {"verification_device": kwargs["verification_device"]}
+
+    monkeypatch.setattr(rollout, "run_libero_rollout", fake_rollout)
+    result = _execute_verification_arm(
+        arm="optimized",
+        optimized_ref="export",
+        original_checkpoint="native",
+        task_suite_name="libero_10",
+        num_episodes=1,
+        task_indices=[0],
+        seed=7,
+        preprocessor_ref=None,
+        verification_device="cpu",
+        safety_limits=None,
+        safety_config_sha256=None,
+    )
+    assert result["verification_device"] == "cpu"
+    assert calls == [("context", "cpu"), ("artifact", "cpu"), ("rollout", "cpu")]
+
+
+def test_gather_dispatches_arms_to_distinct_isolated_runs(monkeypatch):
+    import tether.export_config as export_config
+    import tether.verify as verify
+
+    monkeypatch.setattr(
+        export_config,
+        "load_tether_config",
+        lambda *_args, **_kwargs: {"model_id": "native", "model_type": "pi05"},
+    )
+    calls = []
+
+    def isolated(**kwargs):
+        calls.append(kwargs)
+        return {
+            "arm": kwargs["arm"],
+            "verification_device": "cpu",
+            "seed": kwargs["seed"],
+            "seed_protocol": "sha256-v1",
+        }
+
+    monkeypatch.setattr(verify, "_run_isolated_verification_arm", isolated)
+    original, optimized = verify.gather_paired_samples(
+        optimized_ref="export",
+        original_ref=None,
+        suite="libero",
+        task_suite_name="libero_10",
+        num_episodes=30,
+        task_indices=[0],
+        seed=7,
+        verification_device="cpu",
+    )
+    assert [call["arm"] for call in calls] == ["original", "optimized"]
+    assert all(call["original_checkpoint"] == "native" for call in calls)
+    assert original["arm"] == "original"
+    assert optimized["arm"] == "optimized"
+
+
+def test_gather_reads_safety_once_and_passes_one_canonical_value(monkeypatch):
+    import tether.eval.evidence_capture as capture
+    import tether.export_config as export_config
+    import tether.verify as verify
+    from tether.safety import SafetyLimits
+
+    canonical = capture.canonicalize_safety_limits(SafetyLimits.default(7))
+    reads = []
+    calls = []
+    monkeypatch.setattr(
+        export_config,
+        "load_tether_config",
+        lambda *_args, **_kwargs: {"model_id": "native", "model_type": "pi05"},
+    )
+    monkeypatch.setattr(
+        capture,
+        "load_canonical_safety_limits",
+        lambda path: reads.append(path) or canonical,
+    )
+
+    def isolated(**kwargs):
+        calls.append(kwargs)
+        return {
+            "seed": kwargs["seed"],
+            "seed_protocol": "sha256-v1",
+            "safety_evidence": {
+                "status": "available",
+                "value": {
+                    "sha256": kwargs["safety_config_sha256"],
+                    "limits": kwargs["safety_limits"].to_dict(),
+                },
+            },
+        }
+
+    monkeypatch.setattr(verify, "_run_isolated_verification_arm", isolated)
+    verify.gather_paired_samples(
+        optimized_ref="export",
+        original_ref=None,
+        suite="libero",
+        task_suite_name="libero_10",
+        num_episodes=30,
+        task_indices=[0],
+        seed=7,
+        verification_device="cpu",
+        safety_config="limits.json",
+    )
+    assert reads == ["limits.json"]
+    assert calls[0]["safety_limits"] is canonical
+    assert calls[1]["safety_limits"] is canonical
+    assert calls[0]["safety_config_sha256"] == canonical.sha256
+
+
+def test_gather_rejects_child_safety_identity_mutation(monkeypatch):
+    import tether.eval.evidence_capture as capture
+    import tether.export_config as export_config
+    import tether.verify as verify
+    from tether.safety import SafetyLimits
+
+    canonical = capture.canonicalize_safety_limits(SafetyLimits.default(7))
+    monkeypatch.setattr(
+        export_config,
+        "load_tether_config",
+        lambda *_args, **_kwargs: {"model_id": "native", "model_type": "pi05"},
+    )
+    monkeypatch.setattr(capture, "load_canonical_safety_limits", lambda _path: canonical)
+
+    def isolated(**kwargs):
+        limits = kwargs["safety_limits"].to_dict()
+        if kwargs["arm"] == "optimized":
+            limits["position_max"][0] = 99.0
+        return {
+            "seed": kwargs["seed"],
+            "seed_protocol": "sha256-v1",
+            "safety_evidence": {
+                "status": "available",
+                "value": {"sha256": canonical.sha256, "limits": limits},
+            },
+        }
+
+    monkeypatch.setattr(verify, "_run_isolated_verification_arm", isolated)
+    with pytest.raises(ValueError, match="optimized rollout safety identity mismatch"):
+        verify.gather_paired_samples(
+            optimized_ref="export",
+            original_ref=None,
+            suite="libero",
+            task_suite_name="libero_10",
+            num_episodes=30,
+            task_indices=[0],
+            seed=7,
+            verification_device="cpu",
+            safety_config="limits.json",
+        )
