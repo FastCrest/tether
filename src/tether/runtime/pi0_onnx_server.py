@@ -177,6 +177,7 @@ class Pi0OnnxServer:
         noise: np.ndarray | None = None,
         lang_tokens: np.ndarray | None = None,
         lang_masks: np.ndarray | None = None,
+        image_masks: list[np.ndarray] | None = None,
     ) -> dict[str, Any]:
         """Run one pi0 forward pass.
 
@@ -220,7 +221,12 @@ class Pi0OnnxServer:
         img_wrist_l = _prep_img(images_list[1])
         img_wrist_r = _prep_img(images_list[2])
 
-        mask = np.ones((1,), dtype=np.bool_)
+        masks_list = list(image_masks or [])
+        while len(masks_list) < 3:
+            masks_list.append(np.ones((1,), dtype=np.bool_))
+        mask_base, mask_wrist_l, mask_wrist_r = [
+            np.asarray(value, dtype=np.bool_).reshape(-1) for value in masks_list[:3]
+        ]
 
         # Lang: take externally-supplied tokens or tokenize the instruction
         if lang_tokens is None:
@@ -260,9 +266,9 @@ class Pi0OnnxServer:
             "img_base": img_base,
             "img_wrist_l": img_wrist_l,
             "img_wrist_r": img_wrist_r,
-            "mask_base": mask,
-            "mask_wrist_l": mask,
-            "mask_wrist_r": mask,
+            "mask_base": mask_base,
+            "mask_wrist_l": mask_wrist_l,
+            "mask_wrist_r": mask_wrist_r,
             "lang_tokens": lang_tokens,
             "lang_masks": lang_masks,
             "state": state_arr,

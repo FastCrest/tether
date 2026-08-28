@@ -141,7 +141,6 @@ def run_libero_rollout(
     # Lazy imports — LIBERO + mujoco only needed at rollout time, not at module load.
     import collections
     import math
-    import time
     import traceback
     from pathlib import Path
 
@@ -450,12 +449,38 @@ def run_libero_rollout(
     return results
 
 
+def _load_exact_reference_policy(model_type: str, checkpoint: str) -> Any:
+    """Load the declared native family from the exact export provenance ref."""
+    import importlib
+
+    targets = {
+        "pi05": ("lerobot.policies.pi05.modeling_pi05", "PI05Policy"),
+        "pi05_decomposed": ("lerobot.policies.pi05.modeling_pi05", "PI05Policy"),
+        "pi0": ("lerobot.policies.pi0.modeling_pi0", "PI0Policy"),
+        "smolvla": ("lerobot.policies.smolvla.modeling_smolvla", "SmolVLAPolicy"),
+    }
+    if model_type == "pi05_decomposed_student":
+        module = importlib.import_module("tether.distill.snapflow_pi0_model")
+        return module.load_snapflow_student(checkpoint)
+    try:
+        module_name, class_name = targets[model_type]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported native verification model_type={model_type!r}"
+        ) from exc
+    policy_class = getattr(importlib.import_module(module_name), class_name)
+    return policy_class.from_pretrained(checkpoint)
+
+
 def load_pi05_policy_and_processors(
     *,
     student_checkpoint: str,
     decomposed_dir: str,
     preprocessor_ref: str | None = None,
     force_teacher: bool = False,
+    model_type: str = "pi05",
+    require_exact_checkpoint: bool = False,
+    device: str = "cuda",
 ) -> tuple[Any, Any, Any]:
     """Load PyTorch policy (for config + _preprocess_images) + processor pipelines.
 
@@ -480,7 +505,10 @@ def load_pi05_policy_and_processors(
     )
 
     student_ckpt_path = Path(student_checkpoint)
-    if not force_teacher and (student_ckpt_path / "model.safetensors").exists():
+    if require_exact_checkpoint:
+        print(f"[load] Loading exact {model_type} reference from {student_checkpoint}")
+        policy = _load_exact_reference_policy(model_type, student_checkpoint)
+    elif not force_teacher and (student_ckpt_path / "model.safetensors").exists():
         print(f"[load] Loading SnapFlow student from {student_checkpoint}")
         from tether.distill.snapflow_pi0_model import load_snapflow_student
         policy = load_snapflow_student(student_checkpoint)
@@ -497,7 +525,7 @@ def load_pi05_policy_and_processors(
                 f"inference still runs through decomposed ONNX)"
             )
             policy = PI05Policy.from_pretrained(fallback)
-    policy.eval().to("cuda").to(torch.float32)
+    policy.eval().to(device).to(torch.float32)
 
     # Student-distillation checkpoints don't always ship the processor JSONs —
     # fall back to the teacher HF repo for baseline preprocessor + normalizer.
@@ -511,7 +539,7 @@ def load_pi05_policy_and_processors(
         config_filename="policy_preprocessor.json",
         to_transition=batch_to_transition,
         to_output=transition_to_batch,
-        overrides={"device_processor": {"device": "cuda"}},
+        overrides={"device_processor": {"device": device}},
     )
     postprocessor = PolicyProcessorPipeline.from_pretrained(
         pretrained_model_name_or_path=proc_ref,
@@ -532,7 +560,6 @@ def load_pi05_policy_and_processors(
         )
     if is_state_out_export:
         from tether.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
-        from lerobot.utils.constants import ACTION
         max_state_dim = policy.config.max_action_dim  # pi0.5: 32
         swap_prepare_step_in_pipeline(preprocessor, max_state_dim=max_state_dim)
         print(

@@ -37,6 +37,7 @@ nothing. The scoring + aggregation layer is pure and fully mockable via the
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -324,6 +325,7 @@ def gather_paired_samples(
     task_indices: list[int] | None,
     seed: int,
     preprocessor_ref: str | None = None,
+    verification_device: str = "cuda",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the ORIGINAL (native PyTorch) and OPTIMIZED (ONNX/Triton) policies
     through the SAME LIBERO loop and return both rollout result dicts.
@@ -348,15 +350,21 @@ def gather_paired_samples(
         run_libero_rollout,
     )
 
-    # The "original" reference defaults to the same checkpoint as the export
-    # (native-PyTorch IS the reference for an export of itself). A caller may
-    # override --original to compare against a different baseline checkpoint.
-    original_checkpoint = original_ref or optimized_ref
+    from tether.export_config import load_tether_config
+
+    export_config = load_tether_config(optimized_ref, inspect_artifacts=True)
+    # The original reference comes from the export provenance unless the user
+    # explicitly selects a different baseline.  The export directory itself is
+    # never treated as a native checkpoint.
+    original_checkpoint = original_ref or str(export_config["model_id"])
 
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=original_checkpoint,
         decomposed_dir=optimized_ref,
         preprocessor_ref=preprocessor_ref,
+        model_type=str(export_config["model_type"]),
+        require_exact_checkpoint=True,
+        device=verification_device,
     )
 
     common = dict(
@@ -376,23 +384,13 @@ def gather_paired_samples(
         inference=None, use_native=True, label="ORIGINAL", **common,
     )
 
-    # ARM B — optimized: the exported ONNX/Triton inference object on the same
-    # loop. v0 uses the shipped Triton fast-kernels adapter
-    # (``TritonLIBEROAdapter``), which is exactly the optimized arm the proven
-    # side-by-side eval drives in scripts/modal_fast_kernels_l3_side_by_side.py.
-    # It builds the optimized runtime from the SAME policy weights, so the only
-    # difference between the two arms is the inference path (native vs Triton) —
-    # which is precisely the parity question.
-    #
-    # TODO(tether-verify): dispatch on the export's tether_config.json so a
-    # decomposed-ONNX export (Pi05DecomposedInference) or a future exporter
-    # (DreamZero, GR00T DiT) selects the matching InferenceProtocol object
-    # instead of always using the Triton adapter. v0 ships the Triton path
-    # because it is the one with a proven LIBERO adapter today.
-    logger.info("verify: running OPTIMIZED arm (Triton fast-kernels export)")
-    from tether.runtime.fast_inference.libero_adapter import TritonLIBEROAdapter
+    # ARM B — optimized: construct the runtime from the declared export files.
+    # Failure to load or support that artifact aborts verification; there is no
+    # native-weight fallback because that would make parity trivially pass.
+    logger.info("verify: loading and running OPTIMIZED export artifacts")
+    from tether.runtime.verify_inference import load_verification_inference
 
-    inference = TritonLIBEROAdapter.from_policy(policy)
+    inference = load_verification_inference(optimized_ref, device=verification_device)
     optimized_results = run_libero_rollout(
         inference=inference, use_native=False, label="OPTIMIZED", **common,
     )
@@ -439,10 +437,24 @@ def run_verify(
             f"{', '.join(SUPPORTED_SUITES)}."
         )
 
+    resolved_original_ref = original_ref
+    if resolved_original_ref is None:
+        config_path = Path(optimized_ref) / "tether_config.json"
+        if config_path.is_file():
+            from tether.export_config import load_tether_config
+
+            resolved_original_ref = str(
+                load_tether_config(optimized_ref, inspect_artifacts=True)["model_id"]
+            )
+        else:
+            # Synthetic gather functions used by callers may not have an export
+            # directory. Real verification always resolves from tether_config.
+            resolved_original_ref = optimized_ref
+
     gather = gather_fn or gather_paired_samples
     original_results, optimized_results = gather(
         optimized_ref=optimized_ref,
-        original_ref=original_ref,
+        original_ref=resolved_original_ref,
         suite=suite,
         task_suite_name=task_suite_name,
         num_episodes=num_episodes,
@@ -523,7 +535,7 @@ def run_verify(
         two_sample_episodes=n_cmp,
         eval_report=report,
         optimized_ref=optimized_ref,
-        original_ref=original_ref or optimized_ref,
+        original_ref=resolved_original_ref,
         suite=suite,
         target=target,
         n_episodes=len(candidate_samples),
