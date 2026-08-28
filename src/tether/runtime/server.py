@@ -1769,7 +1769,9 @@ def create_app(
     max_similar_skips: int = 3,
     a2c2_checkpoint: str | None = None,  # path to .npz A2C2 head; None disables A2C2
     a2c2_latency_threshold_ms: float = 40.0,  # hook auto-skip when latency_p95 < this (ms)
-    a2c2_success_threshold: float = 0.90,  # hook auto-skip when /act success rate > this; set to 1.01 to disable
+    # Advanced request-health gate; 1.01 disables it so default gating is
+    # latency-only. Values < 1.0 measure /act errors, not robot task success.
+    a2c2_success_threshold: float = 1.01,
     # BID (Bidirectional Decoding) — alternative to A2C2 head per arxiv
     # 2408.17355 + 2026-04-29 a2c2-correction research-revisit Lens 4. When
     # bid_n_candidates > 0, server samples N chunks per /act + picks best
@@ -2413,7 +2415,7 @@ def create_app(
                 server.a2c2_internal = True  # type: ignore[attr-defined]
             logger.info(
                 "A2C2 hook loaded: checkpoint=%s, "
-                "latency_threshold_ms=%.1f, success_threshold=%.2f, "
+                "latency_threshold_ms=%.1f, request_success_threshold=%.2f, "
                 "applied=%s",
                 a2c2_checkpoint,
                 server.a2c2_hook.config.latency_threshold_ms,
@@ -2441,17 +2443,24 @@ def create_app(
             )
             if hasattr(server, "set_bid_config"):
                 server.set_bid_config(_bid_cfg)  # type: ignore[attr-defined]
+                if getattr(server, "a2c2_hook", None) is not None:
+                    # BID wins the Phase 1 mutex. Clear both the public hook
+                    # used by the /act handler and any server-internal binding
+                    # so correction cannot run after candidate selection.
+                    if hasattr(server, "set_a2c2_hook"):
+                        server.set_a2c2_hook(None)
+                    server.a2c2_hook = None  # type: ignore[attr-defined]
+                    server.a2c2_internal = False  # type: ignore[attr-defined]
+                    logger.warning(
+                        "Both --bid-num-candidates and --a2c2-checkpoint set; "
+                        "Phase 1 treats these as mutually exclusive. BID is "
+                        "enabled and A2C2 is disabled."
+                    )
                 logger.info(
                     "BID enabled on server: N=%d, window=%d, metric=%s",
                     _bid_cfg.n_candidates, _bid_cfg.coherence_window,
                     _bid_cfg.coherence_metric,
                 )
-                if a2c2_checkpoint:
-                    logger.warning(
-                        "Both --bid-num-candidates and --a2c2-checkpoint set; "
-                        "Phase 1 treats these as mutually exclusive. BID will "
-                        "run; A2C2 head output ignored."
-                    )
             else:
                 logger.warning(
                     "--bid-num-candidates=%d set but server type %s does not "
@@ -2464,6 +2473,21 @@ def create_app(
                 "Failed to configure BID (n=%d): %s — falling back to single-sample",
                 bid_n_candidates, exc,
             )
+
+    # Warn only when the request-health gate remains active. A successfully
+    # configured BID path clears A2C2 above, so the transient hook load should
+    # not produce a misleading gate-enabled warning.
+    if (
+        getattr(server, "a2c2_hook", None) is not None
+        and a2c2_success_threshold < 1.0
+    ):
+        logger.warning(
+            "A2C2 request-health gate enabled at %.2f: this signal only "
+            "records whether /act returned an error; it is not robot task "
+            "success. Healthy HTTP traffic can disable corrections. The "
+            "default 1.01 leaves gating latency-only.",
+            a2c2_success_threshold,
+        )
 
     # The cuda_graphs_enabled flag is consumed by Pi05DecomposedInference when
     # that backend is instantiated (scripts/modal_*_decomposed.py paths, and
@@ -3525,10 +3549,11 @@ def create_app(
 
             # A2C2 correction hook (Phase 1 a2c2-correction Day 3).
             # Applies a per-step residual correction to the action chunk
-            # when latency p95 ≥ threshold AND success rate ≤ threshold.
-            # Cold-start + no-hook → no-op. Per-act outcome recorded into
-            # the hook's rolling windows AFTER the apply call so the
-            # current request's signal joins the steady-state distribution.
+            # when latency p95 ≥ threshold. An explicitly configured legacy
+            # request-health gate may also skip on error-free HTTP traffic;
+            # it is disabled by default. Cold-start + no-hook → no-op.
+            # Per-act outcome is recorded AFTER the apply call so the current
+            # request's signal joins the steady-state distribution.
             _a2c2 = getattr(server, "a2c2_hook", None)
             _a2c2_internal = getattr(server, "a2c2_internal", False)
             if (
@@ -3753,17 +3778,20 @@ def create_app(
                 span.set_attribute("tether.injected_latency_ms", _inj)
                 await _asyncio.sleep(_inj / 1000.0)
 
-            # A2C2 outcome bookkeeping — feed the latency + success signal
-            # into the hook's rolling windows so subsequent should_apply()
-            # decisions reflect this request. Records regardless of whether
-            # we applied or skipped this time.
+            # A2C2 outcome bookkeeping — feed latency + HTTP request health
+            # into the rolling windows so subsequent should_apply() decisions
+            # reflect this request. This is not a robot task-success signal.
+            # Record regardless of whether correction applied this time.
             if _a2c2 is not None and isinstance(result, dict):
                 try:
                     _latency_ms = float(result.get("latency_ms", 0.0))
                     if _inj > 0:
                         _latency_ms += _inj  # client-perceived latency
-                    _success = "error" not in result
-                    _a2c2.record_outcome(latency_ms=_latency_ms, success=_success)
+                    _request_succeeded = "error" not in result
+                    _a2c2.record_outcome(
+                        latency_ms=_latency_ms,
+                        success=_request_succeeded,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("a2c2_hook.record_outcome_failed: %s", exc)
 

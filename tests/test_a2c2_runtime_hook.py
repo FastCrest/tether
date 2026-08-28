@@ -2,8 +2,8 @@
 
 Per a2c2-correction execution plan B.5 Day 3 acceptance criteria:
 - Auto-skip when latency_p95 < threshold (default 40ms)
-- Auto-skip when success_rate > threshold (default 90%)
-- Apply when both: high latency AND low success (correction has marginal value)
+- Apply at high latency by default, regardless of healthy HTTP responses
+- Optionally auto-skip on HTTP request health when explicitly configured
 - Cold-start: skip until min_samples in BOTH windows
 - Counters: applied/skipped totals correctly tracked
 - Per-action correction across the chunk (not just chunk[0])
@@ -58,9 +58,9 @@ def test_config_accepts_boundary_success_thresholds():
 
 
 def test_config_accepts_disable_skip_sentinel():
-    """Values in (1.0, 2.0] disable success-based skip — used in measurement
+    """Values in [1.0, 2.0] disable success-based skip — used in measurement
     runs where the success metric is /act error rate, not task success."""
-    h = A2C2HookConfig(success_threshold=1.01)
+    h = A2C2HookConfig()
     assert h.success_threshold == 1.01
     h2 = A2C2HookConfig(success_threshold=2.0)
     assert h2.success_threshold == 2.0
@@ -162,13 +162,34 @@ def test_should_apply_skips_when_latency_low():
     assert decision.reason == "low_latency"
 
 
-def test_should_apply_skips_when_success_high():
-    hook = _mk_hook(min_samples_for_decision=3)
+def test_explicit_request_health_gate_can_skip():
+    hook = _mk_hook(min_samples_for_decision=3, success_threshold=0.90)
     for _ in range(5):
         hook.record_outcome(latency_ms=100.0, success=True)  # high success
     decision = hook.should_apply()
     assert decision.apply is False
     assert decision.reason == "high_success"
+
+
+def test_default_high_latency_request_success_applies():
+    """Healthy HTTP responses do not suppress the latency-only default."""
+    hook = _mk_hook(min_samples_for_decision=5)
+    for _ in range(5):
+        hook.record_outcome(latency_ms=100.0, success=True)
+    decision = hook.should_apply()
+    assert decision.apply is True
+    assert decision.reason == "applied"
+    assert decision.success_rate == 1.0
+
+
+def test_threshold_one_disables_request_health_gate():
+    """A 100% threshold is inert under the strict greater-than contract."""
+    hook = _mk_hook(min_samples_for_decision=5, success_threshold=1.0)
+    for _ in range(5):
+        hook.record_outcome(latency_ms=100.0, success=True)
+    decision = hook.should_apply()
+    assert decision.apply is True
+    assert decision.reason == "applied"
 
 
 def test_should_apply_applies_when_high_latency_and_low_success():
@@ -196,8 +217,8 @@ def _bad_day_hook() -> A2C2Hook:
 
 
 def _good_day_hook() -> A2C2Hook:
-    """Hook seeded with samples that trigger should_apply()=False."""
-    hook = _mk_hook(min_samples_for_decision=3)
+    """Hook with the advanced request-health gate enabled and satisfied."""
+    hook = _mk_hook(min_samples_for_decision=3, success_threshold=0.90)
     for _ in range(5):
         hook.record_outcome(latency_ms=100.0, success=True)  # high success → skip
     return hook
@@ -287,6 +308,7 @@ def test_from_checkpoint_loads_head_and_wraps_with_default_config(tmp_path):
     hook = A2C2Hook.from_checkpoint(ckpt)
     assert hook.head.config == head.config
     assert hook.config.latency_threshold_ms == 40.0  # default
+    assert hook.config.success_threshold == 1.01  # request-health gate disabled
 
 
 def test_from_checkpoint_accepts_custom_config(tmp_path):

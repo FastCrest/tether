@@ -640,5 +640,5 @@ Use `mode: "reject"` only if your task cannot tolerate ANY constraint violation 
 - [Batching & throughput tuning](batching.md)
 - [CUDA Graphs & performance](cuda_graphs.md)
 - [Safety & ActionGuard](../scripts/emit_embodiment_presets.py) — code for guard initialization
-- [A2C2 Correction](self_distilling_serve.md) — post-hoc action correction based on task success rate
+- [A2C2 Correction](a2c2.md) — post-hoc action correction gated by deployment latency
 - [Policy Versioning](policy_versioning.md) — A/B testing and policy slots

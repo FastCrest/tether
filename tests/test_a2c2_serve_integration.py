@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import base64
 import io
+import inspect
 import json
+import logging
 from pathlib import Path
+import sys
+from types import ModuleType
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -45,6 +49,23 @@ def _make_export_dir(tmp_path: Path) -> Path:
     return export_dir
 
 
+def _make_decomposed_export_dir(tmp_path: Path) -> Path:
+    export_dir = tmp_path / "decomposed_export"
+    export_dir.mkdir()
+    (export_dir / "tether_config.json").write_text(json.dumps({
+        "model_type": "pi05_decomposed_student",
+        "export_kind": "decomposed",
+        "chunk_size": 50,
+        "action_dim": 32,
+        "decomposed": {
+            "vlm_prefix_onnx": "vlm_prefix.onnx",
+            "expert_denoise_onnx": "expert_denoise.onnx",
+            "max_action_dim": 32,
+        },
+    }))
+    return export_dir
+
+
 def _tiny_jpeg_b64() -> str:
     try:
         from PIL import Image
@@ -56,14 +77,23 @@ def _tiny_jpeg_b64() -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _setup_app(tmp_path, monkeypatch, *, a2c2_ckpt: str | None = None):
+def _setup_app(
+    tmp_path,
+    monkeypatch,
+    *,
+    a2c2_ckpt: str | None = None,
+    **create_app_kwargs,
+):
     """Builds a FastAPI app via create_app with optional A2C2 checkpoint."""
     try:
         from fastapi.testclient import TestClient  # noqa: F401
     except ImportError:
         pytest.skip("fastapi/httpx not installed")
     import onnxruntime as ort
-    import transformers
+
+    transformers_stub = ModuleType("transformers")
+    transformers_stub.AutoTokenizer = MagicMock()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "transformers", transformers_stub)
 
     input_names = [
         "img_cam1", "img_cam2", "img_cam3",
@@ -79,7 +109,8 @@ def _setup_app(tmp_path, monkeypatch, *, a2c2_ckpt: str | None = None):
         "attention_mask": np.ones((1, 16), dtype=np.int64),
     }
     monkeypatch.setattr(
-        transformers.AutoTokenizer, "from_pretrained",
+        transformers_stub.AutoTokenizer,  # type: ignore[attr-defined]
+        "from_pretrained",
         lambda *a, **kw: tok_stub,
     )
 
@@ -89,6 +120,7 @@ def _setup_app(tmp_path, monkeypatch, *, a2c2_ckpt: str | None = None):
     return create_app(
         str(export_dir), device="cpu",
         a2c2_checkpoint=a2c2_ckpt,
+        **create_app_kwargs,
     )
 
 
@@ -122,6 +154,88 @@ def test_a2c2_hook_loaded_when_checkpoint_set(tmp_path, monkeypatch):
         hook = getattr(server, "a2c2_hook", None)
         assert hook is not None
         assert hook.head.config.action_dim == 32
+        assert hook.config.success_threshold == 1.01
+
+
+def test_create_app_and_cli_default_to_latency_only():
+    """Both public serve entry points disable the request-health gate."""
+    from typer.models import OptionInfo
+
+    from tether.cli import serve
+    from tether.runtime.server import create_app
+
+    create_default = inspect.signature(create_app).parameters[
+        "a2c2_success_threshold"
+    ].default
+    assert create_default == 1.01
+
+    cli_option = inspect.signature(serve).parameters[
+        "a2c2_success_threshold"
+    ].default
+    assert isinstance(cli_option, OptionInfo)
+    assert cli_option.default == 1.01
+    assert "request-health" in cli_option.help
+    assert "1 (exclusive)" in cli_option.help
+    assert "not robot task success" in cli_option.help
+
+
+def test_explicit_request_health_gate_logs_semantics_warning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """Compatibility thresholds warn that HTTP success is not task success."""
+    ckpt = _make_a2c2_checkpoint(tmp_path, action_dim=32)
+    with caplog.at_level(logging.WARNING):
+        _setup_app(
+            tmp_path,
+            monkeypatch,
+            a2c2_ckpt=ckpt,
+            a2c2_success_threshold=0.90,
+        )
+    assert "request-health gate enabled at 0.90" in caplog.text
+    assert "not robot task success" in caplog.text
+
+
+def test_threshold_one_disables_gate_without_enabled_warning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    ckpt = _make_a2c2_checkpoint(tmp_path, action_dim=32)
+    with caplog.at_level(logging.WARNING):
+        app = _setup_app(
+            tmp_path,
+            monkeypatch,
+            a2c2_ckpt=ckpt,
+            a2c2_success_threshold=1.0,
+        )
+    assert app.state.tether_server.a2c2_hook.config.success_threshold == 1.0
+    assert "request-health gate enabled" not in caplog.text
+
+
+def test_bid_precedence_clears_public_and_internal_a2c2_hooks(
+    tmp_path,
+    caplog,
+):
+    """The real create_app combined path enables BID and fully disables A2C2."""
+    from tether.runtime.server import create_app
+
+    export_dir = _make_decomposed_export_dir(tmp_path)
+    ckpt = _make_a2c2_checkpoint(tmp_path, action_dim=32)
+    with caplog.at_level(logging.WARNING):
+        app = create_app(
+            str(export_dir),
+            device="cpu",
+            a2c2_checkpoint=ckpt,
+            bid_n_candidates=2,
+        )
+    server = app.state.tether_server
+    assert server._bid_config is not None
+    assert server._a2c2_hook is None
+    assert server.a2c2_hook is None
+    assert server.a2c2_internal is False
+    assert "BID is enabled and A2C2 is disabled" in caplog.text
 
 
 def test_a2c2_hook_load_failure_disables_gracefully(tmp_path, monkeypatch):
@@ -193,6 +307,37 @@ def test_a2c2_hook_records_outcomes_after_each_act(tmp_path, monkeypatch):
         n_lat, n_succ = hook.sample_count()
         assert n_lat == 3
         assert n_succ == 3
+
+
+def test_default_a2c2_applies_after_high_latency_cold_start(
+    tmp_path,
+    monkeypatch,
+):
+    """The sixth request applies after five healthy, high-latency samples."""
+    from fastapi.testclient import TestClient
+
+    ckpt = _make_a2c2_checkpoint(tmp_path, action_dim=32)
+    app = _setup_app(
+        tmp_path,
+        monkeypatch,
+        a2c2_ckpt=ckpt,
+        inject_latency_ms=50.0,
+    )
+    decisions = []
+    with TestClient(app) as client:
+        for _ in range(6):
+            resp = client.post("/act", json={
+                "image": _tiny_jpeg_b64(),
+                "instruction": "test",
+                "state": [0.0] * 6,
+            })
+            assert resp.status_code == 200
+            decisions.append(resp.json())
+
+    assert [d["a2c2_reason"] for d in decisions[:5]] == ["cold_start"] * 5
+    assert all(d["a2c2_applied"] is False for d in decisions[:5])
+    assert decisions[5]["a2c2_reason"] == "applied"
+    assert decisions[5]["a2c2_applied"] is True
 
 
 def test_metrics_endpoint_includes_a2c2_counters(tmp_path, monkeypatch):
