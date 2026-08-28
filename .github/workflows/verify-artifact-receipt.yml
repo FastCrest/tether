@@ -1,0 +1,42 @@
+name: Verify artifact execution receipt
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/tether/runtime/verify_inference.py"
+      - "src/tether/verify.py"
+      - "src/tether/smoke.py"
+      - "scripts/verify_artifact_receipt.py"
+      - ".github/workflows/verify-artifact-receipt.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  execute-export:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[onnx,serve]"
+      - name: Execute generated export
+        run: python scripts/verify_artifact_receipt.py --output verify-artifact-receipt.json
+      - name: Upload provenance receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-artifact-receipt-${{ github.sha }}
+          path: verify-artifact-receipt.json
+          if-no-files-found: error
+          retention-days: 90

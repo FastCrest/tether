@@ -175,6 +175,7 @@ class SmolVLAOnnxServer:
         noise: np.ndarray | None = None,
         lang_tokens: np.ndarray | None = None,
         lang_masks: np.ndarray | None = None,
+        image_masks: list[np.ndarray] | None = None,
     ) -> dict[str, Any]:
         """Run one SmolVLA forward pass. Accepts a single image or a list of 3."""
         if not self._ready:
@@ -207,7 +208,12 @@ class SmolVLAOnnxServer:
         img_cam2 = _prep_img(images_list[1])
         img_cam3 = _prep_img(images_list[2])
 
-        mask = np.ones((1,), dtype=np.bool_)
+        masks_list = list(image_masks or [])
+        while len(masks_list) < 3:
+            masks_list.append(np.ones((1,), dtype=np.bool_))
+        mask_cam1, mask_cam2, mask_cam3 = [
+            np.asarray(value, dtype=np.bool_).reshape(-1) for value in masks_list[:3]
+        ]
 
         # Lang: tokenize (SmolLM2 vocab ~49152) or use provided tokens
         if lang_tokens is None:
@@ -251,9 +257,9 @@ class SmolVLAOnnxServer:
             "img_cam1": img_cam1,
             "img_cam2": img_cam2,
             "img_cam3": img_cam3,
-            "mask_cam1": mask,
-            "mask_cam2": mask,
-            "mask_cam3": mask,
+            "mask_cam1": mask_cam1,
+            "mask_cam2": mask_cam2,
+            "mask_cam3": mask_cam3,
             "lang_tokens": lang_tokens,
             "lang_masks": lang_masks,
             "state": state_arr,
