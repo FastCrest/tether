@@ -22,7 +22,7 @@ contributor traffic hits:
    so the next stress run starts fresh.
 
 Usage:
-    python scripts/stress_test_contribution_worker.py
+    TETHER_CONTRIB_ADMIN_TOKEN=... python scripts/stress_test_contribution_worker.py
     python scripts/stress_test_contribution_worker.py --concurrency 200
     python scripts/stress_test_contribution_worker.py --skip-cleanup  # leave D1 dirty for debugging
 
@@ -58,6 +58,11 @@ class StressOutcome:
 
 def _worker_url() -> str:
     return os.environ.get("TETHER_CONTRIB_ENDPOINT", DEFAULT_WORKER).rstrip("/")
+
+
+def _admin_headers() -> dict[str, str]:
+    token = os.environ.get("TETHER_CONTRIB_ADMIN_TOKEN", "")
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _smoke_contributor_id() -> str:
@@ -210,6 +215,7 @@ def test_revoked_contributor_refusal() -> StressOutcome:
         revoke = client.post(
             f"{_worker_url()}/v1/revoke/cascade",
             json={"contributor_id": cid, "scope": "all"},
+            headers=_admin_headers(),
             timeout=30.0,
         )
 
@@ -283,6 +289,12 @@ def main():
                         "Phase 1.5 reservation-based rate limit lands.")
     p.add_argument("--skip-cleanup", action="store_true")
     args = p.parse_args()
+
+    if not os.environ.get("TETHER_CONTRIB_ADMIN_TOKEN"):
+        p.error(
+            "TETHER_CONTRIB_ADMIN_TOKEN is required because the revoke "
+            "stress case exercises an admin-only destructive endpoint"
+        )
 
     print(f"=== Stress-testing contribution-worker at {_worker_url()} ===\n")
 

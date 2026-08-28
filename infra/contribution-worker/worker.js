@@ -6,13 +6,15 @@
  *   POST /admin/init-bucket                      → confirm R2 bucket exists (admin auth)
  *   GET  /admin/contributors                     → list contributors + stats (admin auth)
  *   POST /admin/manual-purge                     → trigger cascade purge for contributor_id (admin auth)
+ *   POST /admin/cascade-execute/:request_id       → force cascade progression (admin auth)
  *   POST /v1/uploads/sign                        → issue signed PUT URL for an upload
  *   POST /v1/uploads/complete                    → record successful upload, update stats
- *   POST /v1/revoke/cascade                      → mark contributor for purge (30-day SLA)
+ *   POST /v1/revoke/cascade                      → mark contributor for purge (admin auth)
+ *   GET  /v1/revoke/cascade-status/:request_id   → read cascade status (never mutates)
  *   GET  /v1/contributors/:id/stats              → return contribution stats for `reflex contribute --status`
  *
  * Auth (Phase 1):
- *   - Admin endpoints: Authorization: Bearer <ADMIN_TOKEN>
+ *   - Admin and revoke-mutation endpoints: Authorization: Bearer <ADMIN_TOKEN>
  *   - Customer endpoints: contributor_id + opted_in_at as soft-proof.
  *     Phase 1.5 will add Ed25519 challenge-response signed by the
  *     consent receipt's user-side key.
@@ -66,7 +68,7 @@ export default {
       if (method === "POST" && path === "/v1/uploads/complete")
         return await postUploadsComplete(request, env);
       if (method === "POST" && path === "/v1/revoke/cascade")
-        return await postRevokeCascade(request, env);
+        return await adminAuth(request, env, () => postRevokeCascade(request, env));
       if (method === "GET" && path.startsWith("/v1/revoke/cascade-status/")) {
         const requestId = path.split("/").pop();
         return await getRevokeCascadeStatus(requestId, env);
@@ -88,17 +90,49 @@ export default {
       return jsonResponse(500, { error: "internal_error", message: e.message });
     }
   },
+
+  scheduled(_controller, env, ctx) {
+    // Timed cascade progression is deliberately unavailable over public HTTP.
+    // Cloudflare invokes this hook from the configured cron trigger.
+    ctx.waitUntil(progressPendingCascades(env));
+  },
 };
 
 // ---------- middleware ----------
 
 async function adminAuth(request, env, handler) {
-  const auth = request.headers.get(ADMIN_TOKEN_HEADER) || "";
-  const expected = `Bearer ${env.ADMIN_TOKEN}`;
-  if (!env.ADMIN_TOKEN || auth !== expected) {
+  if (!(await hasValidAdminBearer(request, env))) {
     return jsonResponse(401, { error: "unauthorized" });
   }
   return await handler();
+}
+
+/**
+ * Verify the admin bearer without an early-exit string comparison.
+ *
+ * Both values are reduced to fixed-length SHA-256 digests before the XOR
+ * comparison, so differing token lengths and the first mismatching byte do
+ * not change the comparison loop. An absent server-side secret always fails.
+ */
+async function hasValidAdminBearer(request, env) {
+  const authorization = request.headers.get(ADMIN_TOKEN_HEADER) || "";
+  const supplied = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : "";
+  const expected = typeof env.ADMIN_TOKEN === "string" ? env.ADMIN_TOKEN : "";
+  const encoder = new TextEncoder();
+  const [suppliedDigest, expectedDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(supplied)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+
+  const suppliedBytes = new Uint8Array(suppliedDigest);
+  const expectedBytes = new Uint8Array(expectedDigest);
+  let mismatch = expected.length === 0 ? 1 : 0;
+  for (let i = 0; i < expectedBytes.length; i += 1) {
+    mismatch |= suppliedBytes[i] ^ expectedBytes[i];
+  }
+  return mismatch === 0;
 }
 
 // ---------- handlers: health + admin ----------
@@ -418,6 +452,8 @@ async function postUploadsComplete(request, env) {
  *
  * Body: { contributor_id: string, scope: "all" | "future_only" }
  *
+ * Emergency containment: this endpoint requires the same admin bearer as
+ * /admin routes until contributor proof-of-possession authentication ships.
  * Marks the contributor for revoke. The actual purge cascade (delete R2
  * objects + rebuild derived datasets + email buyers) runs as a separate
  * background job; this endpoint only enqueues the request and updates
@@ -432,7 +468,7 @@ async function postRevokeCascade(request, env) {
   if (!["all", "future_only"].includes(scope)) {
     return jsonResponse(400, { error: "invalid_scope", got: scope });
   }
-  return await initiateRevoke(env, contributorId, scope, "customer");
+  return await initiateRevoke(env, contributorId, scope, "admin_api");
 }
 
 /**
@@ -498,12 +534,14 @@ async function initiateRevoke(env, contributorId, scope, source) {
 /**
  * GET /v1/revoke/cascade-status/<request_id>
  *
- * Returns the current cascade state for a request. Lazily progresses the
- * cascade through any stages whose SLA has elapsed (no separate cron needed).
+ * Returns the current cascade state for a request. This handler is strictly
+ * read-only; timed progression runs only from the Worker's scheduled hook.
  */
 async function getRevokeCascadeStatus(requestId, env) {
   if (!requestId) return jsonResponse(400, { error: "missing_request_id" });
-  const fresh = await loadAndProgressCascade(requestId, env, { force: false });
+  const fresh = await env.DB.prepare(
+    `SELECT * FROM revoke_requests WHERE request_id = ?`
+  ).bind(requestId).first();
   if (!fresh) return jsonResponse(404, { error: "request_not_found" });
   return jsonResponse(200, formatCascadeStatus(fresh));
 }
@@ -514,6 +552,21 @@ async function adminExecuteCascade(requestId, env) {
   const fresh = await loadAndProgressCascade(requestId, env, { force: true });
   if (!fresh) return jsonResponse(404, { error: "request_not_found" });
   return jsonResponse(200, formatCascadeStatus(fresh));
+}
+
+
+/**
+ * Progress pending cascades from Cloudflare's non-HTTP scheduled event.
+ * Each stage remains idempotent in loadAndProgressCascade, so retrying a
+ * scheduled event is safe.
+ */
+async function progressPendingCascades(env) {
+  const pending = await env.DB.prepare(
+    `SELECT request_id FROM revoke_requests WHERE status != 'completed' LIMIT 100`
+  ).all();
+  for (const row of pending.results || []) {
+    await loadAndProgressCascade(row.request_id, env, { force: false });
+  }
 }
 
 

@@ -17,12 +17,17 @@ Sibling workers (each in its own folder under `infra/`):
 - `POST /admin/init-bucket` — sanity-check the R2 binding
 - `GET  /admin/contributors` — list contributors + stats
 - `POST /admin/manual-purge` — trigger cascade for a specific contributor
+- `POST /admin/cascade-execute/:request_id` — force cascade progression
+- `POST /v1/revoke/cascade` — mark a contributor for purge (temporary admin-only containment)
 
 ### Customer (Phase 1 soft-auth: `contributor_id` + `opted_in_at` body fields)
 - `POST /v1/uploads/sign` — issue signed PUT URL for an upload
 - `POST /v1/uploads/complete` — record successful upload, increment stats
-- `POST /v1/revoke/cascade` — mark contributor for purge (30-day SLA)
+- `GET  /v1/revoke/cascade-status/:request_id` — read cascade state without advancing it
 - `GET  /v1/contributors/:id/stats` — return contribution totals
+
+Timed revoke stages advance through the private Cloudflare cron trigger every
+five minutes. Public `GET` requests never perform a tombstone or R2 deletion.
 
 ## Storage
 
@@ -47,6 +52,12 @@ on-disk consent receipt. **Anyone with a valid `contributor_id` could upload as
 that contributor** — privacy-acceptable because contributor_ids are anonymous
 and uploads are subject to the same anonymization filters that ship in
 `reflex.curate.uploader`.
+
+Destructive revoke operations are excluded from this soft-auth model. As an
+emergency containment measure, they require `Authorization: Bearer
+<ADMIN_TOKEN>` and use a fixed-length digest comparison. A contributor-facing
+revoke flow must not be re-enabled until it binds the requested contributor ID
+to proof of possession.
 
 **Phase 1.5:** add Ed25519 challenge-response. The user-side keypair lives in
 the consent receipt (`consent_signature`); the worker challenges the client
@@ -84,8 +95,9 @@ After deploy:
 - Update `src/reflex/curate/uploader.py:_request_signed_url` and `_put_to_r2`
   to make real httpx calls (currently raise `UploadStub`).
 - Flip `live=True` in `src/reflex/runtime/server.py` curate-uploader scaffolding.
-- Update `src/reflex/curate/opt_in_cli.py:_cmd_revoke` to actually POST to
-  `/v1/revoke/cascade` instead of logging.
+- Do not wire the contributor CLI to `/v1/revoke/cascade` while the emergency
+  admin-only containment is active. A public revoke flow requires the signed
+  proof-of-possession protocol first.
 
 ## Layout convention (per ADR decision #1)
 
@@ -109,7 +121,6 @@ key from the request body's `tier` field.
   defaults so older rows still satisfy NOT NULL constraints.
 - `daily_uploads` is the hot table on the upload path. Indexed on
   `(contributor_id, utc_date)` (PK) + `utc_date` for retention prune jobs.
-- Revoke cascade runs OUT OF BAND from this worker — the worker only
-  enqueues the request and flags the contributor. The actual R2 deletion
-  + derived-dataset rebuild + buyer notifications are operator-driven jobs
-  triggered by the Slack alert. Phase 2 automates the cascade.
+- Revoke cascade progression runs through the Worker's private scheduled hook.
+  The public status route is read-only; an administrator can force progression
+  through the authenticated `/admin/cascade-execute/:request_id` route.

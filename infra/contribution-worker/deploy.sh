@@ -132,6 +132,6 @@ echo "    1. Update src/reflex/curate/uploader.py:_request_signed_url + _put_to_
 echo "       to make real httpx POST/PUT calls (replace UploadStub)."
 echo "    2. Flip the curate uploader's live=False to live=True in"
 echo "       src/reflex/runtime/server.py."
-echo "    3. Update src/reflex/curate/opt_in_cli.py:_cmd_revoke to POST to"
-echo "       \$WORKER_URL/v1/revoke/cascade."
+echo "    3. Keep contributor revoke disabled until signed proof-of-possession"
+echo "       replaces the temporary admin-only containment."
 echo "    4. (Optional) bind a custom domain in wrangler.toml + redeploy."

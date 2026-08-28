@@ -2,6 +2,11 @@ name = "reflex-contributions"
 main = "worker.js"
 compatibility_date = "2026-05-01"
 
+# Cascade status GETs are read-only. This private scheduler hook is the only
+# non-admin path that advances elapsed revoke stages.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # D1 binding for contributor metadata + upload tracking + revoke cascade.
 # Fill in `database_id` after `wrangler d1 create reflex-contributions`.
 [[d1_databases]]
@@ -22,5 +27,5 @@ bucket_name = "reflex-curate"
 # routes = [{ pattern = "data.fastcrest.com/*", custom_domain = true }]
 
 # Required Secrets (set via `wrangler secret put`):
-#   ADMIN_TOKEN                — bearer token for /admin/* endpoints
+#   ADMIN_TOKEN                — bearer token for admin + revoke mutations
 #   SLACK_WEBHOOK_URL          — optional; alert on revoke + suspicious uploads
