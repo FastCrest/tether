@@ -134,6 +134,8 @@ def test_workflows_separate_ordinary_and_protected_policy_changes() -> None:
     workflows = Path(__file__).parents[1] / ".github" / "workflows"
     ordinary = (workflows / "quality-ratchet.yml").read_text()
     protected = (workflows / "quality-baseline-update.yml").read_text()
+    assert 'PROTECTED_POLICY="$PROTECTED_POLICY_DIR/pyproject.toml"' in protected
+    assert ".protected-base-pyproject.toml" not in protected
 
     assert "pull_request_target:" in ordinary
     assert "${BASE_SHA}:scripts/ci_quality_ratchet.py" in ordinary
