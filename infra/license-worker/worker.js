@@ -7,9 +7,10 @@
  *   POST /admin/issue                      → sign + store new license + activation code (admin auth)
  *   POST /admin/revoke                     → revoke license_id (admin auth)
  *   GET  /admin/list                       → list licenses with status (admin auth)
+ *   GET  /admin/signer                     → verify configured signer binding (admin auth)
  *   GET  /v1/pubkey                        → return current Ed25519 public key (PEM)
- *   GET  /v1/activation/:code              → fetch signed license by one-time code
- *   POST /v1/heartbeat                     → record heartbeat + check revocation
+ *   POST /v1/activation/:code              → bind hardware + fetch signed v2 license
+ *   POST /v1/heartbeat                     → return signed revocation attestation
  *   GET  /v1/revocation/:license_id        → check if license is revoked
  *
  * Security:
@@ -30,9 +31,8 @@ const ADMIN_TOKEN_HEADER = "Authorization";
 // Activation codes: REFLEX-XXXX-XXXX-XXXX (4-block, 16 hex chars). 24h TTL.
 const ACTIVATION_CODE_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Heartbeat: customers ping daily; we accept up to 7-day staleness for the
-// grace period (matches src/reflex/pro/license.py HEARTBEAT_FRESHNESS_S).
-const HEARTBEAT_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+const HEARTBEAT_VALIDITY_SECONDS = 24 * 60 * 60;
+const HEARTBEAT_DOMAIN = "tether.license.heartbeat";
 
 // Sharing-detection threshold: a license heartbeat'd from more than this many
 // distinct hardware_fingerprint values within a 7-day window is flagged.
@@ -52,8 +52,9 @@ export default {
       if (method === "POST" && path === "/admin/issue") return await adminAuth(request, env, () => adminIssue(request, env));
       if (method === "POST" && path === "/admin/revoke") return await adminAuth(request, env, () => adminRevoke(request, env));
       if (method === "GET" && path === "/admin/list") return await adminAuth(request, env, () => adminList(request, env));
+      if (method === "GET" && path === "/admin/signer") return await adminAuth(request, env, () => adminSigner(env));
       if (method === "GET" && path === "/v1/pubkey") return await getPubkey(env);
-      if (method === "GET" && path.startsWith("/v1/activation/")) return await getActivation(path.split("/").pop(), env);
+      if (method === "POST" && path.startsWith("/v1/activation/")) return await postActivation(path.split("/").pop(), request, env);
       if (method === "POST" && path === "/v1/heartbeat") return await postHeartbeat(request, env);
       if (method === "GET" && path.startsWith("/v1/revocation/")) return await getRevocation(path.split("/").pop(), env);
       return jsonResponse(404, { error: "not_found", path });
@@ -122,9 +123,11 @@ async function adminInit(request, env) {
     next_steps: [
       `1. Set the private key as a Worker Secret IMMEDIATELY:`,
       `     echo '${privB64}' | wrangler secret put PRIVATE_KEY`,
-      `2. Paste the public_key_b64 into src/reflex/pro/_public_key.py BUNDLED_PUBLIC_KEY_B64`,
-      `3. Commit + push the public key change`,
-      `4. The private key from this response is ONE-TIME — discard it after setting the Secret`,
+      `2. Bind that secret to this exact public-key row:`,
+      `     echo '${keyId}' | wrangler secret put SIGNING_KEY_ID`,
+      `3. Add public_key_b64 under ${keyId} in TRUSTED_PUBLIC_KEYS_B64`,
+      `4. Commit + release the trusted public key before serving signed responses`,
+      `5. The private key from this response is ONE-TIME — discard it after setting the Secret`,
     ],
   });
 }
@@ -163,13 +166,10 @@ async function adminIssue(request, env) {
     hardware_binding: null, // unbound until first activation
   };
 
-  // Sign with Ed25519.
-  const privKey = await loadPrivateKey(env);
-  const canonical = canonicalJson(payload);
-  const sigBuf = await crypto.subtle.sign("Ed25519", privKey, new TextEncoder().encode(canonical));
-  const signature = arrayBufferToBase64(sigBuf);
-
-  const license = { ...payload, signature, key_id: await activeKeyId(env) };
+  // Sign with the key-id/private-key pair verified by loadSigner().
+  const signed = await signPayload(payload, env, { base64url: false });
+  const signature = signed.signature;
+  const license = { ...payload, signature, key_id: signed.keyId };
 
   // Persist license + generate activation code.
   const activationCode = generateActivationCode();
@@ -259,16 +259,30 @@ async function adminList(request, env) {
   return jsonResponse(200, { licenses: rows.results });
 }
 
+async function adminSigner(env) {
+  const { keyId } = await loadSigner(env);
+  return jsonResponse(200, { verified: true, key_id: keyId });
+}
+
 async function getPubkey(env) {
+  if (!env.SIGNING_KEY_ID) {
+    return jsonResponse(503, { error: "signing_key_id_not_configured" });
+  }
   const row = await env.DB.prepare(
-    "SELECT key_id, public_key_b64, generated_at FROM master_keys WHERE retired_at IS NULL ORDER BY generated_at DESC LIMIT 1"
-  ).first();
-  if (!row) return jsonResponse(404, { error: "no_active_key", message: "Run POST /admin/init first." });
+    "SELECT key_id, public_key_b64, generated_at FROM master_keys WHERE key_id = ? AND retired_at IS NULL"
+  ).bind(env.SIGNING_KEY_ID).first();
+  if (!row) return jsonResponse(404, { error: "configured_signing_key_not_active" });
   return jsonResponse(200, { key_id: row.key_id, public_key_b64: row.public_key_b64, generated_at: row.generated_at });
 }
 
-async function getActivation(code, env) {
+async function postActivation(code, request, env) {
   if (!code || !/^REFLEX-[A-Z0-9-]+$/.test(code)) return jsonResponse(400, { error: "invalid_code_format" });
+
+  const body = await request.json().catch(() => ({}));
+  const hardwareBinding = body.hardware_binding;
+  if (!isValidHardwareBinding(hardwareBinding)) {
+    return jsonResponse(400, { error: "valid_hardware_binding_required" });
+  }
 
   const row = await env.DB.prepare(
     "SELECT license_id, expires_at, used FROM activation_codes WHERE code = ?"
@@ -277,42 +291,77 @@ async function getActivation(code, env) {
   if (row.used) return jsonResponse(410, { error: "code_already_used" });
   if (new Date(row.expires_at) < new Date()) return jsonResponse(410, { error: "code_expired" });
 
-  const license = await env.DB.prepare("SELECT license_json FROM licenses WHERE license_id = ?")
+  // Atomically consume the capability before issuing a hardware-bound
+  // license. Concurrent redeemers cannot obtain two valid bindings.
+  const claimed = await env.DB.prepare(
+    "UPDATE activation_codes SET used = 1, used_at = ? WHERE code = ? AND used = 0"
+  ).bind(new Date().toISOString(), code).run();
+  const claimChanges = claimed?.meta?.changes ?? claimed?.changes ?? 0;
+  if (claimChanges !== 1) return jsonResponse(410, { error: "code_already_used" });
+
+  const stored = await env.DB.prepare("SELECT license_json FROM licenses WHERE license_id = ?")
     .bind(row.license_id).first();
-  if (!license) return jsonResponse(500, { error: "license_missing", license_id: row.license_id });
+  if (!stored) return jsonResponse(500, { error: "license_missing", license_id: row.license_id });
 
-  // Mark code used so it's one-shot.
-  await env.DB.prepare("UPDATE activation_codes SET used = 1, used_at = ? WHERE code = ?")
-    .bind(new Date().toISOString(), code).run();
+  const issued = JSON.parse(stored.license_json);
+  const payload = {
+    license_version: 2,
+    license_id: issued.license_id,
+    customer_id: issued.customer_id,
+    tier: issued.tier,
+    issued_at: issued.issued_at,
+    expires_at: issued.expires_at,
+    max_seats: issued.max_seats,
+    hardware_binding: hardwareBinding,
+  };
+  const signed = await signPayload(payload, env, { base64url: false });
+  const license = { ...payload, signature: signed.signature, key_id: signed.keyId };
 
-  return jsonResponse(200, { license: JSON.parse(license.license_json) });
+  // Persist exactly the hardware-bound object returned to the customer.
+  await env.DB.prepare(
+    "UPDATE licenses SET signature = ?, key_id = ?, license_json = ? WHERE license_id = ?"
+  ).bind(signed.signature, signed.keyId, JSON.stringify(license), row.license_id).run();
+
+  return jsonResponse(200, { license });
 }
 
 async function postHeartbeat(request, env) {
   const body = await request.json().catch(() => ({}));
   const licenseId = String(body.license_id || "").trim();
   const hardwareFingerprint = String(body.hardware_fingerprint || "").trim();
-  const reflexVersion = String(body.reflex_version || "unknown").slice(0, 64);
-  if (!licenseId || !hardwareFingerprint) {
-    return jsonResponse(400, { error: "license_id_and_hardware_fingerprint_required" });
+  const tetherVersion = String(body.tether_version || "unknown").slice(0, 64);
+  const requestNonce = String(body.request_nonce || "");
+  if (!licenseId || !hardwareFingerprint || !isNonce(requestNonce)) {
+    return jsonResponse(400, { error: "license_id_hardware_fingerprint_and_nonce_required" });
   }
 
-  // Check revocation first — heartbeat from a revoked license is rejected loudly.
-  const revoked = await env.DB.prepare(
-    "SELECT revoked_at, reason FROM revocation_list WHERE license_id = ?"
-  ).bind(licenseId).first();
-  if (revoked) {
-    return jsonResponse(403, { revoked: true, revoked_at: revoked.revoked_at, reason: revoked.reason });
-  }
-
-  // Check expiry from licenses table.
   const license = await env.DB.prepare(
     "SELECT customer_id, expires_at, max_seats FROM licenses WHERE license_id = ?"
   ).bind(licenseId).first();
   if (!license) return jsonResponse(404, { error: "license_not_found" });
-  if (new Date(license.expires_at) < new Date()) {
-    return jsonResponse(403, { expired: true, expires_at: license.expires_at });
-  }
+
+  const revoked = await env.DB.prepare(
+    "SELECT revoked_at, reason FROM revocation_list WHERE license_id = ?"
+  ).bind(licenseId).first();
+
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = Math.floor(new Date(license.expires_at).getTime() / 1000);
+  const status = revoked ? "revoked" : expiresAt <= issuedAt ? "expired" : "active";
+  const validUntil = Math.min(issuedAt + HEARTBEAT_VALIDITY_SECONDS, expiresAt);
+  const attestation = {
+    domain: HEARTBEAT_DOMAIN,
+    issued_at: issuedAt,
+    key_id: String(env.SIGNING_KEY_ID || ""),
+    license_id: licenseId,
+    request_nonce: requestNonce,
+    status,
+    v: 1,
+    valid_until: validUntil,
+  };
+  const signed = await signPayload(attestation, env, { base64url: true });
+  const signedAttestation = { ...attestation, signature: signed.signature };
+
+  if (status !== "active") return jsonResponse(200, signedAttestation);
 
   // Best-effort country geo (Cloudflare Cf-IPCountry header).
   const country = request.headers.get("Cf-IPCountry") || "??";
@@ -322,17 +371,12 @@ async function postHeartbeat(request, env) {
     `INSERT INTO heartbeats
      (license_id, hardware_fingerprint, ip_country, reflex_version, server_timestamp)
      VALUES (?, ?, ?, ?, ?)`
-  ).bind(licenseId, hardwareFingerprint, country, reflexVersion, new Date().toISOString()).run();
+  ).bind(licenseId, hardwareFingerprint, country, tetherVersion, new Date().toISOString()).run();
 
   // Sharing-detection check (async; doesn't block response).
   detectSharing(licenseId, env).catch((e) => console.error("sharing-detect failed:", e.message));
 
-  return jsonResponse(200, {
-    valid: true,
-    license_id: licenseId,
-    expires_at: license.expires_at,
-    max_seats: license.max_seats,
-  });
+  return jsonResponse(200, signedAttestation);
 }
 
 async function getRevocation(licenseId, env) {
@@ -404,11 +448,37 @@ async function loadPrivateKey(env) {
   return await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
 }
 
-async function activeKeyId(env) {
+async function signPayload(payload, env, { base64url = false } = {}) {
+  const { keyId, privateKey } = await loadSigner(env);
+  const signatureBuffer = await crypto.subtle.sign(
+    "Ed25519", privateKey, new TextEncoder().encode(canonicalJson(payload)),
+  );
+  return {
+    keyId,
+    signature: base64url
+      ? arrayBufferToBase64Url(signatureBuffer)
+      : arrayBufferToBase64(signatureBuffer),
+  };
+}
+
+async function loadSigner(env) {
+  const keyId = String(env.SIGNING_KEY_ID || "");
+  if (!keyId) throw new Error("SIGNING_KEY_ID secret not set");
   const row = await env.DB.prepare(
-    "SELECT key_id FROM master_keys WHERE retired_at IS NULL ORDER BY generated_at DESC LIMIT 1"
-  ).first();
-  return row ? row.key_id : null;
+    "SELECT public_key_b64 FROM master_keys WHERE key_id = ? AND retired_at IS NULL"
+  ).bind(keyId).first();
+  if (!row) throw new Error(`SIGNING_KEY_ID ${keyId} is missing or retired`);
+
+  const privateKey = await loadPrivateKey(env);
+  const publicKey = await crypto.subtle.importKey(
+    "raw", base64ToArrayBuffer(row.public_key_b64), { name: "Ed25519" }, false, ["verify"],
+  );
+  const challenge = new TextEncoder().encode("tether.signer.key-binding.v1");
+  const proof = await crypto.subtle.sign("Ed25519", privateKey, challenge);
+  if (!(await crypto.subtle.verify("Ed25519", publicKey, proof, challenge))) {
+    throw new Error(`SIGNING_KEY_ID ${keyId} does not match PRIVATE_KEY`);
+  }
+  return { keyId, privateKey };
 }
 
 function canonicalJson(obj) {
@@ -424,6 +494,33 @@ function arrayBufferToBase64(buf) {
   let bin = "";
   for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
+}
+
+function arrayBufferToBase64Url(buf) {
+  return arrayBufferToBase64(buf)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function isNonce(value) {
+  if (!/^[A-Za-z0-9_-]{22}$/.test(value)) return false;
+  try {
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/") + "==";
+    return base64ToArrayBuffer(base64).byteLength === 16;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isValidHardwareBinding(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (Object.keys(value).sort().join(",") !== "cpu_count,gpu_name,gpu_uuid") return false;
+  return (
+    typeof value.gpu_uuid === "string" && value.gpu_uuid.length > 0 && value.gpu_uuid.length <= 256 &&
+    typeof value.gpu_name === "string" && value.gpu_name.length > 0 && value.gpu_name.length <= 256 &&
+    Number.isInteger(value.cpu_count) && value.cpu_count > 0 && value.cpu_count <= 1048576
+  );
 }
 
 function base64ToArrayBuffer(b64) {

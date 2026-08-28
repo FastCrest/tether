@@ -15,10 +15,11 @@
 #   5. Applies the schema
 #   6. Generates a strong ADMIN_TOKEN, prints it ONCE, then sets it as a Worker Secret
 #   7. Optionally sets SLACK_WEBHOOK_URL
-#   8. Deploys the worker
-#   9. Calls /admin/init to generate the Ed25519 keypair
-#   10. Sets PRIVATE_KEY as a Worker Secret
-#   11. Prints the public_key_b64 + key_id you need to paste into
+#   8. Migrates an existing active signer id before deploying, when present
+#   9. Deploys the worker
+#   10. Calls /admin/init for a fresh install, or verifies the existing signer
+#   11. Sets PRIVATE_KEY + SIGNING_KEY_ID for a fresh install
+#   12. Prints the public_key_b64 + key_id you need to paste into
 #       src/reflex/pro/_public_key.py + the worker URL for src/reflex/pro/activate.py
 #
 # After this script: edit those two Python constants, commit + push, and your
@@ -35,6 +36,34 @@ ok()   { printf "${GREEN}✓${NC} %s\n" "$*"; }
 warn() { printf "${YELLOW}⚠${NC} %s\n" "$*"; }
 err()  { printf "${RED}✗${NC} %s\n" "$*" >&2; }
 info() { printf "${CYAN}→${NC} %s\n" "$*"; }
+
+select_active_signing_key() {
+    python3 -c '
+import json, os, sys
+value = json.load(sys.stdin)
+batches = value if isinstance(value, list) else [value]
+rows = [row for batch in batches for row in batch.get("results", [])]
+requested = os.environ.get("TETHER_SIGNING_KEY_ID", "")
+if requested:
+    rows = [row for row in rows if row.get("key_id") == requested]
+    if len(rows) != 1:
+        print(f"TETHER_SIGNING_KEY_ID={requested!r} is not an active D1 key", file=sys.stderr)
+        raise SystemExit(4)
+elif not rows:
+    raise SystemExit(3)
+elif len(rows) != 1:
+    print("multiple active D1 keys; set TETHER_SIGNING_KEY_ID to the key matching PRIVATE_KEY", file=sys.stderr)
+    raise SystemExit(4)
+row = rows[0]
+print(f"{row['"'"'key_id'"'"']}\t{row['"'"'public_key_b64'"'"']}")
+'
+}
+
+# Pure selector mode exercises the exact branch logic without Cloudflare access.
+if [ "${1:-}" = "--select-active-key" ]; then
+    select_active_signing_key
+    exit $?
+fi
 
 cd "$(dirname "$0")"
 
@@ -129,7 +158,38 @@ else
     fi
 fi
 
-# ─── 8. Deploy the worker ────────────────────────────────────────────────────
+# ─── 8. Pre-bind an existing signer before deploying the stricter Worker ────
+ACTIVE_KEYS_JSON=$(wrangler d1 execute "$DB_NAME" --remote --json --command \
+    "SELECT key_id, public_key_b64 FROM master_keys WHERE retired_at IS NULL ORDER BY generated_at DESC")
+set +e
+ACTIVE_KEY_ROW=$(printf '%s' "$ACTIVE_KEYS_JSON" | select_active_signing_key)
+KEY_SELECT_STATUS=$?
+set -e
+if [ "$KEY_SELECT_STATUS" -eq 0 ]; then
+    IFS=$'\t' read -r KEY_ID PUBKEY_B64 <<< "$ACTIVE_KEY_ROW"
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        if [ -n "${REFLEX_ADMIN_TOKEN:-}" ]; then
+            ADMIN_TOKEN="$REFLEX_ADMIN_TOKEN"
+        else
+            err "Existing-signer migration requires REFLEX_ADMIN_TOKEN so /admin/signer can verify the binding immediately after deploy. SIGNING_KEY_ID and Worker code were not changed."
+            exit 1
+        fi
+    fi
+    if ! wrangler secret list 2>/dev/null | grep -q '"PRIVATE_KEY"'; then
+        err "D1 has active key ${KEY_ID}, but PRIVATE_KEY is missing. Restore the matching private key; do not generate a replacement for the existing public row."
+        exit 1
+    fi
+    info "Binding existing active D1 key ${KEY_ID} before deploying signer enforcement..."
+    echo -n "$KEY_ID" | wrangler secret put SIGNING_KEY_ID
+    ok "Existing SIGNING_KEY_ID set before deploy"
+elif [ "$KEY_SELECT_STATUS" -eq 3 ]; then
+    info "No active D1 signing key; fresh install will initialize one after deploy"
+else
+    err "Could not select the existing signing key safely. If rotation overlap leaves multiple active rows, set TETHER_SIGNING_KEY_ID to the row that matches PRIVATE_KEY."
+    exit 1
+fi
+
+# ─── 9. Deploy the worker ────────────────────────────────────────────────────
 info "Deploying worker..."
 DEPLOY_OUT=$(wrangler deploy 2>&1)
 echo "$DEPLOY_OUT" | tail -10
@@ -140,7 +200,7 @@ if [ -z "$WORKER_URL" ]; then
 fi
 ok "Worker deployed at: ${WORKER_URL}"
 
-# ─── 9. /admin/init ──────────────────────────────────────────────────────────
+# ─── 10. /admin/init ─────────────────────────────────────────────────────────
 # Skip init if we don't have the ADMIN_TOKEN locally (it was already set as a
 # Secret on a prior run and we don't have the value anymore).
 if [ -z "${ADMIN_TOKEN:-}" ]; then
@@ -173,10 +233,12 @@ elif echo "$INIT_OUT" | grep -q "keypair_generated"; then
     KEY_ID=$(echo "$INIT_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['key_id'])")
     ok "Keypair generated (id=${KEY_ID})"
 
-    # ─── 10. Set PRIVATE_KEY ──────────────────────────────────────────────────
+    # ─── 11. Set PRIVATE_KEY + SIGNING_KEY_ID ─────────────────────────────────
     info "Setting PRIVATE_KEY as Worker Secret (this is the only place it goes — never persisted elsewhere)..."
     echo -n "$PRIVKEY_B64" | wrangler secret put PRIVATE_KEY
     ok "PRIVATE_KEY set as Worker Secret"
+    echo -n "$KEY_ID" | wrangler secret put SIGNING_KEY_ID
+    ok "SIGNING_KEY_ID set to ${KEY_ID}"
     unset PRIVKEY_B64
 else
     err "Unexpected response from /admin/init:"
@@ -184,9 +246,23 @@ else
     exit 1
 fi
 
-# ─── 11. Print next-steps with values to paste ───────────────────────────────
-PUBKEY_FILE="../../src/reflex/pro/_public_key.py"
-ACTIVATE_FILE="../../src/reflex/pro/activate.py"
+# This authenticated check invokes loadSigner(), which signs and verifies a
+# fixed challenge. Matching ids alone do not prove PRIVATE_KEY is the private
+# half of the selected D1 public key.
+info "Verifying configured signer/private-key binding..."
+SIGNER_OUT=$(curl -sS "${WORKER_URL}/admin/signer" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}")
+VERIFIED_KEY_ID=$(printf '%s' "$SIGNER_OUT" | python3 -c \
+    "import sys,json; value=json.load(sys.stdin); print(value.get('key_id', '')) if value.get('verified') is True else raise SystemExit(1)")
+if [ "$VERIFIED_KEY_ID" != "$KEY_ID" ]; then
+    err "Signer verification failed for ${KEY_ID}: ${SIGNER_OUT}"
+    exit 1
+fi
+ok "Signer binding cryptographically verified (id=${VERIFIED_KEY_ID})"
+
+# ─── 12. Print next-steps with values to paste ───────────────────────────────
+PUBKEY_FILE="../../src/tether/pro/_public_key.py"
+ACTIVATE_FILE="../../src/tether/pro/activate.py"
 
 printf "\n\n${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
 printf "${GREEN}DEPLOY COMPLETE${NC}\n"
@@ -199,8 +275,7 @@ printf "${YELLOW}Public key:${NC} ${PUBKEY_B64}\n\n"
 printf "${CYAN}Next steps (3 manual edits, ~2 min):${NC}\n\n"
 
 printf "1. Update ${PUBKEY_FILE}:\n"
-printf "   BUNDLED_PUBLIC_KEY_B64 = \"${PUBKEY_B64}\"\n"
-printf "   BUNDLED_KEY_ID         = \"${KEY_ID}\"\n\n"
+printf "   Add \"${KEY_ID}\": \"${PUBKEY_B64}\" to TRUSTED_PUBLIC_KEYS_B64\n\n"
 
 printf "2. Update ${ACTIVATE_FILE}:\n"
 printf "   DEFAULT_LICENSE_ENDPOINT = \"${WORKER_URL}\"\n\n"

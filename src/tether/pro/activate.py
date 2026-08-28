@@ -4,15 +4,12 @@ The customer receives an activation code from the operator (via Discord,
 DM, email — whatever the out-of-band channel is). Running
 ``tether pro activate <code>`` does the following:
 
-1. POSTs nothing — the activation endpoint is a GET so the code can be
-   shared as a URL too.
-2. GETs ``<endpoint>/v1/activation/<code>`` to fetch the signed license JSON.
+1. POSTs the local hardware binding with the one-time activation code.
+2. The worker signs that exact hardware-bound v2 license.
 3. Verifies the Ed25519 signature using the bundled public key
    (``tether.pro._public_key``).
-4. Captures the local hardware fingerprint and writes it into the
-   ``hardware_binding`` field if the license is unbound (first activation).
-5. Writes the resulting license to ``~/.tether/pro.license`` with mode 0600.
-6. Prints a welcome message + telemetry-opt-out reminder.
+4. Writes the resulting license to ``~/.tether/pro.license`` with mode 0600.
+5. Prints a welcome message + telemetry-opt-out reminder.
 
 Failure modes:
 - Code expired / used / not found → 410 / 404 from the worker
@@ -26,7 +23,6 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +121,11 @@ def activate_license(
         ) from exc
 
     try:
-        resp = httpx.get(full_url, timeout=15.0)
+        resp = httpx.post(
+            full_url,
+            json={"hardware_binding": probe_hardware_binding()},
+            timeout=15.0,
+        )
     except Exception as exc:  # noqa: BLE001
         raise ActivationNetworkError(
             f"Could not reach license endpoint at {url}: {exc}. "
@@ -157,16 +157,10 @@ def activate_license(
     # Verify signature BEFORE doing anything stateful (writing to disk).
     verify_license_signature(license_dict)
 
-    # Bind hardware on first activation. If the license already has a
-    # hardware_binding (e.g., re-activation after a worker round-trip), don't
-    # overwrite — the operator will issue a new license to rebind.
-    if license_dict.get("hardware_binding") is None:
-        license_dict["hardware_binding"] = probe_hardware_binding()
-
-    # Stamp the local heartbeat so license.py's heartbeat-staleness check passes.
-    license_dict["last_heartbeat_at"] = datetime.now(timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
+    if license_dict.get("license_version") != 2 or not isinstance(
+        license_dict.get("hardware_binding"), dict
+    ):
+        raise ActivationError("Worker did not return a signed, hardware-bound v2 license")
 
     # Write to disk with mode 0600.
     path = Path(license_path).expanduser()

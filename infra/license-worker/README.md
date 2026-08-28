@@ -13,9 +13,10 @@ Pairs with the Phase 1 telemetry worker at `infra/telemetry-worker/` (different 
 | `/admin/issue` | POST | bearer | Sign + store new license, return activation code |
 | `/admin/revoke` | POST | bearer | Revoke a license_id |
 | `/admin/list` | GET | bearer | List all licenses with status + heartbeat info |
+| `/admin/signer` | GET | bearer | Cryptographically verify `SIGNING_KEY_ID` matches `PRIVATE_KEY` |
 | `/v1/pubkey` | GET | none | Return current Ed25519 public key (for offline verify) |
-| `/v1/activation/:code` | GET | none | Fetch signed license by one-time code (24h TTL, single-use) |
-| `/v1/heartbeat` | POST | none | Record heartbeat + check revocation/expiry |
+| `/v1/activation/:code` | POST | one-time code | Bind hardware and fetch signed v2 license (24h TTL, single-use) |
+| `/v1/heartbeat` | POST | nonce-bound | Record heartbeat + return signed status attestation |
 | `/v1/revocation/:license_id` | GET | none | Check if a license is revoked |
 
 ## Deploy (one-time setup, ~25 min)
@@ -53,9 +54,10 @@ curl -X POST https://reflex-licenses.<subdomain>.workers.dev/admin/init \
 # IMMEDIATELY:
 #   a. Copy the private_key_b64 and set it as a Worker Secret:
 #        echo '<private_key_b64>' | wrangler secret put PRIVATE_KEY
-#   b. Copy the public_key_b64 into src/tether/pro/_public_key.py
-#      (replace the BUNDLED_PUBLIC_KEY_B64 constant)
-#   c. Discard the private_key_b64 from your terminal scrollback (it never
+#   b. Bind the private key to the exact D1 public-key row:
+#        echo '<key_id>' | wrangler secret put SIGNING_KEY_ID
+#   c. Add key_id → public_key_b64 to TRUSTED_PUBLIC_KEYS_B64
+#   d. Discard the private_key_b64 from your terminal scrollback (it never
 #      needs to leave wrangler again)
 #
 # 9. Update src/tether/pro/license.py:DEFAULT_LICENSE_ENDPOINT to your worker URL
@@ -65,6 +67,30 @@ curl -X POST https://reflex-licenses.<subdomain>.workers.dev/admin/init \
 curl https://reflex-licenses.<subdomain>.workers.dev/healthz
 curl https://reflex-licenses.<subdomain>.workers.dev/v1/pubkey
 ```
+
+### Existing-install migration
+
+Older installs may already have one active D1 public-key row and a matching
+`PRIVATE_KEY`, but no `SIGNING_KEY_ID`. Migrate that install before deploying
+the stricter Worker:
+
+1. Query the active rows directly with `wrangler d1 execute reflex-licenses
+   --remote --json --command "SELECT key_id, public_key_b64 FROM master_keys
+   WHERE retired_at IS NULL"`.
+2. Compare the row's public key with the key already shipped in
+   `TRUSTED_PUBLIC_KEYS_B64`. If more than one row is active, do not guess: set
+   `TETHER_SIGNING_KEY_ID` to the row known to match the existing private key.
+3. Set that id with `wrangler secret put SIGNING_KEY_ID`, then deploy.
+4. Call authenticated `GET /admin/signer`. A 200 response with
+   `{ "verified": true, "key_id": "..." }` proves the configured private key
+   matches the selected non-retired D1 row. Any mismatch fails closed.
+
+`deploy.sh` performs these steps automatically for the normal one-active-key
+case. It refuses an ambiguous multi-key migration or an active public row with
+no `PRIVATE_KEY`; it never creates a replacement private key for an existing
+public row. Set `REFLEX_ADMIN_TOKEN` before running it so the script can verify
+the coupled signer immediately after deployment; it refuses to migrate an
+existing signer without that verification credential.
 
 ## Issue your first license
 
@@ -106,7 +132,18 @@ python -m tether.admin.revoke_license \
     --reason "Refund processed"
 ```
 
-Customer's running deployment will fail its next heartbeat (within 24h) and refuse to serve.
+Customer's running deployment will fail its next heartbeat and refuse to serve.
+
+## Signed heartbeat contract
+
+The client sends a fresh unpadded-base64url 16-byte `request_nonce`. The Worker
+returns an Ed25519-signed `tether.license.heartbeat` v1 attestation containing
+the echoed nonce, `license_id`, active signing `key_id`, Unix `issued_at`,
+`valid_until`, and status (`active`, `expired`, or `revoked`; clients also
+understand `suspended`). Active validity is capped at 24 hours and at the
+license expiry. Released clients accept five minutes of clock skew, persist
+only verified attestations, and fail paid requests closed when the signed
+deadline plus skew elapses.
 
 ## Privacy posture
 
@@ -142,14 +179,22 @@ WHERE l.revoked_at IS NULL
   );
 ```
 
-## Key rotation (Phase 2 — not implemented yet)
+## Key rotation
 
 The schema supports key rotation via the `master_keys.retired_at` column, but the rotation endpoint (`POST /admin/rotate`) isn't built yet. When you need it:
 
-1. Generate a new Ed25519 keypair (new POST /admin/init variant)
-2. New licenses get signed with the new key
-3. Old key stays valid for verification (grace period)
-4. Customer-side bundled key gets a list of N trusted keys instead of one
-5. Eventually retire the old key when no licenses signed with it remain
+1. Generate the new Ed25519 pair through an audited rotation procedure and
+   insert its public half as a new non-retired `master_keys` row. Keep the old
+   row active.
+2. Ship both old and new public keys in `TRUSTED_PUBLIC_KEYS_B64` and release
+   that client trust overlap before changing the signer.
+3. Set `PRIVATE_KEY` and `SIGNING_KEY_ID` to the new coupled pair in one
+   controlled deployment window, then require authenticated `/admin/signer`
+   to return the new id with `verified: true`. Roll back both secrets together
+   if verification fails.
+4. Keep the old public key trusted throughout the maximum license/attestation
+   overlap.
+5. Retire the old D1 row and remove its client trust only after that overlap
+   has elapsed.
 
 Plan to revisit when you have ~50 active licenses or a security incident requires rotation.
