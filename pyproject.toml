@@ -127,7 +127,11 @@ serve = [
     "msgpack>=1.0",
     "opencv-python-headless>=4.8",  # JPEG-on-wire serialization for ZMQ transport
 ]
-safety = ["yourdfpy"]
+safety = [
+    "yourdfpy",
+    # CVE-2026-41066: older iterparse defaults can resolve local-file entities.
+    "lxml>=6.1.0",
+]
 # Offline EU evidence-pack generator. No runtime deps today; kept as an extra
 # so pilots can install with `pip install fastcrest-tether[serve,comply]`.
 comply = []
