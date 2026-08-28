@@ -9,12 +9,9 @@ from typing import Any
 import pytest
 
 from tether.curate.uploader import (
-    MAX_ACTION_Z_SCORE,
     MAX_DUP_IMAGE_HASH_FRAC,
     MAX_ZERO_ACTION_FRAC,
     MIN_EPISODE_STEPS,
-    EpisodeStats,
-    UploadStub,
     Uploader,
     _stats_for_episode,
     filter_episodes,
@@ -206,3 +203,94 @@ def test_kill_switch_skips_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     )
     outcome = uploader.run_once()
     assert outcome.files_scanned == 0
+
+
+def test_live_upload_uses_signed_reservation_capability_and_completion(tmp_path: Path) -> None:
+    class FakeAuthClient:
+        def __init__(self):
+            self.calls = []
+
+        def upload(self, **kwargs):
+            self.calls.append(("upload", kwargs))
+            return {"status": "completed", "upload_id": "upl_test"}
+
+    auth = FakeAuthClient()
+    uploader = Uploader(
+        contributor_id="legacy_receipt_id_is_not_sent",
+        tier="enterprise",
+        queue_dir=tmp_path,
+        live=True,
+        auth_client=auth,
+    )
+    payload = b'{"metadata":{"anonymized":true}}\n'
+    assert uploader._upload_one(
+        file_name="episode.jsonl", file_bytes=payload, episode_count=1,
+    ) == len(payload)
+    assert [call[0] for call in auth.calls] == ["upload"]
+    upload = auth.calls[0][1]
+    assert upload["file_bytes"] == payload
+    assert upload["media_type"] == "application/jsonl"
+    assert "tier" not in upload and "contributor_id" not in upload
+
+
+def test_curate_upload_passes_owner_queue_state_path(tmp_path: Path) -> None:
+    class FakeAuthClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def upload(self, **kwargs):
+            self.kwargs = kwargs
+            return {"status": "completed", "upload_id": "upl_test"}
+
+    auth = FakeAuthClient()
+    uploader = Uploader(
+        contributor_id="legacy_receipt_id_is_not_sent",
+        queue_dir=tmp_path,
+        live=True,
+        auth_client=auth,
+    )
+    state_path = tmp_path / ".episode.jsonl.upload-v1.json"
+    uploader._upload_one(
+        file_name="episode.jsonl",
+        file_bytes=b"payload",
+        episode_count=1,
+        state_path=state_path,
+    )
+    assert auth.kwargs is not None
+    assert auth.kwargs["state_path"] == state_path
+
+
+def test_live_upload_snapshot_preserves_concurrent_new_generation(tmp_path: Path) -> None:
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    active = queue / "today.jsonl"
+    rows = [
+        _mk_row(episode_id="snapshot", action_chunk=[[float(i), float(i + 1)]])
+        for i in range(MIN_EPISODE_STEPS + 2)
+    ]
+    active.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    appended = _mk_row(episode_id="new-generation", action_chunk=[[1.0, 2.0]])
+
+    class RacingAuth:
+        kwargs = None
+
+        def upload(self, **kwargs):
+            self.kwargs = kwargs
+            # The collector has already atomically rotated the old generation.
+            active.write_text(json.dumps(appended) + "\n")
+            return {"status": "completed", "upload_id": "upl_snapshot"}
+
+    auth = RacingAuth()
+    uploader = Uploader(
+        contributor_id="ignored", queue_dir=queue,
+        uploaded_dir=tmp_path / "uploaded", rejected_dir=tmp_path / "rejected",
+        live=True, auth_client=auth,
+    )
+    outcome = uploader.run_once()
+    assert outcome.files_uploaded == 1
+    assert active.read_text() == json.dumps(appended) + "\n"
+    assert (tmp_path / "uploaded" / "today.jsonl").exists()
+    assert auth.kwargs is not None
+    assert "upload-snapshot-" in Path(auth.kwargs["state_path"]).name
+    assert auth.kwargs["file_name"] == "today.jsonl"
+    assert b"new-generation" not in auth.kwargs["file_bytes"]

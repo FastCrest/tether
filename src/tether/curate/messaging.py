@@ -49,8 +49,9 @@ RECIPROCITY_FRAMING_PRO = (
 
 PRIVACY_FRAMING = (
     "Face-blurred and instruction-hashed at ingest. Aggregated across 5+ "
-    "contributors before anything is published. You can revoke anytime — "
-    "your data is removed from all derived datasets within 30 days."
+    "contributors before anything is published. You can stop future "
+    "contribution locally at any time. Historical purge currently requires "
+    "the administrator handoff printed by `tether contribute --revoke`."
 )
 
 
@@ -158,26 +159,39 @@ def opt_out_success() -> str:
     return (
         "[yellow]✓[/yellow] Opted out. Future recordings will not be contributed.\n"
         "[dim]Note: data already contributed remains in derived datasets unless you "
-        "also run [cyan]tether contribute --revoke[/cyan].[/dim]"
+        "also complete the admin handoff shown by "
+        "[cyan]tether contribute --revoke[/cyan].[/dim]"
     )
 
 
 def revoke_warning() -> str:
     return (
-        "[yellow]⚠[/yellow]  This will remove your historical contributions from all "
-        "derived datasets within 30 days.\n"
-        "[dim]Datasets already sold cannot be recalled, but your contribution will "
-        "not appear in v2+ releases.[/dim]"
+        "[yellow]⚠[/yellow]  This removes the local consent receipt and stops future "
+        "contribution. It does not submit a server-side purge request.\n"
+        "[dim]The next screen provides the contributor IDs required for an "
+        "administrator-assisted historical-data purge.[/dim]"
     )
 
 
-def revoke_success(*, contributor_id: str) -> str:
-    return (
-        f"[green]✓[/green] Revocation submitted for contributor [dim]{contributor_id}[/dim].\n"
-        f"[green]✓[/green] Local consent receipt removed.\n"
-        f"[green]✓[/green] Server-side cascade purge will complete within 30 days "
-        f"per GDPR Article 17."
-    )
+def revoke_local_handoff(*, authenticated_id: str, historical_id: str) -> str:
+    lines = [
+        "[green]✓[/green] Local consent receipt removed; future contributions are disabled.",
+        "[yellow]⚠[/yellow]  No server-side purge request was submitted.",
+        f"Contributor Auth ID: [dim]{authenticated_id}[/dim]",
+    ]
+    if historical_id != authenticated_id:
+        lines.extend([
+            f"Historical receipt ID: [dim]{historical_id}[/dim]",
+            "[bold]Admin migration/purge handoff:[/bold] send both IDs to "
+            "[cyan]privacy@fastcrest.com[/cyan] so legacy and authenticated "
+            "records can be located.",
+        ])
+    else:
+        lines.append(
+            "[bold]Admin purge handoff:[/bold] send this ID to "
+            "[cyan]privacy@fastcrest.com[/cyan]."
+        )
+    return "\n".join(lines)
 
 
 __all__ = [
@@ -194,5 +208,5 @@ __all__ = [
     "opt_in_success",
     "opt_out_success",
     "revoke_warning",
-    "revoke_success",
+    "revoke_local_handoff",
 ]

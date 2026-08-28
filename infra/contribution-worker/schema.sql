@@ -20,15 +20,55 @@ CREATE INDEX IF NOT EXISTS idx_contributors_tier ON contributors(tier);
 CREATE INDEX IF NOT EXISTS idx_contributors_revoked ON contributors(revoked_at)
   WHERE revoked_at IS NOT NULL;
 
+-- Contributor Authentication v1 key registry. Public keys are raw Ed25519
+-- keys encoded as unpadded base64url; private keys never reach this service.
+CREATE TABLE IF NOT EXISTS contributor_keys (
+  key_id TEXT PRIMARY KEY,
+  contributor_id TEXT NOT NULL,
+  public_key_base64url TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
+  created_at INTEGER NOT NULL,
+  deactivated_at INTEGER,
+  FOREIGN KEY (contributor_id) REFERENCES contributors(contributor_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contributor_one_active_key
+  ON contributor_keys(contributor_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_contributor_keys_owner
+  ON contributor_keys(contributor_id);
+
+-- Replays are rejected for ten minutes. The scheduled handler prunes expired
+-- rows; uniqueness remains fail-closed if pruning is delayed.
+CREATE TABLE IF NOT EXISTS contributor_nonces (
+  contributor_id TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (contributor_id, nonce)
+);
+CREATE INDEX IF NOT EXISTS idx_contributor_nonces_expiry
+  ON contributor_nonces(expires_at);
+
 -- Uploads. One row per accepted upload.
 CREATE TABLE IF NOT EXISTS uploads (
   upload_id TEXT PRIMARY KEY,               -- UUID4 generated at /v1/uploads/sign
   contributor_id TEXT NOT NULL,
+  reservation_key TEXT,
+  request_sha256 TEXT,
   r2_key TEXT NOT NULL,                     -- the R2 object key, e.g. free-contributors/.../sess.jsonl
   byte_size INTEGER NOT NULL,
-  status TEXT NOT NULL,                     -- "pending" | "completed" | "failed" | "purged"
+  media_type TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  capability_sha256 TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  status TEXT NOT NULL,                     -- pending/uploading/uploaded/completed/rejected/expired/purged
   signed_at TEXT NOT NULL,                  -- when the PUT URL was issued
+  signed_at_epoch INTEGER NOT NULL,
+  attempt_id TEXT,
+  attempt_started_at INTEGER,
+  uploaded_at INTEGER,
   completed_at TEXT,
+  completion_id TEXT,
   user_agent TEXT,
   source_ip TEXT,
   notes TEXT,
@@ -38,6 +78,12 @@ CREATE TABLE IF NOT EXISTS uploads (
 CREATE INDEX IF NOT EXISTS idx_uploads_contributor ON uploads(contributor_id);
 CREATE INDEX IF NOT EXISTS idx_uploads_status ON uploads(status);
 CREATE INDEX IF NOT EXISTS idx_uploads_signed_at ON uploads(signed_at);
+CREATE INDEX IF NOT EXISTS idx_uploads_sign_window
+  ON uploads(contributor_id, signed_at_epoch);
+CREATE INDEX IF NOT EXISTS idx_uploads_stale_attempts
+  ON uploads(status, attempt_started_at) WHERE status = 'uploading';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_uploads_reservation_key
+  ON uploads(contributor_id, reservation_key) WHERE reservation_key IS NOT NULL;
 
 -- Daily upload-bytes counters per contributor for rate limiting.
 -- Phase 1: 10 GB/day default; raise on request.

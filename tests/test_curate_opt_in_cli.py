@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from tether.curate import consent as curate_consent
 from tether.curate.opt_in_cli import contribute_app
 
 
@@ -38,7 +37,10 @@ def test_opt_in_creates_receipt(runner: CliRunner, home: Path) -> None:
     assert receipt.exists()
     data = json.loads(receipt.read_text())
     assert data["tier"] == "free"
-    assert data["contributor_id"].startswith("free_")
+    assert data["contributor_id"].startswith("ctr_")
+    credentials = home / ".tether" / "contributor-auth-v1.json"
+    assert credentials.exists()
+    assert json.loads(credentials.read_text())["contributor_id"] == data["contributor_id"]
 
 
 def test_opt_in_idempotent(runner: CliRunner, home: Path) -> None:
@@ -79,7 +81,30 @@ def test_revoke_with_yes_flag(runner: CliRunner, home: Path) -> None:
     result = runner.invoke(contribute_app, ["--revoke", "--yes"])
     assert result.exit_code == 0
     assert not receipt.exists()
-    assert "Revocation submitted" in result.output
+    assert "Local consent receipt removed" in result.output
+    assert "No server-side purge request was submitted" in result.output
+    assert "Revocation submitted" not in result.output
+    assert "will complete within 30 days" not in result.output
+
+
+def test_revoke_preserves_legacy_and_authenticated_ids_for_admin_handoff(
+    runner: CliRunner, home: Path,
+) -> None:
+    runner.invoke(contribute_app, ["--opt-in"])
+    receipt_path = home / ".tether" / "consent.json"
+    receipt = json.loads(receipt_path.read_text())
+    authenticated_id = receipt["contributor_id"]
+    historical_id = "free_legacy_history_12345678"
+    receipt["contributor_id"] = historical_id
+    receipt_path.write_text(json.dumps(receipt))
+
+    result = runner.invoke(contribute_app, ["--revoke", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert not receipt_path.exists()
+    assert f"Contributor Auth ID: {authenticated_id}" in result.output
+    assert f"Historical receipt ID: {historical_id}" in result.output
+    assert "send both IDs" in result.output
+    assert "No server-side purge request was submitted" in result.output
 
 
 def test_revoke_when_not_opted_in(runner: CliRunner, home: Path) -> None:

@@ -23,6 +23,16 @@ database_id = "39cc37c0-524c-4a7a-921e-76cc44cb1494"
 binding = "CURATE_BUCKET"
 bucket_name = "reflex-curate"
 
+# One coordination atom per contributor serializes payload writes and terminal
+# purge so D1/R2 cross-service races cannot create post-purge objects.
+[[durable_objects.bindings]]
+name = "CONTRIBUTOR_STORAGE"
+class_name = "ContributorStorageFence"
+
+[[migrations]]
+tag = "contributor-storage-fence-v1"
+new_sqlite_classes = ["ContributorStorageFence"]
+
 # Optional: bind a custom domain after first deploy.
 # routes = [{ pattern = "data.fastcrest.com/*", custom_domain = true }]
 

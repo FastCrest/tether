@@ -8,7 +8,7 @@ Per `data-collection-free-tier.md`:
 - Set TETHER_NO_CONTRIB_UPLOAD=1 to keep collecting locally without uploading
 
 Live transport: 3-step round-trip (sign → put → complete) against the
-deployed contribution-worker at https://tether-contributions.fastcrest
+deployed contribution-worker at https://reflex-contributions.fastcrest
 .workers.dev. Override the endpoint with TETHER_CONTRIB_ENDPOINT.
 
 Defaults to `live=True` from the server lifespan; set TETHER_CURATE_DRY_RUN=1
@@ -25,9 +25,10 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import threading
-import time
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -59,7 +60,7 @@ THROTTLE_ENV = "TETHER_CONTRIB_MAX_MBPS"
 #   POST /v1/uploads/complete     — record success + update stats
 #   POST /v1/revoke/cascade       — mark contributor for purge
 #   GET  /v1/contributors/<id>/stats  — return contribution totals
-DEFAULT_WORKER_URL = "https://tether-contributions.fastcrest.workers.dev"
+DEFAULT_WORKER_URL = "https://reflex-contributions.fastcrest.workers.dev"
 WORKER_URL_ENV = "TETHER_CONTRIB_ENDPOINT"
 HTTP_TIMEOUT_S = 30.0
 
@@ -270,176 +271,53 @@ class ContributorRevoked(Exception):
 
 def _request_signed_url(
     *,
-    contributor_id: str,
-    tier: str,
-    opted_in_at: str,
+    auth_client: Any,
     file_name: str,
-    byte_size: int,
-    episode_count: int,
-    privacy_mode: str,
+    file_bytes: bytes,
 ) -> dict[str, Any]:
-    """POST /v1/uploads/sign. Returns the worker's response dict
-    {upload_id, r2_key, put_url, expires_at}. Raises RateLimited on 429,
-    ContributorRevoked on 403 contributor_revoked, WorkerError on other
-    non-2xx after retry exhaustion."""
+    """Create a signed reservation without accepting client identity or tier."""
+    from tether.contributor_auth import ContributorAuthError
     try:
-        import httpx
-    except ImportError as exc:
-        raise UploadStub(f"httpx not available — install fastcrest-tether[serve]: {exc}") from exc
-
-    url = f"{_worker_url()}/v1/uploads/sign"
-    payload = {
-        "contributor_id": contributor_id,
-        "tier": tier,
-        "opted_in_at": opted_in_at,
-        "file_name": file_name,
-        "byte_size": int(byte_size),
-        "episode_count": int(episode_count),
-        "privacy_mode": privacy_mode,
-    }
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            r = httpx.post(url, json=payload, timeout=HTTP_TIMEOUT_S)
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
-            last_exc = exc
-            if attempt < MAX_RETRIES:
-                wait = BACKOFF_BASE_S * (2 ** attempt)
-                logger.warning("uploader.sign_retrying attempt=%d wait=%.1fs err=%s", attempt + 1, wait, exc)
-                time.sleep(wait)
-                continue
-            raise WorkerError(0, {"error": "transport", "message": str(exc)}) from exc
-
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code == 429:
-            raise RateLimited(r.text)
-        if r.status_code == 403:
-            body = _safe_json(r)
-            if body.get("error") == "contributor_revoked":
-                raise ContributorRevoked(str(body))
-            raise WorkerError(r.status_code, body)
-        if r.status_code in TERMINAL_STATUS_CODES:
-            raise WorkerError(r.status_code, _safe_json(r))
-        if r.status_code in RETRY_STATUS_CODES and attempt < MAX_RETRIES:
-            wait = BACKOFF_BASE_S * (2 ** attempt)
-            logger.warning(
-                "uploader.sign_retrying attempt=%d wait=%.1fs status=%d",
-                attempt + 1, wait, r.status_code,
-            )
-            time.sleep(wait)
-            continue
-        raise WorkerError(r.status_code, _safe_json(r))
-    if last_exc is not None:
-        raise WorkerError(0, {"error": "transport", "message": str(last_exc)}) from last_exc
-    raise WorkerError(0, {"error": "exhausted_without_response"})
+        return auth_client.reserve(
+            file_name=file_name,
+            file_bytes=file_bytes,
+            media_type="application/jsonl",
+            anonymizer_version="tether-curate-anonymizer-v1",
+            scanner_version="tether-curate-scanner-v1",
+        )
+    except ContributorAuthError as exc:
+        if exc.status == 429:
+            raise RateLimited(str(exc)) from exc
+        if exc.status == 403 and exc.body.get("error") == "contributor_revoked":
+            raise ContributorRevoked(str(exc)) from exc
+        raise WorkerError(exc.status, exc.body) from exc
 
 
-def _put_bytes(*, put_url: str, file_bytes: bytes, max_mbps: float) -> int:
-    """PUT the raw bytes to the worker's /v1/uploads/put/<id> endpoint.
-    Throttles to `max_mbps` by chunked sends with sleep gating between chunks.
-    Returns bytes uploaded on success.
+def _put_bytes(*, auth_client: Any, reservation: dict[str, Any], file_bytes: bytes, max_mbps: float) -> int:
+    """Perform one capability PUT and return the accepted byte count.
 
-    Retry policy: transient transport errors + 5xx retry up to MAX_RETRIES
-    with exponential backoff. The R2 PUT is idempotent for the same upload_id
-    so re-PUT on retry overwrites any partial bytes from the previous attempt.
+    The full uploader uses ``ContributorAuthClient.upload`` so an ambiguous
+    response is reconciled through signed completion before the same
+    reservation is retried. A caller must never create a replacement
+    reservation merely because this individual transport call was lost.
     """
+    del max_mbps  # exact Content-Length takes precedence over streaming/chunking
+    from tether.contributor_auth import ContributorAuthError
     try:
-        import httpx
-    except ImportError as exc:
-        raise UploadStub(f"httpx not available: {exc}") from exc
-
-    headers = {"Content-Type": "application/x-jsonlines"}
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            if max_mbps <= 0:
-                r = httpx.put(put_url, content=file_bytes, headers=headers, timeout=HTTP_TIMEOUT_S * 4)
-            else:
-                chunk_bytes = max(64 * 1024, int(max_mbps * 1024 * 1024 * 0.25))
-
-                def _chunked() -> Any:
-                    for i in range(0, len(file_bytes), chunk_bytes):
-                        yield file_bytes[i : i + chunk_bytes]
-                        time.sleep(0.25)
-
-                r = httpx.put(
-                    put_url, content=_chunked(), headers=headers,
-                    timeout=HTTP_TIMEOUT_S * 4,
-                )
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
-            last_exc = exc
-            if attempt < MAX_RETRIES:
-                wait = BACKOFF_BASE_S * (2 ** attempt)
-                logger.warning("uploader.put_retrying attempt=%d wait=%.1fs err=%s", attempt + 1, wait, exc)
-                time.sleep(wait)
-                continue
-            raise WorkerError(0, {"error": "transport", "message": str(exc)}) from exc
-
-        if r.status_code == 200:
-            body = r.json()
-            return int(body.get("bytes_received", len(file_bytes)))
-        if r.status_code == 410:
-            raise WorkerError(r.status_code, _safe_json(r))  # URL expired — terminal
-        if r.status_code == 403:
-            body = _safe_json(r)
-            if body.get("error") == "contributor_revoked_between_sign_and_put":
-                raise ContributorRevoked(str(body))
-            raise WorkerError(r.status_code, body)
-        if r.status_code in TERMINAL_STATUS_CODES:
-            raise WorkerError(r.status_code, _safe_json(r))
-        if r.status_code in RETRY_STATUS_CODES and attempt < MAX_RETRIES:
-            wait = BACKOFF_BASE_S * (2 ** attempt)
-            logger.warning(
-                "uploader.put_retrying attempt=%d wait=%.1fs status=%d",
-                attempt + 1, wait, r.status_code,
-            )
-            time.sleep(wait)
-            continue
-        raise WorkerError(r.status_code, _safe_json(r))
-    if last_exc is not None:
-        raise WorkerError(0, {"error": "transport", "message": str(last_exc)}) from last_exc
-    raise WorkerError(0, {"error": "exhausted_without_response"})
+        return auth_client.put(reservation, file_bytes, media_type="application/jsonl")
+    except ContributorAuthError as exc:
+        if exc.status == 403:
+            raise ContributorRevoked(str(exc)) from exc
+        raise WorkerError(exc.status, exc.body) from exc
 
 
-def _complete_upload(*, upload_id: str, episode_count: int) -> dict[str, Any]:
+def _complete_upload(*, auth_client: Any, upload_id: str) -> dict[str, Any]:
     """POST /v1/uploads/complete. Retries on transient errors + 5xx."""
+    from tether.contributor_auth import ContributorAuthError
     try:
-        import httpx
-    except ImportError as exc:
-        raise UploadStub(f"httpx not available: {exc}") from exc
-
-    url = f"{_worker_url()}/v1/uploads/complete"
-    payload = {"upload_id": upload_id, "episode_count": int(episode_count)}
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            r = httpx.post(url, json=payload, timeout=HTTP_TIMEOUT_S)
-        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
-            last_exc = exc
-            if attempt < MAX_RETRIES:
-                wait = BACKOFF_BASE_S * (2 ** attempt)
-                logger.warning("uploader.complete_retrying attempt=%d wait=%.1fs err=%s", attempt + 1, wait, exc)
-                time.sleep(wait)
-                continue
-            raise WorkerError(0, {"error": "transport", "message": str(exc)}) from exc
-
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code in TERMINAL_STATUS_CODES:
-            raise WorkerError(r.status_code, _safe_json(r))
-        if r.status_code in RETRY_STATUS_CODES and attempt < MAX_RETRIES:
-            wait = BACKOFF_BASE_S * (2 ** attempt)
-            logger.warning(
-                "uploader.complete_retrying attempt=%d wait=%.1fs status=%d",
-                attempt + 1, wait, r.status_code,
-            )
-            time.sleep(wait)
-            continue
-        raise WorkerError(r.status_code, _safe_json(r))
-    if last_exc is not None:
-        raise WorkerError(0, {"error": "transport", "message": str(last_exc)}) from last_exc
-    raise WorkerError(0, {"error": "exhausted_without_response"})
+        return auth_client.complete(upload_id)
+    except ContributorAuthError as exc:
+        raise WorkerError(exc.status, exc.body) from exc
 
 
 def _safe_json(response: Any) -> dict[str, Any]:
@@ -464,7 +342,7 @@ class Uploader:
     __slots__ = (
         "_queue_dir", "_uploaded_dir", "_rejected_dir",
         "_contributor_id", "_tier", "_opted_in_at", "_privacy_mode",
-        "_live", "_max_mbps",
+        "_live", "_max_mbps", "_auth_client",
         "_thread", "_stop_event", "_interval_s",
         "_last_outcome", "_lock",
     )
@@ -482,6 +360,7 @@ class Uploader:
         live: bool = False,
         max_mbps: float | None = None,
         interval_s: float = DEFAULT_DAILY_INTERVAL_S,
+        auth_client: Any | None = None,
     ):
         self._queue_dir = Path(queue_dir).expanduser()
         self._uploaded_dir = Path(uploaded_dir).expanduser()
@@ -492,6 +371,7 @@ class Uploader:
         self._privacy_mode = privacy_mode
         self._live = bool(live)
         self._max_mbps = float(max_mbps) if max_mbps is not None else _max_mbps()
+        self._auth_client = auth_client
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._interval_s = float(interval_s)
@@ -519,6 +399,19 @@ class Uploader:
 
         for jsonl_path in sorted(self._queue_dir.glob("*.jsonl")):
             outcome.files_scanned += 1
+            snapshot_logical_name = self._snapshot_logical_name(jsonl_path)
+            logical_name = snapshot_logical_name or jsonl_path.name
+            if self._live and snapshot_logical_name is None:
+                from tether.pro.data_collection import _queue_file_lock
+                with _queue_file_lock(jsonl_path):
+                    if not jsonl_path.exists():
+                        continue
+                    logical_name = jsonl_path.name
+                    snapshot = jsonl_path.with_name(
+                        f"upload-snapshot-{uuid.uuid4().hex}-{jsonl_path.name}"
+                    )
+                    os.replace(jsonl_path, snapshot)
+                    jsonl_path = snapshot
             try:
                 rows_by_episode = self._group_by_episode(jsonl_path)
             except Exception as exc:  # noqa: BLE001
@@ -539,7 +432,7 @@ class Uploader:
 
             if not accepted:
                 # All episodes rejected — archive the file to rejected/ for audit.
-                self._archive_rejected(jsonl_path)
+                self._archive_rejected(jsonl_path, dest_name=logical_name)
                 outcome.files_kept_in_queue += 0
                 continue
 
@@ -592,13 +485,15 @@ class Uploader:
             try:
                 if self._live:
                     bytes_up = self._upload_one(
-                        file_name=jsonl_path.name,
+                        file_name=logical_name,
                         file_bytes=accepted_bytes,
                         episode_count=episode_count,
+                        state_path=self._reservation_state_path(jsonl_path),
+                        source_identity=self._source_identity(jsonl_path),
                     )
                     outcome.bytes_uploaded += bytes_up
                     outcome.files_uploaded += 1
-                    self._archive_uploaded(jsonl_path)
+                    self._archive_uploaded(jsonl_path, dest_name=logical_name)
                 else:
                     logger.info(
                         "uploader.dry_run file=%s episodes=%d bytes=%d (live=False)",
@@ -630,6 +525,12 @@ class Uploader:
                 logger.error("uploader.upload_failed %s", msg)
                 outcome.errors.append(msg)
                 outcome.files_kept_in_queue += 1
+            if self._snapshot_logical_name(jsonl_path) and jsonl_path.exists():
+                from tether.pro.data_collection import _queue_file_lock
+                original = jsonl_path.with_name(logical_name)
+                with _queue_file_lock(original):
+                    if not original.exists():
+                        os.replace(jsonl_path, original)
 
         with self._lock:
             self._last_outcome = outcome
@@ -810,23 +711,31 @@ class Uploader:
         file_name: str,
         file_bytes: bytes,
         episode_count: int,
+        state_path: str | Path | None = None,
+        source_identity: str | None = None,
     ) -> int:
         """3-step worker round-trip: sign → put → complete. Returns bytes uploaded."""
-        sign_resp = _request_signed_url(
-            contributor_id=self._contributor_id,
-            tier=self._tier,
-            opted_in_at=self._opted_in_at,
-            file_name=file_name,
-            byte_size=len(file_bytes),
-            episode_count=episode_count,
-            privacy_mode=self._privacy_mode,
+        if self._auth_client is None:
+            from tether.contributor_auth import ContributorAuthClient
+            self._auth_client = ContributorAuthClient(
+                _worker_url(),
+                timeout=HTTP_TIMEOUT_S,
+                upload_max_retries=MAX_RETRIES,
+                upload_backoff_base_s=BACKOFF_BASE_S,
+            )
+        upload_kwargs: dict[str, Any] = {
+            "file_name": file_name,
+            "file_bytes": file_bytes,
+            "media_type": "application/jsonl",
+        }
+        if state_path is not None:
+            upload_kwargs["state_path"] = state_path
+            upload_kwargs["source_identity"] = source_identity
+        result = self._auth_client.upload(
+            **upload_kwargs,
         )
-        put_url = sign_resp["put_url"]
-        upload_id = sign_resp["upload_id"]
-        bytes_up = _put_bytes(
-            put_url=put_url, file_bytes=file_bytes, max_mbps=self._max_mbps,
-        )
-        _complete_upload(upload_id=upload_id, episode_count=episode_count)
+        upload_id = str(result.get("upload_id", "completed"))
+        bytes_up = len(file_bytes)
         logger.info(
             "uploader.uploaded file=%s upload_id=%s bytes=%d",
             file_name, upload_id, bytes_up,
@@ -848,19 +757,36 @@ class Uploader:
                 lines.append(json.dumps(row))
         return ("\n".join(lines) + "\n").encode("utf-8")
 
-    def _archive_uploaded(self, src: Path) -> None:
+    def _archive_uploaded(self, src: Path, *, dest_name: str | None = None) -> None:
         self._uploaded_dir.mkdir(parents=True, exist_ok=True)
-        dest = self._uploaded_dir / src.name
+        dest = self._uploaded_dir / (dest_name or src.name)
         if dest.exists():
             stem = dest.stem
             suffix = dest.suffix
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             dest = self._uploaded_dir / f"{stem}.{ts}{suffix}"
         shutil.move(str(src), str(dest))
+        # The owner-only redacted completion marker intentionally remains. A
+        # process already waiting on this queue generation must observe the
+        # election result; a later replacement file supersedes it by identity.
 
-    def _archive_rejected(self, src: Path) -> None:
+    @staticmethod
+    def _reservation_state_path(src: Path) -> Path:
+        return src.with_name(f".{src.name}.upload-v1.json")
+
+    @staticmethod
+    def _source_identity(src: Path) -> str:
+        current = src.stat()
+        return f"{current.st_dev}:{current.st_ino}:{current.st_mtime_ns}:{current.st_size}"
+
+    @staticmethod
+    def _snapshot_logical_name(src: Path) -> str | None:
+        match = re.fullmatch(r"upload-snapshot-[0-9a-f]{32}-(.+\.jsonl)", src.name)
+        return match.group(1) if match else None
+
+    def _archive_rejected(self, src: Path, *, dest_name: str | None = None) -> None:
         self._rejected_dir.mkdir(parents=True, exist_ok=True)
-        dest = self._rejected_dir / src.name
+        dest = self._rejected_dir / (dest_name or src.name)
         if dest.exists():
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             dest = self._rejected_dir / f"{src.stem}.{ts}{src.suffix}"

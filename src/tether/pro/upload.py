@@ -2,15 +2,14 @@
 
 When contribute_data is true in onboarding.json, episodes are queued for
 upload in ``~/.tether/upload-queue/``. Uploads are:
-- Resumable: chunked uploads with progress tracking
-- Bandwidth-throttled: 10% of available bandwidth by default
+- Authenticated: every control-plane request is signed with a local Ed25519 key
+- Capability-bound: the raw upload consumes a short-lived one-time capability
 - Retry with backoff: 3 attempts with exponential backoff
-- Compressed: gzip before upload
 
 Upload lifecycle:
 1. ``queue_episode(path)`` copies/links the file to upload-queue/pending/
 2. Background thread picks up pending files
-3. POST to https://data.fastcrest.workers.dev/v1/episodes/upload
+3. Register, reserve, PUT, and complete through the contribution worker
 4. On success, move to upload-queue/completed/
 5. Completed files auto-deleted after 7 days
 
@@ -19,15 +18,15 @@ The parquet file must contain an ``anonymized`` metadata flag.
 """
 from __future__ import annotations
 
-import gzip
 import hashlib
+import hmac
 import json
 import logging
 import os
 import shutil
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,7 +34,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Upload endpoint. Override via TETHER_DATA_ENDPOINT for testing.
-DEFAULT_DATA_ENDPOINT = "https://tether-data.fastcrest.workers.dev/v1/episodes/upload"
+DEFAULT_DATA_ENDPOINT = "https://reflex-contributions.fastcrest.workers.dev"
 
 # Upload config defaults
 DEFAULT_MAX_RETRIES = 3
@@ -50,6 +49,7 @@ _COMPLETED_DIR = "completed"
 _FAILED_DIR = "failed"
 
 _REQUEST_TIMEOUT_S = 30.0
+_SUPPORTED_DATA_SUFFIXES = (".jsonl", ".parquet")
 
 
 @dataclass
@@ -57,6 +57,7 @@ class UploadManifest:
     """Metadata about a queued upload. Written alongside the data file."""
 
     episode_id: str
+    file_name: str
     source_path: str
     queued_at: str  # ISO 8601 UTC
     file_size: int
@@ -73,9 +74,17 @@ class UploadManifest:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "UploadManifest":
+        episode_id = str(d["episode_id"])
+        source_path = str(d["source_path"])
+        # Pre-binding manifests are upgraded deterministically from the
+        # original source format. New manifests always persist file_name.
+        file_name = str(
+            d.get("file_name") or f"{episode_id}{Path(source_path).suffix}"
+        )
         return cls(
-            episode_id=str(d["episode_id"]),
-            source_path=str(d["source_path"]),
+            episode_id=episode_id,
+            file_name=file_name,
+            source_path=source_path,
             queued_at=str(d["queued_at"]),
             file_size=int(d["file_size"]),
             file_hash=str(d["file_hash"]),
@@ -154,6 +163,64 @@ def _verify_anonymized(path: Path) -> bool:
         return False
 
 
+def _reservation_state_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.upload-v1.json")
+
+
+def _source_identity(path: Path) -> str:
+    current = path.stat()
+    return f"{current.st_dev}:{current.st_ino}:{current.st_mtime_ns}:{current.st_size}"
+
+
+def _write_manifest(path: Path, manifest: UploadManifest) -> None:
+    """Atomically publish one authoritative episode generation."""
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        temporary.write_text(json.dumps(manifest.to_dict(), indent=2))
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _bound_data_path(
+    pending: Path, episode_id: str, manifest: UploadManifest,
+) -> Path:
+    """Resolve a manifest binding without accepting alternate/path names."""
+    file_name = manifest.file_name
+    file_path = Path(file_name)
+    if file_path.name != file_name or file_path.parent != Path("."):
+        raise ValueError("manifest file_name must be a plain file name")
+    if file_path.suffix not in _SUPPORTED_DATA_SUFFIXES:
+        raise ValueError("manifest file_name has an unsupported format")
+    if file_name != f"{episode_id}{file_path.suffix}":
+        raise ValueError("manifest file_name does not match episode_id")
+    return pending / file_name
+
+
+def _generation_matches(path: Path, manifest: UploadManifest) -> bool:
+    """Verify that the on-disk bytes are the manifest-bound generation."""
+    try:
+        if path.stat().st_size != manifest.file_size:
+            return False
+        return hmac.compare_digest(_file_sha256(path), manifest.file_hash)
+    except OSError:
+        return False
+
+
+def _remove_obsolete_siblings(
+    pending: Path, episode_id: str, bound_path: Path,
+) -> None:
+    """Remove superseded formats and their unusable reservation sidecars."""
+    for suffix in _SUPPORTED_DATA_SUFFIXES:
+        candidate = pending / f"{episode_id}{suffix}"
+        if candidate == bound_path:
+            continue
+        candidate.unlink(missing_ok=True)
+        _reservation_state_path(candidate).unlink(missing_ok=True)
+
+
 class UploadClient:
     """Manages the episode upload queue and background uploads.
 
@@ -167,7 +234,7 @@ class UploadClient:
 
     __slots__ = (
         "_queue_dir", "_max_retries", "_backoff_base", "_throttle",
-        "_chunk_size", "_endpoint", "_upload_thread", "_stopping",
+        "_chunk_size", "_endpoint", "_auth_client", "_upload_thread", "_stopping",
         "_uploads_completed", "_uploads_failed",
     )
 
@@ -180,6 +247,7 @@ class UploadClient:
         throttle: float = DEFAULT_BANDWIDTH_THROTTLE,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         endpoint: str | None = None,
+        auth_client: Any | None = None,
     ):
         self._queue_dir = Path(queue_dir).expanduser()
         self._max_retries = max_retries
@@ -189,6 +257,12 @@ class UploadClient:
         self._endpoint = endpoint or os.environ.get(
             "TETHER_DATA_ENDPOINT", DEFAULT_DATA_ENDPOINT
         )
+        if self._endpoint.startswith("https://tether-data.fastcrest.workers.dev"):
+            # Migrate the former built-in default even if it persists in an old env file.
+            self._endpoint = DEFAULT_DATA_ENDPOINT
+        elif self._endpoint.endswith("/v1/episodes/upload"):
+            self._endpoint = self._endpoint.removesuffix("/v1/episodes/upload")
+        self._auth_client = auth_client
         self._upload_thread: threading.Thread | None = None
         self._stopping = False
         self._uploads_completed = 0
@@ -257,22 +331,40 @@ class UploadClient:
         if not episode_id:
             episode_id = _file_sha256(src)[:12]
 
-        # Copy file to pending
-        dest = pending / f"{episode_id}{src.suffix}"
-        shutil.copy2(src, dest)
+        if src.suffix not in _SUPPORTED_DATA_SUFFIXES:
+            logger.warning("Upload queue: unsupported episode format: %s", src.suffix)
+            return None
 
-        # Write manifest
-        manifest = UploadManifest(
-            episode_id=episode_id,
-            source_path=str(src),
-            queued_at=_utc_now_iso(),
-            file_size=dest.stat().st_size,
-            file_hash=_file_sha256(dest),
-            anonymized=True,
-            contributor_hash=_machine_fingerprint_hash(),
-        )
+        # The manifest pathname is the episode lock identity. It deliberately
+        # does not vary with .jsonl/.parquet so format replacement is atomic.
+        dest = pending / f"{episode_id}{src.suffix}"
         manifest_path = pending / f"{episode_id}.manifest.json"
-        manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
+        from tether.pro.data_collection import _queue_file_lock
+        with _queue_file_lock(manifest_path):
+            temporary = pending / (
+                f".{episode_id}.{os.getpid()}.{threading.get_ident()}"
+                f"{src.suffix}.queueing"
+            )
+            try:
+                shutil.copy2(src, temporary)
+                os.replace(temporary, dest)
+            finally:
+                temporary.unlink(missing_ok=True)
+            manifest = UploadManifest(
+                episode_id=episode_id,
+                file_name=dest.name,
+                source_path=str(src),
+                queued_at=_utc_now_iso(),
+                file_size=dest.stat().st_size,
+                file_hash=_file_sha256(dest),
+                anonymized=True,
+                contributor_hash=_machine_fingerprint_hash(),
+            )
+            _write_manifest(manifest_path, manifest)
+            # A new generation must never inherit the old reservation, even
+            # when the replacement uses the same extension/pathname.
+            _reservation_state_path(dest).unlink(missing_ok=True)
+            _remove_obsolete_siblings(pending, episode_id, dest)
 
         logger.info("Episode queued for upload: %s (%d bytes)", episode_id, manifest.file_size)
         return manifest
@@ -318,140 +410,112 @@ class UploadClient:
         for manifest_path in sorted(pending.glob("*.manifest.json")):
             if self._stopping:
                 break
-            try:
-                manifest = UploadManifest.from_dict(
-                    json.loads(manifest_path.read_text())
-                )
-            except Exception as exc:
-                logger.debug("Bad manifest %s: %s", manifest_path, exc)
-                continue
-
-            # Find the data file
-            data_path = pending / f"{manifest.episode_id}{Path(manifest.source_path).suffix}"
-            if not data_path.exists():
-                # Try common extensions
-                for ext in (".jsonl", ".parquet"):
-                    candidate = pending / f"{manifest.episode_id}{ext}"
-                    if candidate.exists():
-                        data_path = candidate
-                        break
-                else:
-                    logger.debug("Data file missing for manifest %s", manifest_path)
+            episode_id = manifest_path.name.removesuffix(".manifest.json")
+            from tether.pro.data_collection import _queue_file_lock
+            with _queue_file_lock(manifest_path):
+                # The manifest is intentionally the first queue artifact read
+                # under the episode lock. It alone selects the exact format
+                # and byte generation; sibling discovery is never authoritative.
+                if not manifest_path.exists():
                     continue
-
-            if manifest.attempts >= self._max_retries:
-                # Move to failed
-                self._move_to_failed(data_path, manifest_path, manifest)
-                continue
-
-            success = self._upload_file(data_path, manifest)
-            manifest.attempts += 1
-            manifest.last_attempt_at = _utc_now_iso()
-
-            if success:
-                manifest.completed_at = _utc_now_iso()
-                self._move_to_completed(data_path, manifest_path, manifest)
-                self._uploads_completed += 1
-            else:
-                # Update manifest with attempt count
-                manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
+                try:
+                    manifest = UploadManifest.from_dict(
+                        json.loads(manifest_path.read_text())
+                    )
+                    if manifest.episode_id != episode_id:
+                        raise ValueError("manifest episode_id mismatch")
+                    data_path = _bound_data_path(pending, episode_id, manifest)
+                except Exception as exc:
+                    logger.debug("Bad manifest %s: %s", manifest_path, exc)
+                    continue
+                if not _generation_matches(data_path, manifest):
+                    manifest.error = "queued data does not match manifest hash and size"
+                    _write_manifest(manifest_path, manifest)
+                    logger.debug("Manifest generation mismatch: %s", manifest_path)
+                    continue
+                _remove_obsolete_siblings(pending, episode_id, data_path)
                 if manifest.attempts >= self._max_retries:
                     self._move_to_failed(data_path, manifest_path, manifest)
-                    self._uploads_failed += 1
+                    continue
+                success = self._upload_file(data_path, manifest)
+                manifest.attempts += 1
+                manifest.last_attempt_at = _utc_now_iso()
+
+                if success:
+                    if not _generation_matches(data_path, manifest):
+                        manifest.error = "queued data changed during upload"
+                        _write_manifest(manifest_path, manifest)
+                        continue
+                    manifest.completed_at = _utc_now_iso()
+                    self._move_to_completed(data_path, manifest_path, manifest)
+                    self._uploads_completed += 1
                 else:
-                    # Backoff before next attempt
-                    backoff = self._backoff_base ** manifest.attempts
-                    time.sleep(min(backoff, 60))
+                    _write_manifest(manifest_path, manifest)
+                    if manifest.attempts >= self._max_retries:
+                        if not _generation_matches(data_path, manifest):
+                            manifest.error = "queued data changed before terminal failure"
+                            _write_manifest(manifest_path, manifest)
+                            continue
+                        self._move_to_failed(data_path, manifest_path, manifest)
+                        self._uploads_failed += 1
+                    else:
+                        backoff = self._backoff_base ** manifest.attempts
+                        time.sleep(min(backoff, 60))
 
     def _upload_file(self, data_path: Path, manifest: UploadManifest) -> bool:
         """Upload a single file to the endpoint. Returns True on success."""
         try:
-            # Compress the file
-            compressed = data_path.with_suffix(data_path.suffix + ".gz")
-            with open(data_path, "rb") as f_in:
-                with gzip.open(compressed, "wb") as f_out:
-                    shutil.copyfileobj(f_in, f_out)
-
-            # Build upload metadata
+            # The reservation digest and PUT body cover the same exact bytes.
             upload_meta = {
                 "episode_id": manifest.episode_id,
-                "contributor_hash": manifest.contributor_hash,
                 "file_hash": manifest.file_hash,
                 "file_size": manifest.file_size,
                 "anonymized": manifest.anonymized,
-                "content_encoding": "gzip",
             }
-
-            # Upload via httpx or urllib
-            success = self._do_upload(compressed, upload_meta)
-
-            # Clean up compressed file
-            try:
-                compressed.unlink()
-            except OSError:
-                pass
-
-            return success
+            return self._do_upload(data_path, upload_meta)
         except Exception as exc:
             manifest.error = str(exc)
             logger.debug("Upload failed for %s: %s", manifest.episode_id, exc)
             return False
 
     def _do_upload(self, file_path: Path, metadata: dict) -> bool:
-        """Perform the actual HTTP upload."""
+        """Perform the signed reserve -> capability PUT -> complete flow."""
         try:
-            import httpx
-        except ImportError:
-            return self._do_upload_urllib(file_path, metadata)
+            from tether.contributor_auth import ContributorAuthClient
 
-        try:
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-
-            resp = httpx.post(
-                self._endpoint,
-                content=file_data,
-                headers={
-                    "Content-Type": "application/octet-stream",
-                    "Content-Encoding": "gzip",
-                    "X-Episode-Id": metadata["episode_id"],
-                    "X-Contributor-Hash": metadata["contributor_hash"],
-                    "X-File-Hash": metadata["file_hash"],
-                    "X-Anonymized": str(metadata["anonymized"]).lower(),
-                },
-                timeout=_REQUEST_TIMEOUT_S,
+            client = self._auth_client
+            if client is None:
+                client = ContributorAuthClient(
+                    self._endpoint,
+                    timeout=_REQUEST_TIMEOUT_S,
+                    # Pro's constant counts total attempts; the shared client
+                    # takes retries after the initial operation.
+                    upload_max_retries=max(0, self._max_retries - 1),
+                    upload_backoff_base_s=self._backoff_base,
+                )
+                self._auth_client = client
+            file_data = file_path.read_bytes()
+            media_type = {
+                ".jsonl": "application/jsonl",
+                ".parquet": "application/x-parquet",
+            }.get(file_path.suffix)
+            if media_type is None:
+                raise ValueError(f"unsupported contribution format: {file_path.suffix}")
+            client.upload(
+                file_name=file_path.name,
+                file_bytes=file_data,
+                media_type=media_type,
+                state_path=_reservation_state_path(file_path),
+                source_identity=_source_identity(file_path),
             )
-            return 200 <= resp.status_code < 300
+            return True
         except Exception as exc:
-            logger.debug("httpx upload failed: %s", exc)
+            logger.debug("authenticated contribution upload failed: %s", exc)
             return False
 
     def _do_upload_urllib(self, file_path: Path, metadata: dict) -> bool:
-        """Fallback upload via stdlib urllib."""
-        try:
-            import urllib.request
-
-            with open(file_path, "rb") as f:
-                file_data = f.read()
-
-            req = urllib.request.Request(
-                self._endpoint,
-                data=file_data,
-                headers={
-                    "Content-Type": "application/octet-stream",
-                    "Content-Encoding": "gzip",
-                    "X-Episode-Id": metadata["episode_id"],
-                    "X-Contributor-Hash": metadata["contributor_hash"],
-                    "X-File-Hash": metadata["file_hash"],
-                    "X-Anonymized": str(metadata["anonymized"]).lower(),
-                },
-                method="POST",
-            )
-            resp = urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S)
-            return 200 <= resp.status < 300
-        except Exception as exc:
-            logger.debug("urllib upload failed: %s", exc)
-            return False
+        """Compatibility shim; the shared client owns its stdlib fallback."""
+        return self._do_upload(file_path, metadata)
 
     def _move_to_completed(
         self, data_path: Path, manifest_path: Path, manifest: UploadManifest,
@@ -463,7 +527,8 @@ class UploadClient:
             dest_data = completed / data_path.name
             dest_manifest = completed / manifest_path.name
             shutil.move(str(data_path), str(dest_data))
-            manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
+            _reservation_state_path(data_path).unlink(missing_ok=True)
+            _write_manifest(manifest_path, manifest)
             shutil.move(str(manifest_path), str(dest_manifest))
             logger.info("Upload completed: %s", manifest.episode_id)
         except OSError as exc:
@@ -477,8 +542,11 @@ class UploadClient:
         failed.mkdir(parents=True, exist_ok=True)
         try:
             shutil.move(str(data_path), str(failed / data_path.name))
+            state_path = _reservation_state_path(data_path)
+            if state_path.exists():
+                shutil.move(str(state_path), str(failed / state_path.name))
             manifest.error = manifest.error or "max retries exceeded"
-            manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2))
+            _write_manifest(manifest_path, manifest)
             shutil.move(str(manifest_path), str(failed / manifest_path.name))
             logger.warning("Upload failed permanently: %s", manifest.episode_id)
         except OSError as exc:
