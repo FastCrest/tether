@@ -1,0 +1,3 @@
+src/tether/example.py:18:5: error: Incompatible return value type  [return-value]
+src/tether/example.py:18:5: note: Expected a string
+Found 1 error in 1 file (checked 1 source file)

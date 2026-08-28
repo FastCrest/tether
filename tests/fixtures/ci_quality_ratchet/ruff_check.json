@@ -1,0 +1,8 @@
+[
+  {
+    "code": "F401",
+    "filename": "/checkout/src/tether/example.py",
+    "location": {"column": 8, "row": 12},
+    "message": "`os` imported but unused"
+  }
+]
