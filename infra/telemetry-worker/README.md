@@ -53,7 +53,7 @@ wrangler deploy
 # Edit wrangler.toml, uncomment the `routes` block, redeploy
 ```
 
-After deploy, the default URL is `https://reflex-telemetry.<your-subdomain>.workers.dev`. Update `DEFAULT_TELEMETRY_ENDPOINT` in `src/tether/pro/telemetry.py` if you use a different URL than `https://telemetry.fastcrest.workers.dev/v1/heartbeat`.
+After deploy, the default URL is `https://tether-telemetry.<your-subdomain>.workers.dev`. The client default is `DEFAULT_TELEMETRY_ENDPOINT = https://tether-telemetry.fastcrest.workers.dev/v1/heartbeat` in `src/tether/pro/telemetry.py` — update it there if your deployed subdomain differs.
 
 ## Common queries
 

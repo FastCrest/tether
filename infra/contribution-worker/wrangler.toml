@@ -1,4 +1,4 @@
-name = "reflex-contributions"
+name = "tether-contributions"
 main = "worker.js"
 compatibility_date = "2026-05-01"
 
