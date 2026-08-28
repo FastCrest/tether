@@ -3,7 +3,7 @@
 Guards the data-loss bug where the pre-save cleanup globbed every *.bin/*.data
 in the destination's parent directory and unlinked them — destroying OTHER
 models' weight files when a user converted into a shared export dir. The fix
-scopes deletion strictly to the model being converted (dst.stem).
+scopes deletion to the exact external-data names written for the destination.
 """
 from __future__ import annotations
 
@@ -48,6 +48,21 @@ def test_preserves_other_models_weights(tmp_path: Path) -> None:
     assert other_data.exists(), "unrelated .onnx.data was destroyed"
     assert other_onnx.exists()
     assert other_bin not in removed and other_data not in removed
+
+
+def test_preserves_files_that_only_share_the_destination_prefix(tmp_path: Path) -> None:
+    dst = tmp_path / "model.onnx"
+    _touch(tmp_path / "model.bin")  # exact stale file — will be removed
+    collisions = [
+        _touch(tmp_path / "model2.bin"),
+        _touch(tmp_path / "model_backup.data"),
+        _touch(tmp_path / "model-old.bin"),
+    ]
+
+    removed = _remove_stale_external_data(dst)
+
+    assert all(path.exists() for path in collisions)
+    assert all(path not in removed for path in collisions)
 
 
 def test_never_removes_dst_itself(tmp_path: Path) -> None:

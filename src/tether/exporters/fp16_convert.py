@@ -122,23 +122,26 @@ def _remove_stale_external_data(dst: Path) -> list[Path]:
     A leftover ``.bin``/``.data`` from an earlier run at the same path would sit
     alongside the new one and inflate our size accounting, so we clear it first.
 
-    Scope is strictly this model's stem. The previous implementation globbed
-    every ``*.bin`` / ``*.data`` in ``dst.parent`` and unlinked them — which
-    destroyed *other* models' weight files whenever a user converted into a
-    shared export directory (real data-loss bug). ``dst`` itself (the ``.onnx``)
-    is never touched.
+    Scope is an exact allowlist of names written by current and legacy saves:
+    ``{dst.stem}.bin``, ``{dst.stem}.data``, and ``{dst.name}.data``. The
+    previous implementation globbed external-data files and could destroy
+    another model's weights in a shared export directory. ``dst`` itself (the
+    ``.onnx``) is never touched.
 
     Returns the list of paths actually removed (for logging / tests).
     """
     removed: list[Path] = []
-    for old in dst.parent.glob(f"{dst.stem}*"):
-        if old == dst:
-            continue
-        if old.suffix not in (".bin", ".data"):
-            continue
+    candidates = (
+        dst.with_suffix(".bin"),
+        dst.with_suffix(".data"),
+        Path(f"{dst}.data"),
+    )
+    for old in candidates:
         try:
             old.unlink()
             removed.append(old)
+        except FileNotFoundError:
+            pass
         except OSError:
             pass
     return removed
