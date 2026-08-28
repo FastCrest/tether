@@ -156,16 +156,12 @@ def _load_target_server(model: str):
     # but bypass FastAPI — we just want the underlying server object.
     # We can't call create_app() here easily because it sets up FastAPI;
     # instead, replicate its dispatch-by-config logic directly.
-    config_path = Path(model) / "tether_config.json"
-    cfg: dict[str, Any] = {}
-    if config_path.exists():
-        try:
-            cfg = json.loads(config_path.read_text())
-        except json.JSONDecodeError:
-            cfg = {}
+    from tether.export_config import decomposed_layout, load_tether_config
 
-    if cfg.get("export_kind") == "monolithic":
-        model_type = cfg.get("model_type", "smolvla")
+    cfg = load_tether_config(Path(model))
+
+    if cfg.get("export_kind") == "monolithic_onnx":
+        model_type = cfg["model_type"]
         if model_type == "pi0":
             from tether.runtime.pi0_onnx_server import Pi0OnnxServer
             srv = Pi0OnnxServer(model)
@@ -177,9 +173,22 @@ def _load_target_server(model: str):
                 f"Replay against monolithic model_type={model_type!r} not "
                 f"yet supported. Day 2 ships pi0 + smolvla only."
             )
+    elif cfg.get("export_kind") == "decomposed_onnx":
+        layout = decomposed_layout(cfg)
+        if layout == "pi05_split":
+            from tether.runtime.decomposed_server import Pi05DecomposedServer
+
+            srv = Pi05DecomposedServer(model)
+        elif layout in {"expert_stack", "smolvla_full_bundle"}:
+            from tether.runtime.server import TetherServer
+
+            srv = TetherServer(model)
+        else:  # pragma: no cover - decomposed_layout is exhaustive
+            raise AssertionError(layout)
     else:
-        from tether.runtime.server import TetherServer
-        srv = TetherServer(model)
+        raise ValueError(
+            f"Replay does not support export_kind={cfg.get('export_kind')!r}"
+        )
     srv.load()
     return srv
 

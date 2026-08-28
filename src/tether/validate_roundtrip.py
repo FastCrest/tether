@@ -33,7 +33,6 @@ into the following process exit codes:
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -41,20 +40,19 @@ from typing import Any
 import numpy as np
 import torch
 
-from tether.checkpoint import detect_model_type, load_checkpoint
 from tether.fixtures.vla_fixtures import load_fixtures
+from tether.export_config import (
+    UnsupportedExportPipelineError,
+    decomposed_layout,
+    load_tether_config,
+    require_supported_export_kind,
+    require_supported_pipeline,
+)
 from tether.validate import ValidationResult, validate_outputs
 
 # Backends from Issues 4/5 — required at import time now.
 from tether._pytorch_backend import load_pytorch_backend
 from tether._onnx_backend import load_onnx_backend
-
-# Per-model action_dim fallback when tether_config.json doesn't specify it.
-_ACTION_DIM_FALLBACK: dict[str, int] = {
-    "smolvla": 6,
-    "pi0": 14,
-    "gr00t": 64,
-}
 
 logger = logging.getLogger(__name__)
 
@@ -136,36 +134,19 @@ class ValidateRoundTrip:
                 f"Export path is not a directory: {self.export_dir}"
             )
 
-        config_path = self.export_dir / "tether_config.json"
-        if not config_path.exists():
-            raise ValueError(
-                f"Missing tether_config.json in export dir: {self.export_dir}"
+        self.config = load_tether_config(self.export_dir)
+        require_supported_export_kind(
+            self.config,
+            {"decomposed_onnx"},
+            "tether validate",
+        )
+        require_supported_pipeline(self.config, set(), "tether validate")
+        layout = decomposed_layout(self.config)
+        if layout not in {"expert_stack", "smolvla_full_bundle"}:
+            raise UnsupportedExportPipelineError(
+                f"tether validate supports only the expert_stack family, got {layout!r}"
             )
-        try:
-            self.config: dict[str, Any] = json.loads(config_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Malformed tether_config.json at {config_path}: {exc}"
-            ) from exc
-
-        num_steps = self.config.get("num_denoising_steps", 10)
-        if not isinstance(num_steps, int) or num_steps < 1:
-            raise ValueError(
-                f"num_denoising_steps in tether_config.json must be a positive "
-                f"integer, got {num_steps!r}"
-            )
-
-        model_type = self.config.get("model_type")
-        if not model_type:
-            logger.debug("model_type missing from tether_config.json; detecting from checkpoint")
-            ref_id = self.model_id or self.config.get("model_id")
-            if ref_id is None:
-                raise ValueError(
-                    "Cannot detect model_type: tether_config.json has no "
-                    "model_type or model_id field, and --model was not passed."
-                )
-            state_dict, _ = load_checkpoint(ref_id, device="cpu")
-            model_type = detect_model_type(state_dict)
+        model_type = self.config["model_type"]
 
         if model_type not in SUPPORTED_MODEL_TYPES:
             raise ValueError(UNSUPPORTED_MODEL_MESSAGE)
@@ -228,10 +209,7 @@ class ValidateRoundTrip:
             or self.config.get("chunk_size")
             or 50
         )
-        action_dim = int(
-            self.config.get("action_dim")
-            or _ACTION_DIM_FALLBACK.get(self.model_type, 6)
-        )
+        action_dim = int(self.config["action_dim"])
         noise = torch.randn((chunk_size, action_dim), generator=rng).numpy().astype(np.float32)
         return noise
 

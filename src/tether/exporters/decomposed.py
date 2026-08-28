@@ -55,7 +55,6 @@ is invoked here to get the shared denoise-step + cache-freeze patches.
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
-import json
 import logging
 import multiprocessing as mp
 import time
@@ -602,7 +601,7 @@ def _write_decomposed_export_result(
         "action_chunk_size": chunk_size,
         "action_dim": action_dim,
         "opset": 19,
-        "export_kind": "decomposed",
+        "export_kind": "decomposed_onnx",
         "export_mode": export_mode.value,
         "export_mode_reason": export_mode_reason,
         "decomposed": {
@@ -621,7 +620,21 @@ def _write_decomposed_export_result(
             "per_step_expert": bool(per_step_expert),
         },
     }
-    (output_dir / "tether_config.json").write_text(json.dumps(tether_cfg, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    canonical = build_producer_config(
+        output_dir,
+        producer="pi05_split",
+        model_id=tether_cfg["model_id"],
+        model_type=tether_cfg["model_type"],
+        action_dim=action_dim,
+        num_denoising_steps=num_steps,
+        opset=19,
+        metadata={key: value for key, value in tether_cfg.items() if key not in {
+            "model_id", "model_type", "action_dim", "num_denoising_steps", "opset", "export_kind"
+        }},
+    )
+    write_tether_config(output_dir, canonical)
     try:
         from tether.verification_report import write_verification_report
         write_verification_report(output_dir, parity=None)

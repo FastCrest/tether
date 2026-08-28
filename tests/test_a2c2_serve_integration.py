@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import io
 import inspect
-import json
 import logging
 from pathlib import Path
 import sys
@@ -21,6 +20,7 @@ import numpy as np
 import pytest
 
 from tether.kernels.a2c2_correction import A2C2Config, A2C2Head
+from tests.export_config_factory import write_test_export_config
 
 
 def _stub_ort_session(input_names: list[str], output_shape=(1, 50, 32)):
@@ -36,33 +36,31 @@ def _stub_ort_session(input_names: list[str], output_shape=(1, 50, 32)):
 def _make_export_dir(tmp_path: Path) -> Path:
     export_dir = tmp_path / "export"
     export_dir.mkdir()
-    (export_dir / "model.onnx").write_bytes(b"stub")
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 10,
-        "chunk_size": 50,
-        "action_chunk_size": 50,
-        "action_dim": 32,
-        "max_state_dim": 32,
-    }))
+    write_test_export_config(
+        export_dir,
+        model_type="smolvla",
+        chunk_size=50,
+        action_chunk_size=50,
+        max_state_dim=32,
+    )
     return export_dir
 
 
 def _make_decomposed_export_dir(tmp_path: Path) -> Path:
     export_dir = tmp_path / "decomposed_export"
     export_dir.mkdir()
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "model_type": "pi05_decomposed_student",
-        "export_kind": "decomposed",
-        "chunk_size": 50,
-        "action_dim": 32,
-        "decomposed": {
+    write_test_export_config(
+        export_dir,
+        model_type="pi05_decomposed_student",
+        export_kind="decomposed_onnx",
+        artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
+        chunk_size=50,
+        decomposed={
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
             "max_action_dim": 32,
         },
-    }))
+    )
     return export_dir
 
 

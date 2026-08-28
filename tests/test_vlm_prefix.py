@@ -15,11 +15,14 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from tests.export_config_factory import write_test_export_config
 import torch
 
 from tether.exporters.vlm_prefix_exporter import (
     DEFAULT_VLM_KV_DIM,
+    _update_vlm_manifest,
 )
+from tether.export_config import build_producer_config, load_tether_config, write_tether_config
 from tether.runtime.vlm_components import (
     HIDDEN_SIZE,
     MAX_STATE_DIM,
@@ -82,45 +85,46 @@ def tiny_expert_stack():
 @pytest.fixture
 def v02_export_dir(tmp_path):
     """Create a mock v0.2+ export dir with VLM ONNX files."""
-    config = {
-        "model_id": "lerobot/smolvla_base",
-        "target": "desktop",
-        "action_chunk_size": 10,
-        "export_version": "0.3",
-        "vlm_prefix_onnx": "vision_encoder.onnx",
-        "vlm_image_size": [512, 512],
-        "vlm_kv_dim": 960,
-        "vlm_prefix_seq_len": 50,
-        "expert": {
+    write_test_export_config(
+        tmp_path,
+        model_type="smolvla",
+        export_kind="decomposed_onnx",
+        artifacts=[
+            "expert_stack.onnx",
+            "vision_encoder.onnx",
+            "text_embedder.onnx",
+            "decoder_prefill.onnx",
+        ],
+        action_chunk_size=10,
+        export_version="0.3",
+        vlm_prefix_onnx="vision_encoder.onnx",
+        vlm_image_size=[512, 512],
+        vlm_kv_dim=960,
+        vlm_prefix_seq_len=50,
+        expert={
             "expert_hidden": 720,
             "action_dim": 32,
             "num_layers": 16,
         },
-    }
-    (tmp_path / "tether_config.json").write_text(json.dumps(config))
-    # Create placeholder ONNX files (real loading is mocked)
-    (tmp_path / "expert_stack.onnx").write_bytes(b"fake-onnx")
-    (tmp_path / "vision_encoder.onnx").write_bytes(b"fake-onnx")
-    (tmp_path / "text_embedder.onnx").write_bytes(b"fake-onnx")
-    (tmp_path / "decoder_prefill.onnx").write_bytes(b"fake-onnx")
+    )
     return tmp_path
 
 
 @pytest.fixture
 def v01_export_dir(tmp_path):
     """Create a mock v0.1 export dir (no vlm_prefix)."""
-    config = {
-        "model_id": "lerobot/smolvla_base",
-        "target": "desktop",
-        "action_chunk_size": 10,
-        "expert": {
+    write_test_export_config(
+        tmp_path,
+        model_type="smolvla",
+        export_kind="decomposed_onnx",
+        artifacts=["expert_stack.onnx"],
+        action_chunk_size=10,
+        expert={
             "expert_hidden": 720,
             "action_dim": 32,
             "num_layers": 16,
         },
-    }
-    (tmp_path / "tether_config.json").write_text(json.dumps(config))
-    (tmp_path / "expert_stack.onnx").write_bytes(b"fake-onnx")
+    )
     return tmp_path
 
 
@@ -423,6 +427,93 @@ class TestVLMPrefixExporterUpdatesConfig:
         # Original fields preserved
         assert updated_config["model_id"] == "lerobot/smolvla_base"
         assert updated_config["expert"]["action_dim"] == 32
+
+    def test_manifest_rebuild_tracks_external_data_and_drops_stale_owned_entries(
+        self, tmp_path
+    ):
+        onnx = pytest.importorskip("onnx")
+        from onnx import numpy_helper
+
+        from tests.export_config_factory import write_test_onnx
+
+        write_test_onnx(tmp_path / "expert_stack.onnx")
+        base = build_producer_config(
+            tmp_path,
+            producer="expert_stack",
+            model_id="org/smolvla",
+            model_type="smolvla",
+            action_dim=7,
+            num_denoising_steps=10,
+            opset=19,
+        )
+        write_tether_config(tmp_path, base)
+
+        source = onnx.helper.make_tensor_value_info(
+            "input", onnx.TensorProto.FLOAT, [1, 7]
+        )
+        target = onnx.helper.make_tensor_value_info(
+            "output", onnx.TensorProto.FLOAT, [1, 7]
+        )
+        weight = numpy_helper.from_array(np.ones((1, 7), dtype=np.float32), name="weight")
+        graph = onnx.helper.make_graph(
+            [onnx.helper.make_node("Add", ["input", "weight"], ["output"])],
+            "vision",
+            [source],
+            [target],
+            [weight],
+        )
+        model = onnx.helper.make_model(
+            graph, opset_imports=[onnx.helper.make_opsetid("", 19)]
+        )
+        onnx.save_model(
+            model,
+            tmp_path / "vision_encoder.onnx",
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location="vision_encoder.onnx.data",
+            size_threshold=0,
+        )
+        write_test_onnx(tmp_path / "text_embedder.onnx")
+        write_test_onnx(tmp_path / "decoder_prefill.onnx")
+
+        _update_vlm_manifest(
+            tmp_path,
+            checkpoint_path_or_id="org/smolvla",
+            image_size=512,
+            vlm_hidden_size=960,
+            vlm_kv_dim=320,
+        )
+        first = load_tether_config(tmp_path)
+        first_roles = {item["path"]: item["role"] for item in first["artifacts"]}
+        assert first_roles["vision_encoder.onnx.data"] == "weights"
+        assert first["extensions"]["artifact_owners"]["smolvla_vlm"] == [
+            "vision_encoder.onnx",
+            "text_embedder.onnx",
+            "decoder_prefill.onnx",
+            "vision_encoder.onnx.data",
+        ]
+
+        # A rerun now emits an inline graph. The prior external data and any
+        # other path recorded as VLM-owned must disappear from the manifest.
+        write_test_onnx(tmp_path / "vision_encoder.onnx")
+        stale = tmp_path / "old-vlm-weights.bin"
+        stale.write_bytes(b"stale")
+        first["artifacts"].append({"path": stale.name, "role": "weights"})
+        first["extensions"]["artifact_owners"]["smolvla_vlm"].append(stale.name)
+        write_tether_config(tmp_path, first)
+
+        _update_vlm_manifest(
+            tmp_path,
+            checkpoint_path_or_id="org/smolvla",
+            image_size=512,
+            vlm_hidden_size=960,
+            vlm_kv_dim=320,
+        )
+        second = load_tether_config(tmp_path)
+        second_paths = {item["path"] for item in second["artifacts"]}
+        assert "expert_stack.onnx" in second_paths
+        assert "vision_encoder.onnx.data" not in second_paths
+        assert stale.name not in second_paths
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.export_config_factory import write_test_onnx
+
 import tether.exporters.decomposed as decomposed
 from tether.exporters._export_mode import (
     ExportMode,
@@ -214,13 +216,13 @@ def test_pi05_decomposed_sequential_reuses_single_policy(monkeypatch, tmp_path):
     def fake_prefix_pass(policy_arg, output_dir, past_kv_names):
         assert policy_arg is policy
         pass_order.append("prefix")
-        (output_dir / "vlm_prefix.onnx").write_bytes(b"prefix")
+        write_test_onnx(output_dir / "vlm_prefix.onnx", action_dim=32)
         return {"chunk_size": 50, "action_dim": 32, "prefix_seq_len": 968}
 
     def fake_expert_pass(**kwargs):
         assert kwargs["policy"] is policy
         pass_order.append("expert")
-        (kwargs["output_dir"] / "expert_denoise.onnx").write_bytes(b"expert")
+        write_test_onnx(kwargs["output_dir"] / "expert_denoise.onnx", action_dim=32)
         return {"chunk_size": 50, "action_dim": 32, "prefix_seq_len": 968}
 
     monkeypatch.setattr(decomposed, "_load_pi05_policy", fake_load_policy)
@@ -302,8 +304,8 @@ def test_run_parallel_pi05_exports_submits_both_workers(monkeypatch, tmp_path):
 
 
 def test_write_decomposed_result_records_export_mode(tmp_path):
-    (tmp_path / "vlm_prefix.onnx").write_bytes(b"prefix")
-    (tmp_path / "expert_denoise.onnx").write_bytes(b"expert")
+    write_test_onnx(tmp_path / "vlm_prefix.onnx", action_dim=32)
+    write_test_onnx(tmp_path / "expert_denoise.onnx", action_dim=32)
 
     result = decomposed._write_decomposed_export_result(
         model_id="lerobot/pi05_libero_finetuned_v044",

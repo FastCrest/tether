@@ -23,7 +23,6 @@ for the parity rows this export is responsible for.
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
 from importlib.metadata import PackageNotFoundError, version as _dist_version
@@ -101,11 +100,15 @@ def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
         if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
             tok.pad_token = tok.eos_token
         tok_dir = output_dir / "tokenizer"
-        tok.save_pretrained(tok_dir)
+        saved_paths = tok.save_pretrained(tok_dir)
         meta.update(
             {
                 "tokenizer_path": "tokenizer",
                 "tokenizer_bundled": True,
+                "_artifact_paths": [
+                    Path(path).resolve().relative_to(output_dir.resolve()).as_posix()
+                    for path in saved_paths
+                ],
             }
         )
     except Exception as exc:
@@ -863,6 +866,9 @@ def _write_tether_config(
 ) -> None:
     """Write `tether_config.json` + seed a VERIFICATION.md receipt."""
     tokenizer_meta = _bundle_tokenizer(output_dir, model_type)
+    tokenizer_artifacts = [
+        (path, "tokenizer") for path in tokenizer_meta.pop("_artifact_paths", [])
+    ]
     cfg_dict = {
         "model_id": model_id,
         "model_type": model_type,
@@ -873,13 +879,24 @@ def _write_tether_config(
         "action_dim": getattr(policy_config, "max_action_dim", 32),
         "max_state_dim": getattr(policy_config, "max_state_dim", 32),
         "opset": 19,
-        "export_kind": "monolithic",
+        "export_kind": "monolithic_onnx",
         "notes": _CCM_NONE_RATIONALE if num_steps > 1 else None,
         **tokenizer_meta,
     }
-    (output_dir / "tether_config.json").write_text(
-        json.dumps(cfg_dict, indent=2, default=str)
+    from tether.export_config import build_producer_config, write_tether_config
+
+    canonical = build_producer_config(
+        output_dir,
+        producer="monolithic",
+        model_id=model_id,
+        model_type=model_type,
+        action_dim=cfg_dict["action_dim"],
+        num_denoising_steps=num_steps,
+        opset=19,
+        optional_artifacts=tokenizer_artifacts,
+        metadata=cfg_dict,
     )
+    write_tether_config(output_dir, canonical)
 
     # Seed VERIFICATION.md at export time — every export ships a receipt,
     # even before `tether validate` fills in the parity numbers. Callers

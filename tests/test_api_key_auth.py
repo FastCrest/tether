@@ -11,27 +11,21 @@ build the app without a real export directory on disk.
 """
 from __future__ import annotations
 
-import json
-from contextlib import asynccontextmanager
 
 import pytest
+
+from tests.export_config_factory import write_test_export_config
 
 
 @pytest.fixture
 def minimal_export_dir(tmp_path):
     """Minimal tether_config.json so the server can at least instantiate."""
-    cfg = {
-        "model_id": "lerobot/smolvla_base",
-        "model_type": "smolvla",
-        "target": "desktop",
-        "action_chunk_size": 50,
-        "action_dim": 32,
-        "expert": {"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
-    }
-    (tmp_path / "tether_config.json").write_text(json.dumps(cfg))
-    # Touch an "onnx" file so the CLI path wouldn't fail sanity checks —
-    # we're not testing the CLI here, but some create_app code paths peek.
-    (tmp_path / "model.onnx").write_bytes(b"\x00")
+    write_test_export_config(
+        tmp_path,
+        model_type="smolvla",
+        action_chunk_size=50,
+        expert={"expert_hidden": 720, "action_dim": 32, "num_layers": 16},
+    )
     return tmp_path
 
 

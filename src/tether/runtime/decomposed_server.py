@@ -166,13 +166,9 @@ class Pi05DecomposedServer:
 
     def _load_config(self) -> dict[str, Any]:
         """Read tether_config.json from the export dir."""
-        config_path = self.export_dir / "tether_config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"tether_config.json not found in {self.export_dir}. "
-                f"Decomposed exports must include the config sibling."
-            )
-        return json.loads(config_path.read_text())
+        from tether.export_config import load_tether_config
+
+        return load_tether_config(self.export_dir)
 
     def load(self) -> None:
         """Load the decomposed inference + tokenizer + tether_config."""
@@ -186,15 +182,15 @@ class Pi05DecomposedServer:
 
         # Pull canonical fields from config; validate export_kind.
         export_kind = self.config.get("export_kind", "")
-        if export_kind != "decomposed":
+        if export_kind != "decomposed_onnx":
             raise ValueError(
-                f"Pi05DecomposedServer requires export_kind='decomposed', "
+                f"Pi05DecomposedServer requires export_kind='decomposed_onnx', "
                 f"got {export_kind!r}. Use the matching server class for "
                 f"this export type (monolithic -> Pi0OnnxServer / "
                 f"SmolVLAOnnxServer; legacy decomposed -> TetherServer)."
             )
 
-        self.action_dim = int(self.config.get("action_dim", 7))
+        self.action_dim = int(self.config["action_dim"])
         self.chunk_size = int(
             self.config.get("chunk_size") or self.config.get("action_chunk_size", DEFAULT_CHUNK_SIZE)
         )

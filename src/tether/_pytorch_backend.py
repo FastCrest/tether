@@ -91,12 +91,27 @@ def load_pytorch_backend(
     export_dir = Path(export_dir)
     config_path = export_dir / "tether_config.json"
     if not config_path.exists():
-        raise FileNotFoundError(
-            f"Missing tether_config.json in export dir: {export_dir}"
-        )
-    import json
+        raise FileNotFoundError(f"Missing tether_config.json in export dir: {export_dir}")
+    from tether.export_config import (
+        UnsupportedExportPipelineError,
+        decomposed_layout,
+        load_tether_config,
+        require_supported_export_kind,
+        require_supported_pipeline,
+    )
 
-    config: dict[str, Any] = json.loads(config_path.read_text())
+    config = load_tether_config(config_path)
+    require_supported_export_kind(
+        config,
+        {"decomposed_onnx"},
+        "PyTorch round-trip reference",
+    )
+    require_supported_pipeline(config, set(), "PyTorch round-trip reference")
+    layout = decomposed_layout(config)
+    if layout not in {"expert_stack", "smolvla_full_bundle"}:
+        raise UnsupportedExportPipelineError(
+            f"PyTorch round-trip reference supports only the expert_stack family, got {layout!r}"
+        )
     resolved_id = model_id or config.get("model_id")
     if resolved_id is None:
         raise ValueError(

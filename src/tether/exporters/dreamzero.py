@@ -18,13 +18,9 @@ Usage::
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
-
-import torch
-import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +59,9 @@ def export_dreamzero(
     logger.info("DreamZero export — checkpoint=%s, output=%s", checkpoint_path, output_dir)
 
     # Build the tether_config.json (describes the export for `tether serve`)
-    config = {
+    metadata = {
         "model_family": "dreamzero",
         "architecture": "world_action_model",
-        "action_dim": action_dim,
         "max_action_dim": max_action_dim,
         "action_horizon": action_horizon,
         "num_frames": num_frames,
@@ -80,9 +75,20 @@ def export_dreamzero(
         "requires_video_input": True,
     }
 
-    config_path = output_dir / "tether_config.json"
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    from tether.export_config import build_producer_config, write_tether_config
+
+    config = build_producer_config(
+        output_dir,
+        producer="dreamzero",
+        model_id=str(checkpoint_path),
+        model_type="dreamzero",
+        action_dim=action_dim,
+        num_denoising_steps=4,
+        opset=opset_version,
+        metadata=metadata,
+    )
+
+    config_path = write_tether_config(output_dir, config)
     logger.info("Wrote tether_config.json")
 
     result = {

@@ -14,16 +14,12 @@ Key differences from SmolVLA:
 
 from __future__ import annotations
 
-import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.nn as nn
-
-import math
 
 import torch.nn.functional as F
 
@@ -31,7 +27,9 @@ from tether.config import ExportConfig, get_hardware_profile
 from tether.checkpoint import load_checkpoint
 from tether.exporters.onnx_export import export_module_to_onnx, optimize_onnx
 from tether.models.heads.expert_stack import (
-    ExpertGQALayer, ExpertStack, Pi05ExpertGQALayer, _DecomposedRoPE,
+    ExpertGQALayer,
+    ExpertStack,
+    Pi05ExpertGQALayer,
     _sinusoidal_pos_embedding,
 )
 from tether.exporters.trt_build import build_engine, check_trtexec
@@ -287,6 +285,7 @@ def export_pi0(
     export_config = {
         "model_id": config.model_id,
         "model_type": "pi0",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
@@ -301,8 +300,23 @@ def export_pi0(
         },
         "expert": expert_meta,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    optional_artifacts = []
+    if "expert_trt" in result["files"]:
+        optional_artifacts.append(("expert_stack.trt", "engine"))
+    canonical = build_producer_config(
+        output_dir,
+        producer="expert_stack",
+        model_id=config.model_id,
+        model_type="pi0",
+        action_dim=action_dim,
+        num_denoising_steps=config.num_denoising_steps,
+        opset=config.opset,
+        optional_artifacts=optional_artifacts,
+        metadata=export_config,
+    )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
     return result
 
@@ -549,6 +563,7 @@ def export_pi05(
     export_config = {
         "model_id": config.model_id,
         "model_type": "pi05",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
@@ -563,7 +578,22 @@ def export_pi05(
         },
         "expert": expert_meta,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    optional_artifacts = []
+    if "expert_trt" in result["files"]:
+        optional_artifacts.append(("expert_stack.trt", "engine"))
+    canonical = build_producer_config(
+        output_dir,
+        producer="expert_stack",
+        model_id=config.model_id,
+        model_type="pi05",
+        action_dim=action_dim,
+        num_denoising_steps=config.num_denoising_steps,
+        opset=config.opset,
+        optional_artifacts=optional_artifacts,
+        metadata=export_config,
+    )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
     return result

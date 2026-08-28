@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.export_config_factory import write_test_export_config
 
 
 class _StubServer:
@@ -34,6 +35,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_server, "TetherServer", _StubServer)
     export_dir = tmp_path / "export"
     export_dir.mkdir()
+    write_test_export_config(export_dir, model_type="gr00t", action_dim=7)
     app = runtime_server.create_app(str(export_dir), device="cpu")
 
     @app.get("/_test/request-id")

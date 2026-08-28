@@ -24,7 +24,6 @@ which export pattern is active.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -236,14 +235,14 @@ class Pi05DecomposedInference:
         else:
             self._providers = providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
+        from tether.export_config import load_tether_config
+
         cfg_path = self.export_dir / "tether_config.json"
-        if not cfg_path.exists():
-            raise FileNotFoundError(f"tether_config.json missing in {self.export_dir}")
-        self.config: dict[str, Any] = json.loads(cfg_path.read_text())
-        if self.config.get("export_kind") != "decomposed":
+        self.config = load_tether_config(cfg_path)
+        if self.config.get("export_kind") != "decomposed_onnx":
             raise ValueError(
                 f"{cfg_path} has export_kind={self.config.get('export_kind')!r}; "
-                "Pi05DecomposedInference requires 'decomposed'"
+                "Pi05DecomposedInference requires 'decomposed_onnx'"
             )
         self._past_kv_names: list[str] = self.config["decomposed"]["past_kv_tensor_names"]
         self._n_layers: int = self.config["decomposed"]["paligemma_layers"]
@@ -252,10 +251,8 @@ class Pi05DecomposedInference:
         # (x_t, t, past_kv) → v_t and we drive the Euler loop in Python.
         # When False (default), it's the baked-loop shape (noise → actions,
         # single call). Spec: features/03_export/per-step-expert-export.md.
-        self._per_step_expert: bool = bool(
-            self.config["decomposed"].get("per_step_expert", False)
-        )
-        self._num_steps: int = int(self.config.get("num_denoising_steps", 1))
+        self._per_step_expert: bool = bool(self.config["decomposed"].get("per_step_expert", False))
+        self._num_steps = int(self.config["num_denoising_steps"])
         if self._per_step_expert:
             logger.info(
                 "Pi05DecomposedInference: per-step expert path active "

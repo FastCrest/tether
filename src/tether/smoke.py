@@ -140,12 +140,11 @@ def create_smoke_export(export_dir: str | Path) -> Path:
         unk_token="[UNK]",
         pad_token="[PAD]",
     )
-    fast_tokenizer.save_pretrained(tokenizer_dir)
+    tokenizer_files = fast_tokenizer.save_pretrained(tokenizer_dir)
 
     config = {
+        "model_id": "tether/smoke-smolvla",
         "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 1,
         "chunk_size": 50,
         "action_chunk_size": 50,
         "action_dim": 32,
@@ -157,7 +156,27 @@ def create_smoke_export(export_dir: str | Path) -> Path:
         "created_by": "tether smoke",
         "created_at": _now_iso(),
     }
-    (export_path / "tether_config.json").write_text(json.dumps(config, indent=2) + "\n")
+    from tether.export_config import build_producer_config, write_tether_config
+
+    optional_artifacts = [
+        (
+            Path(path).resolve().relative_to(export_path.resolve()).as_posix(),
+            "tokenizer",
+        )
+        for path in tokenizer_files
+    ]
+    canonical = build_producer_config(
+        export_path,
+        producer="monolithic",
+        model_id="tether/smoke-smolvla",
+        model_type="smolvla",
+        action_dim=32,
+        num_denoising_steps=1,
+        opset=17,
+        optional_artifacts=optional_artifacts,
+        metadata=config,
+    )
+    write_tether_config(export_path, canonical)
     return export_path
 
 

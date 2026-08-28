@@ -24,6 +24,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from tests.export_config_factory import write_test_export_config
+
 
 def _mock_ort_session(input_names: list[str], output_shape: tuple = (1, 50, 32)):
     sess = MagicMock()
@@ -146,14 +148,13 @@ def test_pi05_server_uses_pi0_shape_without_state_input(tmp_path):
 def test_tether_server_uses_model_onnx_for_gr00t_monolithic(tmp_path, monkeypatch):
     from tether.runtime.server import TetherServer
 
-    (tmp_path / "model.onnx").write_bytes(b"fake")
-    (tmp_path / "tether_config.json").write_text(json.dumps({
-        "model_type": "gr00t",
-        "export_kind": "monolithic",
-        "chunk_size": 50,
-        "action_dim": 64,
-        "num_denoising_steps": 4,
-    }))
+    write_test_export_config(
+        tmp_path,
+        model_type="gr00t",
+        action_dim=64,
+        num_denoising_steps=4,
+        chunk_size=50,
+    )
 
     loaded = {}
 
@@ -182,16 +183,10 @@ def test_create_app_dispatch_monolithic(tmp_path, monkeypatch):
     from tether.runtime import server as server_module
 
     # Write a fake model.onnx + config so _find_onnx_path succeeds
-    (tmp_path / "model.onnx").write_bytes(b"fake")
-    (tmp_path / "tether_config.json").write_text(json.dumps({
-        "model_type": "smolvla",
-        "export_kind": "monolithic",
-        "num_denoising_steps": 10,
-    }))
+    write_test_export_config(tmp_path, model_type="smolvla")
 
     # Stub SmolVLAOnnxServer so we don't actually load the fake ONNX
     from tether.runtime import smolvla_onnx_server as smolvla_server_module
-    original_server_cls = smolvla_server_module.SmolVLAOnnxServer
     instances = []
 
     class StubSmolVLA:
@@ -208,6 +203,6 @@ def test_create_app_dispatch_monolithic(tmp_path, monkeypatch):
 
     monkeypatch.setattr(smolvla_server_module, "SmolVLAOnnxServer", StubSmolVLA)
 
-    app = server_module.create_app(str(tmp_path), device="cpu")
+    server_module.create_app(str(tmp_path), device="cpu")
     # The dispatch happened — we got a SmolVLA stub instance
     assert len(instances) >= 1, "create_app did not instantiate SmolVLAOnnxServer"

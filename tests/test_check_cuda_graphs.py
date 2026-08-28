@@ -10,14 +10,26 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from tether.diagnostics.check_cuda_graphs import _run as check_run
 
 
 def _decomposed_config() -> dict:
     return {
-        "export_kind": "decomposed",
+        "schema_version": 1,
+        "model_id": "test/pi05",
+        "model_type": "pi05_decomposed",
+        "action_dim": 7,
+        "num_denoising_steps": 10,
+        "opset": 19,
+        "export_kind": "decomposed_onnx",
+        "artifacts": [
+            {"path": "vlm_prefix.onnx", "role": "model"},
+            {"path": "expert_denoise.onnx", "role": "model"},
+        ],
+        "io_contract": {
+            "inputs": [{"name": "noise", "dtype": "float32", "shape": [1, 50, 32]}],
+            "outputs": [{"name": "actions", "dtype": "float32", "shape": [1, 50, 32]}],
+        },
         "decomposed": {
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
@@ -28,7 +40,10 @@ def _decomposed_config() -> dict:
 
 
 def _monolithic_config() -> dict:
-    return {"export_kind": "monolithic"}
+    config = _decomposed_config()
+    config["export_kind"] = "monolithic_onnx"
+    config["artifacts"] = [{"path": "model.onnx", "role": "model"}]
+    return config
 
 
 def _write_export(tmp_path: Path, config: dict) -> Path:
@@ -37,6 +52,7 @@ def _write_export(tmp_path: Path, config: dict) -> Path:
     # Create empty onnx files for path existence
     (tmp_path / "vlm_prefix.onnx").write_bytes(b"\x00")
     (tmp_path / "expert_denoise.onnx").write_bytes(b"\x00")
+    (tmp_path / "model.onnx").write_bytes(b"\x00")
     return tmp_path
 
 
@@ -53,17 +69,37 @@ def test_skip_when_export_is_monolithic(tmp_path):
     assert "decomposed" in result.expected.lower()
 
 
+def test_invalid_config_returns_identified_failure(tmp_path):
+    (tmp_path / "tether_config.json").write_text("{}")
+
+    result = check_run(model_path=str(tmp_path), embodiment_name="franka", rtc=False)
+
+    assert result.check_id == "cuda_graphs"
+    assert result.status == "fail"
+    assert result.actual
+
+
+def test_skip_is_explicit_for_expert_stack_layout(tmp_path):
+    config = _decomposed_config()
+    config["artifacts"] = [{"path": "expert_stack.onnx", "role": "model"}]
+    (tmp_path / "expert_stack.onnx").write_bytes(b"\x00")
+    _write_export(tmp_path, config)
+
+    result = check_run(model_path=str(tmp_path), embodiment_name="franka", rtc=False)
+
+    assert result.status == "skip"
+    assert "pi05 split" in result.expected
+    assert "expert_stack" in result.actual
+
+
 def test_skip_when_onnxruntime_not_importable(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
     # Simulate missing onnxruntime by intercepting the import inside the check
-    import tether.diagnostics.check_cuda_graphs as mod
-
     # Monkey-patch ort import at the check module level by stashing a raising
     # import into sys.modules
     orig_ort = sys.modules.pop("onnxruntime", None)
     try:
-        import importlib
         # Insert a dummy that raises ImportError on attribute access
         fake = MagicMock()
         fake.get_available_providers = MagicMock(side_effect=ImportError("mock no ort"))

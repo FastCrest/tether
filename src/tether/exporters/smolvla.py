@@ -16,7 +16,6 @@ file lands the export refactor in the same PR as the spine composition.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -293,6 +292,8 @@ def export_smolvla(
     # 6. Save tether_config.json — same schema as legacy
     export_config = {
         "model_id": config.model_id,
+        "model_type": "smolvla",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
@@ -310,8 +311,23 @@ def export_smolvla(
         "vlm_kv_dim": vlm_kv_dim,
         "spine_path": True,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    optional_artifacts = []
+    if "expert_trt" in result["files"]:
+        optional_artifacts.append(("expert_stack.trt", "engine"))
+    canonical = build_producer_config(
+        output_dir,
+        producer="expert_stack",
+        model_id=config.model_id,
+        model_type="smolvla",
+        action_dim=action_dim,
+        num_denoising_steps=config.num_denoising_steps,
+        opset=config.opset,
+        optional_artifacts=optional_artifacts,
+        metadata=export_config,
+    )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
 
     logger.info("Export complete: %s", output_dir)
