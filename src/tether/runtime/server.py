@@ -3250,7 +3250,7 @@ def create_app(
 
         # Curate uploader scaffolding — daily background upload of the
         # contribution queue at ~/.tether/contribute/queue/. Posts to the
-        # live contribution-worker (https://tether-contributions.fastcrest
+        # live contribution-worker (https://reflex-contributions.fastcrest
         # .workers.dev) by default. Set TETHER_CURATE_DRY_RUN=1 to keep
         # files locally without uploading; TETHER_CONTRIB_ENDPOINT to point
         # at a self-hosted worker.

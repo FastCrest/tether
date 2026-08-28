@@ -4,7 +4,7 @@ Surface:
   tether contribute                  → equivalent to --status (zero-friction default)
   tether contribute --opt-in         → create receipt + show success
   tether contribute --opt-out        → delete receipt locally
-  tether contribute --revoke         → opt-out + cascade purge through server
+  tether contribute --revoke         → local revoke + admin purge handoff
   tether contribute --status         → show current consent + contribution stats
   tether contribute --info           → show privacy/legal details before deciding
   tether contribute --inspect        → list episodes in the local upload queue
@@ -70,7 +70,7 @@ def main(
     ),
     revoke: bool = typer.Option(
         False, "--revoke",
-        help="Opt out + request server-side cascade purge of historical data.",
+        help="Remove local consent and print the IDs for an admin purge handoff.",
     ),
     status: bool = typer.Option(
         False, "--status", help="Show current consent + contribution stats.",
@@ -88,7 +88,7 @@ def main(
     ),
     revoke_status: str = typer.Option(
         "", "--revoke-status",
-        help="Check cascade progress for a revoke request_id (returned from --revoke).",
+        help="Check cascade progress for an existing admin-provided request_id.",
     ),
     yes: bool = typer.Option(
         False, "--yes", "-y",
@@ -164,8 +164,8 @@ What is NOT contributed:
 
 [bold cyan]Revoke anytime[/bold cyan]
 [cyan]tether contribute --opt-out[/cyan]   stop future contribution
-[cyan]tether contribute --revoke[/cyan]    cascade purge historical contributions
-                              (30-day SLA, GDPR Article 17 compliant)
+[cyan]tether contribute --revoke[/cyan]    remove local consent + print IDs for
+                              an administrator-assisted historical purge
 
 [bold cyan]Decide[/bold cyan]
 [cyan]tether contribute --opt-in[/cyan]    join the program
@@ -176,18 +176,24 @@ What is NOT contributed:
 def _cmd_opt_in() -> None:
     if curate_consent.is_opted_in():
         receipt = curate_consent.load()
+        from tether.contributor_auth import load_or_create_credentials
+        authenticated_id = load_or_create_credentials().contributor_id
         console.print(
-            f"[yellow]Already opted in[/yellow] as [dim]{receipt.contributor_id}[/dim] "
+            f"[yellow]Already opted in[/yellow] as [dim]{authenticated_id}[/dim] "
             f"({receipt.tier}, since {receipt.opted_in_at}).\n"
             f"Run [cyan]tether contribute --status[/cyan] to see contribution stats, "
             f"or [cyan]tether contribute --opt-out[/cyan] to stop."
         )
         return
 
-    tier, license_customer_id = _detect_pro_tier()
+    tier, _license_customer_id = _detect_pro_tier()
+    from tether.contributor_auth import load_or_create_credentials
+    credentials = load_or_create_credentials()
     receipt = curate_consent.save(
         tier=tier,
-        contributor_id=license_customer_id,  # None → anonymous derive for Free
+        # Public proof-of-possession identity; the private key is kept only in
+        # the separate owner-only credential file.
+        contributor_id=credentials.contributor_id,
     )
     console.print(messaging.opt_in_success(
         tier=receipt.tier, contributor_id=receipt.contributor_id,
@@ -232,42 +238,23 @@ def _cmd_revoke(*, yes: bool) -> None:
             console.print("[dim]Revoke cancelled.[/dim]")
             return
 
-    # Local: remove the receipt now.
+    from tether.contributor_auth import load_or_create_credentials
+    # Retain both identities before deleting the only local historical receipt.
+    # A pre-Auth-v1 receipt can name uploads that the new ctr_* key cannot.
+    historical_id = receipt.contributor_id
+    authenticated_id = load_or_create_credentials().contributor_id
     curate_consent.revoke()
-
-    # Server-side cascade: POST to /v1/revoke/cascade.
-    contributor_id = receipt.contributor_id
-    logger.info("curate revoke requested for contributor_id=%s", contributor_id)
-    server_request_id = None
-    try:
-        import httpx
-        from tether.curate.uploader import _worker_url, HTTP_TIMEOUT_S
-        r = httpx.post(
-            f"{_worker_url()}/v1/revoke/cascade",
-            json={"contributor_id": contributor_id, "scope": "all"},
-            timeout=HTTP_TIMEOUT_S,
+    logger.info(
+        "curate local revoke completed authenticated_id=%s historical_id=%s",
+        authenticated_id,
+        historical_id,
+    )
+    console.print(
+        messaging.revoke_local_handoff(
+            authenticated_id=authenticated_id,
+            historical_id=historical_id,
         )
-        if r.status_code == 200:
-            server_request_id = r.json().get("request_id")
-        else:
-            logger.warning(
-                "revoke cascade returned status=%d body=%s", r.status_code, r.text[:200],
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("revoke cascade POST failed: %s", exc)
-
-    console.print(messaging.revoke_success(contributor_id=contributor_id))
-    if server_request_id:
-        console.print(f"[dim]Server-side cascade request_id: {server_request_id}[/dim]")
-        console.print(
-            f"[dim]Track progress: [cyan]tether contribute --revoke-status {server_request_id}[/cyan][/dim]"
-        )
-    else:
-        console.print(
-            "[yellow]⚠[/yellow]  Could not reach the contribution worker — local "
-            "receipt was still removed. To trigger server-side cascade manually, "
-            "email [cyan]privacy@fastcrest.com[/cyan] with your contributor_id above."
-        )
+    )
 
 
 def _cmd_status() -> None:
@@ -280,12 +267,14 @@ def _cmd_status() -> None:
         return
 
     receipt = curate_consent.load()
+    from tether.contributor_auth import load_or_create_credentials
+    authenticated_id = load_or_create_credentials().contributor_id
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold")
     table.add_column()
     table.add_row("Status:", "[green]✓ opted in[/green]")
     table.add_row("Tier:", receipt.tier)
-    table.add_row("contributor_id:", f"[dim]{receipt.contributor_id}[/dim]")
+    table.add_row("contributor_id:", f"[dim]{authenticated_id}[/dim]")
     table.add_row("Opted in at:", receipt.opted_in_at)
     table.add_row("Privacy mode:", receipt.privacy_mode)
     table.add_row("Terms version:", receipt.accepted_terms_version)
@@ -297,7 +286,7 @@ def _cmd_status() -> None:
     console.print()
 
     # Live contribution stats from the worker.
-    stats = _fetch_live_stats(receipt.contributor_id)
+    stats = _fetch_live_stats(authenticated_id)
     if stats is None:
         console.print(
             "[dim]Could not reach the contribution worker — live counts "
@@ -334,20 +323,18 @@ def _cmd_status() -> None:
 
 
 def _fetch_live_stats(contributor_id: str) -> dict | None:
-    """GET /v1/contributors/<id>/stats. Returns None on connection error,
-    {error: 'not_found'} on 404, or the worker's response dict on 200."""
+    """Read owner stats with the local Contributor Auth v1 principal."""
+    del contributor_id  # legacy consent ID is never trusted as an auth principal
+    from tether.contributor_auth import ContributorAuthClient, ContributorAuthError
+    from tether.curate.uploader import _worker_url, HTTP_TIMEOUT_S
     try:
-        import httpx
-        from tether.curate.uploader import _worker_url, HTTP_TIMEOUT_S
-        r = httpx.get(
-            f"{_worker_url()}/v1/contributors/{contributor_id}/stats",
-            timeout=HTTP_TIMEOUT_S,
-        )
-        if r.status_code == 404:
+        client = ContributorAuthClient(_worker_url(), timeout=HTTP_TIMEOUT_S)
+        return client.stats()
+    except ContributorAuthError as exc:
+        if exc.status == 404:
             return {"error": "not_found"}
-        if r.status_code != 200:
-            return None
-        return r.json()
+        logger.debug("fetch live stats failed: %s", exc)
+        return None
     except Exception as exc:  # noqa: BLE001
         logger.debug("fetch live stats failed: %s", exc)
         return None
@@ -355,7 +342,6 @@ def _fetch_live_stats(contributor_id: str) -> dict | None:
 
 def _cmd_inspect() -> None:
     """List files in ~/.tether/contribute/queue/ + sibling subdirs."""
-    from collections import defaultdict
     from tether.curate.uploader import (
         DEFAULT_QUEUE_DIR,
         DEFAULT_REJECTED_DIR,
@@ -446,29 +432,26 @@ def _cmd_purge(*, target: str, yes: bool) -> None:
 
 def _cmd_revoke_status(*, request_id: str) -> None:
     """Fetch cascade status from the contribution worker and render."""
+    from tether.contributor_auth import ContributorAuthClient, ContributorAuthError
+    from tether.curate.uploader import HTTP_TIMEOUT_S, _worker_url
     try:
-        import httpx
-        from tether.curate.uploader import HTTP_TIMEOUT_S, _worker_url
-        r = httpx.get(
-            f"{_worker_url()}/v1/revoke/cascade-status/{request_id}",
-            timeout=HTTP_TIMEOUT_S,
-        )
+        data = ContributorAuthClient(
+            _worker_url(), timeout=HTTP_TIMEOUT_S,
+        ).revoke_status(request_id)
+    except ContributorAuthError as exc:
+        if exc.status == 404:
+            console.print(
+                f"[red]Request not found:[/red] [cyan]{request_id}[/cyan]\n"
+                "[dim]Either the request_id is wrong, or it predates the "
+                "cascade-status endpoint deploy. Email privacy@fastcrest.com "
+                "if you need help.[/dim]"
+            )
+        else:
+            console.print(f"[red]Worker returned status={exc.status}:[/red] {exc.body}")
+        raise typer.Exit(2)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Failed to reach worker:[/red] {exc}")
         raise typer.Exit(2)
-
-    if r.status_code == 404:
-        console.print(
-            f"[red]Request not found:[/red] [cyan]{request_id}[/cyan]\n"
-            f"[dim]Either the request_id is wrong, or it predates the cascade-status "
-            f"endpoint deploy. Email privacy@fastcrest.com if you need help.[/dim]"
-        )
-        raise typer.Exit(2)
-    if r.status_code != 200:
-        console.print(f"[red]Worker returned status={r.status_code}:[/red] {r.text[:300]}")
-        raise typer.Exit(2)
-
-    data = r.json()
     overall = data.get("overall_status", "unknown")
     overall_color = "green" if overall == "completed" else "yellow"
     console.print(
