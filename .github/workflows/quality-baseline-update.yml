@@ -1,0 +1,399 @@
+name: Quality ratchet protected policy update
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: Pull request containing the reviewed gate or tool-policy update
+        required: true
+        type: number
+      reason:
+        description: Why this protected authorization change is required
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-candidate:
+    name: validate candidate without authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      base_sha: ${{ steps.candidate.outputs.base_sha }}
+      candidate_sha: ${{ steps.candidate.outputs.sha }}
+      validation_name: ${{ steps.candidate.outputs.validation_name }}
+
+    steps:
+      - name: Check out protected main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up uncached Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned validation tools without cache
+        run: >-
+          python -m pip install --no-cache-dir
+          "pytest==8.4.2" "ruff==0.15.10" "mypy==1.20.1"
+
+      - name: Resolve the exact candidate
+        id: candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pull_request_number }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          PR_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          jq -e '.state == "open" and .base.ref == "main"' \
+            <<< "$PR_JSON" >/dev/null
+          CANDIDATE_SHA=$(jq -r '.head.sha' <<< "$PR_JSON")
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/policy-candidate"
+          git cat-file -e "${CANDIDATE_SHA}^{commit}"
+          VALIDATION_NAME="quality-policy-validation-${CANDIDATE_SHA}-${GITHUB_RUN_ID}"
+          echo "base_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          echo "validation_name=$VALIDATION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Compare candidate under protected policy
+        run: >-
+          python -I scripts/ci_quality_ratchet.py
+          --repo .
+          --base-sha "$GITHUB_SHA"
+          --head-sha "${{ steps.candidate.outputs.sha }}"
+          --report "$RUNNER_TEMP/quality-policy-ratchet.json"
+          --authorization-approved
+
+      - name: Parse proposed policy and statically validate candidate judge
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/quality-policy-candidate"
+          CANDIDATE_POLICY="$RUNNER_TEMP/candidate-pyproject.toml"
+          git show \
+            "${{ steps.candidate.outputs.sha }}:pyproject.toml" > "$CANDIDATE_POLICY"
+          python -I scripts/ci_quality_ratchet.py \
+            --validate-policy-syntax "$CANDIDATE_POLICY"
+          git worktree add --detach "$CANDIDATE_DIR" "${{ steps.candidate.outputs.sha }}"
+          trap 'git worktree remove --force "$CANDIDATE_DIR"' EXIT
+          PROTECTED_POLICY="$CANDIDATE_DIR/.protected-base-pyproject.toml"
+          rm -f -- "$CANDIDATE_DIR/pyproject.toml"
+          git show "$GITHUB_SHA:pyproject.toml" > "$PROTECTED_POLICY"
+          python -I -m ruff check \
+            --config="$PROTECTED_POLICY" \
+            "$CANDIDATE_DIR/scripts/ci_quality_ratchet.py" \
+            "$CANDIDATE_DIR/tests/test_ci_quality_ratchet.py"
+          python -I -m ruff format \
+            --config="$PROTECTED_POLICY" --check \
+            "$CANDIDATE_DIR/scripts/ci_quality_ratchet.py" \
+            "$CANDIDATE_DIR/tests/test_ci_quality_ratchet.py"
+          python -I -m mypy \
+            --config-file="$PROTECTED_POLICY" \
+            "$CANDIDATE_DIR/scripts/ci_quality_ratchet.py"
+
+      - name: Build protected pre-execution validation evidence
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/quality-policy-ratchet.json"
+          jq -e '
+            .passed == true
+            and (.new_findings | length) == 0
+            and (.authorization_input_changes | length) > 0
+          ' "$REPORT" >/dev/null
+          JUDGE_DIGEST=$(sha256sum scripts/ci_quality_ratchet.py | cut -d' ' -f1)
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_sha "$GITHUB_SHA" \
+            --arg candidate_sha "$CANDIDATE_SHA" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg judge_sha256 "$JUDGE_DIGEST" \
+            --slurpfile ratchet "$REPORT" \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              base_sha: $base_sha,
+              candidate_sha: $candidate_sha,
+              run_id: $run_id,
+              protected_judge_sha256: $judge_sha256,
+              ratchet_passed: $ratchet[0].passed,
+              new_findings_count: ($ratchet[0].new_findings | length),
+              authorization_input_changes: $ratchet[0].authorization_input_changes
+            }' > "$RUNNER_TEMP/quality-policy-validation.json"
+
+      - name: Upload immutable validation evidence before candidate execution
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.candidate.outputs.validation_name }}
+          path: ${{ runner.temp }}/quality-policy-validation.json
+          if-no-files-found: error
+          retention-days: 30
+
+  exercise-candidate:
+    name: exercise candidate only after evidence is sealed
+    needs: validate-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out protected main without credentials
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up uncached Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned candidate-test tools without cache
+        run: >-
+          python -m pip install --no-cache-dir
+          "pytest==8.4.2" "ruff==0.15.10" "mypy==1.20.1"
+
+      - name: Resolve the already sealed candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ needs.validate-candidate.outputs.candidate_sha }}
+          PR_NUMBER: ${{ inputs.pull_request_number }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/untrusted-candidate"
+          [[ "$(git rev-parse refs/remotes/pull/untrusted-candidate)" == "$CANDIDATE_SHA" ]]
+
+      - name: Load candidate policy and run candidate tests without authority
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ needs.validate-candidate.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/unprivileged-candidate-tests"
+          git worktree add --detach "$CANDIDATE_DIR" "$CANDIDATE_SHA"
+          trap 'cd "$GITHUB_WORKSPACE"; git worktree remove --force "$CANDIDATE_DIR"' EXIT
+          cd "$CANDIDATE_DIR"
+          python -I -m ruff check \
+            --config=pyproject.toml \
+            --show-settings scripts/ci_quality_ratchet.py >/dev/null
+          python -I -m mypy \
+            --config-file=pyproject.toml \
+            --no-error-summary -c 'pass' >/dev/null
+          rm -f -- "$CANDIDATE_DIR/pyproject.toml"
+          cp "$GITHUB_WORKSPACE/pyproject.toml" "$CANDIDATE_DIR/pyproject.toml"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. \
+            python -m pytest -q tests/test_ci_quality_ratchet.py
+
+  authorize-policy-update:
+    name: authorize exact validated SHA
+    needs: [validate-candidate, exercise-candidate]
+    if: >-
+      needs.validate-candidate.result == 'success'
+      && needs.exercise-candidate.result == 'success'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: quality-ratchet-policy
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      statuses: write
+
+    steps:
+      - name: Check out protected main only
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify environment, candidate, and validation artifact
+        id: validation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pull_request_number }}
+          EXPECTED_SHA: ${{ needs.validate-candidate.outputs.candidate_sha }}
+          EXPECTED_BASE: ${{ needs.validate-candidate.outputs.base_sha }}
+          EXPECTED_NAME: ${{ needs.validate-candidate.outputs.validation_name }}
+        run: |
+          set -euo pipefail
+          ENVIRONMENT="$RUNNER_TEMP/policy-environment.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/environments/quality-ratchet-policy" \
+            > "$ENVIRONMENT"
+          python -I scripts/ci_quality_ratchet.py \
+            --verify-policy-environment "$ENVIRONMENT"
+
+          PR_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          CANDIDATE_SHA=$(jq -r '.head.sha' <<< "$PR_JSON")
+          jq -e '.state == "open" and .base.ref == "main"' \
+            <<< "$PR_JSON" >/dev/null
+          [[ "$CANDIDATE_SHA" == "$EXPECTED_SHA" ]]
+          [[ "$GITHUB_SHA" == "$EXPECTED_BASE" ]]
+          EXPECTED_ARTIFACT="quality-policy-validation-${CANDIDATE_SHA}-${GITHUB_RUN_ID}"
+          [[ "$EXPECTED_NAME" == "$EXPECTED_ARTIFACT" ]]
+
+          ARTIFACTS=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts")
+          MATCH_COUNT=$(jq --arg name "$EXPECTED_ARTIFACT" \
+            '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
+            <<< "$ARTIFACTS")
+          [[ "$MATCH_COUNT" == "1" ]]
+          ARTIFACT_ID=$(jq -r --arg name "$EXPECTED_ARTIFACT" \
+            '.artifacts[] | select(.name == $name and .expired == false) | .id' \
+            <<< "$ARTIFACTS")
+          ARTIFACT_DIGEST=$(jq -r --arg name "$EXPECTED_ARTIFACT" \
+            '.artifacts[] | select(.name == $name and .expired == false) | .digest' \
+            <<< "$ARTIFACTS")
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "artifact_id=$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Download immutable validation evidence
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.validation.outputs.artifact_id }}
+          path: ${{ runner.temp }}/validation-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+
+      - name: Verify validation evidence without loading candidate content
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.validation.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/validation-evidence/quality-policy-validation.json"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_sha "$GITHUB_SHA" \
+            --arg candidate_sha "$CANDIDATE_SHA" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            '
+              (keys | sort) == ([
+                "authorization_input_changes", "base_sha", "candidate_sha",
+                "new_findings_count", "protected_judge_sha256", "ratchet_passed",
+                "repository", "run_id", "schema_version"
+              ] | sort)
+              and .schema_version == 1
+              and .repository == $repository
+              and .base_sha == $base_sha
+              and .candidate_sha == $candidate_sha
+              and .run_id == $run_id
+              and (.protected_judge_sha256 | test("^[0-9a-f]{64}$"))
+              and .ratchet_passed == true
+              and .new_findings_count == 0
+              and (.authorization_input_changes | length) > 0
+            ' "$EVIDENCE" >/dev/null
+
+      - name: Reconfirm current protected tip immediately before approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.validation.outputs.candidate_sha }}
+          EXPECTED_BASE: ${{ needs.validate-candidate.outputs.base_sha }}
+          PR_NUMBER: ${{ inputs.pull_request_number }}
+        run: |
+          set -euo pipefail
+          MAIN_REF="$RUNNER_TEMP/current-main-ref.json"
+          PULL_REQUEST="$RUNNER_TEMP/current-pull-request.json"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" > "$MAIN_REF"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$PULL_REQUEST"
+          python -I scripts/ci_quality_ratchet.py \
+            --verify-main-ref-response "$MAIN_REF" \
+            --verify-pull-request-response "$PULL_REQUEST" \
+            --expected-current-main-sha "$EXPECTED_BASE" \
+            --expected-current-head-sha "$CANDIDATE_SHA"
+
+      - name: Build immutable approval evidence
+        id: approval
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.validation.outputs.candidate_sha }}
+          VALIDATION_ID: ${{ steps.validation.outputs.artifact_id }}
+          VALIDATION_DIGEST: ${{ steps.validation.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          APPROVAL_NAME="quality-policy-approval-${CANDIDATE_SHA}-${GITHUB_RUN_ID}"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_sha "$GITHUB_SHA" \
+            --arg candidate_sha "$CANDIDATE_SHA" \
+            --arg workflow_path '.github/workflows/quality-baseline-update.yml' \
+            --arg validation_digest "$VALIDATION_DIGEST" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson validation_id "$VALIDATION_ID" \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              base_sha: $base_sha,
+              candidate_sha: $candidate_sha,
+              run_id: $run_id,
+              workflow_path: $workflow_path,
+              validation_artifact_id: $validation_id,
+              validation_artifact_digest: $validation_digest
+            }' > "$RUNNER_TEMP/quality-policy-approval.json"
+          echo "name=$APPROVAL_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable approval evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.approval.outputs.name }}
+          path: ${{ runner.temp }}/quality-policy-approval.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Reconfirm current protected tip immediately before status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.validation.outputs.candidate_sha }}
+          EXPECTED_BASE: ${{ needs.validate-candidate.outputs.base_sha }}
+          PR_NUMBER: ${{ inputs.pull_request_number }}
+        run: |
+          set -euo pipefail
+          MAIN_REF="$RUNNER_TEMP/final-main-ref.json"
+          PULL_REQUEST="$RUNNER_TEMP/final-pull-request.json"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" > "$MAIN_REF"
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$PULL_REQUEST"
+          python -I scripts/ci_quality_ratchet.py \
+            --verify-main-ref-response "$MAIN_REF" \
+            --verify-pull-request-response "$PULL_REQUEST" \
+            --expected-current-main-sha "$EXPECTED_BASE" \
+            --expected-current-head-sha "$CANDIDATE_SHA"
+
+      - name: Authorize the exact evidence-bound commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.validation.outputs.candidate_sha }}
+        run: |
+          DESCRIPTION="sha:${CANDIDATE_SHA:0:12} run:${GITHUB_RUN_ID}"
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            -f state=success \
+            -f context='quality-ratchet/policy-approved' \
+            -f description="$DESCRIPTION" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
