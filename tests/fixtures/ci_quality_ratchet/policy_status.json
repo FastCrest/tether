@@ -1,0 +1,12 @@
+{
+  "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "statuses": [
+    {
+      "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+      "context": "quality-ratchet/policy-approved",
+      "description": "sha:aaaaaaaaaaaa run:33163572947",
+      "state": "success",
+      "target_url": "https://github.com/FastCrest/tether/actions/runs/33163572947"
+    }
+  ]
+}

@@ -26,6 +26,9 @@ from scripts.ci_quality_ratchet import (
     verify_current_main_binding,
     verify_policy_environment,
     verify_policy_approval_evidence,
+    verify_policy_artifacts_response,
+    verify_policy_run_response,
+    verify_policy_status_response,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ci_quality_ratchet"
@@ -134,13 +137,18 @@ def test_workflows_separate_ordinary_and_protected_policy_changes() -> None:
     workflows = Path(__file__).parents[1] / ".github" / "workflows"
     ordinary = (workflows / "quality-ratchet.yml").read_text()
     protected = (workflows / "quality-baseline-update.yml").read_text()
+    judge = (Path(__file__).parents[1] / "scripts" / "ci_quality_ratchet.py").read_text()
     assert 'PROTECTED_POLICY="$PROTECTED_POLICY_DIR/pyproject.toml"' in protected
     assert ".protected-base-pyproject.toml" not in protected
     assert "merge-multiple: true" in protected
 
     assert "pull_request_target:" in ordinary
     assert "${BASE_SHA}:scripts/ci_quality_ratchet.py" in ordinary
-    assert "quality-ratchet/policy-approved" in ordinary
+    assert "quality-ratchet/policy-approved" in judge
+    assert "--verify-policy-status-response" in ordinary
+    assert "--verify-policy-run-response" in ordinary
+    assert "--verify-policy-artifacts-response" in ordinary
+    assert '.creator.login == "github-actions[bot]"' not in ordinary
     assert "quality-policy-approval-${HEAD_SHA}-${RUN_ID}" in ordinary
     assert '--expected-candidate-sha "$HEAD_SHA"' in ordinary
     assert '--expected-base-sha "$BASE_SHA"' in ordinary
@@ -185,6 +193,99 @@ def test_workflows_separate_ordinary_and_protected_policy_changes() -> None:
     assert protected.index(
         "Reconfirm current protected tip immediately before status"
     ) < protected.index("Authorize the exact evidence-bound commit")
+
+
+def test_policy_status_prefilter_accepts_live_shape_and_rejects_spoofs() -> None:
+    candidate = "a" * 40
+    value = json.loads((FIXTURES / "policy_status.json").read_text())
+    assert (
+        verify_policy_status_response(
+            value,
+            expected_candidate_sha=candidate,
+            expected_repository="FastCrest/tether",
+        )
+        == 33163572947
+    )
+
+    status = value["statuses"][0]
+    tampered = [
+        {**status, "avatar_url": "https://avatars.githubusercontent.com/u/1?v=4"},
+        {key: item for key, item in status.items() if key != "avatar_url"},
+        {**status, "context": "quality-ratchet/protected"},
+        {**status, "state": "pending"},
+        {**status, "description": "sha:spoofed run:33163572947"},
+        {
+            **status,
+            "target_url": "https://github.com/attacker/fork/actions/runs/33163572947",
+        },
+    ]
+    for invalid_status in tampered:
+        with pytest.raises(RatchetError):
+            verify_policy_status_response(
+                {"sha": candidate, "statuses": [invalid_status]},
+                expected_candidate_sha=candidate,
+                expected_repository="FastCrest/tether",
+            )
+
+    with pytest.raises(RatchetError):
+        verify_policy_status_response(
+            {"sha": "b" * 40, "statuses": value["statuses"]},
+            expected_candidate_sha=candidate,
+            expected_repository="FastCrest/tether",
+        )
+
+
+def test_same_actions_identity_needs_exact_run_and_artifact_chain() -> None:
+    candidate = "a" * 40
+    base = "b" * 40
+    status = json.loads((FIXTURES / "policy_status.json").read_text())
+    run_id = verify_policy_status_response(
+        status,
+        expected_candidate_sha=candidate,
+        expected_repository="FastCrest/tether",
+    )
+    run = json.loads((FIXTURES / "policy_run.json").read_text())
+    verify_policy_run_response(
+        run,
+        expected_base_sha=base,
+        expected_run_id=run_id,
+        expected_repository="FastCrest/tether",
+    )
+    artifact_name = f"quality-policy-approval-{candidate}-{run_id}"
+    artifacts = json.loads((FIXTURES / "policy_artifacts.json").read_text())
+    assert verify_policy_artifacts_response(artifacts, expected_name=artifact_name) == 9682669486
+
+    run_tampering = [
+        {**run, "id": run_id + 1},
+        {**run, "head_sha": "c" * 40},
+        {**run, "event": "push"},
+        {**run, "head_branch": "feature"},
+        {**run, "path": ".github/workflows/unrelated.yml"},
+        {**run, "conclusion": "failure"},
+        {**run, "repository": {"full_name": "attacker/fork"}},
+    ]
+    for invalid_run in run_tampering:
+        with pytest.raises(RatchetError):
+            verify_policy_run_response(
+                invalid_run,
+                expected_base_sha=base,
+                expected_run_id=run_id,
+                expected_repository="FastCrest/tether",
+            )
+
+    artifact = artifacts["artifacts"][0]
+    artifact_tampering = [
+        {**artifact, "name": "quality-policy-approval-spoofed"},
+        {**artifact, "expired": True},
+        {**artifact, "id": 0},
+        {**artifact, "digest": "sha256:short"},
+    ]
+    for invalid_artifact in artifact_tampering:
+        with pytest.raises(RatchetError):
+            verify_policy_artifacts_response(
+                {"artifacts": [invalid_artifact]},
+                expected_name=artifact_name,
+            )
 
 
 def test_policy_approval_evidence_is_bound_to_exact_sha_base_and_run() -> None:
