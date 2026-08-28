@@ -44,6 +44,10 @@ _APPROVAL_EVIDENCE_FIELDS = frozenset(
 )
 _SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_ACTIONS_APP_AVATAR = re.compile(r"^https://avatars\.githubusercontent\.com/in/15368(?:\?.*)?$")
+_ACTIONS_RUN_URL = re.compile(
+    r"^https://github\.com/(?P<repository>[^/]+/[^/]+)/actions/runs/(?P<run_id>[1-9][0-9]*)$"
+)
 _MYPY_LINE = re.compile(r"^(.*?):(\d+):(\d+):\s+(error|warning|note):\s+(.*?)(?:\s+\[([^\]]+)\])?$")
 _RUFF_FORMAT_LINE = re.compile(r"^Would reformat:\s+(.+?)\s*$")
 _DIFF_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -155,6 +159,102 @@ def verify_policy_approval_evidence(
     digest = value["validation_artifact_digest"]
     if not isinstance(digest, str) or not _SHA256_DIGEST.fullmatch(digest):
         raise RatchetError("policy approval validation artifact digest is invalid")
+
+
+def verify_policy_status_response(
+    value: object,
+    *,
+    expected_candidate_sha: str,
+    expected_repository: str,
+) -> int:
+    """Return the run id from one coarse, server-attributed approval candidate.
+
+    The Actions App avatar is only a defense-in-depth prefilter: every workflow
+    in the repository uses that global App identity. Authorization comes from
+    the separately fetched protected-main run and its immutable evidence.
+    """
+    if not _COMMIT_SHA.fullmatch(expected_candidate_sha):
+        raise RatchetError("expected policy candidate SHA is invalid")
+    if not isinstance(value, dict) or value.get("sha") != expected_candidate_sha:
+        raise RatchetError("policy status response does not match candidate SHA")
+    statuses = value.get("statuses")
+    if not isinstance(statuses, list):
+        raise RatchetError("policy status response is missing statuses")
+
+    candidates: list[tuple[dict[str, object], re.Match[str]]] = []
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
+        avatar = status.get("avatar_url")
+        target = status.get("target_url")
+        match = _ACTIONS_RUN_URL.fullmatch(target) if isinstance(target, str) else None
+        if (
+            status.get("context") == "quality-ratchet/policy-approved"
+            and status.get("state") == "success"
+            and isinstance(avatar, str)
+            and _ACTIONS_APP_AVATAR.fullmatch(avatar)
+            and match is not None
+            and match.group("repository") == expected_repository
+        ):
+            candidates.append((status, match))
+    if len(candidates) != 1:
+        raise RatchetError("expected exactly one Actions-attributed policy status")
+
+    status, match = candidates[0]
+    run_id = int(match.group("run_id"))
+    expected_description = f"sha:{expected_candidate_sha[:12]} run:{run_id}"
+    if status.get("description") != expected_description:
+        raise RatchetError("policy status description does not bind candidate and run")
+    return run_id
+
+
+def verify_policy_run_response(
+    value: object,
+    *,
+    expected_base_sha: str,
+    expected_run_id: int,
+    expected_repository: str,
+) -> None:
+    """Verify that a status target is the successful protected-main workflow."""
+    if not isinstance(value, dict):
+        raise RatchetError("policy run response is not an object")
+    repository = value.get("repository")
+    checks = (
+        value.get("id") == expected_run_id
+        and not isinstance(value.get("id"), bool)
+        and value.get("event") == "workflow_dispatch"
+        and value.get("head_branch") == "main"
+        and value.get("head_sha") == expected_base_sha
+        and value.get("conclusion") == "success"
+        and value.get("path") == POLICY_WORKFLOW_PATH
+        and isinstance(repository, dict)
+        and repository.get("full_name") == expected_repository
+    )
+    if not checks:
+        raise RatchetError("policy run is not the exact successful protected workflow")
+
+
+def verify_policy_artifacts_response(value: object, *, expected_name: str) -> int:
+    """Return the id of one exact, unexpired, digest-addressed approval artifact."""
+    if not isinstance(value, dict) or not isinstance(value.get("artifacts"), list):
+        raise RatchetError("policy artifact response is invalid")
+    matches = [
+        artifact
+        for artifact in value["artifacts"]
+        if isinstance(artifact, dict)
+        and artifact.get("name") == expected_name
+        and artifact.get("expired") is False
+    ]
+    if len(matches) != 1:
+        raise RatchetError("expected exactly one unexpired policy approval artifact")
+    artifact = matches[0]
+    artifact_id = artifact.get("id")
+    digest = artifact.get("digest")
+    if isinstance(artifact_id, bool) or not isinstance(artifact_id, int) or artifact_id <= 0:
+        raise RatchetError("policy approval artifact id is invalid")
+    if not isinstance(digest, str) or not _SHA256_DIGEST.fullmatch(digest):
+        raise RatchetError("policy approval artifact digest is invalid")
+    return artifact_id
 
 
 def verify_current_main_binding(
@@ -740,6 +840,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Accept gate/policy changes approved by the protected manual workflow.",
     )
     parser.add_argument("--verify-approval-evidence", type=Path)
+    parser.add_argument("--verify-policy-status-response", type=Path)
+    parser.add_argument("--verify-policy-run-response", type=Path)
+    parser.add_argument("--verify-policy-artifacts-response", type=Path)
     parser.add_argument("--validate-policy-syntax", type=Path)
     parser.add_argument("--verify-main-ref-response", type=Path)
     parser.add_argument("--verify-policy-environment", type=Path)
@@ -750,6 +853,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-base-sha")
     parser.add_argument("--expected-run-id", type=int)
     parser.add_argument("--expected-repository")
+    parser.add_argument("--expected-artifact-name")
     return parser
 
 
@@ -758,6 +862,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.verify_policy_status_response is not None:
+            status_expected = (args.expected_candidate_sha, args.expected_repository)
+            if any(value is None for value in status_expected):
+                parser.error("policy status verification requires candidate and repository")
+            try:
+                status_value = json.loads(args.verify_policy_status_response.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RatchetError(f"policy status API evidence is unreadable: {exc}") from exc
+            run_id = verify_policy_status_response(
+                status_value,
+                expected_candidate_sha=args.expected_candidate_sha,
+                expected_repository=args.expected_repository,
+            )
+            print(run_id)
+            return 0
+        if args.verify_policy_run_response is not None:
+            run_expected = (args.expected_base_sha, args.expected_run_id, args.expected_repository)
+            if any(value is None for value in run_expected):
+                parser.error("policy run verification requires base, run, and repository")
+            try:
+                run_value = json.loads(args.verify_policy_run_response.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RatchetError(f"policy run API evidence is unreadable: {exc}") from exc
+            verify_policy_run_response(
+                run_value,
+                expected_base_sha=args.expected_base_sha,
+                expected_run_id=args.expected_run_id,
+                expected_repository=args.expected_repository,
+            )
+            print("policy approval run verified")
+            return 0
+        if args.verify_policy_artifacts_response is not None:
+            if args.expected_artifact_name is None:
+                parser.error("policy artifact verification requires --expected-artifact-name")
+            try:
+                artifacts_value = json.loads(args.verify_policy_artifacts_response.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RatchetError(f"policy artifact API evidence is unreadable: {exc}") from exc
+            artifact_id = verify_policy_artifacts_response(
+                artifacts_value,
+                expected_name=args.expected_artifact_name,
+            )
+            print(artifact_id)
+            return 0
         if args.verify_policy_environment is not None:
             try:
                 environment_value = json.loads(args.verify_policy_environment.read_text())
@@ -795,13 +943,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("candidate Ruff/mypy policy parsed without executing plugins")
             return 0
         if args.verify_approval_evidence is not None:
-            expected = (
+            approval_expected = (
                 args.expected_candidate_sha,
                 args.expected_base_sha,
                 args.expected_run_id,
                 args.expected_repository,
             )
-            if any(value is None for value in expected):
+            if any(value is None for value in approval_expected):
                 parser.error("approval evidence verification requires every --expected-* value")
             try:
                 evidence = json.loads(args.verify_approval_evidence.read_text())

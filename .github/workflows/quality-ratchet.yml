@@ -123,63 +123,43 @@ jobs:
             exit 0
           fi
 
-          STATUS_JSON=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/status")
-          STATUS_ENTRY=$(jq -c '
-            [.statuses[]
-             | select(.context == "quality-ratchet/policy-approved")
-             | select(.state == "success")
-             | select(.creator.login == "github-actions[bot]")]
-            | first // {}
-          ' <<< "$STATUS_JSON")
-          TARGET_URL=$(jq -r '
-            .target_url // ""
-          ' <<< "$STATUS_ENTRY")
-          if [[ ! "$TARGET_URL" =~ /actions/runs/([0-9]+)$ ]]; then
+          STATUS_FILE="$RUNNER_TEMP/policy-status.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/status" > "$STATUS_FILE"
+          # The global Actions App identity is only a coarse prefilter. The
+          # protected-main run and immutable artifact below grant authorization.
+          if ! RUN_ID=$(python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-policy-status-response "$STATUS_FILE" \
+            --expected-candidate-sha "$HEAD_SHA" \
+            --expected-repository "$GITHUB_REPOSITORY"); then
             echo "push_approved=false" >> "$GITHUB_OUTPUT"
             echo "candidate=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          RUN_ID="${BASH_REMATCH[1]}"
-          EXPECTED_DESCRIPTION="sha:${HEAD_SHA:0:12} run:${RUN_ID}"
-          [[ "$(jq -r '.description // ""' <<< "$STATUS_ENTRY")" == "$EXPECTED_DESCRIPTION" ]] || {
-            echo "push_approved=false" >> "$GITHUB_OUTPUT"
-            echo "candidate=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          }
-          RUN_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")
-          if ! jq -e --arg base_sha "$BASE_SHA" '
-            .event == "workflow_dispatch"
-            and .head_branch == "main"
-            and .head_sha == $base_sha
-            and .conclusion == "success"
-            and .path == ".github/workflows/quality-baseline-update.yml"
-          ' <<< "$RUN_JSON" >/dev/null; then
+          RUN_FILE="$RUNNER_TEMP/policy-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > "$RUN_FILE"
+          if ! python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-policy-run-response "$RUN_FILE" \
+            --expected-base-sha "$BASE_SHA" \
+            --expected-run-id "$RUN_ID" \
+            --expected-repository "$GITHUB_REPOSITORY"; then
             echo "push_approved=false" >> "$GITHUB_OUTPUT"
             echo "candidate=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           APPROVAL_NAME="quality-policy-approval-${HEAD_SHA}-${RUN_ID}"
-          ARTIFACTS=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts")
-          MATCH_COUNT=$(jq --arg name "$APPROVAL_NAME" \
-            '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
-            <<< "$ARTIFACTS")
-          [[ "$MATCH_COUNT" == "1" ]] || {
+          ARTIFACTS_FILE="$RUNNER_TEMP/policy-artifacts.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            > "$ARTIFACTS_FILE"
+          if ! ARTIFACT_ID=$(python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-policy-artifacts-response "$ARTIFACTS_FILE" \
+            --expected-artifact-name "$APPROVAL_NAME"); then
             echo "push_approved=false" >> "$GITHUB_OUTPUT"
             echo "candidate=false" >> "$GITHUB_OUTPUT"
             exit 0
-          }
-          ARTIFACT_ID=$(jq -r --arg name "$APPROVAL_NAME" \
-            '.artifacts[] | select(.name == $name and .expired == false) | .id' \
-            <<< "$ARTIFACTS")
-          ARTIFACT_DIGEST=$(jq -r --arg name "$APPROVAL_NAME" \
-            '.artifacts[] | select(.name == $name and .expired == false) | .digest' \
-            <<< "$ARTIFACTS")
-          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          fi
           echo "push_approved=false" >> "$GITHUB_OUTPUT"
           echo "candidate=true" >> "$GITHUB_OUTPUT"
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
