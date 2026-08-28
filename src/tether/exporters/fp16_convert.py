@@ -115,6 +115,38 @@ def parity_gate(
     }
 
 
+def _remove_stale_external_data(dst: Path) -> list[Path]:
+    """Delete external-data leftovers from a PRIOR conversion of *this* model.
+
+    ``onnx.save`` writes the FP16 weights to ``{dst.stem}.bin`` next to ``dst``.
+    A leftover ``.bin``/``.data`` from an earlier run at the same path would sit
+    alongside the new one and inflate our size accounting, so we clear it first.
+
+    Scope is an exact allowlist of names written by current and legacy saves:
+    ``{dst.stem}.bin``, ``{dst.stem}.data``, and ``{dst.name}.data``. The
+    previous implementation globbed external-data files and could destroy
+    another model's weights in a shared export directory. ``dst`` itself (the
+    ``.onnx``) is never touched.
+
+    Returns the list of paths actually removed (for logging / tests).
+    """
+    removed: list[Path] = []
+    candidates = (
+        dst.with_suffix(".bin"),
+        dst.with_suffix(".data"),
+        Path(f"{dst}.data"),
+    )
+    for old in candidates:
+        try:
+            old.unlink()
+            removed.append(old)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    return removed
+
+
 def convert_fp32_to_fp16(
     fp32_onnx_path: str | Path,
     fp16_onnx_path: str | Path,
@@ -205,15 +237,10 @@ def convert_fp32_to_fp16(
         )
 
     logger.info("[fp16] Saving %s...", dst)
-    # Remove any leftover external data from a prior run at this path —
-    # onnx.save would otherwise leave both the old and new .bin on disk
-    # and our size accounting would double-count.
-    for pat in ("*.bin", "*.data"):
-        for old in dst.parent.glob(pat):
-            try:
-                old.unlink()
-            except Exception:
-                pass
+    # Clear leftover external data from a prior conversion of THIS model only.
+    # (Scoped to dst.stem — see _remove_stale_external_data; a blanket
+    # *.bin/*.data sweep would delete other models' weights in a shared dir.)
+    _remove_stale_external_data(dst)
 
     onnx.save(
         model_fp16,
