@@ -12,7 +12,7 @@ This script fires it on Modal A10G against a public LeRobot dataset to
 confirm:
   1. The tether install pulls all the new code (config + run + cli).
   2. _build_lerobot_command produces a valid lerobot-train invocation
-     with --policy.type=act, no --policy.pretrained_path, --policy.chunk_size=N.
+     with --policy.type=act, no pretrained policy path, --policy.chunk_size=N.
   3. lerobot-train accepts the args and starts training.
   4. A checkpoint actually lands at the expected path.
 
@@ -166,7 +166,12 @@ def act_smoke(
     # Sanity check the construction matches Phase 4 expectations:
     cmd_str = " ".join(cmd)
     expected_in_cmd = ["--policy.type=act", "--policy.chunk_size=31"]
-    forbidden_in_cmd = ["--policy.pretrained_path", "--peft.method_type"]
+    forbidden_in_cmd = [
+        "--policy.path",
+        "--policy.pretrained_path",
+        "--policy.pretrained_model_path",
+        "--peft.method_type",
+    ]
     construction_ok = (
         all(s in cmd_str for s in expected_in_cmd)
         and not any(s in cmd_str for s in forbidden_in_cmd)

@@ -124,8 +124,10 @@ class TestLerobotCommandBuild:
         # Schema is pinned to lerobot 0.5.1. If lerobot renames flags
         # upstream, this test catches it.
         joined = " ".join(cmd)
-        assert "--policy.type=smolvla" in joined
-        assert "--policy.pretrained_path=lerobot/smolvla_base" in joined
+        assert cmd.count("--policy.path=lerobot/smolvla_base") == 1
+        assert "--policy.type=" not in joined
+        assert "--policy.pretrained_path=" not in joined
+        assert "--policy.pretrained_model_path=" not in joined
         assert "--policy.repo_id=" in joined
         assert "--policy.push_to_hub=false" in joined
         assert "--dataset.repo_id=lerobot/libero" in joined
@@ -139,6 +141,7 @@ class TestLerobotCommandBuild:
 
     def test_policy_type_inference(self):
         from tether.finetune.run import _infer_policy_type
+
         assert _infer_policy_type("lerobot/smolvla_base") == "smolvla"
         assert _infer_policy_type("lerobot/pi0_base") == "pi0"
         assert _infer_policy_type("lerobot/pi05_base") == "pi05"
@@ -146,8 +149,49 @@ class TestLerobotCommandBuild:
 
     def test_policy_type_unknown_rejected(self):
         from tether.finetune.run import _infer_policy_type
+
         with pytest.raises(ValueError, match="Could not infer"):
             _infer_policy_type("some-random/unknown-model")
+
+    def test_from_scratch_selects_type_without_pretrained_path(self, tmp_path):
+        cfg = FinetuneConfig(
+            base="",
+            dataset="lerobot/pusht",
+            output=tmp_path,
+            mode="full",
+            policy="act",
+            chunk_size=31,
+        )
+
+        cmd = _build_lerobot_command(cfg)
+        joined = " ".join(cmd)
+
+        assert cmd.count("--policy.type=act") == 1
+        assert "--policy.path=" not in joined
+        assert "--policy.pretrained_path=" not in joined
+        assert "--policy.pretrained_model_path=" not in joined
+
+    @pytest.mark.parametrize(
+        "arg_name",
+        [
+            "policy.path",
+            "policy.type",
+            "policy.pretrained_path",
+            "policy.pretrained_model_path",
+        ],
+    )
+    def test_policy_selection_cannot_be_duplicated_by_extra_args(
+        self, tmp_path, arg_name
+    ):
+        cfg = FinetuneConfig(
+            base="lerobot/smolvla_base",
+            dataset="lerobot/libero",
+            output=tmp_path,
+            extra_lerobot_args={arg_name: "other/value"},
+        )
+
+        with pytest.raises(ValueError, match="cannot override policy selection"):
+            _build_lerobot_command(cfg)
 
     def test_extra_args_pass_through(self, tmp_path):
         cfg = FinetuneConfig(

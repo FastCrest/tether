@@ -81,15 +81,11 @@ def _validate_config(cfg: FinetuneConfig) -> list[str]:
 
 
 def _infer_policy_type(base: str) -> str:
-    """Derive lerobot's policy registry name from the base model id.
+    """Derive LeRobot's policy registry name from a model id.
 
-    lerobot 0.5.1 registers policies by short name (smolvla, pi0, pi05,
-    act, diffusion, vqbet, ...) and requires `--policy.type=<name>` at
-    CLI time. The full HF model id (e.g. 'lerobot/smolvla_base') goes
-    to `--policy.pretrained_model_path=...` separately.
-
-    Falls back to raising a clear error for unrecognized bases rather
-    than guessing. Customers can override via extra_lerobot_args={"policy.type": "..."}.
+    This metadata helper is retained for callers that need a short policy
+    name. It is deliberately not used to select a pretrained policy on the
+    LeRobot 0.5.1 CLI: ``--policy.path`` loads the type from the checkpoint.
     """
     base_lower = base.lower()
     if "smolvla" in base_lower:
@@ -102,9 +98,8 @@ def _infer_policy_type(base: str) -> str:
         # lerobot 0.5.1 can't load N1.6 per prior Step-3 finding; v0.6 work.
         return "gr00t_n1_5"
     raise ValueError(
-        f"Could not infer --policy.type from base={base!r}. "
-        f"Supported in v0.3: lerobot/smolvla_base. For other bases, "
-        f"pass policy.type explicitly via extra_lerobot_args."
+        f"Could not infer policy type from base={base!r}. "
+        "Supported identifiers include smolvla, pi0, pi05, and gr00t."
     )
 
 
@@ -121,24 +116,41 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     customers can reproduce manually.
 
     Key arg names per lerobot 0.5.1:
-      --policy.pretrained_model_path   (NOT --policy.path)
+      --policy.path                    (pretrained checkpoint)
+      --policy.type                    (from-scratch policy only)
       --optimizer.lr                   (NOT --policy.optimizer_lr)
       --peft.method_type=lora          (enables PEFT)
       --peft.r                         (LoRA rank)
+
+    LeRobot's parser rejects using ``--policy.path`` and ``--policy.type``
+    together. A pretrained command therefore selects the policy only by
+    checkpoint path; LeRobot loads the policy type from that checkpoint's
+    config. From-scratch commands select the policy only by type.
 
     cfg.precision is intentionally NOT passed through — lerobot 0.5.1
     doesn't expose a top-level precision flag; it's baked into the
     policy config. v0.5 will add per-policy precision overrides.
     """
-    # draccus requires `policy.type` to select which PreTrainedConfig
-    # subclass to decode into. Use explicit cfg.policy when set, else
-    # infer from the base-model id.
     explicit_policy = getattr(cfg, "policy", "auto")
-    if explicit_policy != "auto":
-        policy_type = explicit_policy
-    else:
-        policy_type = _infer_policy_type(cfg.base)
     is_from_scratch = (explicit_policy != "auto" and cfg.mode == "full")
+
+    # These select the policy and must be emitted exactly once by this
+    # builder. In particular, LeRobot 0.5.1 rejects policy.path + policy.type,
+    # while the older pretrained_* spellings are not valid selection flags.
+    reserved_policy_args = {
+        "policy.path",
+        "policy.type",
+        "policy.pretrained_path",
+        "policy.pretrained_model_path",
+    }
+    conflicting_args = reserved_policy_args.intersection(cfg.extra_lerobot_args)
+    if conflicting_args:
+        names = ", ".join(sorted(conflicting_args))
+        raise ValueError(
+            f"extra_lerobot_args cannot override policy selection ({names}); "
+            "use FinetuneConfig.base for pretrained policies or "
+            "FinetuneConfig.policy for from-scratch policies"
+        )
 
     # lerobot-train wants to OWN its output_dir (errors if pre-existing
     # and resume=False). We keep cfg.output as the tether orchestration
@@ -153,7 +165,6 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
 
     cmd = [
         "lerobot-train",
-        f"--policy.type={policy_type}",
         f"--policy.repo_id={repo_id}",
         f"--policy.push_to_hub=false",
         f"--dataset.repo_id={cfg.dataset}",
@@ -163,9 +174,11 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         f"--optimizer.lr={cfg.learning_rate}",
         f"--seed={cfg.seed}",
     ]
-    if not is_from_scratch:
-        # Pretrained-base path: pass the HF id / local checkpoint to load weights from.
-        cmd.append(f"--policy.pretrained_path={cfg.base}")
+    if is_from_scratch:
+        cmd.append(f"--policy.type={explicit_policy}")
+    else:
+        # LeRobot 0.5.1 loads both config and weights through policy.path.
+        cmd.append(f"--policy.path={cfg.base}")
     if is_from_scratch and cfg.chunk_size:
         # ACT (and similar chunked policies) need chunk_size; pretrained bases
         # bake this in. auto_soarm convention (per its train.py): set

@@ -43,10 +43,10 @@ class FinetuneConfig:
 
     policy: str = "auto"
     """Policy class to train.
-      - 'auto' (default): infer from `base` (e.g. lerobot/smolvla_base → smolvla).
+      - 'auto' (default): load policy config + weights from `base`.
       - 'act' / 'diffusion' / 'pi0' / etc.: explicit lerobot policy.type.
-    Used by from-scratch training paths where `base` is empty or a non-pretrained
-    sentinel; lerobot-train requires --policy.type either way.
+    Explicit types are used by from-scratch training paths where `base` is empty.
+    Pretrained paths use LeRobot's --policy.path and must not also pass policy.type.
 
     ACT-from-scratch (vendored from auto_soarm 2026-05-06): set policy='act',
     mode='full', leave base='' (or set to ''). Recipe defaults:
