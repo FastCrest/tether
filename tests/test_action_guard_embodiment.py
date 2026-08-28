@@ -118,8 +118,11 @@ class TestActionGuardFromEmbodiment:
         safe, results = guard.check(chunk)
         # Action 0 unchanged (was mean)
         np.testing.assert_array_equal(safe[0], mean)
-        # Action 1 clamped on joint_0; other dims preserved
-        assert safe[1, 0] == pytest.approx(2.8973)
+        # Action 1 satisfies both the static Franka bound and the 1 rad/step
+        # velocity bound from the action that will actually precede it.
+        assert safe[1, 0] == pytest.approx(1.0)
+        assert any("joint_0 above max" in v for v in results[1].violations)
+        assert any("joint_0 velocity limit" in v for v in results[1].violations)
         np.testing.assert_array_equal(safe[1, 1:], mean[1:])
         # Action 2 unchanged (was mean)
         np.testing.assert_array_equal(safe[2], mean)

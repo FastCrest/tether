@@ -328,10 +328,6 @@ class ActionGuard:
         num_joints = min(len(action), len(self.limits.position_max))
 
         for i in range(num_joints):
-            # Marks where this joint's own violations start. The velocity gate
-            # below reads it instead of scanning the shared cross-joint list.
-            joint_violation_start = len(violations)
-
             # Position bounds
             if safe_action[i] < self.limits.position_min[i]:
                 violations.append(
@@ -363,11 +359,17 @@ class ActionGuard:
                         )
                         clamped = True
 
-            if (
-                previous_action is not None
-                and len(violations) == joint_violation_start
-                and i < len(self.limits.velocity_max)
-            ):
+        # Compose the velocity constraint with the position and effort bounds.
+        # The caller executes ``safe_action``, so its delta from the previously
+        # emitted action must remain within the configured velocity limit even
+        # when this joint also needed a static clamp.
+        if previous_action is not None:
+            num_velocity = min(
+                len(safe_action),
+                len(previous_action),
+                len(self.limits.velocity_max),
+            )
+            for i in range(num_velocity):
                 velocity_limit = self.limits.velocity_max[i]
                 delta = float(safe_action[i] - previous_action[i])
                 if velocity_limit > 0 and abs(delta) > velocity_limit:
@@ -468,13 +470,10 @@ class ActionGuard:
                 )
                 results.append(result)
                 safe_actions[i] = np.array(result.safe_action)
-                if result.safe or (
-                    result.violations
-                    and all("velocity limit" in v for v in result.violations)
-                ):
-                    previous_safe = safe_actions[i]
-                else:
-                    previous_safe = None
+                # The returned action is what the caller will execute. Preserve
+                # it as the next velocity reference in both clamp and reject
+                # modes, including rows that contained static violations.
+                previous_safe = safe_actions[i]
             all_violations = [v for r in results for v in r.violations]
             chunk_clamped = any(r.clamped for r in results)
 

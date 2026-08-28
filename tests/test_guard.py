@@ -173,7 +173,7 @@ class TestActionGuard:
         assert any("joint_1 velocity limit" in v for v in results[1].violations)
         assert results[1].clamped
 
-    def test_position_clamp_still_takes_precedence_on_the_same_joint(self):
+    def test_same_joint_position_and_velocity_limits_both_hold(self):
         limits = SafetyLimits(
             joint_names=["j0", "j1"],
             position_min=[-1.0, -10.0],
@@ -187,8 +187,42 @@ class TestActionGuard:
             np.array([5.0, 0.0]), previous_action=np.zeros(2)
         )
 
-        assert result.safe_action[0] == 1.0
-        assert not any("joint_0 velocity limit" in v for v in result.violations)
+        assert result.safe_action[0] == pytest.approx(0.1)
+        assert any("joint_0 above max" in v for v in result.violations)
+        assert any("joint_0 velocity limit" in v for v in result.violations)
+
+    def test_chunk_preserves_velocity_reference_after_position_clamp(self):
+        limits = SafetyLimits(
+            joint_names=["j0"],
+            position_min=[-1.0],
+            position_max=[1.0],
+            velocity_max=[0.5],
+            effort_max=[50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        safe_actions, results = guard.check(np.array([[0.0], [2.0], [-1.0]]))
+
+        np.testing.assert_allclose(safe_actions[:, 0], [0.0, 0.5, 0.0])
+        assert any("joint_0 above max" in v for v in results[1].violations)
+        assert any("joint_0 velocity limit" in v for v in results[1].violations)
+        assert any("joint_0 velocity limit" in v for v in results[2].violations)
+
+    def test_reject_mode_uses_emitted_zero_as_next_velocity_reference(self):
+        limits = SafetyLimits(
+            joint_names=["j0"],
+            position_min=[-1.0],
+            position_max=[1.0],
+            velocity_max=[0.5],
+            effort_max=[50.0],
+        )
+        guard = ActionGuard(limits=limits, mode="reject")
+
+        safe_actions, results = guard.check(np.array([[0.0], [2.0], [1.0]]))
+
+        np.testing.assert_allclose(safe_actions[:, 0], [0.0, 0.0, 0.0])
+        assert any("joint_0 above max" in v for v in results[1].violations)
+        assert any("joint_0 velocity limit" in v for v in results[2].violations)
 
     def test_velocity_check_skips_joints_without_a_configured_limit(self):
         limits = SafetyLimits(
@@ -287,7 +321,8 @@ class TestActionGuard:
         assert len(results) == 3
         assert results[0].safe
         assert not results[1].safe
-        assert results[2].safe
+        assert not results[2].safe
+        assert any("joint_1 velocity limit" in v for v in results[2].violations)
         assert safe_actions.shape == actions.shape
 
     def test_inference_count(self):
