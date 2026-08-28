@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from tether.verification_report import _sha256
+from tether.verification_evidence import serialize_evidence
 
 if TYPE_CHECKING:
     from tether.verify import ParityVerdict
@@ -124,17 +125,18 @@ def build_parity_cert(verdict: "ParityVerdict", *, parity_md_path: str | Path | 
         "passed": verdict.passed,
         "n_episodes": verdict.n_episodes,
         "success_rates": {
-            "original": verdict.original_success_rate,
-            "optimized": verdict.optimized_success_rate,
-            "delta": verdict.success_rate_delta,
+            "original": serialize_evidence(verdict.original_success_rate),
+            "optimized": serialize_evidence(verdict.optimized_success_rate),
+            "delta": serialize_evidence(verdict.success_rate_delta),
         },
         "first_failing_gate_id": verdict.first_failing_gate_id,
+        "diagnostics": verdict.to_dict()["diagnostics"],
         "gates": [
             {
                 "gate_id": g.gate_id,
                 "gate_class": g.gate_class,
                 "passed": g.passed,
-                "measured": g.measured,
+                "measured": serialize_evidence(g.measured),
                 "threshold": g.threshold,
                 "message": g.message,
             }

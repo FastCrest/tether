@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from tether.export_config import decomposed_layout, load_tether_config
+from tether.verification_evidence import normalize_verification_device
 
 
 class UnsupportedVerificationBackend(RuntimeError):
@@ -20,11 +21,25 @@ class UnsupportedVerificationBackend(RuntimeError):
 
 
 def _providers(device: str) -> list[str]:
-    if device.lower() == "cpu":
+    device = normalize_verification_device(device)
+    if device == "cpu":
         return ["CPUExecutionProvider"]
-    if device.lower() in {"cuda", "gpu"}:
+    if device == "cuda":
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    raise UnsupportedVerificationBackend(f"unsupported verification device {device!r}")
+    raise AssertionError("unreachable verification device")
+
+
+def _require_session_device(session: Any, *, device: str, name: str) -> None:
+    """Reject an ORT session whose primary active backend mismatches the CLI."""
+
+    raw_session = getattr(session, "session", session)
+    active = list(raw_session.get_providers())
+    expected = "CPUExecutionProvider" if device == "cpu" else "CUDAExecutionProvider"
+    if not active or active[0] != expected:
+        raise UnsupportedVerificationBackend(
+            f"{name} verification device mismatch: requested {device!r}, "
+            f"active providers are {active!r}"
+        )
 
 
 class MonolithicOnnxVerificationAdapter:
@@ -87,6 +102,7 @@ def load_verification_inference(
     device: str = "cpu",
 ) -> Any:
     """Construct an inference object from the actual declared export artifacts."""
+    device = normalize_verification_device(device)
     root = Path(export_dir)
     config = load_tether_config(root, inspect_artifacts=True)
     kind = config["export_kind"]
@@ -121,6 +137,7 @@ def load_verification_inference(
                 f"monolithic verifier does not support model_type={model_type!r}"
             )
         server.load()
+        _require_session_device(server._session, device=device, name="monolithic")
         return MonolithicOnnxVerificationAdapter(server)
 
     if kind == "decomposed_onnx":
@@ -141,7 +158,18 @@ def load_verification_inference(
                 )
             from tether.runtime.pi05_decomposed_server import Pi05DecomposedInference
 
-            return Pi05DecomposedInference(root, providers=providers)
+            inference = Pi05DecomposedInference(root, providers=providers)
+            _require_session_device(
+                inference._sess_prefix,
+                device=device,
+                name="vlm_prefix",
+            )
+            _require_session_device(
+                inference._sess_expert,
+                device=device,
+                name="expert_denoise",
+            )
+            return inference
         if layout == "expert_stack":
             raise UnsupportedVerificationBackend(
                 "expert_stack verification is disabled because that runtime does "

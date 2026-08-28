@@ -1747,6 +1747,10 @@ def verify_cmd(
         help="Hardware SKU the export targets (e.g. orin, orin-nano). Recorded "
              "in the PARITY.md receipt; does not change scoring in v0.",
     ),
+    device: str = typer.Option(
+        "cpu", "--device",
+        help="Exact execution device for both verification arms: cpu or cuda.",
+    ),
     eval_suite: str = typer.Option(
         "libero", "--eval",
         help="Eval suite for the paired rollout. v0 ships LIBERO only "
@@ -1776,6 +1780,11 @@ def verify_cmd(
         7, "--seed",
         help="RNG seed shared by both arms so episodes are paired (same "
              "LIBERO initial state in the original + optimized arm).",
+    ),
+    safety_config: str = typer.Option(
+        "", "--safety-config",
+        help="SafetyLimits JSON applied to every action in both arms. Required "
+             "for available safety-clamp evidence; without it S1 fails closed.",
     ),
     output: str = typer.Option(
         "./verify_output", "--output",
@@ -1810,11 +1819,10 @@ def verify_cmd(
     the Tether Pro 9-gate evaluator (original = baseline, optimized = candidate)
     and writes a PARITY.md receipt. Exit code 0 = PASS, 1 = FAIL, 2 = error.
 
-    v0 reuses the shipped Pro gate + the proven rollout loop; the load-bearing
-    signal is success-rate parity (success-cliff + Wilson gates). The
-    distributional engine (MMD / energy-distance) and embodied metrics (jerk,
-    completion-time, motion-energy) are flagged follow-ups — see the
-    TODO(tether-verify) anchors in src/tether/verify.py.
+    Verification Evidence v1 captures safety, action, velocity, latency,
+    trajectory, success, and process/device-memory evidence. Missing required
+    evidence fails closed with a typed reason. Optional distributional and
+    embodied diagnostics are marked NOT_EVALUATED when their inputs are absent.
 
     Examples:
         tether verify ./my-export --target orin --eval libero
@@ -1828,6 +1836,13 @@ def verify_cmd(
         InsufficientEpisodes,
         run_verify,
     )
+    from tether.verification_evidence import normalize_verification_device
+
+    try:
+        verification_device = normalize_verification_device(device)
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
 
     if eval_suite not in SUPPORTED_SUITES:
         err_console.print(
@@ -1888,13 +1903,20 @@ def verify_cmd(
             )
             raise typer.Exit(2)
 
-    console.print("\n[bold]Tether Verify[/bold] [dim](action-parity gate · v0)[/dim]")
+    console.print(
+        "\n[bold]Tether Verify[/bold] "
+        "[dim](action-parity gate · evidence v1)[/dim]"
+    )
     console.print(f"  Optimized:  {checkpoint_or_export}")
     console.print(f"  Original:   {original or '[dim](same checkpoint)[/dim]'}")
     console.print(f"  Eval suite: [cyan]{eval_suite}[/cyan] ({task_suite})")
     console.print(f"  Target:     {target}")
+    console.print(f"  Device:     {verification_device}")
     console.print(f"  Episodes:   {num_episodes} per task per arm")
     console.print(f"  Seed:       {seed}")
+    console.print(
+        f"  Safety:     {safety_config or '[yellow]not configured (S1 will fail)[/yellow]'}"
+    )
     console.print(f"  Output:     {output}")
     if embodiment_metadata:
         console.print(
@@ -1912,6 +1934,8 @@ def verify_cmd(
             num_episodes=num_episodes,
             task_indices=parsed_task_indices,
             seed=seed,
+            safety_config=safety_config or None,
+            verification_device=verification_device,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Verify interrupted by user.[/yellow]")
@@ -1936,6 +1960,31 @@ def verify_cmd(
     if output_json:
         print(json.dumps(verdict.to_dict(), indent=2, default=str))
     else:
+        from tether.verification_evidence import EvidenceValue
+
+        def _measurement_or_reason(
+            value: float | EvidenceValue[float],
+        ) -> float | str:
+            if isinstance(value, EvidenceValue):
+                if value.is_available:
+                    assert value.value is not None
+                    return value.value
+                assert value.reason is not None
+                return f"UNAVAILABLE ({value.reason.value})"
+            return value
+
+        def _render_measurement(value: float | EvidenceValue[float]) -> str:
+            measured = _measurement_or_reason(value)
+            return measured if isinstance(measured, str) else f"{measured:.4g}"
+
+        def _render_rate(value: float | EvidenceValue[float]) -> str:
+            measured = _measurement_or_reason(value)
+            return measured if isinstance(measured, str) else f"{measured * 100:.1f}%"
+
+        def _render_delta(value: float | EvidenceValue[float]) -> str:
+            measured = _measurement_or_reason(value)
+            return measured if isinstance(measured, str) else f"{measured * 100:+.1f}pp"
+
         gate_table = Table(title="Parity gates", show_header=True, header_style="bold")
         gate_table.add_column("Gate")
         gate_table.add_column("Class")
@@ -1947,15 +1996,15 @@ def verify_cmd(
                 g.gate_id,
                 g.gate_class,
                 "[green]PASS[/green]" if g.passed else "[red]FAIL[/red]",
-                f"{g.measured:.4g}",
+                _render_measurement(g.measured),
                 f"{g.threshold:.4g}",
             )
         console.print(gate_table)
         console.print(
             f"\n  Success rate: original "
-            f"[bold]{verdict.original_success_rate * 100:.1f}%[/bold] → "
-            f"optimized [bold]{verdict.optimized_success_rate * 100:.1f}%[/bold] "
-            f"({verdict.success_rate_delta * 100:+.1f}pp)"
+            f"[bold]{_render_rate(verdict.original_success_rate)}[/bold] → "
+            f"optimized [bold]{_render_rate(verdict.optimized_success_rate)}[/bold] "
+            f"({_render_delta(verdict.success_rate_delta)})"
         )
         if verdict.first_failing_gate_id:
             err_console.print(
