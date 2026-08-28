@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -33,6 +34,7 @@ from tether.distill.teacher_loader import (
     load_teacher,
     resolve_policy_type,
 )
+from tether.distill.snapflow import SnapFlowLosses
 from tether.finetune.backends import TrainerContext
 from tether.finetune.backends.base import CheckpointResult
 from tether.finetune.backends.snapflow_backend import (
@@ -413,6 +415,103 @@ class TestWriteProvenance:
 
 
 class TestSnapFlowBackendFit:
+    @staticmethod
+    def _fit_with_loader(
+        tmp_path,
+        loader,
+        *,
+        num_steps: int,
+        checkpoint_every: int = 100,
+    ):
+        """Run the generic loop with lightweight CPU-only collaborators."""
+        teacher_dir = tmp_path / "teacher"
+        teacher_dir.mkdir()
+        (teacher_dir / "config.json").write_text(json.dumps({"type": "smolvla"}))
+
+        cfg = FinetuneConfig(
+            base="lerobot/smolvla_base",
+            dataset="lerobot/libero",
+            output=tmp_path,
+            num_steps=num_steps,
+            phase="distill",
+            teacher_export=str(teacher_dir),
+            precision="fp32",
+            extra_lerobot_args={"checkpoint_every": checkpoint_every},
+        )
+        log_path = tmp_path / "training_log.jsonl"
+        log_path.touch()
+        events = []
+        hooks = HookRegistry()
+        for name in ("on_step", "on_checkpoint", "on_end"):
+            hooks.register(
+                name,
+                lambda _ctx, _name=name, **payload: events.append(
+                    (_name, payload)
+                ),
+            )
+        ctx = TrainerContext(config=cfg, hooks=hooks, training_log_path=log_path)
+
+        teacher = torch.nn.Linear(1, 1)
+        teacher.config = SimpleNamespace(max_action_dim=None, chunk_size=None)
+        student = torch.nn.Linear(1, 1)
+        student.config = SimpleNamespace(max_action_dim=None, chunk_size=None)
+        teacher_loaded = LoadedTeacher(
+            policy=teacher,
+            config={"type": "smolvla"},
+            policy_type="smolvla",
+            checkpoint_dir=teacher_dir,
+        )
+        student_loaded = LoadedTeacher(
+            policy=student,
+            config={"type": "smolvla"},
+            policy_type="smolvla",
+            checkpoint_dir=teacher_dir,
+        )
+
+        def fake_save(_student, root, step):
+            path = root / f"{step:08d}" / "pretrained_model"
+            path.mkdir(parents=True)
+            return path
+
+        loss = torch.tensor(1.0, requires_grad=True)
+        snapshot = SnapFlowLosses(
+            flow_matching=0.5,
+            consistency=0.5,
+            total=1.0,
+        )
+        with patch(
+            "tether.distill.teacher_loader.load_teacher",
+            side_effect=[teacher_loaded, student_loaded],
+        ), patch(
+            "tether.finetune.backends.snapflow_backend._build_velocity_adapters",
+            return_value=(lambda *a, **kw: None, lambda *a, **kw: None),
+        ), patch(
+            "tether.finetune.backends.snapflow_backend._build_dataloader",
+            return_value=loader,
+        ), patch(
+            "tether.finetune.backends.snapflow_backend._build_preprocessor",
+            return_value=lambda batch: batch,
+        ), patch(
+            "tether.finetune.backends.snapflow_backend._prepare_batch",
+            return_value=(
+                torch.zeros(1, 1, 1),
+                torch.zeros(1, 1, 1),
+                torch.zeros(1),
+                {},
+            ),
+        ), patch(
+            "tether.distill.snapflow.snapflow_loss_step",
+            return_value=(loss, snapshot),
+        ), patch(
+            "tether.finetune.backends.snapflow_backend._save_student_checkpoint",
+            side_effect=fake_save,
+        ) as save_checkpoint, patch(
+            "tether.finetune.backends.snapflow_backend._write_provenance",
+        ) as write_provenance:
+            result = SnapFlowBackend().fit(ctx)
+
+        return result, events, save_checkpoint, write_provenance, log_path
+
     def test_missing_teacher_export_returns_training_failed(self, tmp_path):
         cfg = FinetuneConfig(
             base="lerobot/pi0", dataset="lerobot/libero",
@@ -469,6 +568,83 @@ class TestSnapFlowBackendFit:
             result = SnapFlowBackend().fit(ctx)
         assert result.status == "training_failed"
         assert "dataloader" in result.error.lower()
+
+    def test_short_loader_completes_requested_steps(self, tmp_path):
+        result, events, save_checkpoint, write_provenance, log_path = (
+            self._fit_with_loader(
+                tmp_path,
+                ["A", "B"],
+                num_steps=5,
+                checkpoint_every=2,
+            )
+        )
+
+        assert result.status == "ok"
+        assert result.training_steps_completed == 5
+        assert [
+            payload["step"] for name, payload in events if name == "on_step"
+        ] == [1, 2, 3, 4, 5]
+        assert [
+            json.loads(line)["step"]
+            for line in log_path.read_text().splitlines()
+        ] == [1, 2, 3, 4, 5]
+        assert [call.args[2] for call in save_checkpoint.call_args_list] == [
+            2,
+            4,
+            5,
+        ]
+        assert [
+            payload["step"]
+            for name, payload in events
+            if name == "on_checkpoint"
+        ] == [2, 4, 5]
+        write_provenance.assert_called_once()
+        assert events[-1] == (
+            "on_end",
+            {"status": "ok", "steps_completed": 5},
+        )
+
+    def test_empty_loader_fails_without_success_artifacts(self, tmp_path):
+        result, events, save_checkpoint, write_provenance, _ = (
+            self._fit_with_loader(tmp_path, [], num_steps=5)
+        )
+
+        assert result.status == "training_failed"
+        assert result.training_steps_completed == 0
+        assert "yielded no batches" in result.error
+        assert "drop_last" in result.error
+        save_checkpoint.assert_not_called()
+        write_provenance.assert_not_called()
+        assert events[-1] == (
+            "on_end",
+            {"status": "training_failed", "steps_completed": 0},
+        )
+
+    def test_one_step_saves_final_checkpoint_once(self, tmp_path):
+        result, _events, save_checkpoint, write_provenance, _ = (
+            self._fit_with_loader(tmp_path, ["A"], num_steps=1)
+        )
+
+        assert result.status == "ok"
+        assert result.training_steps_completed == 1
+        save_checkpoint.assert_called_once()
+        assert save_checkpoint.call_args.args[2] == 1
+        write_provenance.assert_called_once()
+
+    def test_non_reiterable_short_loader_cannot_report_success(self, tmp_path):
+        result, events, save_checkpoint, write_provenance, _ = (
+            self._fit_with_loader(tmp_path, iter(["A", "B"]), num_steps=5)
+        )
+
+        assert result.status == "training_failed"
+        assert result.training_steps_completed == 2
+        assert "2/5 steps" in result.error
+        save_checkpoint.assert_not_called()
+        write_provenance.assert_not_called()
+        assert events[-1] == (
+            "on_end",
+            {"status": "training_failed", "steps_completed": 2},
+        )
 
 
 # ---------------------------------------------------------------------------
