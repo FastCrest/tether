@@ -42,11 +42,16 @@ from tether.embodiments import EmbodimentConfig, list_presets
 from tether.embodiments.validate import validate_embodiment_config
 
 presets = list_presets()
-# Don't hard-code the expected preset list — it already drifted once when
-# quadcopter shipped, and hard-coding it here would break again on the
-# next preset. Validate whatever the package actually ships.
-if not presets:
-    print("  ✗ list_presets() returned no presets — package presets dir missing?")
+# Two checks, not one: a required-minimum SUBSET (catches an accidentally
+# dropped preset file — an equality check broke when quadcopter shipped,
+# but no check at all lets packaging omissions pass silently) plus dynamic
+# validation of everything else that ships. New presets validate
+# automatically in the loop below; add them to REQUIRED when they should
+# be omission-protected too.
+REQUIRED = {"franka", "so100", "ur5", "quadcopter"}
+missing = REQUIRED - set(presets)
+if missing:
+    print(f"  ✗ required package presets missing: {sorted(missing)}")
     sys.exit(1)
 
 for name in presets:

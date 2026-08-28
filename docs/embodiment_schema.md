@@ -83,7 +83,7 @@ List of camera streams the model expects (1–8 cameras).
 |---|---|---|---|
 | `frequency_hz` | float | 0–1000 (exclusive 0) | Robot control loop rate. |
 | `chunk_size` | int | 1–200 | Actions in a single inference chunk. |
-| `rtc_execution_horizon` | int | 1–`chunk_size` | Integer count of actions to lock during RTC replan. Legacy fractional values (0 < v < 1) auto-migrate to `int(v × chunk_size)` at load with a one-time deprecation warning; schema v2 will reject them. |
+| `rtc_execution_horizon` | int | 1–`chunk_size` | Integer count of actions to lock during RTC replan. Legacy fractional values (0 < v < 1) auto-migrate to `round(v × chunk_size)` (minimum 1) at load with a one-time deprecation warning; schema v2 will reject them. |
 
 **Cross-field rules (warnings, not blocking):**
 - `rtc_execution_horizon < 1` (else `rtc-horizon-too-short` warning — RTC degenerates below one action)
