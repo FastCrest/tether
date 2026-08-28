@@ -3171,27 +3171,20 @@ def serve(
     if transport == "zmq":
         console.print("[bold green]Starting ZMQ server...[/bold green]")
         from tether.runtime.transports.zmq.factory import create_zmq_server
-        from tether.runtime.transports.zmq.security import validate_zmq_bind_security
 
         try:
-            validate_zmq_bind_security(
+            zmq_server = create_zmq_server(
+                app_instance,
                 host=host,
-                curve_enabled=bool(zmq_server_cert and zmq_client_cert_dir),
-                control_auth_enabled=bool(zmq_control_token),
+                port=port,
+                curve_server_cert=zmq_server_cert or None,
+                curve_client_cert_dir=zmq_client_cert_dir or None,
+                control_token=zmq_control_token or None,
                 allow_insecure=zmq_insecure_ok,
             )
         except ValueError as exc:
             err_console.print(f"[red]{exc}[/red]", markup=False)
             raise typer.Exit(1) from exc
-
-        zmq_server = create_zmq_server(
-            app_instance,
-            host=host,
-            port=port,
-            curve_server_cert=zmq_server_cert or None,
-            curve_client_cert_dir=zmq_client_cert_dir or None,
-            control_token=zmq_control_token or None,
-        )
         composed.append("[cyan]transport=zmq[/cyan]")
         if zmq_server_cert:
             composed.append("[cyan]curve=on[/cyan]")

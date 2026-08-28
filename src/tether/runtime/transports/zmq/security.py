@@ -1,10 +1,14 @@
 """Shared ZMQ transport security helpers."""
+
 from __future__ import annotations
 
 import ipaddress
+import logging
 from pathlib import Path
 
 import zmq.auth
+
+logger = logging.getLogger(__name__)
 
 
 def load_curve_key(value: str | bytes | Path, *, secret: bool) -> bytes:
@@ -50,8 +54,6 @@ def validate_zmq_bind_security(
         return
     if curve_enabled and control_auth_enabled:
         return
-    if allow_insecure:
-        return
 
     missing: list[str] = []
     if not curve_enabled:
@@ -59,6 +61,14 @@ def validate_zmq_bind_security(
     if not control_auth_enabled:
         missing.append("a ZMQ control token")
     missing_text = " and ".join(missing)
+    if allow_insecure:
+        logger.warning(
+            "Allowing insecure ZMQ bind on host %r via explicit override; "
+            "missing %s. Use only on an isolated lab network.",
+            host,
+            missing_text,
+        )
+        return
     raise ValueError(
         f"Refusing insecure ZMQ bind on host {host!r}: configure {missing_text}, "
         "bind to 127.0.0.1, or pass --zmq-insecure-ok for an isolated lab network."

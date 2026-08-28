@@ -3,12 +3,15 @@
 Uses real ZMQ sockets on localhost with kernel-assigned ports (port=0).
 Each test gets its own server + client pair; no shared state.
 """
+
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
 import msgpack
+import pytest
 import zmq
 import zmq.auth
 
@@ -55,10 +58,10 @@ def _send_recv(sock: zmq.Socket, msg: dict) -> dict:
 
 
 def test_ping_returns_ok():
-    server, thread = _start_server()
+    server, thread = _start_server(control_token="secret")
     port = server.bound_port
     sock = _client_socket(port)
-    result = _send_recv(sock, {"endpoint": "ping"})
+    result = _send_recv(sock, {"endpoint": "ping", "auth_token": "secret"})
     assert result["status"] == "ok"
     assert "uptime_s" in result
     assert result["schema_version"] == SCHEMA_VERSION
@@ -70,13 +73,29 @@ def test_ping_returns_ok():
 
 
 def test_kill_shuts_down():
-    server, thread = _start_server()
+    server, thread = _start_server(control_token="secret")
     port = server.bound_port
     sock = _client_socket(port)
-    result = _send_recv(sock, {"endpoint": "kill"})
+    result = _send_recv(sock, {"endpoint": "kill", "auth_token": "secret"})
     assert result["status"] == "ok"
     thread.join(timeout=2)
     assert not server.running
+
+
+def test_control_endpoints_disabled_without_token():
+    server, thread = _start_server()
+    port = server.bound_port
+    sock = _client_socket(port)
+
+    result = _send_recv(sock, {"endpoint": "ping"})
+    assert result == {"error": "ZMQ control endpoint disabled; configure a control token"}
+
+    result = _send_recv(sock, {"endpoint": "kill"})
+    assert result == {"error": "ZMQ control endpoint disabled; configure a control token"}
+    assert server.running
+
+    server.close()
+    thread.join(timeout=2)
 
 
 def test_control_token_required_for_ping_and_kill():
@@ -101,6 +120,26 @@ def test_control_token_required_for_ping_and_kill():
     assert not server.running
 
 
+def test_control_endpoint_registration_cannot_disable_auth():
+    server, thread = _start_server(control_token="secret")
+    port = server.bound_port
+    sock = _client_socket(port)
+    server.register_endpoint(
+        "ping",
+        lambda: {"status": "overridden"},
+        requires_input=False,
+        requires_auth=False,
+    )
+
+    result = _send_recv(sock, {"endpoint": "ping"})
+    assert "auth token" in result["error"]
+
+    result = _send_recv(sock, {"endpoint": "ping", "auth_token": "secret"})
+    assert result == {"status": "overridden"}
+    server.close()
+    thread.join(timeout=2)
+
+
 def test_curve_client_can_connect_with_allowed_certificate(tmp_path):
     server_public, server_secret = zmq.auth.create_certificates(tmp_path, "server")
     client_cert_dir = tmp_path / "clients"
@@ -108,8 +147,10 @@ def test_curve_client_can_connect_with_allowed_certificate(tmp_path):
     _client_public, client_secret = zmq.auth.create_certificates(client_cert_dir, "robot")
 
     server, thread = _start_server(
+        host="0.0.0.0",
         curve_server_cert=server_secret,
         curve_client_cert_dir=client_cert_dir,
+        control_token="secret",
     )
     port = server.bound_port
     sock = _client_socket(
@@ -118,7 +159,7 @@ def test_curve_client_can_connect_with_allowed_certificate(tmp_path):
         curve_server_public_key=server_public,
     )
 
-    result = _send_recv(sock, {"endpoint": "ping"})
+    result = _send_recv(sock, {"endpoint": "ping", "auth_token": "secret"})
     assert result["status"] == "ok"
 
     server.close()
@@ -198,12 +239,12 @@ def test_protobuf_byte_returns_error():
 
 
 def test_request_counter_increments():
-    server, thread = _start_server()
+    server, thread = _start_server(control_token="secret")
     port = server.bound_port
     sock = _client_socket(port)
 
-    r1 = _send_recv(sock, {"endpoint": "ping"})
-    r2 = _send_recv(sock, {"endpoint": "ping"})
+    r1 = _send_recv(sock, {"endpoint": "ping", "auth_token": "secret"})
+    r2 = _send_recv(sock, {"endpoint": "ping", "auth_token": "secret"})
     assert r2["request_count"] == r1["request_count"] + 1
     server.close()
     thread.join(timeout=2)
@@ -217,5 +258,30 @@ def test_bound_port_returns_real_port():
     port = server.bound_port
     assert isinstance(port, int)
     assert port > 0
+    server.close()
+    thread.join(timeout=2)
+
+
+def test_default_bind_is_loopback():
+    server, thread = _start_server()
+    assert server.bound_address.startswith("tcp://127.0.0.1:")
+    server.close()
+    thread.join(timeout=2)
+
+
+def test_direct_public_bind_rejected_without_security():
+    with pytest.raises(ValueError, match="Refusing insecure ZMQ bind"):
+        PolicyServer(host="0.0.0.0", port=0)
+
+
+def test_direct_insecure_override_warns(caplog: pytest.LogCaptureFixture):
+    caplog.set_level(logging.WARNING)
+    server, thread = _start_server(
+        host="0.0.0.0",
+        allow_insecure=True,
+    )
+    assert server.bound_address.startswith("tcp://0.0.0.0:")
+    assert "Allowing insecure ZMQ bind" in caplog.text
+    assert "0.0.0.0" in caplog.text
     server.close()
     thread.join(timeout=2)

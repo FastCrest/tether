@@ -3,6 +3,7 @@
 Client + server in same process via fixture. Validates predict_action
 round-trip, profile data, schema version, persistent socket reuse.
 """
+
 from __future__ import annotations
 
 import threading
@@ -126,10 +127,10 @@ def test_profile_overhead_minimal(server_port):
 # ── ping / reset ─────────────────────────────────────────────────────
 
 
-def test_ping(server_port):
+def test_ping_is_disabled_without_control_token(server_port):
     with ZmqRuntimeClient(f"tcp://127.0.0.1:{server_port}") as client:
         result = client.ping()
-        assert result["status"] == "ok"
+        assert result == {"error": "ZMQ control endpoint disabled; configure a control token"}
 
 
 def test_ping_sends_auth_token(auth_server_port):

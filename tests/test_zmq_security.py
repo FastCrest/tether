@@ -1,5 +1,8 @@
 """Tests for ZMQ transport security helpers."""
+
 from __future__ import annotations
+
+import logging
 
 import pytest
 
@@ -46,13 +49,20 @@ def test_validate_zmq_bind_security_rejects_partial_security() -> None:
         )
 
 
-def test_validate_zmq_bind_security_allows_explicit_insecure_override() -> None:
+def test_validate_zmq_bind_security_allows_explicit_insecure_override(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING)
     validate_zmq_bind_security(
         host="0.0.0.0",
         curve_enabled=False,
         control_auth_enabled=False,
         allow_insecure=True,
     )
+    assert "Allowing insecure ZMQ bind" in caplog.text
+    assert "0.0.0.0" in caplog.text
+    assert "CURVE certificates" in caplog.text
+    assert "control token" in caplog.text
 
 
 def test_load_curve_key_rejects_invalid_raw_key_length() -> None:
