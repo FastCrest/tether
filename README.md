@@ -634,6 +634,6 @@ For commercial licensing inquiries (offering Tether as a hosted service to compe
 
 ---
 
-Tether is built by [FastCrest](https://fastcrest.com). No signup, no telemetry by default.
+Tether is built by [FastCrest](https://fastcrest.com). No signup required. The free CLI sends no usage telemetry. Tether **Pro** sends an anonymized usage heartbeat once per day (opt-out, on by default) — disable any time with `TETHER_NO_TELEMETRY=1` or `tether config set telemetry off`.
 
 Made with 🔥 Passion in San Francisco
