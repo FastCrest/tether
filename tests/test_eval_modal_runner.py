@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from tether.eval.libero import EpisodeResult, LiberoSuiteConfig
+from tether.eval.libero import LiberoSuiteConfig
 from tether.eval.modal_runner import (
-    DEFAULT_MODAL_SCRIPT,
     TASK_SUITE_MAX_STEPS,
     ModalInvocationResult,
     ModalNotInstalledError,
@@ -291,6 +289,8 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
     assert "libero_object" in cmd
     assert "--num-episodes" in cmd
     assert "5" in cmd
+    assert "--seed" in cmd
+    assert "42" in cmd
     assert "--tasks" in cmd
     assert "all" in cmd
 

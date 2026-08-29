@@ -27,7 +27,6 @@ shipped Phase 1").
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 import shutil
@@ -187,6 +186,7 @@ def _invoke_one_suite(
         modal_binary, "run", script_path,
         "--suite", suite,
         "--num-episodes", str(num_episodes),
+        "--seed", str(seed),
         "--tasks", "all",
     ]
     t0 = time.perf_counter()

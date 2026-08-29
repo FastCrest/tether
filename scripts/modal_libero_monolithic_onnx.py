@@ -165,6 +165,11 @@ def run_libero_onnx(
         kwargs.setdefault("weights_only", False)
         return _orig_torch_load(*args, **kwargs)
     torch.load = _compat_load
+    seed = int(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
     # ─── Load SmolVLAPolicy (for preprocessor/postprocessor + prepare_* helpers) ──
     # We use the policy to build ONNX inputs but bypass its forward. This is
@@ -228,10 +233,10 @@ def run_libero_onnx(
     _input_shapes = {inp.name: inp.shape for inp in sess.get_inputs()}
     if "img_cam1" in _input_names:
         _cam_keys = ("img_cam1", "img_cam2", "img_cam3", "mask_cam1", "mask_cam2", "mask_cam3")
-        print(f"[onnx] cam naming: SmolVLA-style (cam1/cam2/cam3)")
+        print("[onnx] cam naming: SmolVLA-style (cam1/cam2/cam3)")
     elif "img_base" in _input_names:
         _cam_keys = ("img_base", "img_wrist_l", "img_wrist_r", "mask_base", "mask_wrist_l", "mask_wrist_r")
-        print(f"[onnx] cam naming: pi05-style (base/wrist_l/wrist_r)")
+        print("[onnx] cam naming: pi05-style (base/wrist_l/wrist_r)")
     else:
         raise RuntimeError(
             f"Unknown camera-naming convention in ONNX inputs: {sorted(_input_names)}. "
@@ -265,7 +270,6 @@ def run_libero_onnx(
     print(f"[onnx]   lang_seq (detected): {expected_lang_seq}")
 
     # ─── LIBERO setup ────────────────────────────────────────────────
-    np.random.seed(seed)
     from libero.libero import benchmark
     from libero.libero import get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
@@ -278,8 +282,10 @@ def run_libero_onnx(
           f"max_steps={max_steps}")
 
     def _quat2axisangle(quat):
-        if quat[3] > 1.0: quat[3] = 1.0
-        elif quat[3] < -1.0: quat[3] = -1.0
+        if quat[3] > 1.0:
+            quat[3] = 1.0
+        elif quat[3] < -1.0:
+            quat[3] = -1.0
         den = np.sqrt(1.0 - quat[3] * quat[3])
         if math.isclose(den, 0.0):
             return np.zeros(3)
@@ -594,6 +600,7 @@ def main(
     tasks: str = "0",
     suite: str = "libero_10",
     onnx_subdir: str = "smolvla_libero_monolithic",
+    seed: int = 7,
 ):
     """
     --num-episodes N: episodes per task (native used 5)
@@ -601,6 +608,7 @@ def main(
     --tasks "0,1,2,3,4"   N=25 matching native run
     --tasks "all"     all 10 tasks
     --onnx-subdir     subfolder under /onnx_out/ (default smolvla_libero_monolithic)
+    --seed            RNG seed for LIBERO envs, NumPy, and Torch noise
     """
     if tasks == "all":
         task_list = None
@@ -613,13 +621,14 @@ def main(
         task_suite_name=suite,
         task_indices=task_list,
         onnx_subdir=onnx_subdir,
+        seed=seed,
     )
     print("\n=== RESULT ===")
     # Early-return failure path (e.g., ONNX missing on volume) — surface
     # the status + reason so operators don't see opaque '?' counts.
     # Caught by 2026-04-25 eval-as-a-service Modal smoke validation.
     if r.get("status") == "fail":
-        print(f"  status: FAIL")
+        print("  status: FAIL")
         print(f"  reason: {r.get('reason', '(no reason)')}")
         return
     print(f"  success_rate: {r.get('success_rate_pct', '?')}%")
