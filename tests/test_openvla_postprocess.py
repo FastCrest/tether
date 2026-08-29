@@ -4,12 +4,23 @@ import numpy as np
 import pytest
 
 from tether.postprocess.openvla import (
+    bins_to_normalized,
+    decode_actions,
     logits_to_tokens,
     tokens_to_action_bins,
-    bins_to_normalized,
     unnormalize_actions,
-    decode_actions,
 )
+
+
+def _center(
+    index: int,
+    n_bins: int = 256,
+    action_low: float = -1.0,
+    action_high: float = 1.0,
+) -> np.float32:
+    edges = np.linspace(action_low, action_high, n_bins, dtype=np.float32)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+    return centers[index]
 
 
 class TestLogitsToTokens:
@@ -28,28 +39,28 @@ class TestLogitsToTokens:
 
 class TestTokensToActionBins:
     def test_top_token_is_bin_zero(self):
-        # top-of-vocab token (vocab_size-1) → bin 0
-        tokens = np.array([[32063, 32062, 32061]])
-        bins = tokens_to_action_bins(tokens, vocab_size=32064, n_bins=256)
+        # OpenVLA decodes against effective vocab_size=32000, not the padded LM size.
+        tokens = np.array([[31999, 31998, 31997]])
+        bins = tokens_to_action_bins(tokens, vocab_size=32000, n_bins=256)
         assert (bins == np.array([[0, 1, 2]])).all()
 
     def test_clips_out_of_range(self):
-        # Any token below the top 256 should clip to bin 255 (lowest bin)
+        # Any token below the action token band clips to the last valid center.
         tokens = np.array([[0, 100, 1000]])
-        bins = tokens_to_action_bins(tokens, vocab_size=32064, n_bins=256)
-        assert (bins == 255).all()
+        bins = tokens_to_action_bins(tokens, vocab_size=32000, n_bins=256)
+        assert (bins == 254).all()
 
 
 class TestBinsToNormalized:
-    def test_bin_0_maps_to_low(self):
+    def test_bin_0_maps_to_first_center(self):
         bins = np.array([[0]])
         out = bins_to_normalized(bins, n_bins=256, action_low=-1.0, action_high=1.0)
-        assert out[0, 0] == pytest.approx(-1.0)
+        assert out[0, 0] == pytest.approx(_center(0))
 
-    def test_bin_last_maps_to_high(self):
+    def test_bin_last_maps_to_last_center(self):
         bins = np.array([[255]])
         out = bins_to_normalized(bins)
-        assert out[0, 0] == pytest.approx(1.0)
+        assert out[0, 0] == pytest.approx(_center(254))
 
 
 class TestUnnormalizeActions:
@@ -86,20 +97,26 @@ class TestUnnormalizeActions:
 
 class TestDecodeActions:
     def test_full_pipeline_normalized(self):
-        # 1 batch, seq 8, vocab 32064, pick top token at last 7 positions
+        # 1 batch, seq 8, padded vocab 32064; OpenVLA decode uses token 31999.
         logits = np.zeros((1, 8, 32064), dtype=np.float32)
-        logits[0, -7:, 32063] = 10.0  # topmost token = bin 0 = -1.0 normalized
+        logits[0, -7:, 31999] = 10.0  # effective top token = bin 0 = first center
         out = decode_actions(logits, action_dim=7)
         assert out.shape == (1, 7)
-        assert np.all(out == -1.0)
+        assert np.allclose(out, _center(0))
 
     def test_with_norm_stats(self):
         logits = np.zeros((1, 8, 32064), dtype=np.float32)
-        logits[0, -7:, 32063] = 10.0
+        logits[0, -7:, 31999] = 10.0
         norm_stats = {
-            "bridge": {"action": {"q01": [0.0]*7, "q99": [2.0]*7, "mask": [True]*7}}
+            "bridge": {
+                "action": {
+                    "q01": [0.0] * 7,
+                    "q99": [2.0] * 7,
+                    "mask": [True] * 7,
+                }
+            }
         }
         out = decode_actions(logits, action_dim=7, norm_stats=norm_stats, dataset_name="bridge")
         assert out.shape == (1, 7)
-        # normalized=-1, q01=0, q99=2 → 0.5*(-1+1)*2 + 0 = 0.0
-        assert np.allclose(out, 0.0)
+        # q01=0, q99=2 maps normalized x to x + 1.
+        assert np.allclose(out, _center(0) + 1.0)
