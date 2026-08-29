@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from tether.eval.libero import EpisodeResult, LiberoSuiteConfig
+from tether.eval.libero import LiberoSuiteConfig
 from tether.eval.modal_runner import (
-    DEFAULT_MODAL_SCRIPT,
     TASK_SUITE_MAX_STEPS,
     ModalInvocationResult,
     ModalNotInstalledError,
+    _modal_onnx_subdir_for_export,
     _parse_invocation_to_episodes,
     _parse_modal_stdout,
     run_libero_on_modal,
@@ -267,6 +267,8 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
     scripts_dir.mkdir()
     fake_script = scripts_dir / "modal_libero_monolithic_onnx.py"
     fake_script.write_text("# stub")
+    export_dir = tmp_path / "customer-smolvla-export"
+    export_dir.mkdir()
 
     captured = []
 
@@ -280,7 +282,7 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
         num_episodes=5, tasks=("libero_object",), seed=42,
     )
     run_libero_on_modal(
-        config=config, export_dir=tmp_path,
+        config=config, export_dir=export_dir,
         repo_root=tmp_path, modal_invoker=_spy_invoker,
     )
     assert len(captured) == 1
@@ -293,6 +295,8 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
     assert "5" in cmd
     assert "--tasks" in cmd
     assert "all" in cmd
+    assert "--onnx-subdir" in cmd
+    assert cmd[cmd.index("--onnx-subdir") + 1] == "customer-smolvla-export"
 
 
 def test_run_libero_invokes_per_suite_for_multiple_tasks(tmp_path):
@@ -320,3 +324,16 @@ def test_run_libero_invokes_per_suite_for_multiple_tasks(tmp_path):
         repo_root=tmp_path, modal_invoker=_counting_invoker,
     )
     assert invocations == ["libero_spatial", "libero_object", "libero_goal"]
+
+
+def test_modal_onnx_subdir_for_local_export_uses_basename(tmp_path):
+    export_dir = tmp_path / "my-export"
+    export_dir.mkdir()
+
+    assert _modal_onnx_subdir_for_export(export_dir) == "my-export"
+
+
+def test_modal_onnx_subdir_for_modal_volume_path_preserves_relative_subdir():
+    export_dir = Path("/onnx_out/runs/customer-a/export-42")
+
+    assert _modal_onnx_subdir_for_export(export_dir) == "runs/customer-a/export-42"
