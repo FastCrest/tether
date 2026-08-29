@@ -67,6 +67,9 @@ def test_get_converter_unknown_raises() -> None:
 
 def test_lerobot_v3_basic_convert(tmp_path: Path) -> None:
     pytest.importorskip("pyarrow")
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
     jsonl = tmp_path / "input.jsonl"
     _seed_jsonl(jsonl)
     out = tmp_path / "out_lerobot"
@@ -76,11 +79,27 @@ def test_lerobot_v3_basic_convert(tmp_path: Path) -> None:
     assert result.episode_count == 2
     assert result.step_count == 200  # 2 ep × 20 rows × 5 steps_per_chunk
     assert (out / "meta" / "info.json").exists()
-    assert (out / "meta" / "tasks.jsonl").exists()
-    assert (out / "meta" / "episodes.jsonl").exists()
+    assert (out / "meta" / "stats.json").exists()
+    assert (out / "meta" / "tasks.parquet").exists()
+    assert (out / "meta" / "episodes" / "chunk-000" / "file-000.parquet").exists()
     assert (out / "README.md").exists()
-    assert (out / "data" / "chunk-000" / "episode_000000.parquet").exists()
-    assert (out / "data" / "chunk-000" / "episode_000001.parquet").exists()
+    assert (out / "data" / "chunk-000" / "file-000.parquet").exists()
+    assert not (out / "meta" / "tasks.jsonl").exists()
+    assert not (out / "meta" / "episodes.jsonl").exists()
+    assert not list((out / "data" / "chunk-000").glob("episode_*.parquet"))
+
+    data = pq.read_table(out / "data" / "chunk-000" / "file-000.parquet")
+    episodes = pq.read_table(out / "meta" / "episodes" / "chunk-000" / "file-000.parquet")
+    tasks = pq.read_table(out / "meta" / "tasks.parquet")
+    assert data.num_rows == 200
+    assert data.schema.field("timestamp").type == pa.float32()
+    assert data.schema.field("action").type == pa.list_(pa.float32(), list_size=7)
+    assert episodes.num_rows == 2
+    assert "dataset_from_index" in episodes.column_names
+    assert "dataset_to_index" in episodes.column_names
+    assert "data/chunk_index" in episodes.column_names
+    assert tasks.column_names == ["task_index", "task"]
+    assert json.loads(tasks.schema.metadata[b"pandas"])["index_columns"] == ["task"]
 
 
 def test_lerobot_v3_info_json_shape(tmp_path: Path) -> None:
@@ -94,8 +113,41 @@ def test_lerobot_v3_info_json_shape(tmp_path: Path) -> None:
     info = json.loads((out / "meta" / "info.json").read_text())
     assert info["robot_type"] == "franka"
     assert info["fps"] == 30
+    assert info["total_episodes"] == 2
+    assert info["total_frames"] == 200
+    assert info["total_tasks"] == 2
+    assert info["data_path"] == "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
     assert "action" in info["features"]
     assert "observation.state" in info["features"]
+
+
+def test_lerobot_v3_output_passes_dataset_validator(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
+    from tether.validation import Decision, overall_decision, run_all_checks
+
+    jsonl = tmp_path / "input.jsonl"
+    _seed_jsonl(jsonl)
+    out = tmp_path / "out_valid"
+
+    LeRobotV3Converter(encode_videos=False).convert(input_jsonl=jsonl, output_dir=out)
+    results = run_all_checks(out)
+    assert overall_decision(results) == Decision.OK, [
+        (result.check_id, result.decision.value, result.summary)
+        for result in results
+    ]
+
+
+def test_lerobot_v3_writes_stats_json(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
+    jsonl = tmp_path / "input.jsonl"
+    _seed_jsonl(jsonl)
+    out = tmp_path / "out_stats"
+
+    LeRobotV3Converter(encode_videos=False).convert(input_jsonl=jsonl, output_dir=out)
+    stats = json.loads((out / "meta" / "stats.json").read_text())
+    assert set(stats) == {"action", "observation.state"}
+    assert stats["action"]["count"] == [200]
+    assert len(stats["action"]["mean"]) == 7
 
 
 def test_lerobot_v3_min_quality_filters(tmp_path: Path) -> None:
@@ -179,7 +231,7 @@ def test_hdf5_basic_convert(tmp_path: Path) -> None:
 
 
 def test_hdf5_split_episodes(tmp_path: Path) -> None:
-    h5py = pytest.importorskip("h5py")
+    pytest.importorskip("h5py")
     jsonl = tmp_path / "input.jsonl"
     _seed_jsonl(jsonl)
     out = tmp_path / "out_split"
