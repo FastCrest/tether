@@ -99,6 +99,18 @@ def encode_image(image: Any, jpeg_quality: int = 85) -> str:
         if len(image) >= 8 and image[:8] == b"\x89PNG\r\n\x1a\n":
             return base64.b64encode(image).decode("ascii")
         return base64.b64encode(image).decode("ascii")
+    # The only remaining valid inputs are numpy.ndarray and PIL.Image, both of
+    # which need Pillow. Reject obviously-unsupported types (dict, int, list…)
+    # BEFORE requiring Pillow, so the error names the real problem rather than
+    # blaming a missing optional dep on a caller who passed garbage.
+    _cls = type(image)
+    _image_like = (
+        _cls.__module__.split(".")[0] in ("PIL", "numpy")
+        or hasattr(image, "__array_interface__")
+        or (hasattr(image, "save") and hasattr(image, "size"))
+    )
+    if not _image_like:
+        raise TetherClientError(f"unsupported image type: {_cls.__name__}")
     try:
         from PIL import Image as PILImage
     except ImportError:
@@ -211,7 +223,6 @@ class TetherClient:
     # ---- Internals -------------------------------------------------------
 
     def _request_with_retry(self, method: str, path: str, **kw) -> httpx.Response:
-        last_exc: TetherClientError | None = None
         attempt = 0
         backoff = self.initial_backoff_s
         while True:
@@ -244,7 +255,6 @@ class TetherClient:
             )
             time.sleep(wait)
             attempt += 1
-            last_exc = err
 
     # ---- Public surface --------------------------------------------------
 
