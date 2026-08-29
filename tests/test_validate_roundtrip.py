@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 
-from tether import _onnx_backend, _pytorch_backend, validate_roundtrip
+from tether import validate_roundtrip
 from tether.ci_template import emit_ci_template
 from tether.fixtures.vla_fixtures import load_fixtures
 from tether.validate_roundtrip import (
@@ -37,12 +37,23 @@ def _write_min_config(
 ) -> Path:
     """Write a minimal tether_config.json for orchestrator tests."""
     export_dir.mkdir(parents=True, exist_ok=True)
+    (export_dir / "expert_stack.onnx").write_bytes(b"test fixture")
     config = {
+        "schema_version": 1,
         "model_type": model_type,
         "model_id": "stub/none",
+        "export_kind": "decomposed_onnx",
         "action_chunk_size": chunk_size,
         "action_dim": action_dim,
         "num_denoising_steps": num_steps,
+        "opset": 17,
+        "artifacts": [{"path": "expert_stack.onnx", "role": "model"}],
+        "io_contract": {
+            "inputs": [{"name": "noise", "dtype": "float32", "shape": [1, chunk_size, action_dim]}],
+            "outputs": [
+                {"name": "actions", "dtype": "float32", "shape": [1, chunk_size, action_dim]}
+            ],
+        },
     }
     if extras:
         config.update(extras)
@@ -196,28 +207,11 @@ def test_threshold_fail_then_pass_with_loose_threshold(tmp_path, monkeypatch):
 
 
 def test_missing_onnx_error(tmp_path, monkeypatch):
-    """Export dir with config but no ONNX file → FileNotFoundError on run().
-
-    Stub the PyTorch loader so we exercise only the ONNX-missing path
-    (loading a real checkpoint would hit the network and is out of scope).
-    """
+    """A declared but missing ONNX artifact fails before backend construction."""
     _write_min_config(tmp_path)
-    # No expert_stack.onnx written.
-
-    pt_stub = _StubBackend(np.zeros((50, 6), dtype=np.float32))
-    monkeypatch.setattr(
-        validate_roundtrip,
-        "load_pytorch_backend",
-        lambda export_dir, model_id, device: pt_stub,
-    )
-    # Leave load_onnx_backend un-patched — the real loader should raise
-    # FileNotFoundError because expert_stack.onnx is absent.
-
-    harness = ValidateRoundTrip(
-        export_dir=tmp_path, num_test_cases=1, seed=0
-    )
-    with pytest.raises(FileNotFoundError):
-        harness.run()
+    (tmp_path / "expert_stack.onnx").unlink()
+    with pytest.raises(ValueError, match="is missing"):
+        ValidateRoundTrip(export_dir=tmp_path, num_test_cases=1, seed=0)
 
 
 def test_unsupported_model_raises_pi05(tmp_path):

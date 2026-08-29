@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tether.correction.bid import BIDConfig
 from tether.runtime.decomposed_server import (
     DEFAULT_CAMERA_RESOLUTION,
     DEFAULT_LANG_SEQ_LEN,
@@ -42,14 +43,17 @@ def _disable_hf_normalizer_fallback(monkeypatch):
 def _make_export_dir(
     tmp_path: Path,
     *,
-    export_kind: str = "decomposed",
+    export_kind: str = "decomposed_onnx",
     action_dim: int = 7,
     chunk_size: int = 50,
 ) -> Path:
     """Build a minimal export dir with a tether_config.json."""
     p = tmp_path / "export"
     p.mkdir()
+    (p / "vlm_prefix.onnx").write_bytes(b"prefix")
+    (p / "expert_denoise.onnx").write_bytes(b"expert")
     config = {
+        "schema_version": 1,
         # Keep this fixture local-only. A real HF repo id triggers teacher
         # normalizer fallback during server.load(), which makes these unit
         # tests depend on network/cache state.
@@ -62,6 +66,14 @@ def _make_export_dir(
         "action_dim": action_dim,
         "opset": 19,
         "export_kind": export_kind,
+        "artifacts": [
+            {"path": "vlm_prefix.onnx", "role": "model"},
+            {"path": "expert_denoise.onnx", "role": "model"},
+        ],
+        "io_contract": {
+            "inputs": [{"name": "noise", "dtype": "float32", "shape": [1, chunk_size, 32]}],
+            "outputs": [{"name": "actions", "dtype": "float32", "shape": [1, chunk_size, 32]}],
+        },
         "decomposed": {
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
@@ -128,13 +140,13 @@ def test_load_rejects_missing_config(tmp_path):
 
 
 def test_load_rejects_wrong_export_kind(tmp_path, monkeypatch):
-    p = _make_export_dir(tmp_path, export_kind="monolithic")
+    p = _make_export_dir(tmp_path, export_kind="monolithic_onnx")
     monkeypatch.setattr(
         "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
         _StubInference,
     )
     server = Pi05DecomposedServer(p)
-    with pytest.raises(ValueError, match="export_kind='decomposed'"):
+    with pytest.raises(ValueError, match="export_kind='decomposed_onnx'"):
         server.load()
 
 
@@ -197,6 +209,43 @@ def test_predict_from_base64_returns_actions_dict(tmp_path, monkeypatch):
     # Shape: (chunk_size, action_dim) = (50, 7)
     assert len(result["actions"]) == 50
     assert len(result["actions"][0]) == 7
+
+
+def test_bid_wins_over_a2c2_during_prediction(tmp_path, monkeypatch):
+    """BID selection must never be followed by A2C2 correction in Phase 1."""
+    server = _build_loaded_server(tmp_path, monkeypatch)
+
+    class _ExplodingA2C2Hook:
+        def __init__(self):
+            from types import SimpleNamespace
+
+            self.calls = 0
+            self.head = SimpleNamespace(
+                config=SimpleNamespace(action_dim=7, obs_dim=256),
+            )
+
+        def maybe_apply_to_chunk(self, *, actions):
+            self.calls += 1
+            raise AssertionError("A2C2 must not run when BID is enabled")
+
+    hook = _ExplodingA2C2Hook()
+    server.set_a2c2_hook(hook)
+    server.set_bid_config(BIDConfig(n_candidates=2))
+    assert server._a2c2_hook is None
+
+    # The mutex is order-independent: a later hook bind is ignored too.
+    server.set_a2c2_hook(hook)
+    assert server._a2c2_hook is None
+
+    result = server.predict_from_base64(
+        image_b64=_make_b64_image(),
+        instruction="pick up the cup",
+        state=[0.0] * 7,
+    )
+    assert "error" not in result
+    assert result["bid_n_candidates"] == 2
+    assert "a2c2_applied" not in result
+    assert hook.calls == 0
 
 
 def test_predict_from_base64_invalid_image_returns_error(tmp_path, monkeypatch):

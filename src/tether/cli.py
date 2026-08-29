@@ -1027,6 +1027,47 @@ def publish_latency_cmd(
             )
 
 
+def _build_benchmark_server(
+    export_dir: str | Path, export_config: dict[str, Any], device: str
+) -> Any:
+    """Construct only a reader declared compatible with this export layout."""
+    from tether.export_config import decomposed_layout
+
+    kind = export_config.get("export_kind")
+    if kind == "monolithic_onnx":
+        model_type = export_config["model_type"]
+        if model_type == "pi0":
+            from tether.runtime.pi0_onnx_server import Pi0OnnxServer
+
+            return Pi0OnnxServer(export_dir, device=device, max_batch=1, strict_providers=False)
+        if model_type == "pi05":
+            from tether.runtime.pi05_onnx_server import Pi05OnnxServer
+
+            return Pi05OnnxServer(export_dir, device=device, max_batch=1, strict_providers=False)
+        if model_type == "smolvla":
+            from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+
+            return SmolVLAOnnxServer(
+                export_dir, device=device, max_batch=1, strict_providers=False
+            )
+        if model_type == "gr00t":
+            from tether.runtime.server import TetherServer
+
+            return TetherServer(export_dir, device=device, strict_providers=False)
+        raise ValueError(f"Benchmark does not support monolithic model_type={model_type!r}")
+    if kind == "decomposed_onnx":
+        layout = decomposed_layout(export_config)
+        if layout == "pi05_split":
+            from tether.runtime.decomposed_server import Pi05DecomposedServer
+
+            return Pi05DecomposedServer(export_dir, device=device, strict_providers=False)
+        if layout in {"expert_stack", "smolvla_full_bundle"}:
+            from tether.runtime.server import TetherServer
+
+            return TetherServer(export_dir, device=device, strict_providers=False)
+    raise ValueError(f"Benchmark does not support export_kind={kind!r}")
+
+
 @app.command(name="bench", hidden=True)
 def benchmark_cmd(
     export_dir: str = typer.Argument(
@@ -1252,52 +1293,15 @@ def benchmark_cmd(
     if benchmark:
         console.print(f"  Benchmark: [cyan]{benchmark}[/cyan] ({episodes_per_task} eps/task)")
 
-    config_path = export_path / "tether_config.json"
-    export_config = {}
-    if config_path.exists():
-        try:
-            export_config = json.loads(config_path.read_text())
-        except Exception:
-            export_config = {}
+    from tether.export_config import ExportConfigError, load_tether_config
 
-    server: Any
-    if export_config.get("export_kind") == "monolithic":
-        model_type = export_config.get("model_type", "smolvla")
-        if model_type == "pi0":
-            from tether.runtime.pi0_onnx_server import Pi0OnnxServer
-            server = Pi0OnnxServer(
-                export_dir,
-                device=device,
-                max_batch=1,
-                strict_providers=False,
-            )
-        elif model_type == "pi05":
-            from tether.runtime.pi05_onnx_server import Pi05OnnxServer
-            server = Pi05OnnxServer(
-                export_dir,
-                device=device,
-                max_batch=1,
-                strict_providers=False,
-            )
-        elif model_type == "smolvla":
-            from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
-            server = SmolVLAOnnxServer(
-                export_dir,
-                device=device,
-                max_batch=1,
-                strict_providers=False,
-            )
-        elif model_type == "gr00t":
-            from tether.runtime.server import TetherServer
-            server = TetherServer(export_dir, device=device, strict_providers=False)
-        else:
-            err_console.print(
-                f"[red]Benchmark does not support monolithic model_type={model_type!r} yet.[/red]"
-            )
-            raise typer.Exit(2)
-    else:
-        from tether.runtime.server import TetherServer
-        server = TetherServer(export_dir, device=device, strict_providers=False)
+    export_config = load_tether_config(export_path)
+
+    try:
+        server = _build_benchmark_server(export_dir, export_config, device)
+    except (ExportConfigError, ValueError) as exc:
+        err_console.print(f"[red]{exc}.[/red]")
+        raise typer.Exit(2)
     console.print("[dim]Loading model...[/dim]")
     t0 = _t.perf_counter()
     server.load()
@@ -1743,6 +1747,10 @@ def verify_cmd(
         help="Hardware SKU the export targets (e.g. orin, orin-nano). Recorded "
              "in the PARITY.md receipt; does not change scoring in v0.",
     ),
+    device: str = typer.Option(
+        "cpu", "--device",
+        help="Exact execution device for both verification arms: cpu or cuda.",
+    ),
     eval_suite: str = typer.Option(
         "libero", "--eval",
         help="Eval suite for the paired rollout. v0 ships LIBERO only "
@@ -1772,6 +1780,11 @@ def verify_cmd(
         7, "--seed",
         help="RNG seed shared by both arms so episodes are paired (same "
              "LIBERO initial state in the original + optimized arm).",
+    ),
+    safety_config: str = typer.Option(
+        "", "--safety-config",
+        help="SafetyLimits JSON applied to every action in both arms. Required "
+             "for available safety-clamp evidence; without it S1 fails closed.",
     ),
     output: str = typer.Option(
         "./verify_output", "--output",
@@ -1806,11 +1819,10 @@ def verify_cmd(
     the Tether Pro 9-gate evaluator (original = baseline, optimized = candidate)
     and writes a PARITY.md receipt. Exit code 0 = PASS, 1 = FAIL, 2 = error.
 
-    v0 reuses the shipped Pro gate + the proven rollout loop; the load-bearing
-    signal is success-rate parity (success-cliff + Wilson gates). The
-    distributional engine (MMD / energy-distance) and embodied metrics (jerk,
-    completion-time, motion-energy) are flagged follow-ups — see the
-    TODO(tether-verify) anchors in src/tether/verify.py.
+    Verification Evidence v1 captures safety, action, velocity, latency,
+    trajectory, success, and process/device-memory evidence. Missing required
+    evidence fails closed with a typed reason. Optional distributional and
+    embodied diagnostics are marked NOT_EVALUATED when their inputs are absent.
 
     Examples:
         tether verify ./my-export --target orin --eval libero
@@ -1824,6 +1836,13 @@ def verify_cmd(
         InsufficientEpisodes,
         run_verify,
     )
+    from tether.verification_evidence import normalize_verification_device
+
+    try:
+        verification_device = normalize_verification_device(device)
+    except ValueError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
 
     if eval_suite not in SUPPORTED_SUITES:
         err_console.print(
@@ -1884,13 +1903,20 @@ def verify_cmd(
             )
             raise typer.Exit(2)
 
-    console.print("\n[bold]Tether Verify[/bold] [dim](action-parity gate · v0)[/dim]")
+    console.print(
+        "\n[bold]Tether Verify[/bold] "
+        "[dim](action-parity gate · evidence v1)[/dim]"
+    )
     console.print(f"  Optimized:  {checkpoint_or_export}")
     console.print(f"  Original:   {original or '[dim](same checkpoint)[/dim]'}")
     console.print(f"  Eval suite: [cyan]{eval_suite}[/cyan] ({task_suite})")
     console.print(f"  Target:     {target}")
+    console.print(f"  Device:     {verification_device}")
     console.print(f"  Episodes:   {num_episodes} per task per arm")
     console.print(f"  Seed:       {seed}")
+    console.print(
+        f"  Safety:     {safety_config or '[yellow]not configured (S1 will fail)[/yellow]'}"
+    )
     console.print(f"  Output:     {output}")
     if embodiment_metadata:
         console.print(
@@ -1908,6 +1934,8 @@ def verify_cmd(
             num_episodes=num_episodes,
             task_indices=parsed_task_indices,
             seed=seed,
+            safety_config=safety_config or None,
+            verification_device=verification_device,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Verify interrupted by user.[/yellow]")
@@ -1932,6 +1960,31 @@ def verify_cmd(
     if output_json:
         print(json.dumps(verdict.to_dict(), indent=2, default=str))
     else:
+        from tether.verification_evidence import EvidenceValue
+
+        def _measurement_or_reason(
+            value: float | EvidenceValue[float],
+        ) -> float | str:
+            if isinstance(value, EvidenceValue):
+                if value.is_available:
+                    assert value.value is not None
+                    return value.value
+                assert value.reason is not None
+                return f"UNAVAILABLE ({value.reason.value})"
+            return value
+
+        def _render_measurement(value: float | EvidenceValue[float]) -> str:
+            measured = _measurement_or_reason(value)
+            return measured if isinstance(measured, str) else f"{measured:.4g}"
+
+        def _render_rate(value: float | EvidenceValue[float]) -> str:
+            measured = _measurement_or_reason(value)
+            return measured if isinstance(measured, str) else f"{measured * 100:.1f}%"
+
+        def _render_delta(value: float | EvidenceValue[float]) -> str:
+            measured = _measurement_or_reason(value)
+            return measured if isinstance(measured, str) else f"{measured * 100:+.1f}pp"
+
         gate_table = Table(title="Parity gates", show_header=True, header_style="bold")
         gate_table.add_column("Gate")
         gate_table.add_column("Class")
@@ -1943,15 +1996,15 @@ def verify_cmd(
                 g.gate_id,
                 g.gate_class,
                 "[green]PASS[/green]" if g.passed else "[red]FAIL[/red]",
-                f"{g.measured:.4g}",
+                _render_measurement(g.measured),
                 f"{g.threshold:.4g}",
             )
         console.print(gate_table)
         console.print(
             f"\n  Success rate: original "
-            f"[bold]{verdict.original_success_rate * 100:.1f}%[/bold] → "
-            f"optimized [bold]{verdict.optimized_success_rate * 100:.1f}%[/bold] "
-            f"({verdict.success_rate_delta * 100:+.1f}pp)"
+            f"[bold]{_render_rate(verdict.original_success_rate)}[/bold] → "
+            f"optimized [bold]{_render_rate(verdict.optimized_success_rate)}[/bold] "
+            f"({_render_delta(verdict.success_rate_delta)})"
         )
         if verdict.first_failing_gate_id:
             err_console.print(
@@ -2479,9 +2532,9 @@ def serve(
         "--a2c2-checkpoint",
         help="Path to a trained A2C2 correction-head checkpoint (.npz). When "
              "set, the server applies per-step A2C2 corrections on the action "
-             "chunk after the policy returns it. Auto-skipped at low latency "
-             "(p95 < 40ms) or high success rate (>90%) — no overhead when not "
-             "needed. Per a2c2-correction execution plan B.5. Train with "
+             "chunk after the policy returns it. By default it auto-skips only "
+             "at low latency (p95 < 40ms); no robot task-success signal is "
+             "inferred from HTTP responses. Train with "
              "scripts/train_a2c2_lerobot.py (Modal A100; user-authorized).",
     ),
     a2c2_latency_threshold_ms: float = typer.Option(
@@ -2493,13 +2546,13 @@ def serve(
              "measurement under --inject-latency-ms).",
     ),
     a2c2_success_threshold: float = typer.Option(
-        0.90,
+        1.01,
         "--a2c2-success-threshold",
-        help="A2C2 hook auto-skips when /act success rate > this (0..1). "
-             "NOTE: 'success' here is /act error-rate (server crash) NOT "
-             "task-success — without task feedback wired in, leave at 0.90 "
-             "for default behavior or set to 1.01 to disable success-skip "
-             "for measurement runs.",
+        help="Advanced request-health gate: auto-skip when the fraction of "
+             "error-free /act responses exceeds this threshold. Default 1.01 "
+             "disables the gate, leaving latency-only behavior. Values from "
+             "0 (inclusive) to 1 (exclusive) enable it; 1.0 and above disable "
+             "it. This is HTTP request health, not robot task success.",
     ),
     bid_n_candidates: int = typer.Option(
         0,
@@ -2633,6 +2686,19 @@ def serve(
              "2-policy mode (--policy-b set) per ADR "
              "2026-04-25-policy-versioning-architecture.",
     ),
+    pro: bool = typer.Option(
+        False,
+        "--pro",
+        help="Enable paid serving. Requires a valid signed v2 license and a "
+             "fresh server-signed heartbeat before startup.",
+    ),
+    pro_license: str = typer.Option(
+        "",
+        "--pro-license",
+        envvar="TETHER_PRO_LICENSE",
+        help="Path to the signed v2 Pro license. Used only with --pro; defaults "
+             "to ~/.tether/pro.license.",
+    ),
     verbose: bool = typer.Option(False, help="Verbose logging"),
 ):
     """Start a VLA inference server. POST /act with image + instruction → actions.
@@ -2646,6 +2712,28 @@ def serve(
     if not export_path.exists():
         err_console.print(f"[red]Export directory not found: {export_dir}[/red]")
         console.print(f"[dim]Run 'tether export' first to create an export.[/dim]")
+        raise typer.Exit(1)
+
+    if pro_license and not pro:
+        err_console.print("[red]--pro-license/TETHER_PRO_LICENSE requires --pro.[/red]")
+        raise typer.Exit(1)
+    if pro and ros2:
+        err_console.print(
+            "[red]--pro cannot be combined with --ros2; ROS2 serving does not "
+            "yet enforce the signed-license lease.[/red]"
+        )
+        raise typer.Exit(1)
+    if pro and mcp:
+        err_console.print(
+            "[red]--pro cannot be combined with --mcp; MCP serving does not "
+            "yet enforce the signed-license lease.[/red]"
+        )
+        raise typer.Exit(1)
+    if pro and transport != "http":
+        err_console.print(
+            "[red]--pro currently supports only --transport http; the ZMQ "
+            "transport has no signed-lease admission gate.[/red]"
+        )
         raise typer.Exit(1)
 
     onnx_files = list(export_path.glob("*.onnx"))
@@ -3072,9 +3160,13 @@ def serve(
         shadow_policy=shadow_policy or None,
         shadow_sample=shadow_sample,
         shadow_queue_size=shadow_queue_size,
+        pro=pro,
+        pro_license=pro_license or None,
     )
     if api_key:
         composed.append("[cyan]api-key-auth[/cyan]")
+    if pro:
+        composed.append("[cyan]pro-license[/cyan]")
     if replan_hz > 0:
         composed.append(
             f"[cyan]replan[/cyan]={replan_hz:g}Hz/execute={execute_hz:g}Hz"
@@ -3171,27 +3263,20 @@ def serve(
     if transport == "zmq":
         console.print("[bold green]Starting ZMQ server...[/bold green]")
         from tether.runtime.transports.zmq.factory import create_zmq_server
-        from tether.runtime.transports.zmq.security import validate_zmq_bind_security
 
         try:
-            validate_zmq_bind_security(
+            zmq_server = create_zmq_server(
+                app_instance,
                 host=host,
-                curve_enabled=bool(zmq_server_cert and zmq_client_cert_dir),
-                control_auth_enabled=bool(zmq_control_token),
+                port=port,
+                curve_server_cert=zmq_server_cert or None,
+                curve_client_cert_dir=zmq_client_cert_dir or None,
+                control_token=zmq_control_token or None,
                 allow_insecure=zmq_insecure_ok,
             )
         except ValueError as exc:
             err_console.print(f"[red]{exc}[/red]", markup=False)
             raise typer.Exit(1) from exc
-
-        zmq_server = create_zmq_server(
-            app_instance,
-            host=host,
-            port=port,
-            curve_server_cert=zmq_server_cert or None,
-            curve_client_cert_dir=zmq_client_cert_dir or None,
-            control_token=zmq_control_token or None,
-        )
         composed.append("[cyan]transport=zmq[/cyan]")
         if zmq_server_cert:
             composed.append("[cyan]curve=on[/cyan]")

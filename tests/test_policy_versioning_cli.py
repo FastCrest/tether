@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from tether.cli import app
+from tests.export_config_factory import write_test_export_config
 
 
 runner = CliRunner()
@@ -23,8 +24,7 @@ runner = CliRunner()
 def fake_export(tmp_path):
     p = tmp_path / "export"
     p.mkdir()
-    (p / "model.onnx").write_bytes(b"fake")
-    (p / "tether_config.json").write_text("{}")
+    write_test_export_config(p, model_type="smolvla", action_dim=7)
     return p
 
 
@@ -32,8 +32,7 @@ def fake_export(tmp_path):
 def fake_export_b(tmp_path):
     p = tmp_path / "export_b"
     p.mkdir()
-    (p / "model.onnx").write_bytes(b"fake")
-    (p / "tether_config.json").write_text("{}")
+    write_test_export_config(p, model_type="smolvla", action_dim=7)
     return p
 
 
@@ -170,8 +169,7 @@ def test_shadow_policy_surfaces_active_banner(fake_export, tmp_path, monkeypatch
     active shadow-rollout banner before handing off to uvicorn."""
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    (shadow / "model.onnx").write_bytes(b"fake")
-    (shadow / "tether_config.json").write_text("{}")
+    write_test_export_config(shadow, model_type="smolvla", action_dim=7)
     monkeypatch.setitem(
         sys.modules,
         "onnxruntime",

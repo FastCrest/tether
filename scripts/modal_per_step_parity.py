@@ -25,11 +25,12 @@ Usage:
     modal profile activate suranjana-jain
     HF_TOKEN=<token> modal run scripts/modal_per_step_parity.py
 """
+
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
 
@@ -105,10 +106,12 @@ image = (
         f'echo "build_bust={_BUST}"',
         'pip install -e "/root/tether-vla[monolithic]"',
     )
-    .env({
-        "HF_HOME": HF_CACHE,
-        "TRANSFORMERS_CACHE": f"{HF_CACHE}/transformers",
-    })
+    .env(
+        {
+            "HF_HOME": HF_CACHE,
+            "TRANSFORMERS_CACHE": f"{HF_CACHE}/transformers",
+        }
+    )
 )
 
 
@@ -142,12 +145,46 @@ CELLS = [
     volumes={HF_CACHE: hf_cache, ONNX_OUT: onnx_output},
     secrets=[_hf_secret()],
 )
-def parity_test() -> dict:
+def parity_test(
+    receipt_namespace: str = "",
+    source_repository: str = "",
+    source_sha: str = "",
+    workflow_run_id: int = 0,
+    workflow_run_attempt: int = 0,
+) -> dict:
     """Build baked + per-step exports for each cell, run both on shared
     seeded inputs, compute cos + max_abs."""
     import logging
     import numpy as np
     import onnxruntime as ort
+    from tether.receipt_provenance import (
+        hash_export_set,
+        receipt_mode_binding,
+        receipt_run_dir,
+    )
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    log = logging.getLogger(__name__)
+
+    namespace_binding = receipt_mode_binding(
+        receipt_namespace=receipt_namespace,
+        repository=source_repository,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+    )
+    if namespace_binding is None:
+        onnx_root = Path(ONNX_OUT)
+    else:
+        namespace = str(namespace_binding["value"])
+        onnx_root = receipt_run_dir(Path(ONNX_OUT), namespace)
+        cache_root = receipt_run_dir(Path(HF_CACHE), namespace)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        os.environ["HF_HOME"] = str(cache_root)
+        os.environ["TRANSFORMERS_CACHE"] = str(cache_root / "transformers")
+
+    # Hugging Face/Transformers read cache configuration at import time.
+    from huggingface_hub import model_info
 
     from tether.exporters.decomposed import (
         PI05_HEAD_DIM,
@@ -156,18 +193,29 @@ def parity_test() -> dict:
         export_pi05_decomposed,
     )
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    log = logging.getLogger(__name__)
-
     results: dict[str, dict] = {}
+    model_identities: dict[str, tuple[str, str]] = {}
 
     for cell in CELLS:
         log.info("=" * 60)
         log.info("CELL: %s", cell["label"])
         log.info("=" * 60)
 
-        baked_dir = Path(ONNX_OUT) / f"{cell['subdir']}_baked"
-        per_step_dir = Path(ONNX_OUT) / f"{cell['subdir']}_per_step"
+        if cell["model_id"] not in model_identities:
+            revision = model_info(cell["model_id"], token=os.environ.get("HF_TOKEN")).sha
+            if not revision:
+                raise RuntimeError(
+                    f"Hugging Face returned no immutable revision for {cell['model_id']}"
+                )
+            identity = f"huggingface:{cell['model_id']}@{revision}".encode()
+            model_identities[cell["model_id"]] = (
+                revision,
+                hashlib.sha256(identity).hexdigest(),
+            )
+        model_revision, model_digest = model_identities[cell["model_id"]]
+
+        baked_dir = onnx_root / f"{cell['subdir']}_baked"
+        per_step_dir = onnx_root / f"{cell['subdir']}_per_step"
         baked_dir.mkdir(parents=True, exist_ok=True)
         per_step_dir.mkdir(parents=True, exist_ok=True)
 
@@ -175,6 +223,7 @@ def parity_test() -> dict:
         log.info("[%s] building baked-loop export → %s", cell["label"], baked_dir)
         export_pi05_decomposed(
             model_id=cell["model_id"],
+            revision=model_revision,
             output_dir=str(baked_dir),
             num_steps=cell["num_steps"],
             student_checkpoint=cell["student_checkpoint"],
@@ -187,6 +236,7 @@ def parity_test() -> dict:
         log.info("[%s] building per-step export → %s", cell["label"], per_step_dir)
         export_pi05_decomposed(
             model_id=cell["model_id"],
+            revision=model_revision,
             output_dir=str(per_step_dir),
             num_steps=cell["num_steps"],
             student_checkpoint=cell["student_checkpoint"],
@@ -211,7 +261,9 @@ def parity_test() -> dict:
         actual_per_step = sess_per_step.get_providers()[0]
         log.info(
             "[%s] providers: baked=%s, per_step=%s",
-            cell["label"], actual_baked, actual_per_step,
+            cell["label"],
+            actual_baked,
+            actual_per_step,
         )
 
         # Seeded shared inputs for parity comparison
@@ -266,14 +318,25 @@ def parity_test() -> dict:
         max_abs = float(np.max(np.abs(actions_baked - actions_per_step)))
         mean_abs = float(np.mean(np.abs(actions_baked - actions_per_step)))
 
+        current_revision = model_info(cell["model_id"], token=os.environ.get("HF_TOKEN")).sha
+        if current_revision != model_revision:
+            raise RuntimeError(
+                f"Model revision changed during export: {model_revision} -> {current_revision}"
+            )
+
         log.info(
             "[%s] cos=%.10f, max_abs=%.3e, mean_abs=%.3e",
-            cell["label"], cos, max_abs, mean_abs,
+            cell["label"],
+            cos,
+            max_abs,
+            mean_abs,
         )
 
         results[cell["label"]] = {
             "cell": cell["label"],
             "model_id": cell["model_id"],
+            "model_revision": model_revision,
+            "model_digest": model_digest,
             "num_steps": cell["num_steps"],
             "cos": cos,
             "max_abs": max_abs,
@@ -281,6 +344,10 @@ def parity_test() -> dict:
             "actions_shape": list(actions_baked.shape),
             "used_provider_baked": actual_baked,
             "used_provider_per_step": actual_per_step,
+            "exports": {
+                "baked": hash_export_set(baked_dir),
+                "per_step": hash_export_set(per_step_dir),
+            },
             # Acceptance gate per research sidecar Lens 5
             "passes_cos_gate": cos >= 0.99999,
             "passes_max_abs_gate": max_abs <= 1e-5,
@@ -290,13 +357,17 @@ def parity_test() -> dict:
         # Free GPU memory before next cell
         del sess_baked, sess_per_step
         import gc
+
         gc.collect()
 
-    return {
+    result = {
         "cells": results,
         "all_passed": all(r["passes_overall"] for r in results.values()),
         "thresholds": {"cos_min": 0.99999, "max_abs_max": 1e-5},
     }
+    if namespace_binding is not None:
+        result["receipt_namespace"] = namespace_binding
+    return result
 
 
 def _past_kv_names(num_layers: int) -> list[str]:
@@ -310,15 +381,38 @@ def _past_kv_names(num_layers: int) -> list[str]:
 
 
 @app.local_entrypoint()
-def main():
+def main(
+    receipt_namespace: str = "",
+    source_repository: str = "",
+    source_sha: str = "",
+    workflow_run_id: int = 0,
+    workflow_run_attempt: int = 0,
+):
+    from tether.receipt_provenance import receipt_mode_binding, receipt_run_dir
+
+    namespace_binding = receipt_mode_binding(
+        receipt_namespace=receipt_namespace,
+        repository=source_repository,
+        source_sha=source_sha,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+    )
     print("=" * 60)
     print("Per-step expert ONNX parity test (gate 3)")
     print("=" * 60)
-    result = parity_test.remote()
+    result = parity_test.remote(
+        receipt_namespace,
+        source_repository,
+        source_sha,
+        workflow_run_id,
+        workflow_run_attempt,
+    )
 
     # Write receipt
-    receipt_path = Path(REPO_ROOT) / ".." / "reflex_context" / "per_step_parity_last_run.json"
-    receipt_path = receipt_path.resolve()
+    receipt_root = (Path(REPO_ROOT) / ".." / "reflex_context").resolve()
+    if namespace_binding is not None:
+        receipt_root = receipt_run_dir(receipt_root, str(namespace_binding["value"]))
+    receipt_path = receipt_root / "per_step_parity_last_run.json"
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(result, indent=2))
     print(f"\nReceipt written: {receipt_path}")

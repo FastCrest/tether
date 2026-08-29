@@ -14,6 +14,7 @@ Usage::
     server.register_endpoint("predict_action", my_handler)
     server.run()  # blocks
 """
+
 from __future__ import annotations
 
 import hmac
@@ -27,12 +28,16 @@ import msgpack
 import zmq
 from zmq.auth.thread import ThreadAuthenticator
 
-from tether.runtime.transports.zmq.security import load_curve_key
+from tether.runtime.transports.zmq.security import (
+    load_curve_key,
+    validate_zmq_bind_security,
+)
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 FORMAT_PROTOBUF_BYTE = 0x01
+CONTROL_ENDPOINTS = frozenset({"ping", "kill"})
 
 
 class WireSchemaMismatchError(RuntimeError):
@@ -67,13 +72,17 @@ class PolicyServer:
     - ``kill`` — triggers graceful shutdown
 
     Args:
-        host: Bind address (``'*'`` for all interfaces).
+        host: Bind address. Defaults to loopback. Non-loopback binds require
+            CURVE client authentication and a control token unless
+            ``allow_insecure`` is explicitly enabled.
         port: TCP port to listen on. 0 = kernel-assigned (for testing).
+        allow_insecure: Allow an incompletely protected non-loopback bind.
+            Intended only for isolated lab networks; emits a warning.
     """
 
     def __init__(
         self,
-        host: str = "*",
+        host: str = "127.0.0.1",
         port: int = 5555,
         *,
         curve_server_cert: str | Path | None = None,
@@ -81,11 +90,23 @@ class PolicyServer:
         curve_server_secret_key: str | bytes | None = None,
         curve_client_cert_dir: str | Path | None = None,
         control_token: str | None = None,
+        allow_insecure: bool = False,
     ) -> None:
+        curve_enabled = bool(
+            curve_client_cert_dir
+            and (curve_server_cert or (curve_server_public_key and curve_server_secret_key))
+        )
+        validate_zmq_bind_security(
+            host=host,
+            curve_enabled=curve_enabled,
+            control_auth_enabled=bool(control_token),
+            allow_insecure=allow_insecure,
+        )
+
         self.running = True
         self.context = zmq.Context()
         self._authenticator: ThreadAuthenticator | None = None
-        self._control_token = control_token
+        self._control_token = control_token or None
         self.socket = self.context.socket(zmq.REP)
         self._configure_curve(
             curve_server_cert=curve_server_cert,
@@ -102,13 +123,13 @@ class PolicyServer:
             "ping",
             self._handle_ping,
             requires_input=False,
-            requires_auth=self._control_token is not None,
+            requires_auth=True,
         )
         self.register_endpoint(
             "kill",
             self._handle_kill,
             requires_input=False,
-            requires_auth=self._control_token is not None,
+            requires_auth=True,
         )
 
     @property
@@ -126,6 +147,8 @@ class PolicyServer:
         requires_input: bool = True,
         requires_auth: bool = False,
     ) -> None:
+        if name in CONTROL_ENDPOINTS:
+            requires_auth = True
         self._endpoints[name] = _EndpointHandler(handler, requires_input, requires_auth)
 
     def _configure_curve(
@@ -136,9 +159,15 @@ class PolicyServer:
         curve_server_secret_key: str | bytes | None,
         curve_client_cert_dir: str | Path | None,
     ) -> None:
-        if curve_server_cert is None and curve_server_public_key is None and curve_server_secret_key is None:
+        if (
+            curve_server_cert is None
+            and curve_server_public_key is None
+            and curve_server_secret_key is None
+        ):
             if curve_client_cert_dir is not None:
-                raise ValueError("curve_client_cert_dir requires a CURVE server certificate or keypair")
+                raise ValueError(
+                    "curve_client_cert_dir requires a CURVE server certificate or keypair"
+                )
             return
 
         if curve_server_cert is not None:
@@ -153,7 +182,9 @@ class PolicyServer:
             secret_key = load_curve_key(curve_server_secret_key, secret=True)
 
         if curve_client_cert_dir is None:
-            raise ValueError("CURVE server mode requires curve_client_cert_dir for client authentication")
+            raise ValueError(
+                "CURVE server mode requires curve_client_cert_dir for client authentication"
+            )
 
         client_cert_dir = Path(curve_client_cert_dir).expanduser()
         if not client_cert_dir.is_dir():
@@ -168,7 +199,7 @@ class PolicyServer:
 
     def _authorize_control_request(self, request: dict[str, Any]) -> None:
         if self._control_token is None:
-            return
+            raise PermissionError("ZMQ control endpoint disabled; configure a control token")
         token = request.get("auth_token")
         if not isinstance(token, str) or not hmac.compare_digest(token, self._control_token):
             raise PermissionError("ZMQ control endpoint requires a valid auth token")
@@ -211,8 +242,7 @@ class PolicyServer:
                 # Reserved protobuf first-byte check (Z-3)
                 if len(message) > 0 and message[0] == FORMAT_PROTOBUF_BYTE:
                     raise NotImplementedError(
-                        "Protobuf wire format (0x01) is reserved for v2. "
-                        "Use msgpack (the default)."
+                        "Protobuf wire format (0x01) is reserved for v2. Use msgpack (the default)."
                     )
 
                 request = msgpack.unpackb(message, raw=False)
@@ -239,9 +269,7 @@ class PolicyServer:
             except Exception as e:
                 logger.error("ZMQ server error: %s", e)
                 try:
-                    self.socket.send(
-                        msgpack.packb({"error": str(e)}, use_bin_type=True)
-                    )
+                    self.socket.send(msgpack.packb({"error": str(e)}, use_bin_type=True))
                 except Exception:
                     pass
 

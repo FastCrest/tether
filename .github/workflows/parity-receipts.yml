@@ -1,0 +1,258 @@
+name: Parity receipts
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      authorize_paid_run:
+        description: Authorize the paid Modal A100 receipt producers
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - "release/**"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: parity-receipts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    name: Produce provenance-bound receipts
+    runs-on: ubuntu-latest
+    # This environment must require independent reviewers, prevent self-review,
+    # and allow only protected main/release/* deployment branches. See
+    # .github/PARITY_RECEIPTS.md. Environment secrets are unavailable until
+    # its protection rules approve this job.
+    environment: parity-receipts-production
+    timeout-minutes: 120
+    outputs:
+      authorized: ${{ steps.authorization.outputs.authorized }}
+      artifact_id: ${{ steps.payload.outputs.artifact-id }}
+      artifact_name: ${{ steps.namespace.outputs.payload_artifact_name }}
+      artifact_digest: ${{ steps.payload.outputs.artifact-digest }}
+      export_id: ${{ steps.manifest.outputs.export_id }}
+      export_digest: ${{ steps.manifest.outputs.export_digest }}
+      model_digest: ${{ steps.authorization.outputs.model_digest }}
+      receipt_namespace: ${{ steps.namespace.outputs.receipt_namespace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Check authorization and required identities
+        id: authorization
+        env:
+          AUTHORIZED_INPUT: ${{ inputs.authorize_paid_run || false }}
+          CONFIGURED_MODEL_DIGEST: ${{ vars.PARITY_MODEL_DIGEST }}
+          PROTECTED_ENVIRONMENT_CONFIGURED: ${{ vars.PARITY_RECEIPTS_ENVIRONMENT_PROTECTED }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          model_digest="$CONFIGURED_MODEL_DIGEST"
+          authorized=true
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$AUTHORIZED_INPUT" != "true" ]; then
+            authorized=false
+          fi
+          if [ -z "$MODAL_TOKEN_ID" ] || [ -z "$MODAL_TOKEN_SECRET" ] || [ -z "$HF_TOKEN" ]; then
+            authorized=false
+          fi
+          if [ "$PROTECTED_ENVIRONMENT_CONFIGURED" != "true" ]; then
+            authorized=false
+          fi
+          if ! printf '%s' "$model_digest" | grep -Eq '^(sha256:)?[0-9a-fA-F]{64}$'; then
+            authorized=false
+          fi
+          echo "authorized=$authorized" >> "$GITHUB_OUTPUT"
+          echo "model_digest=$model_digest" >> "$GITHUB_OUTPUT"
+          if [ "$authorized" != "true" ]; then
+            echo "::notice::Parity receipt production skipped: protected-environment approval/configuration, authorization, secrets, or model digest unavailable."
+          fi
+
+      - name: Install producer client
+        if: steps.authorization.outputs.authorized == 'true'
+        run: python -m pip install --upgrade pip modal && python -m pip install -e .
+
+      - name: Derive immutable receipt namespace
+        if: steps.authorization.outputs.authorized == 'true'
+        id: namespace
+        run: >-
+          python -m tether.receipt_provenance namespace
+          --repository "${{ github.repository }}"
+          --source-sha "${{ github.sha }}"
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+
+      - name: Run Modal parity producer
+        if: steps.authorization.outputs.authorized == 'true'
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          modal run scripts/modal_per_step_parity.py
+          --receipt-namespace "${{ steps.namespace.outputs.receipt_namespace }}"
+          --source-repository "${{ github.repository }}"
+          --source-sha "${{ github.sha }}"
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+
+      - name: Run Modal overhead producer
+        if: steps.authorization.outputs.authorized == 'true'
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          modal run scripts/modal_per_step_overhead.py
+          --receipt-namespace "${{ steps.namespace.outputs.receipt_namespace }}"
+          --source-repository "${{ github.repository }}"
+          --source-sha "${{ github.sha }}"
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+
+      - name: Run Modal end-to-end latency producer
+        if: steps.authorization.outputs.authorized == 'true'
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: >-
+          modal run scripts/modal_per_step_e2e_latency.py
+          --receipt-namespace "${{ steps.namespace.outputs.receipt_namespace }}"
+          --source-repository "${{ github.repository }}"
+          --source-sha "${{ github.sha }}"
+          --workflow-run-id "${{ github.run_id }}"
+          --workflow-run-attempt "${{ github.run_attempt }}"
+
+      - name: Collect receipt payload
+        if: steps.authorization.outputs.authorized == 'true'
+        env:
+          RECEIPT_SOURCE: ${{ github.workspace }}/../reflex_context
+          RECEIPT_NAMESPACE: ${{ steps.namespace.outputs.receipt_namespace }}
+        run: |
+          mkdir receipt-payload
+          namespace_source="$RECEIPT_SOURCE/receipt_runs/$RECEIPT_NAMESPACE"
+          cp "$namespace_source/per_step_parity_last_run.json" receipt-payload/
+          cp "$namespace_source/per_step_overhead_last_run.json" receipt-payload/
+          cp "$namespace_source/per_step_e2e_latency_last_run.json" receipt-payload/
+
+      - name: Upload hashed receipt payload
+        if: steps.authorization.outputs.authorized == 'true'
+        id: payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.namespace.outputs.payload_artifact_name }}
+          path: receipt-payload/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build provenance manifest
+        if: steps.authorization.outputs.authorized == 'true'
+        id: manifest
+        run: >-
+          python -m tether.receipt_provenance build
+          --payload-dir receipt-payload
+          --repository "${{ github.repository }}"
+          --source-sha "${{ github.sha }}"
+          --source-ref "${{ github.ref }}"
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+          --receipt-namespace "${{ steps.namespace.outputs.receipt_namespace }}"
+          --event "${{ github.event_name }}"
+          --artifact-id "${{ steps.payload.outputs.artifact-id }}"
+          --artifact-name "${{ steps.namespace.outputs.payload_artifact_name }}"
+          --artifact-digest "${{ steps.payload.outputs.artifact-digest }}"
+          --model-id "lerobot/pi05_libero_finetuned_v044"
+          --model-digest "${{ steps.authorization.outputs.model_digest }}"
+          --expires-in-hours 168
+          --output receipt-manifest/receipt-manifest.json
+
+      - name: Upload provenance manifest
+        if: steps.authorization.outputs.authorized == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.namespace.outputs.manifest_artifact_name }}
+          path: receipt-manifest/receipt-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Release branches require receipt authorization
+        if: >-
+          always() && startsWith(github.ref, 'refs/heads/release/') &&
+          steps.authorization.outputs.authorized != 'true'
+        run: |
+          echo "::error::Release receipt gate cannot run without the protected receipt environment, Modal/HF secrets, and PARITY_MODEL_DIGEST."
+          exit 1
+
+  consume:
+    name: Verify and enforce receipt gates
+    needs: produce
+    if: needs.produce.outputs.authorized == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install receipt verifier
+        run: python -m pip install -e ".[dev]"
+
+      - name: Download payload by server-assigned artifact id
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.produce.outputs.artifact_id }}
+          path: receipt-payload
+
+      - name: Download named provenance manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: parity-receipt-manifest-${{ github.sha }}
+          path: receipt-manifest
+
+      - name: Verify receipt provenance and internal hashes
+        run: >-
+          python -m tether.receipt_provenance verify-local
+          --manifest receipt-manifest/receipt-manifest.json
+          --payload-dir receipt-payload
+          --repository "${{ github.repository }}"
+          --source-sha "${{ github.sha }}"
+          --source-ref "${{ github.ref }}"
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+          --event "${{ github.event_name }}"
+          --artifact-id "${{ needs.produce.outputs.artifact_id }}"
+          --artifact-name "${{ needs.produce.outputs.artifact_name }}"
+          --artifact-digest "${{ needs.produce.outputs.artifact_digest }}"
+          --model-id "lerobot/pi05_libero_finetuned_v044"
+          --model-digest "${{ needs.produce.outputs.model_digest }}"
+          --export-id "${{ needs.produce.outputs.export_id }}"
+          --export-digest "${{ needs.produce.outputs.export_digest }}"
+
+      - name: Run fail-loud receipt gates
+        env:
+          TETHER_RECEIPT_DIR: ${{ github.workspace }}/receipt-payload
+          TETHER_REQUIRE_RECEIPTS: "1"
+        run: >-
+          pytest -v
+          tests/test_decomposed_per_step_parity.py
+          tests/test_decomposed_per_step_overhead.py
+          tests/test_decomposed_per_step_e2e_latency.py

@@ -2,16 +2,8 @@ name = "reflex-data"
 main = "worker.js"
 compatibility_date = "2026-05-01"
 
-# Fill in `database_id` after `wrangler d1 create reflex-data`.
-[[d1_databases]]
-binding = "DB"
-database_name = "reflex-data"
-database_id = "REPLACE_WITH_DATABASE_ID_FROM_WRANGLER_D1_CREATE"
-
-# R2 bucket for raw episode storage.
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "reflex-raw-episodes"
+# Intentionally no D1 or R2 bindings. This legacy Worker is a 410 migration
+# shim only; contribution-worker is the sole upload and statistics authority.
 
 # Optional: bind a custom domain after first deploy.
 # routes = [{ pattern = "data.fastcrest.com/*", custom_domain = true }]

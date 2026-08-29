@@ -3,7 +3,7 @@
 Skipped by default. Set TETHER_LIVE_INTEGRATION_TESTS=1 to run.
 
 What it verifies (against the deployed worker at
-https://tether-contributions.fastcrest.workers.dev):
+https://reflex-contributions.fastcrest.workers.dev):
 
   1. /healthz returns 200
   2. Sign + PUT + complete round-trip with a unique synthetic contributor_id
@@ -20,7 +20,6 @@ Manual run:
 """
 from __future__ import annotations
 
-import json
 import os
 import uuid
 
@@ -29,6 +28,10 @@ import pytest
 REQUIRES_LIVE_WORKER = pytest.mark.skipif(
     os.environ.get("TETHER_LIVE_INTEGRATION_TESTS", "").lower() not in ("1", "true", "yes"),
     reason="Set TETHER_LIVE_INTEGRATION_TESTS=1 to enable live-worker tests",
+)
+REQUIRES_LIVE_ADMIN = pytest.mark.skipif(
+    not os.environ.get("TETHER_CONTRIBUTION_ADMIN_TOKEN"),
+    reason="Set TETHER_CONTRIBUTION_ADMIN_TOKEN for admin-only revoke smoke tests",
 )
 
 
@@ -50,112 +53,65 @@ def test_healthz() -> None:
 
 @REQUIRES_LIVE_WORKER
 def test_full_round_trip(smoke_contributor_id: str) -> None:
-    """sign → put → complete → stats → revoke → sign-rejected."""
-    import httpx
-    from tether.curate.uploader import (
-        _complete_upload,
-        _put_bytes,
-        _request_signed_url,
-        _worker_url,
-    )
+    """register → signed reserve → capability PUT → complete → signed stats."""
+    del smoke_contributor_id
+    from tether.contributor_auth import ContributorAuthClient
+    from tether.curate.uploader import _worker_url
 
     file_name = "smoke.jsonl"
     payload_bytes = b'{"hello":"world"}\n' * 10
-    byte_size = len(payload_bytes)
-
-    # 1. Sign
-    sign = _request_signed_url(
-        contributor_id=smoke_contributor_id,
-        tier="free",
-        opted_in_at="2026-05-05T00:00:00Z",
+    client = ContributorAuthClient(_worker_url())
+    sign = client.reserve(
         file_name=file_name,
-        byte_size=byte_size,
-        episode_count=1,
-        privacy_mode="hash_only",
+        file_bytes=payload_bytes,
+        media_type="application/jsonl",
     )
     assert "upload_id" in sign
     assert "put_url" in sign
-    assert sign["r2_key"].startswith(f"free-contributors/{smoke_contributor_id}/")
+    assert sign["r2_key"].startswith(
+        f"free-contributors/{client.credentials.contributor_id}/"
+    )
 
     # 2. PUT
-    bytes_up = _put_bytes(
-        put_url=sign["put_url"],
-        file_bytes=payload_bytes,
-        max_mbps=10.0,
-    )
-    assert bytes_up == byte_size
+    bytes_up = client.put(sign, payload_bytes, media_type="application/jsonl")
+    assert bytes_up == len(payload_bytes)
 
     # 3. Complete
-    complete = _complete_upload(upload_id=sign["upload_id"], episode_count=1)
+    complete = client.complete(sign["upload_id"])
     assert complete.get("status") == "completed"
 
     # 4. Stats
-    stats_resp = httpx.get(
-        f"{_worker_url()}/v1/contributors/{smoke_contributor_id}/stats", timeout=10.0,
-    )
-    assert stats_resp.status_code == 200
-    stats = stats_resp.json()
-    assert stats["total_episodes"] >= 1
+    stats = client.stats()
+    # Episode counts are not trusted from the client in Contributor Auth v1.
+    assert stats["total_episodes"] >= 0
     assert stats["total_uploads"] >= 1
-    assert stats["total_bytes"] >= byte_size
+    assert stats["total_bytes"] >= len(payload_bytes)
     assert stats["revoked_at"] is None
 
-    # 5. Revoke
-    revoke = httpx.post(
-        f"{_worker_url()}/v1/revoke/cascade",
-        json={"contributor_id": smoke_contributor_id, "scope": "all"},
-        timeout=10.0,
-    )
-    assert revoke.status_code == 200
-    assert "request_id" in revoke.json()
-
-    # 6. Stats after revoke shows revoked_at set
-    stats2 = httpx.get(
-        f"{_worker_url()}/v1/contributors/{smoke_contributor_id}/stats", timeout=10.0,
-    ).json()
-    assert stats2.get("revoked_at") is not None
-
-    # 7. Future sign attempt is refused
-    with pytest.raises(Exception) as exc_info:
-        _request_signed_url(
-            contributor_id=smoke_contributor_id,
-            tier="free",
-            opted_in_at="2026-05-05T00:00:00Z",
-            file_name=file_name,
-            byte_size=byte_size,
-            episode_count=1,
-            privacy_mode="hash_only",
-        )
-    # Either ContributorRevoked or WorkerError carrying a 403 — both are correct
-    assert "revoked" in str(exc_info.value).lower() or "403" in str(exc_info.value)
-
 
 @REQUIRES_LIVE_WORKER
-def test_complete_without_put_returns_412(smoke_contributor_id: str) -> None:
+def test_complete_without_put_returns_409(smoke_contributor_id: str) -> None:
     """The worker should refuse to mark a session 'completed' when bytes
     never landed in R2."""
-    from tether.curate.uploader import (
-        _request_signed_url,
-        _complete_upload,
-        WorkerError,
-    )
+    del smoke_contributor_id
+    from tether.contributor_auth import ContributorAuthClient, ContributorAuthError
+    from tether.curate.uploader import _worker_url
 
-    sign = _request_signed_url(
-        contributor_id=smoke_contributor_id,
-        tier="free",
-        opted_in_at="2026-05-05T00:00:00Z",
+    client = ContributorAuthClient(_worker_url())
+    sign = client.reserve(
         file_name="nobytes.jsonl",
-        byte_size=100,
-        episode_count=1,
-        privacy_mode="hash_only",
+        file_bytes=b"x" * 100,
+        media_type="application/jsonl",
     )
-    with pytest.raises(WorkerError) as exc_info:
-        _complete_upload(upload_id=sign["upload_id"], episode_count=1)
-    # 412 precondition failed — bytes weren't put
-    assert exc_info.value.status == 412
+    with pytest.raises(ContributorAuthError) as exc_info:
+        client.complete(sign["upload_id"])
+    # Reservation is still pending; completion is not ready until PUT finalizes.
+    assert exc_info.value.status == 409
+    assert exc_info.value.body.get("error") == "upload_not_ready"
 
 
 @REQUIRES_LIVE_WORKER
+@REQUIRES_LIVE_ADMIN
 def test_revoke_cascade_status_endpoint(smoke_contributor_id: str) -> None:
     """Verify the 5-stage cascade status endpoint returns expected shape."""
     import httpx
@@ -165,6 +121,7 @@ def test_revoke_cascade_status_endpoint(smoke_contributor_id: str) -> None:
     revoke = httpx.post(
         f"{_worker_url()}/v1/revoke/cascade",
         json={"contributor_id": smoke_contributor_id, "scope": "all"},
+        headers={"Authorization": f"Bearer {os.environ['TETHER_CONTRIBUTION_ADMIN_TOKEN']}"},
         timeout=10.0,
     ).json()
     assert "request_id" in revoke
@@ -173,7 +130,9 @@ def test_revoke_cascade_status_endpoint(smoke_contributor_id: str) -> None:
     # Status endpoint immediately after revoke — cascade should be in_progress
     # with revoke + auto-completed Phase 1 stages 4 + 5 marked complete.
     status = httpx.get(
-        f"{_worker_url()}/v1/revoke/cascade-status/{request_id}", timeout=10.0,
+        f"{_worker_url()}/v1/revoke/cascade-status/{request_id}",
+        headers={"Authorization": f"Bearer {os.environ['TETHER_CONTRIBUTION_ADMIN_TOKEN']}"},
+        timeout=10.0,
     ).json()
     assert status["request_id"] == request_id
     assert status["contributor_id"] == smoke_contributor_id
@@ -193,12 +152,14 @@ def test_revoke_cascade_status_endpoint(smoke_contributor_id: str) -> None:
 
 
 @REQUIRES_LIVE_WORKER
+@REQUIRES_LIVE_ADMIN
 def test_revoke_cascade_status_404_unknown_request() -> None:
     import httpx
     from tether.curate.uploader import _worker_url
 
     r = httpx.get(
         f"{_worker_url()}/v1/revoke/cascade-status/rev_does_not_exist",
+        headers={"Authorization": f"Bearer {os.environ['TETHER_CONTRIBUTION_ADMIN_TOKEN']}"},
         timeout=10.0,
     )
     assert r.status_code == 404

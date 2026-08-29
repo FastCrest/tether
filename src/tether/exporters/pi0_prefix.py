@@ -826,15 +826,33 @@ def export_pi0_prefix(
         result["metadata"]["expert_error"] = str(e)
 
     # 6. Save config manifest
+    if "expert_stack" not in result["files"]:
+        raise RuntimeError("pi0 prefix export is incomplete: expert_stack.onnx was not produced")
     config = {
         "model_id": model_id,
         "model_type": "pi0",
+        "export_kind": "decomposed_onnx",
+        "action_dim": action_dim,
+        "num_denoising_steps": 10,
+        "opset": 19,
         "pipeline": "prefix_optimum + expert_custom",
         "components": result["files"],
         "metadata": result["metadata"],
     }
-    (output_dir / "tether_config.json").write_text(json.dumps(config, indent=2))
-    result["files"]["config"] = str(output_dir / "tether_config.json")
+    from tether.export_config import build_producer_config, write_tether_config
+
+    canonical = build_producer_config(
+        output_dir,
+        producer="pi0_prefix",
+        model_id=model_id,
+        model_type="pi0",
+        action_dim=action_dim,
+        num_denoising_steps=10,
+        opset=19,
+        metadata=config,
+    )
+    config_path = write_tether_config(output_dir, canonical)
+    result["files"]["config"] = str(config_path)
 
     logger.info("pi0 prefix export complete: %d components", len(result["files"]))
     return result

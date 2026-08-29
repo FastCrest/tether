@@ -28,8 +28,9 @@ def finetune_command(
     policy: str = typer.Option(
         "auto",
         "--policy",
-        help="Policy class. 'auto' (default) infers from --base. Set explicitly "
-             "(e.g. 'act') for from-scratch training. Per ADR 2026-05-06.",
+        help="Policy class. 'auto' (default) loads the config from --base. "
+             "Set explicitly (e.g. 'act') for from-scratch training. "
+             "Per ADR 2026-05-06.",
     ),
     chunk_size: int = typer.Option(
         50,

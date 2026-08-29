@@ -1,0 +1,258 @@
+name: Quality ratchet
+
+# pull_request_target loads this workflow from protected main. The job never
+# imports or executes PR code; it runs a protected-base judge over static files.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  quality-ratchet:
+    name: ruff + mypy (no new debt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+
+    steps:
+      - name: Check out the protected comparison graph
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned quality tools
+        run: python -m pip install "ruff==0.15.10" "mypy==1.20.1"
+
+      - name: Resolve commits and protected judge
+        id: commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid head SHA: $HEAD_SHA" >&2
+            exit 2
+          fi
+          if [[ "$BASE_SHA" =~ ^0{40}$ ]]; then
+            BASE_SHA=$(git rev-parse "${HEAD_SHA}^" 2>/dev/null || printf '%s' "$HEAD_SHA")
+          fi
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid base SHA: $BASE_SHA" >&2
+            exit 2
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+            if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
+              git fetch --no-tags origin \
+                "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/quality-head"
+            else
+              git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+            fi
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+
+          JUDGE="$RUNNER_TEMP/protected-ci-quality-ratchet.py"
+          if git cat-file -e "${BASE_SHA}:scripts/ci_quality_ratchet.py" 2>/dev/null; then
+            git show "${BASE_SHA}:scripts/ci_quality_ratchet.py" > "$JUDGE"
+            JUDGE_SOURCE="protected-base"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            # One-time bootstrap for the merge that first introduces the gate.
+            git show "${HEAD_SHA}:scripts/ci_quality_ratchet.py" > "$JUDGE"
+            JUDGE_SOURCE="bootstrap-head"
+          else
+            echo "Protected base does not contain the quality judge" >&2
+            exit 2
+          fi
+          python -m py_compile "$JUDGE"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "judge=$JUDGE" >> "$GITHUB_OUTPUT"
+          echo "judge_source=$JUDGE_SOURCE" >> "$GITHUB_OUTPUT"
+
+      - name: Bind the event to the current protected-main tip
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MAIN_REF="$RUNNER_TEMP/current-main-ref.json"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" > "$MAIN_REF"
+          ARGS=(--verify-main-ref-response "$MAIN_REF")
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
+            PULL_REQUEST="$RUNNER_TEMP/current-pull-request.json"
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$PULL_REQUEST"
+            ARGS+=(
+              --verify-pull-request-response "$PULL_REQUEST"
+              --expected-current-main-sha "${{ steps.commits.outputs.base_sha }}"
+              --expected-current-head-sha "${{ steps.commits.outputs.head_sha }}"
+            )
+          else
+            ARGS+=(--expected-current-main-sha "${{ steps.commits.outputs.head_sha }}")
+          fi
+          python -I "${{ steps.commits.outputs.judge }}" "${ARGS[@]}"
+
+      - name: Verify protected policy authorization
+        id: authorization
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            echo "push_approved=true" >> "$GITHUB_OUTPUT"
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          STATUS_FILE="$RUNNER_TEMP/policy-status.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/status" > "$STATUS_FILE"
+          # The global Actions App identity is only a coarse prefilter. The
+          # protected-main run and immutable artifact below grant authorization.
+          if ! RUN_ID=$(python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-policy-status-response "$STATUS_FILE" \
+            --expected-candidate-sha "$HEAD_SHA" \
+            --expected-repository "$GITHUB_REPOSITORY"); then
+            echo "push_approved=false" >> "$GITHUB_OUTPUT"
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RUN_FILE="$RUNNER_TEMP/policy-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > "$RUN_FILE"
+          if ! python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-policy-run-response "$RUN_FILE" \
+            --expected-base-sha "$BASE_SHA" \
+            --expected-run-id "$RUN_ID" \
+            --expected-repository "$GITHUB_REPOSITORY"; then
+            echo "push_approved=false" >> "$GITHUB_OUTPUT"
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          APPROVAL_NAME="quality-policy-approval-${HEAD_SHA}-${RUN_ID}"
+          ARTIFACTS_FILE="$RUNNER_TEMP/policy-artifacts.json"
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" \
+            > "$ARTIFACTS_FILE"
+          if ! ARTIFACT_ID=$(python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-policy-artifacts-response "$ARTIFACTS_FILE" \
+            --expected-artifact-name "$APPROVAL_NAME"); then
+            echo "push_approved=false" >> "$GITHUB_OUTPUT"
+            echo "candidate=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "push_approved=false" >> "$GITHUB_OUTPUT"
+          echo "candidate=true" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact approval evidence
+        if: steps.authorization.outputs.candidate == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.authorization.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/approval-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.authorization.outputs.run_id }}
+
+      - name: Verify immutable approval evidence binding
+        if: steps.authorization.outputs.candidate == 'true'
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -I "${{ steps.commits.outputs.judge }}" \
+            --verify-approval-evidence \
+            "$RUNNER_TEMP/approval-evidence/quality-policy-approval.json" \
+            --expected-candidate-sha "$HEAD_SHA" \
+            --expected-base-sha "$BASE_SHA" \
+            --expected-run-id "${{ steps.authorization.outputs.run_id }}" \
+            --expected-repository "$GITHUB_REPOSITORY"
+          echo "approved=true" >> "$GITHUB_OUTPUT"
+
+      - name: Compare protected base and head findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --repo .
+            --base-sha "${{ steps.commits.outputs.base_sha }}"
+            --head-sha "${{ steps.commits.outputs.head_sha }}"
+            --report "$RUNNER_TEMP/quality-ratchet.json"
+          )
+          if [[ "${{ steps.authorization.outputs.push_approved }}" == "true" \
+             || "${{ steps.evidence.outputs.approved }}" == "true" ]]; then
+            ARGS+=(--authorization-approved)
+          fi
+          python -I "${{ steps.commits.outputs.judge }}" "${ARGS[@]}"
+
+      - name: Reconfirm current protected-main tip before publishing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MAIN_REF="$RUNNER_TEMP/final-main-ref.json"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" > "$MAIN_REF"
+          ARGS=(--verify-main-ref-response "$MAIN_REF")
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
+            PULL_REQUEST="$RUNNER_TEMP/final-pull-request.json"
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$PULL_REQUEST"
+            ARGS+=(
+              --verify-pull-request-response "$PULL_REQUEST"
+              --expected-current-main-sha "${{ steps.commits.outputs.base_sha }}"
+              --expected-current-head-sha "${{ steps.commits.outputs.head_sha }}"
+            )
+          else
+            ARGS+=(--expected-current-main-sha "${{ steps.commits.outputs.head_sha }}")
+          fi
+          python -I "${{ steps.commits.outputs.judge }}" "${ARGS[@]}"
+
+      - name: Publish protected result on the exact head SHA
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          STATE=failure
+          DESCRIPTION='Protected base quality ratchet failed'
+          if [[ "$JOB_STATUS" == "success" ]]; then
+            STATE=success
+            DESCRIPTION='Protected base quality ratchet passed'
+          fi
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$STATE" \
+            -f context='quality-ratchet/protected' \
+            -f description="$DESCRIPTION" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Upload ratchet evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-ratchet-${{ steps.commits.outputs.head_sha }}
+          path: ${{ runner.temp }}/quality-ratchet.json
+          if-no-files-found: warn
+          retention-days: 14

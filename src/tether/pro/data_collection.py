@@ -24,17 +24,42 @@ asyncio dependency on the hot path — the queue is lockless deque.
 from __future__ import annotations
 
 import collections
+import contextlib
 import hashlib
 import json
 import logging
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
+import os
+import stat
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _queue_file_lock(path: Path):
+    """Serialize append/snapshot/overwrite for one queue pathname."""
+    lock_path = path.with_name(f".{path.name}.queue.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise PermissionError(f"queue lock is not a regular file: {lock_path}")
+        if os.name == "posix":
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if os.name == "posix":
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 # Schema version bumped on breaking changes. Phase 1 = v1; additive-only
@@ -314,9 +339,10 @@ class ProDataCollector:
         # Append, atomic-per-line via newline boundary. This is safe under
         # Linux append semantics; macOS HFS+ also guarantees per-write
         # atomicity for writes < page size.
-        with open(path, "a") as f:
-            for event in batch:
-                f.write(json.dumps(event.to_row()) + "\n")
+        with _queue_file_lock(path):
+            with open(path, "a") as f:
+                for event in batch:
+                    f.write(json.dumps(event.to_row()) + "\n")
 
     def prune_older_than(self, retention_days: int = DEFAULT_RETENTION_DAYS) -> int:
         """Remove `.jsonl` files older than `retention_days`. Returns count

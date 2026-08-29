@@ -38,7 +38,7 @@ tether serve ./my_export/ --transport zmq --host 127.0.0.1 --port 5555
 from tether.runtime.transports.zmq.client import ZmqRuntimeClient
 import numpy as np
 
-client = ZmqRuntimeClient("tcp://gpu-server:5555")
+client = ZmqRuntimeClient("tcp://127.0.0.1:5555")
 obs = {
     "agentview_image": camera.read(),  # 224x224x3 uint8
     "robot0_eef_pos": robot.get_eef_pos(),
@@ -55,6 +55,13 @@ control token for operational endpoints such as `ping` and `kill`.
 `tether serve --transport zmq` refuses non-loopback binds unless both are
 configured. For isolated lab networks only, operators can pass
 `--zmq-insecure-ok` to make that risk explicit.
+
+Low-level SDK callers get the same protection. `PolicyServer` and
+`create_zmq_server` bind to `127.0.0.1` by default and reject a non-loopback
+bind unless CURVE and a control token are both configured. Passing
+`allow_insecure=True` is the SDK equivalent of `--zmq-insecure-ok` and emits a
+warning. Without a control token, `ping` and `kill` are disabled even on
+loopback; prediction and custom endpoint authentication policies are unchanged.
 
 Generate one server keypair and one client keypair:
 

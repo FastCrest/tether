@@ -19,14 +19,10 @@ v0 deliberately REUSES shipped components rather than inventing new metrics:
   n>=30 statistical-power floor. We map original→``baseline_samples`` and
   optimized→``candidate_samples`` and let the gate decide.
 
-What v0 measures TODAY: success-rate parity. The rollout primitive exposes
-per-episode ``success`` / ``steps`` but NOT per-joint velocities, per-step
-action chunks, inference latency, or teacher trajectories. Those gate inputs
-are filled with the documented :class:`~tether.pro.eval_gate.EvalSample`
-sentinels, so the distributional gates (S1/S2/P2/P4/P6) pass by default and the
-load-bearing v0 signal is the success-cliff + Wilson gates (S3/P1/P5). This is
-honest and surfaced loudly in the report — it is NOT a silent degrade. The
-TODO(tether-verify) anchors below mark exactly where the richer engine lands.
+Verification Evidence v1 captures executed actions, inference latency, joint
+velocity, safety-clamp counts, success, and process/device memory for both
+arms. Missing required evidence is typed with a bounded reason and fails the
+first affected gate; it is never replaced with a numeric or empty sentinel.
 
 This module is import-light: ``run_libero_rollout`` (and therefore torch /
 LIBERO / mujoco) is imported lazily inside :func:`gather_paired_samples`, so
@@ -37,6 +33,8 @@ nothing. The scoring + aggregation layer is pure and fully mockable via the
 from __future__ import annotations
 
 import logging
+import math
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -56,6 +54,12 @@ from tether.verify_metrics import (
     TwoSampleResult,
     aggregate_embodied,
     two_sample_test,
+)
+from tether.verification_evidence import (
+    EvidenceValue,
+    UnavailableReason,
+    serialize_evidence,
+    normalize_verification_device,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,8 +95,8 @@ class ParityVerdict:
     suite: str
     target: str
     n_episodes: int  # paired episode count (== candidate == baseline)
-    original_success_rate: float  # in [0, 1]
-    optimized_success_rate: float  # in [0, 1]
+    original_success_rate: float | EvidenceValue[float]  # in [0, 1] when available
+    optimized_success_rate: float | EvidenceValue[float]  # in [0, 1] when available
     generated_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
@@ -109,11 +113,24 @@ class ParityVerdict:
         when ``two_sample.distributions_differ`` (the distributional flag alone
         doesn't make the candidate worse — it surfaces a shift for review)."""
         no_embodied_regress = self.embodied is None or not self.embodied.regressed()
-        return self.success_rate_delta >= 0.0 and no_embodied_regress
+        delta = self.success_rate_delta
+        return (
+            not isinstance(delta, EvidenceValue)
+            and delta >= 0.0
+            and no_embodied_regress
+        )
 
     @property
-    def success_rate_delta(self) -> float:
+    def success_rate_delta(self) -> float | EvidenceValue[float]:
         """optimized - original. Negative => the export regressed."""
+        if isinstance(self.original_success_rate, EvidenceValue):
+            return EvidenceValue.unavailable(
+                self.original_success_rate.reason or UnavailableReason.MISSING_FIELD
+            )
+        if isinstance(self.optimized_success_rate, EvidenceValue):
+            return EvidenceValue.unavailable(
+                self.optimized_success_rate.reason or UnavailableReason.MISSING_FIELD
+            )
         return self.optimized_success_rate - self.original_success_rate
 
     @property
@@ -122,6 +139,24 @@ class ParityVerdict:
         return g.gate_id if g is not None else None
 
     def to_dict(self) -> dict[str, Any]:
+        diagnostics = {
+            "two_sample": (
+                {"status": "EVALUATED", "value": self.two_sample.to_dict()}
+                if self.two_sample is not None
+                else {
+                    "status": "NOT_EVALUATED",
+                    "reason": UnavailableReason.MISSING_FIELD.value,
+                }
+            ),
+            "embodied": (
+                {"status": "EVALUATED", "value": self.embodied.to_dict()}
+                if self.embodied is not None
+                else {
+                    "status": "NOT_EVALUATED",
+                    "reason": UnavailableReason.MISSING_FIELD.value,
+                }
+            ),
+        }
         return {
             "passed": self.passed,
             "optimized_ref": self.optimized_ref,
@@ -129,15 +164,16 @@ class ParityVerdict:
             "suite": self.suite,
             "target": self.target,
             "n_episodes": self.n_episodes,
-            "original_success_rate": self.original_success_rate,
-            "optimized_success_rate": self.optimized_success_rate,
-            "success_rate_delta": self.success_rate_delta,
+            "original_success_rate": serialize_evidence(self.original_success_rate),
+            "optimized_success_rate": serialize_evidence(self.optimized_success_rate),
+            "success_rate_delta": serialize_evidence(self.success_rate_delta),
             "first_failing_gate_id": self.first_failing_gate_id,
             "generated_at": self.generated_at,
             "two_sample": self.two_sample.to_dict() if self.two_sample else None,
             "two_sample_episodes": self.two_sample_episodes,
             "candidate_not_worse": self.candidate_not_worse,
             "embodied": self.embodied.to_dict() if self.embodied else None,
+            "diagnostics": diagnostics,
             "eval_report": self.eval_report.to_dict(),
         }
 
@@ -147,42 +183,99 @@ class ParityVerdict:
 # ---------------------------------------------------------------------------
 
 
-def _rollout_results_to_samples(results: dict[str, Any]) -> list[EvalSample]:
-    """Adapt one `run_libero_rollout` results dict into ``list[EvalSample]``.
+def _nearest_rank(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    return ordered[
+        max(0, math.ceil((percentile / 100.0) * len(ordered)) - 1)
+    ]
 
-    Why an adapter is needed: the rollout primitive (designed for the Modal
-    eval scripts) reports per-episode ``success`` / ``steps`` grouped under
-    ``per_task[].episodes[]`` — it does NOT surface the richer per-episode
-    signals the 9-gate evaluator can consume (per-joint velocity, per-step
-    action chunks, inference latency, teacher trajectories). Rather than widen
-    the proven rollout loop for v0, we map what the loop DOES expose onto the
-    gate's ``EvalSample`` and fill the rest with the sentinels documented on
-    ``EvalSample`` (0 clamp count, 0 latency, [] velocities, [] / None
-    trajectories). Those sentinels make the distributional gates no-op-pass;
-    the success-cliff + Wilson gates carry the v0 signal.
 
-    TODO(tether-verify): once the rollout primitive is widened to capture
-    per-step action chunks + per-joint velocities + inference latency (or a
-    sidecar tap is added), populate ``per_joint_velocity`` /
-    ``action_trajectory`` / ``teacher_action_trajectory`` /
-    ``inference_latency_p99_ms`` here so S2 (velocity Wasserstein) and P4
-    (action cosine) measure real distributional parity instead of passing on
-    sentinels.
-    """
+def _nearest_rank_p99(values: list[float]) -> float | None:
+    return _nearest_rank(values, 99.0)
+
+
+def _episode_index(results: dict[str, Any]) -> dict[tuple[Any, Any], dict[str, Any]]:
+    indexed: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for task in results.get("per_task", []) or []:
+        task_idx = task.get("task_idx")
+        for episode in task.get("episodes", []) or []:
+            indexed[(task_idx, episode.get("ep"))] = episode
+    return indexed
+
+
+def _captured_velocities(episode: dict[str, Any]) -> list[float] | None:
+    measured = episode.get("joint_velocities")
+    if measured:
+        return [
+            float(value)
+            for row in measured
+            for value in np.asarray(row, dtype=np.float64).reshape(-1)
+        ]
+
+    actions = episode.get("actions") or []
+    timestamps = episode.get("action_timestamps_s") or []
+    if len(actions) < 2 or len(actions) != len(timestamps):
+        return None
+    velocities: list[float] = []
+    for previous, current, t0, t1 in zip(
+        actions[:-1], actions[1:], timestamps[:-1], timestamps[1:]
+    ):
+        dt = float(t1) - float(t0)
+        if dt <= 0:
+            return None
+        prev_array = np.asarray(previous, dtype=np.float64).reshape(-1)
+        cur_array = np.asarray(current, dtype=np.float64).reshape(-1)
+        if prev_array.shape != cur_array.shape:
+            return None
+        velocities.extend((np.abs(cur_array - prev_array) / dt).tolist())
+    return velocities or None
+
+
+def _rollout_results_to_samples(
+    results: dict[str, Any],
+    *,
+    teacher_results: dict[str, Any] | None = None,
+) -> list[EvalSample]:
+    """Adapt captured rollout records without inventing missing measurements."""
+
+    teacher_index = _episode_index(teacher_results or {})
     samples: list[EvalSample] = []
     for task in results.get("per_task", []) or []:
         task_id = str(task.get("task_idx", task.get("task_description", "unknown")))
         for ep in task.get("episodes", []) or []:
+            raw_actions = ep.get("actions") or None
+            actions = (
+                [np.asarray(action, dtype=np.float64).reshape(-1).tolist() for action in raw_actions]
+                if raw_actions
+                else None
+            )
+            latency = _nearest_rank_p99(
+                [float(value) for value in ep.get("inference_latency_ms", []) or []]
+            )
+            teacher_actions: list[list[float]] | None = None
+            if teacher_results is not None:
+                teacher_ep = teacher_index.get((task.get("task_idx"), ep.get("ep")))
+                raw_teacher = teacher_ep.get("actions") if teacher_ep else None
+                if raw_teacher and actions:
+                    candidate_array = np.asarray(actions, dtype=np.float64)
+                    teacher_array = np.asarray(raw_teacher, dtype=np.float64)
+                    if candidate_array.shape == teacher_array.shape:
+                        teacher_actions = teacher_array.tolist()
             samples.append(
                 EvalSample(
                     task_id=task_id,
-                    success=bool(ep.get("success", False)),
-                    # --- sentinels (see docstring + EvalSample contract) ---
-                    safety_clamp_count=0,
-                    inference_latency_p99_ms=0.0,
-                    per_joint_velocity=[],
-                    action_trajectory=[],
-                    teacher_action_trajectory=None,
+                    success=(bool(ep["success"]) if "success" in ep else None),
+                    safety_clamp_count=(
+                        int(ep["safety_clamp_count"])
+                        if "safety_clamp_count" in ep
+                        else None
+                    ),
+                    inference_latency_p99_ms=latency,
+                    per_joint_velocity=_captured_velocities(ep),
+                    action_trajectory=actions,
+                    teacher_action_trajectory=teacher_actions,
                 )
             )
     return samples
@@ -191,7 +284,404 @@ def _rollout_results_to_samples(results: dict[str, Any]) -> list[EvalSample]:
 def _success_rate(samples: list[EvalSample]) -> float:
     if not samples:
         return 0.0
+    if any(sample.success is None for sample in samples):
+        raise ValueError("success evidence is unavailable")
     return sum(1 for s in samples if s.success) / len(samples)
+
+
+def _unavailable_reason_from_result(
+    results: dict[str, Any],
+    key: str,
+    default: UnavailableReason = UnavailableReason.MISSING_FIELD,
+) -> UnavailableReason:
+    payload = results.get(key)
+    if isinstance(payload, dict) and payload.get("status") == "unavailable":
+        try:
+            return UnavailableReason(str(payload.get("reason")))
+        except ValueError:
+            return UnavailableReason.MEASUREMENT_FAILED
+    return default
+
+
+def _combine_arm_evidence(
+    baseline: EvidenceValue[Any],
+    candidate: EvidenceValue[Any],
+) -> EvidenceValue[dict[str, Any]]:
+    if not baseline.is_available:
+        return EvidenceValue.unavailable(
+            baseline.reason or UnavailableReason.MISSING_FIELD
+        )
+    if not candidate.is_available:
+        return EvidenceValue.unavailable(
+            candidate.reason or UnavailableReason.MISSING_FIELD
+        )
+    return EvidenceValue.available(
+        {"baseline": baseline.value, "candidate": candidate.value}
+    )
+
+
+def _arm_sample_evidence(
+    results: dict[str, Any], samples: list[EvalSample]
+) -> dict[str, EvidenceValue[Any]]:
+    n_episodes = len(samples)
+    success = (
+        EvidenceValue.available(
+            {
+                "episodes": n_episodes,
+                "successes": sum(1 for sample in samples if sample.success),
+            }
+        )
+        if samples and all(sample.success is not None for sample in samples)
+        else EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+    )
+
+    safety = (
+        EvidenceValue.available(
+            {
+                "episodes": n_episodes,
+                "clamp_count": sum(
+                    int(sample.safety_clamp_count or 0) for sample in samples
+                ),
+            }
+        )
+        if samples and all(
+            sample.safety_clamp_count is not None for sample in samples
+        )
+        else EvidenceValue.unavailable(
+            _unavailable_reason_from_result(results, "safety_evidence")
+        )
+    )
+
+    actions = (
+        EvidenceValue.available(
+            {
+                "episodes": n_episodes,
+                "steps": sum(len(sample.action_trajectory or []) for sample in samples),
+            }
+        )
+        if samples and all(sample.action_trajectory for sample in samples)
+        else EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+    )
+
+    velocities = (
+        EvidenceValue.available(
+            {
+                "episodes": n_episodes,
+                "samples": sum(len(sample.per_joint_velocity or []) for sample in samples),
+            }
+        )
+        if samples and all(sample.per_joint_velocity for sample in samples)
+        else EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+    )
+
+    latency = (
+        EvidenceValue.available(
+            {
+                "episodes": n_episodes,
+                "episode_p99_ms": [
+                    float(sample.inference_latency_p99_ms)
+                    for sample in samples
+                    if sample.inference_latency_p99_ms is not None
+                ],
+            }
+        )
+        if samples and all(
+            sample.inference_latency_p99_ms is not None
+            and sample.inference_latency_p99_ms > 0
+            for sample in samples
+        )
+        else EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+    )
+    return {
+        "success": success,
+        "safety_clamps": safety,
+        "executed_actions": actions,
+        "joint_velocity": velocities,
+        "latency": latency,
+    }
+
+
+def _memory_evidence(
+    results: dict[str, Any], *, expected_device: str
+) -> EvidenceValue[Any]:
+    from tether.eval.evidence_capture import (
+        MEMORY_CAPTURE_JITTER_S,
+        MEMORY_DEADLINE_EPSILON_S,
+        MEMORY_SAMPLE_INTERVAL_S,
+    )
+
+    payload = results.get("memory_evidence")
+    if not isinstance(payload, dict):
+        return EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+    try:
+        value = EvidenceValue.from_dict(payload)
+    except (TypeError, ValueError):
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    if not value.is_available:
+        return value
+    summary = value.value
+    if not isinstance(summary, dict):
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    required = (
+        "sample_hz",
+        "backend",
+        "process_identity",
+        "window",
+        "samples",
+        "process_rss",
+        "device_allocated",
+        "combined",
+    )
+    if any(name not in summary for name in required):
+        return EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+    if summary["sample_hz"] != 10.0 or summary["backend"] != expected_device:
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    identity = summary["process_identity"]
+    window = summary["window"]
+    if (
+        not isinstance(identity, dict)
+        or not isinstance(identity.get("pid"), int)
+        or identity["pid"] <= 0
+        or not isinstance(identity.get("capture_id"), str)
+        or not identity["capture_id"]
+        or not isinstance(window, dict)
+    ):
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    samples = summary["samples"]
+    if not isinstance(samples, list) or not samples:
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    rss_values: list[float] = []
+    device_values: list[float] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+        rss = sample.get("process_rss_bytes")
+        device = sample.get("device_allocated_bytes")
+        scheduled = sample.get("scheduled_monotonic_s")
+        captured = sample.get("captured_monotonic_s")
+        if (
+            not isinstance(rss, (int, float))
+            or not isinstance(device, (int, float))
+            or not isinstance(scheduled, (int, float))
+            or not isinstance(captured, (int, float))
+        ):
+            return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+        if (
+            not all(
+                math.isfinite(float(value))
+                for value in (rss, device, scheduled, captured)
+            )
+            or float(rss) < 0
+            or float(device) < 0
+            or float(captured) < float(scheduled)
+        ):
+            return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+        rss_values.append(float(rss))
+        device_values.append(float(device))
+    captured_times = [float(sample["captured_monotonic_s"]) for sample in samples]
+    scheduled_times = [float(sample["scheduled_monotonic_s"]) for sample in samples]
+    started = window.get("started_monotonic_s")
+    ended = window.get("ended_monotonic_s")
+    duration = window.get("duration_s")
+    expected_count = window.get("expected_samples")
+    captured_count = window.get("captured_samples")
+    reported_max_gap = window.get("max_gap_s")
+    if not all(
+        isinstance(value, (int, float))
+        for value in (
+            started,
+            ended,
+            duration,
+            expected_count,
+            captured_count,
+            reported_max_gap,
+        )
+    ):
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    assert isinstance(started, (int, float))
+    assert isinstance(ended, (int, float))
+    assert isinstance(duration, (int, float))
+    assert isinstance(expected_count, (int, float))
+    assert isinstance(captured_count, (int, float))
+    assert isinstance(reported_max_gap, (int, float))
+    interval = MEMORY_SAMPLE_INTERVAL_S
+    gaps = [
+        current - previous
+        for previous, current in zip(captured_times, captured_times[1:])
+    ]
+    if (
+        float(duration) < interval
+        or float(ended) <= float(started)
+        or not all(
+            math.isfinite(float(value))
+            for value in (started, ended, duration, reported_max_gap)
+        )
+        or not math.isclose(
+            float(ended) - float(started),
+            float(duration),
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        )
+        or int(captured_count) != len(samples)
+        or float(captured_count) != int(captured_count)
+        or float(expected_count) != int(expected_count)
+        or int(expected_count)
+        != max(
+            2,
+            math.floor(
+                (float(duration) + MEMORY_DEADLINE_EPSILON_S) / interval
+            ) + 1,
+        )
+        or len(samples) != int(expected_count)
+        or any(
+            not math.isclose(
+                scheduled,
+                float(started) + (index * interval),
+                rel_tol=0.0,
+                abs_tol=MEMORY_DEADLINE_EPSILON_S,
+            )
+            for index, scheduled in enumerate(scheduled_times)
+        )
+        or float(ended) - scheduled_times[-1]
+        > interval + MEMORY_CAPTURE_JITTER_S
+        or any(
+            not interval - MEMORY_CAPTURE_JITTER_S
+            <= gap
+            <= interval + MEMORY_CAPTURE_JITTER_S
+            for gap in gaps
+        )
+        or not math.isclose(
+            float(reported_max_gap),
+            max(gaps) if gaps else 0.0,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        )
+        or any(
+            not 0.0 <= captured - scheduled <= MEMORY_CAPTURE_JITTER_S
+            for captured, scheduled in zip(captured_times, scheduled_times)
+        )
+    ):
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    if summary["backend"] == "cpu" and any(device != 0 for device in device_values):
+        return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+
+    expected_series = {
+        "process_rss": rss_values,
+        "device_allocated": device_values,
+        "combined": [
+            rss + device for rss, device in zip(rss_values, device_values)
+        ],
+    }
+    for name, values in expected_series.items():
+        captured = summary[name]
+        if not isinstance(captured, dict):
+            return EvidenceValue.unavailable(UnavailableReason.MISSING_FIELD)
+        expected_peak = max(values)
+        expected_p95 = _nearest_rank(values, 95.0)
+        if (
+            captured.get("peak_bytes") != expected_peak
+            or captured.get("p95_bytes") != expected_p95
+        ):
+            return EvidenceValue.unavailable(UnavailableReason.MEASUREMENT_FAILED)
+    return value
+
+
+def _verification_evidence(
+    original_results: dict[str, Any],
+    optimized_results: dict[str, Any],
+    baseline_samples: list[EvalSample],
+    candidate_samples: list[EvalSample],
+    *,
+    verification_device: str,
+) -> dict[str, EvidenceValue[Any]]:
+    baseline = _arm_sample_evidence(original_results, baseline_samples)
+    candidate = _arm_sample_evidence(optimized_results, candidate_samples)
+    combined = {
+        name: _combine_arm_evidence(baseline[name], candidate[name])
+        for name in (
+            "success",
+            "safety_clamps",
+            "executed_actions",
+            "joint_velocity",
+            "latency",
+        )
+    }
+    original_safety_identity = original_results.get("safety_evidence")
+    optimized_safety_identity = optimized_results.get("safety_evidence")
+    if (
+        isinstance(original_safety_identity, dict)
+        and original_safety_identity.get("status") == "available"
+        and isinstance(optimized_safety_identity, dict)
+        and optimized_safety_identity.get("status") == "available"
+        and original_safety_identity != optimized_safety_identity
+    ):
+        combined["safety_clamps"] = EvidenceValue.unavailable(
+            UnavailableReason.MEASUREMENT_FAILED
+        )
+    combined["memory"] = _combine_arm_evidence(
+        _memory_evidence(
+            original_results, expected_device=verification_device
+        ),
+        _memory_evidence(
+            optimized_results, expected_device=verification_device
+        ),
+    )
+    if len(baseline_samples) != len(candidate_samples):
+        combined["memory"] = EvidenceValue.unavailable(
+            UnavailableReason.MEASUREMENT_FAILED
+        )
+    if combined["memory"].is_available:
+        memory_value = combined["memory"].value
+        assert isinstance(memory_value, dict)
+        baseline_identity = memory_value["baseline"]["process_identity"]
+        candidate_identity = memory_value["candidate"]["process_identity"]
+        if (
+            baseline_identity["pid"] == candidate_identity["pid"]
+            or baseline_identity["capture_id"] == candidate_identity["capture_id"]
+        ):
+            combined["memory"] = EvidenceValue.unavailable(
+                UnavailableReason.MEASUREMENT_FAILED
+            )
+    if candidate_samples and all(
+        sample.teacher_action_trajectory for sample in candidate_samples
+    ):
+        combined["teacher_trajectory"] = EvidenceValue.available(
+            {
+                "episodes": len(candidate_samples),
+                "steps": sum(
+                    len(sample.teacher_action_trajectory or [])
+                    for sample in candidate_samples
+                ),
+            }
+        )
+    else:
+        combined["teacher_trajectory"] = EvidenceValue.unavailable(
+            UnavailableReason.MISSING_FIELD
+        )
+    return combined
+
+
+def _validate_rollout_device(
+    results: dict[str, Any], *, expected: str, arm: str
+) -> None:
+    actual = results.get("verification_device")
+    if actual != expected:
+        raise ValueError(
+            f"{arm} rollout device mismatch: expected {expected!r}, got {actual!r}"
+        )
+
+
+def _memory_p95(evidence: EvidenceValue[Any], arm: str) -> float | None:
+    if not evidence.is_available or not isinstance(evidence.value, dict):
+        return None
+    arm_value = evidence.value.get(arm)
+    if not isinstance(arm_value, dict):
+        return None
+    combined = arm_value.get("combined")
+    if not isinstance(combined, dict):
+        return None
+    value = combined.get("p95_bytes")
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _collect_step_actions(results: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
@@ -212,7 +702,8 @@ def _collect_step_actions(results: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
     (see ``verify_metrics.two_sample_test``). Without them the test over-rejects.
 
     Returns ``((0, 0), (0,))`` when the rollout didn't capture trajectories (tap
-    off or older results) — the two-sample test then no-ops.
+    off or older results) — the optional two-sample diagnostic is then marked
+    ``NOT_EVALUATED`` while required trajectory gates fail closed.
     """
     rows: list[np.ndarray] = []
     groups: list[int] = []
@@ -254,7 +745,8 @@ def _collect_paired_succeeded_step_actions(
     two-sample test offsets them so the arms' episodes stay distinct units);
     a shared id per commonly-succeeded episode keeps the bookkeeping simple.
     Returns empties + 0 when no episode succeeded in both arms (the two-sample
-    test then no-ops and only success-rate parity applies).
+    test is then marked ``NOT_EVALUATED``; required trajectory gates still
+    fail closed).
     """
     def _index(results: dict[str, Any]) -> dict:
         idx = {}
@@ -314,6 +806,212 @@ def _collect_eef_and_steps(results: dict[str, Any]) -> tuple[list[np.ndarray], l
 # ---------------------------------------------------------------------------
 
 
+def _execute_verification_arm(
+    *,
+    arm: str,
+    optimized_ref: str,
+    original_checkpoint: str,
+    task_suite_name: str,
+    num_episodes: int,
+    task_indices: list[int] | None,
+    seed: int,
+    preprocessor_ref: str | None,
+    verification_device: str,
+    safety_limits: Any | None,
+    safety_config_sha256: str | None,
+) -> dict[str, Any]:
+    """Load and execute exactly one verification arm in the current process."""
+
+    from tether.eval.evidence_capture import ProcessDeviceMemorySampler
+    from tether.eval.libero_rollout import (
+        load_pi05_policy_and_processors,
+        load_verification_policy_context_and_processors,
+        run_libero_rollout,
+    )
+    from tether.export_config import load_tether_config
+
+    verification_device = normalize_verification_device(verification_device)
+    export_config = load_tether_config(optimized_ref, inspect_artifacts=True)
+    model_type = str(export_config["model_type"])
+
+    if arm == "original":
+        policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
+            student_checkpoint=original_checkpoint,
+            decomposed_dir=optimized_ref,
+            preprocessor_ref=preprocessor_ref,
+            model_type=model_type,
+            require_exact_checkpoint=True,
+            device=verification_device,
+        )
+        inference = None
+        use_native = True
+        label = "ORIGINAL"
+    elif arm == "optimized":
+        policy, preprocessor, postprocessor = (
+            load_verification_policy_context_and_processors(
+                checkpoint=original_checkpoint,
+                model_type=model_type,
+                preprocessor_ref=preprocessor_ref,
+                decomposed_dir=optimized_ref,
+                device=verification_device,
+            )
+        )
+        from tether.runtime.verify_inference import load_verification_inference
+
+        inference = load_verification_inference(
+            optimized_ref, device=verification_device
+        )
+        use_native = False
+        label = "OPTIMIZED"
+    else:
+        raise ValueError(f"unknown verification arm: {arm!r}")
+
+    return run_libero_rollout(
+        inference=inference,
+        use_native=use_native,
+        label=label,
+        policy=policy,
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        task_suite_name=task_suite_name,
+        num_episodes=num_episodes,
+        task_indices=task_indices,
+        seed=seed,
+        capture_trajectories=True,
+        safety_limits=safety_limits,
+        safety_config_sha256=safety_config_sha256,
+        verification_device=verification_device,
+        memory_sampler=ProcessDeviceMemorySampler(device=verification_device),
+    )
+
+
+def _verification_arm_worker(result_queue: Any, kwargs: dict[str, Any]) -> None:
+    """Spawn target that reports either the arm result or a readable failure."""
+
+    import traceback
+
+    try:
+        result_queue.put(("ok", _execute_verification_arm(**kwargs)))
+    except BaseException:  # noqa: BLE001 - child failure must reach the parent
+        result_queue.put(("error", traceback.format_exc()))
+
+
+def _terminate_and_join_process(process: Any) -> None:
+    """Leave no live verification child after any parent-side failure."""
+
+    try:
+        alive = process.is_alive()
+    except (AssertionError, OSError, ValueError):
+        alive = False
+    if alive:
+        process.terminate()
+        try:
+            process.join(timeout=10)
+        except (AssertionError, OSError, ValueError):
+            pass
+    try:
+        alive = process.is_alive()
+    except (AssertionError, OSError, ValueError):
+        alive = False
+    if alive:
+        process.kill()
+    try:
+        process.join(timeout=10)
+    except (AssertionError, OSError, ValueError):
+        pass
+
+
+def _validate_paired_rollout_identity(
+    original: dict[str, Any],
+    optimized: dict[str, Any],
+    *,
+    seed: int,
+    safety_limits: Any | None,
+) -> None:
+    """Reject paired arms that did not use one seed/safety identity."""
+
+    from tether.eval.libero_rollout import PAIRED_SEED_PROTOCOL
+
+    for arm, results in (("original", original), ("optimized", optimized)):
+        if results.get("seed") != seed or results.get("seed_protocol") != PAIRED_SEED_PROTOCOL:
+            raise ValueError(f"{arm} rollout seed identity mismatch")
+        if safety_limits is None:
+            continue
+        evidence = results.get("safety_evidence")
+        if not isinstance(evidence, dict) or evidence.get("status") != "available":
+            raise ValueError(f"{arm} rollout safety identity is unavailable")
+        value = evidence.get("value")
+        if (
+            not isinstance(value, dict)
+            or value.get("sha256") != safety_limits.sha256
+            or value.get("limits") != safety_limits.to_dict()
+        ):
+            raise ValueError(f"{arm} rollout safety identity mismatch")
+
+
+def _run_isolated_verification_arm(**kwargs: Any) -> dict[str, Any]:
+    """Run an arm in a fresh spawned process so memory attribution is isolated."""
+
+    import multiprocessing
+    import queue
+    import time
+
+    context = multiprocessing.get_context("spawn")
+    result_queue: Any | None = None
+    process: Any | None = None
+    try:
+        result_queue = context.Queue(maxsize=1)
+        process = context.Process(
+            target=_verification_arm_worker,
+            args=(result_queue, kwargs),
+            name=f"tether-verify-{kwargs['arm']}",
+        )
+        process.start()
+        deadline = time.monotonic() + (6 * 60 * 60)
+        while True:
+            try:
+                status, payload = result_queue.get(timeout=1.0)
+                break
+            except queue.Empty as exc:
+                if not process.is_alive():
+                    process.join(timeout=10)
+                    raise RuntimeError(
+                        f"verification {kwargs['arm']} arm exited with code "
+                        f"{process.exitcode} without returning results"
+                    ) from exc
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"verification {kwargs['arm']} arm timed out"
+                    ) from exc
+        process.join(timeout=10)
+        if process.is_alive():
+            raise RuntimeError(f"verification {kwargs['arm']} arm did not exit")
+        if status != "ok":
+            raise RuntimeError(
+                f"verification {kwargs['arm']} arm failed in isolated process:\n{payload}"
+            )
+        if process.exitcode != 0:
+            raise RuntimeError(
+                f"verification {kwargs['arm']} arm exited with code {process.exitcode}"
+            )
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"verification {kwargs['arm']} returned invalid results")
+        return payload
+    except BaseException:
+        if process is not None:
+            _terminate_and_join_process(process)
+        raise
+    finally:
+        if result_queue is not None:
+            try:
+                result_queue.close()
+                result_queue.join_thread()
+            except (EOFError, OSError, ValueError):
+                if process is not None:
+                    _terminate_and_join_process(process)
+                raise
+
+
 def gather_paired_samples(
     *,
     optimized_ref: str,
@@ -324,6 +1022,9 @@ def gather_paired_samples(
     task_indices: list[int] | None,
     seed: int,
     preprocessor_ref: str | None = None,
+    verification_device: str = "cpu",
+    safety_config: str | None = None,
+    isolate_processes: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the ORIGINAL (native PyTorch) and OPTIMIZED (ONNX/Triton) policies
     through the SAME LIBERO loop and return both rollout result dicts.
@@ -342,21 +1043,59 @@ def gather_paired_samples(
     ``task_indices`` keeps the two arms paired: episode *i* of task *t* sees the
     same LIBERO initial state in both arms.
     """
-    # Lazy: torch + LIBERO + mujoco only load when we actually run a rollout.
+    verification_device = normalize_verification_device(verification_device)
+    from tether.eval.evidence_capture import load_canonical_safety_limits
+    from tether.export_config import load_tether_config
+
+    export_config = load_tether_config(optimized_ref, inspect_artifacts=True)
+    original_checkpoint = original_ref or str(export_config["model_id"])
+    canonical_safety = (
+        load_canonical_safety_limits(safety_config) if safety_config else None
+    )
+    safety_config_sha256 = canonical_safety.sha256 if canonical_safety else None
+    arm_kwargs = dict(
+        optimized_ref=optimized_ref,
+        original_checkpoint=original_checkpoint,
+        task_suite_name=task_suite_name,
+        num_episodes=num_episodes,
+        task_indices=task_indices,
+        seed=seed,
+        preprocessor_ref=preprocessor_ref,
+        verification_device=verification_device,
+        safety_limits=canonical_safety,
+        safety_config_sha256=safety_config_sha256,
+    )
+    if isolate_processes:
+        logger.info("verify: running ORIGINAL arm in isolated process")
+        original_results = _run_isolated_verification_arm(
+            arm="original", **arm_kwargs
+        )
+        logger.info("verify: running OPTIMIZED arm in isolated process")
+        optimized_results = _run_isolated_verification_arm(
+            arm="optimized", **arm_kwargs
+        )
+        _validate_paired_rollout_identity(
+            original_results,
+            optimized_results,
+            seed=seed,
+            safety_limits=canonical_safety,
+        )
+        return original_results, optimized_results
+
+    # In-process execution is retained only as a unit-test seam. Its same-PID
+    # memory evidence deliberately cannot produce a green P3 verdict.
     from tether.eval.libero_rollout import (
         load_pi05_policy_and_processors,
         run_libero_rollout,
     )
 
-    # The "original" reference defaults to the same checkpoint as the export
-    # (native-PyTorch IS the reference for an export of itself). A caller may
-    # override --original to compare against a different baseline checkpoint.
-    original_checkpoint = original_ref or optimized_ref
-
     policy, preprocessor, postprocessor = load_pi05_policy_and_processors(
         student_checkpoint=original_checkpoint,
         decomposed_dir=optimized_ref,
         preprocessor_ref=preprocessor_ref,
+        model_type=str(export_config["model_type"]),
+        require_exact_checkpoint=True,
+        device=verification_device,
     )
 
     common = dict(
@@ -368,33 +1107,43 @@ def gather_paired_samples(
         task_indices=task_indices,
         seed=seed,
         capture_trajectories=True,
+        safety_limits=canonical_safety,
+        safety_config_sha256=safety_config_sha256,
+        verification_device=verification_device,
     )
+
+    from tether.eval.evidence_capture import ProcessDeviceMemorySampler
 
     # ARM A — original: native lerobot select_action (the reference behavior).
     logger.info("verify: running ORIGINAL arm (native PyTorch)")
     original_results = run_libero_rollout(
-        inference=None, use_native=True, label="ORIGINAL", **common,
+        inference=None,
+        use_native=True,
+        label="ORIGINAL",
+        memory_sampler=ProcessDeviceMemorySampler(device=verification_device),
+        **common,
     )
 
-    # ARM B — optimized: the exported ONNX/Triton inference object on the same
-    # loop. v0 uses the shipped Triton fast-kernels adapter
-    # (``TritonLIBEROAdapter``), which is exactly the optimized arm the proven
-    # side-by-side eval drives in scripts/modal_fast_kernels_l3_side_by_side.py.
-    # It builds the optimized runtime from the SAME policy weights, so the only
-    # difference between the two arms is the inference path (native vs Triton) —
-    # which is precisely the parity question.
-    #
-    # TODO(tether-verify): dispatch on the export's tether_config.json so a
-    # decomposed-ONNX export (Pi05DecomposedInference) or a future exporter
-    # (DreamZero, GR00T DiT) selects the matching InferenceProtocol object
-    # instead of always using the Triton adapter. v0 ships the Triton path
-    # because it is the one with a proven LIBERO adapter today.
-    logger.info("verify: running OPTIMIZED arm (Triton fast-kernels export)")
-    from tether.runtime.fast_inference.libero_adapter import TritonLIBEROAdapter
+    # ARM B — optimized: construct the runtime from the declared export files.
+    # Failure to load or support that artifact aborts verification; there is no
+    # native-weight fallback because that would make parity trivially pass.
+    logger.info("verify: loading and running OPTIMIZED export artifacts")
+    from tether.runtime.verify_inference import load_verification_inference
 
-    inference = TritonLIBEROAdapter.from_policy(policy)
+    inference = load_verification_inference(optimized_ref, device=verification_device)
     optimized_results = run_libero_rollout(
-        inference=inference, use_native=False, label="OPTIMIZED", **common,
+        inference=inference,
+        use_native=False,
+        label="OPTIMIZED",
+        memory_sampler=ProcessDeviceMemorySampler(device=verification_device),
+        **common,
+    )
+
+    _validate_paired_rollout_identity(
+        original_results,
+        optimized_results,
+        seed=seed,
+        safety_limits=canonical_safety,
     )
 
     return original_results, optimized_results
@@ -417,6 +1166,8 @@ def run_verify(
     seed: int = 7,
     thresholds: GateThresholds | None = None,
     preprocessor_ref: str | None = None,
+    safety_config: str | None = None,
+    verification_device: str = "cpu",
     gather_fn: GatherFn | None = None,
 ) -> ParityVerdict:
     """Resolve original + optimized policies, gather paired samples, score via
@@ -438,39 +1189,69 @@ def run_verify(
             f"Unsupported suite: {suite!r}. v0 supports: "
             f"{', '.join(SUPPORTED_SUITES)}."
         )
+    verification_device = normalize_verification_device(verification_device)
+
+    resolved_original_ref = original_ref
+    if resolved_original_ref is None:
+        config_path = Path(optimized_ref) / "tether_config.json"
+        if config_path.is_file():
+            from tether.export_config import load_tether_config
+
+            resolved_original_ref = str(
+                load_tether_config(optimized_ref, inspect_artifacts=True)["model_id"]
+            )
+        else:
+            # Synthetic gather functions used by callers may not have an export
+            # directory. Real verification always resolves from tether_config.
+            resolved_original_ref = optimized_ref
 
     gather = gather_fn or gather_paired_samples
     original_results, optimized_results = gather(
         optimized_ref=optimized_ref,
-        original_ref=original_ref,
+        original_ref=resolved_original_ref,
         suite=suite,
         task_suite_name=task_suite_name,
         num_episodes=num_episodes,
         task_indices=task_indices,
         seed=seed,
         preprocessor_ref=preprocessor_ref,
+        safety_config=safety_config,
+        verification_device=verification_device,
+    )
+
+    _validate_rollout_device(
+        original_results, expected=verification_device, arm="original"
+    )
+    _validate_rollout_device(
+        optimized_results, expected=verification_device, arm="optimized"
     )
 
     # ORIGINAL -> baseline, OPTIMIZED -> candidate. The gate asks "is the
     # candidate as good as the baseline?" which is exactly the parity question.
     baseline_samples = _rollout_results_to_samples(original_results)
-    candidate_samples = _rollout_results_to_samples(optimized_results)
+    candidate_samples = _rollout_results_to_samples(
+        optimized_results, teacher_results=original_results
+    )
+    evidence = _verification_evidence(
+        original_results,
+        optimized_results,
+        baseline_samples,
+        candidate_samples,
+        verification_device=verification_device,
+    )
+    candidate_memory_bytes = _memory_p95(evidence["memory"], "candidate")
+    baseline_memory_bytes = _memory_p95(evidence["memory"], "baseline")
 
-    # Memory footprints are not gathered in v0 (the rollout loop doesn't report
-    # them); pass equal sentinels so P3 (memory) is a no-op pass. The export is
-    # by construction <= the native model in memory, so P3 is not the parity
-    # signal v0 cares about.
-    # TODO(tether-verify): wire real export-vs-native resident-memory deltas
-    # (and inference latency for P2) once the rollout primitive taps them.
     report: EvalReport = EvalGate.evaluate(
         candidate_samples=candidate_samples,
         baseline_samples=baseline_samples,
-        candidate_memory_bytes=0.0,
-        baseline_memory_bytes=0.0,
+        candidate_memory_bytes=candidate_memory_bytes,
+        baseline_memory_bytes=baseline_memory_bytes,
         thresholds=thresholds,
         is_libero_suite=(suite == "libero"),
         pro_force=False,
         bypass_audit=None,
+        evidence=evidence,
     )
 
     # Distributional + embodied parity — the v0 TODOs, now wired. Computed from
@@ -518,17 +1299,30 @@ def run_verify(
     if embodied is not None and embodied.regressed():
         passed = False
 
+    success_evidence = evidence["success"]
+    if success_evidence.is_available:
+        original_success_rate: float | EvidenceValue[float] = _success_rate(
+            baseline_samples
+        )
+        optimized_success_rate: float | EvidenceValue[float] = _success_rate(
+            candidate_samples
+        )
+    else:
+        reason = success_evidence.reason or UnavailableReason.MISSING_FIELD
+        original_success_rate = EvidenceValue.unavailable(reason)
+        optimized_success_rate = EvidenceValue.unavailable(reason)
+
     return ParityVerdict(
         passed=passed,
         two_sample_episodes=n_cmp,
         eval_report=report,
         optimized_ref=optimized_ref,
-        original_ref=original_ref or optimized_ref,
+        original_ref=resolved_original_ref,
         suite=suite,
         target=target,
         n_episodes=len(candidate_samples),
-        original_success_rate=_success_rate(baseline_samples),
-        optimized_success_rate=_success_rate(candidate_samples),
+        original_success_rate=original_success_rate,
+        optimized_success_rate=optimized_success_rate,
         two_sample=two_sample,
         embodied=embodied,
     )

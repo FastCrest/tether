@@ -180,7 +180,7 @@ def libero_via_serve(
     task_indices: list[int] | None = None,
     a2c2_checkpoint: str = "",
     a2c2_latency_threshold_ms: float = 40.0,
-    a2c2_success_threshold: float = 0.90,
+    a2c2_success_threshold: float = 1.01,
     inject_latency_ms: float = 0.0,
     bid_n_candidates: int = 0,
     bid_coherence_window: int = 5,
@@ -515,7 +515,7 @@ def main(
     suite: str = "libero_10",
     a2c2_checkpoint: str = "",
     a2c2_latency_threshold_ms: float = 40.0,
-    a2c2_success_threshold: float = 0.90,
+    a2c2_success_threshold: float = 1.01,
     inject_latency_ms: float = 0.0,
     bid_n_candidates: int = 0,
     bid_coherence_window: int = 5,
@@ -529,7 +529,7 @@ def main(
     --tasks "0,1,2"      3 tasks
     --tasks "all"        full suite
     --a2c2-checkpoint /gate_out/.../a2c2_head.npz  enable A2C2
-    --a2c2-success-threshold 1.01  disable success-based skip (for measurement)
+    --a2c2-success-threshold 0.90  enable advanced HTTP request-health skip
     --a2c2-latency-threshold-ms 0  disable latency-based skip (force-apply)
     --inject-latency-ms 100  synthetic latency for A2C2 measurement (ADR 2026-04-24)
     --bid-n-candidates 8  enable BID chunk selection (mutex with a2c2_checkpoint in Phase 1)

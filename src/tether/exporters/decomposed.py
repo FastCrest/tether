@@ -52,10 +52,10 @@ is invoked here to get the shared denoise-step + cache-freeze patches.
 - Does NOT handle pi0 (the non-.5 variant). pi0 decomposed export is
   a separate future goal (pi0 has state_proj, different suffix shape).
 """
+
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
-import json
 import logging
 import multiprocessing as mp
 import time
@@ -85,13 +85,14 @@ _PI05_VISION_PATCHES_PER_VIEW: int = 256
 # pi0.5 path has historically produced roughly 13 GiB of ONNX/external data.
 # Using that estimate keeps auto on the sequential baseline for most hardware,
 # while still allowing explicit or truly high-VRAM parallel runs.
-_PI05_ESTIMATED_ONNX_BYTES: int = int(13.0 * 1024 ** 3)
+_PI05_ESTIMATED_ONNX_BYTES: int = int(13.0 * 1024**3)
 
 
 def export_pi05_decomposed(
     model_id: str,
     output_dir: str | Path,
     *,
+    revision: str | None = None,
     num_steps: int = 1,
     target: str = "desktop",
     student_checkpoint: str | Path | None = None,
@@ -105,6 +106,8 @@ def export_pi05_decomposed(
         model_id: HF repo id for the pi0.5 base/variant (e.g.
             ``"lerobot/pi05_libero_finetuned_v044"``). Ignored if
             ``student_checkpoint`` is provided.
+        revision: immutable Hugging Face commit used for both config and
+            weight loading. Receipt-producing exports must provide this.
         output_dir: where to write the two ONNX files + tether_config.json.
         num_steps: denoising steps baked into expert_denoise.onnx.
             1 for distilled students (target_time=1 path); 10 for the
@@ -141,6 +144,7 @@ def export_pi05_decomposed(
     if decision.mode == ExportMode.PARALLEL:
         return _export_pi05_decomposed_parallel(
             model_id=model_id,
+            revision=revision,
             output_dir=output_dir,
             num_steps=num_steps,
             target=target,
@@ -152,6 +156,7 @@ def export_pi05_decomposed(
 
     return _export_pi05_decomposed_sequential(
         model_id=model_id,
+        revision=revision,
         output_dir=output_dir,
         num_steps=num_steps,
         target=target,
@@ -165,6 +170,7 @@ def export_pi05_decomposed(
 def _export_pi05_decomposed_sequential(
     *,
     model_id: str,
+    revision: str | None = None,
     output_dir: Path,
     num_steps: int,
     target: str,
@@ -174,7 +180,7 @@ def _export_pi05_decomposed_sequential(
     per_step_expert: bool = False,
 ) -> dict[str, Any]:
     """Historical pi0.5 decomposed export path: one policy load, two passes."""
-    policy = _load_pi05_policy(model_id, num_steps, student_checkpoint, variant)
+    policy = _load_pi05_policy(model_id, num_steps, student_checkpoint, variant, revision=revision)
     past_kv_names = _past_kv_names()
     prefix_seq_len = _prefix_seq_len()
 
@@ -183,6 +189,7 @@ def _export_pi05_decomposed_sequential(
     # Free the prefix wrapper before building the expert — on A100-80GB we
     # OOM'd with both loaded + a second prefix forward for dummy inputs.
     import gc
+
     gc.collect()
 
     expert_meta = _export_pi05_expert_pass(
@@ -198,6 +205,7 @@ def _export_pi05_decomposed_sequential(
 
     return _write_decomposed_export_result(
         model_id=model_id,
+        revision=revision,
         output_dir=output_dir,
         num_steps=num_steps,
         target=target,
@@ -215,6 +223,7 @@ def _export_pi05_decomposed_sequential(
 def _export_pi05_decomposed_parallel(
     *,
     model_id: str,
+    revision: str | None = None,
     output_dir: Path,
     num_steps: int,
     target: str,
@@ -228,6 +237,7 @@ def _export_pi05_decomposed_parallel(
     prefix_seq_len = _prefix_seq_len()
     prefix_meta, expert_meta = _run_parallel_pi05_exports(
         model_id=model_id,
+        revision=revision,
         output_dir=output_dir,
         num_steps=num_steps,
         student_checkpoint=student_checkpoint,
@@ -240,6 +250,7 @@ def _export_pi05_decomposed_parallel(
 
     return _write_decomposed_export_result(
         model_id=model_id,
+        revision=revision,
         output_dir=output_dir,
         num_steps=num_steps,
         target=target,
@@ -257,6 +268,7 @@ def _export_pi05_decomposed_parallel(
 def _run_parallel_pi05_exports(
     *,
     model_id: str,
+    revision: str | None = None,
     output_dir: Path,
     num_steps: int,
     student_checkpoint: str | Path | None,
@@ -272,6 +284,7 @@ def _run_parallel_pi05_exports(
         prefix_future = pool.submit(
             _export_pi05_prefix_worker,
             model_id,
+            revision,
             str(output_dir),
             num_steps,
             student,
@@ -281,6 +294,7 @@ def _run_parallel_pi05_exports(
         expert_future = pool.submit(
             _export_pi05_expert_worker,
             model_id,
+            revision,
             str(output_dir),
             num_steps,
             student,
@@ -294,18 +308,20 @@ def _run_parallel_pi05_exports(
 
 def _export_pi05_prefix_worker(
     model_id: str,
+    revision: str | None,
     output_dir: str,
     num_steps: int,
     student_checkpoint: str | None,
     variant: str,
     past_kv_names: list[str],
 ) -> dict[str, Any]:
-    policy = _load_pi05_policy(model_id, num_steps, student_checkpoint, variant)
+    policy = _load_pi05_policy(model_id, num_steps, student_checkpoint, variant, revision=revision)
     return _export_pi05_prefix_pass(policy, Path(output_dir), past_kv_names)
 
 
 def _export_pi05_expert_worker(
     model_id: str,
+    revision: str | None,
     output_dir: str,
     num_steps: int,
     student_checkpoint: str | None,
@@ -314,7 +330,7 @@ def _export_pi05_expert_worker(
     prefix_seq_len: int,
     per_step_expert: bool = False,
 ) -> dict[str, Any]:
-    policy = _load_pi05_policy(model_id, num_steps, student_checkpoint, variant)
+    policy = _load_pi05_policy(model_id, num_steps, student_checkpoint, variant, revision=revision)
     return _export_pi05_expert_pass(
         policy=policy,
         output_dir=Path(output_dir),
@@ -331,6 +347,8 @@ def _load_pi05_policy(
     num_steps: int,
     student_checkpoint: str | Path | None,
     variant: str,
+    *,
+    revision: str | None = None,
 ):
     """Load and patch the pi0.5 policy exactly once for one export process."""
     _require_decomposed_deps()
@@ -356,6 +374,7 @@ def _load_pi05_policy(
                 f"got num_steps={num_steps}"
             )
         from tether.distill.snapflow_pi0_model import load_snapflow_student
+
         logger.info("[decomposed] Loading SnapFlow student from %s", student_checkpoint)
         policy = load_snapflow_student(student_checkpoint)
         if variant == "state_out":
@@ -364,18 +383,20 @@ def _load_pi05_policy(
             # SnapFlowPI05Pytorch; reset class then upgrade.
             from lerobot.policies.pi05.modeling_pi05 import PI05Pytorch
             from tether.distill.snapflow_pi0_model import enable_snapflow_state_out
+
             policy.model.__class__ = PI05Pytorch
             enable_snapflow_state_out(policy.model)
             logger.info("[decomposed] enabled state-out variant on student")
     else:
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+
         logger.info("[decomposed] Loading %s", model_id)
         # Apply the same torch.compile suppression as monolithic export
         # — LIBERO-finetuned pi0.5 configs set compile_model=True.
         _orig_compile = torch.compile
-        torch.compile = lambda fn=None, *a, **kw: (fn if fn is not None else (lambda f: f))
+        torch.compile = lambda fn=None, *a, **kw: fn if fn is not None else (lambda f: f)
         try:
-            policy = PI05Policy.from_pretrained(model_id)
+            policy = PI05Policy.from_pretrained(model_id, revision=revision)
         finally:
             torch.compile = _orig_compile
 
@@ -427,14 +448,18 @@ def _export_pi05_prefix_pass(
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
         ep_prefix = torch.export.export(
-            prefix_wrapper, tuple(prefix_dummy.values()),
-            dynamic_shapes=None, strict=False,
+            prefix_wrapper,
+            tuple(prefix_dummy.values()),
+            dynamic_shapes=None,
+            strict=False,
         )
     logger.info("[decomposed] prefix torch.export: %.1fs", time.time() - t0)
 
     t0 = time.time()
     torch.onnx.export(
-        ep_prefix, tuple(prefix_dummy.values()), str(prefix_path),
+        ep_prefix,
+        tuple(prefix_dummy.values()),
+        str(prefix_path),
         input_names=list(prefix_dummy.keys()),
         output_names=prefix_output_names,
         opset_version=19,
@@ -494,8 +519,7 @@ def _export_pi05_expert_pass(
     # torch.export Dim — deferred until parity is green.)
     past_kv_shape = (B, PI05_KV_HEADS, prefix_seq_len, PI05_HEAD_DIM)
     past_kv_dummies = [
-        torch.randn(past_kv_shape, dtype=torch.float32)
-        for _ in range(PI05_PALIGEMMA_LAYERS * 2)
+        torch.randn(past_kv_shape, dtype=torch.float32) for _ in range(PI05_PALIGEMMA_LAYERS * 2)
     ]
     prefix_pad_masks_dummy = torch.ones(B, prefix_seq_len, dtype=torch.bool)
 
@@ -528,13 +552,17 @@ def _export_pi05_expert_pass(
     expert_path = output_dir / "expert_denoise.onnx"
     shape_label = "per-step" if per_step_expert else f"baked num_steps={num_steps}"
     logger.info(
-        "[decomposed] Exporting expert (%s) → %s", shape_label, expert_path,
+        "[decomposed] Exporting expert (%s) → %s",
+        shape_label,
+        expert_path,
     )
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
         ep_expert = torch.export.export(
-            expert_wrapper, tuple(expert_dummy.values()),
-            dynamic_shapes=None, strict=False,
+            expert_wrapper,
+            tuple(expert_dummy.values()),
+            dynamic_shapes=None,
+            strict=False,
         )
     logger.info("[decomposed] expert torch.export: %.1fs", time.time() - t0)
 
@@ -554,7 +582,9 @@ def _export_pi05_expert_pass(
     # Reproduced + isolated 2026-04-30; see
     # 03_experiments/2026-04-30-per-step-parity-modal-a100.md.
     torch.onnx.export(
-        ep_expert, tuple(expert_dummy.values()), str(expert_path),
+        ep_expert,
+        tuple(expert_dummy.values()),
+        str(expert_path),
         input_names=list(expert_dummy.keys()),
         output_names=output_names,
         opset_version=19,
@@ -578,6 +608,7 @@ def _export_pi05_expert_pass(
 def _write_decomposed_export_result(
     *,
     model_id: str,
+    revision: str | None = None,
     output_dir: Path,
     num_steps: int,
     target: str,
@@ -595,6 +626,7 @@ def _write_decomposed_export_result(
 
     tether_cfg = {
         "model_id": model_id if student_checkpoint is None else str(student_checkpoint),
+        "model_revision": revision if student_checkpoint is None else None,
         "model_type": "pi05_decomposed_student" if student_checkpoint else "pi05_decomposed",
         "target": target,
         "num_denoising_steps": num_steps,
@@ -602,7 +634,7 @@ def _write_decomposed_export_result(
         "action_chunk_size": chunk_size,
         "action_dim": action_dim,
         "opset": 19,
-        "export_kind": "decomposed",
+        "export_kind": "decomposed_onnx",
         "export_mode": export_mode.value,
         "export_mode_reason": export_mode_reason,
         "decomposed": {
@@ -621,9 +653,34 @@ def _write_decomposed_export_result(
             "per_step_expert": bool(per_step_expert),
         },
     }
-    (output_dir / "tether_config.json").write_text(json.dumps(tether_cfg, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    canonical = build_producer_config(
+        output_dir,
+        producer="pi05_split",
+        model_id=str(tether_cfg["model_id"]),
+        model_type=str(tether_cfg["model_type"]),
+        action_dim=action_dim,
+        num_denoising_steps=num_steps,
+        opset=19,
+        metadata={
+            key: value
+            for key, value in tether_cfg.items()
+            if key
+            not in {
+                "model_id",
+                "model_type",
+                "action_dim",
+                "num_denoising_steps",
+                "opset",
+                "export_kind",
+            }
+        },
+    )
+    write_tether_config(output_dir, canonical)
     try:
         from tether.verification_report import write_verification_report
+
         write_verification_report(output_dir, parity=None)
     except Exception:
         pass
@@ -679,6 +736,7 @@ class Pi05PrefixWrapper:
     Defined as a lazy class built on first instantiation so we don't
     force lerobot import at module load. See ``_build_prefix_class``.
     """
+
     def __new__(cls, pi05_model):
         impl = _build_prefix_class()
         return impl(pi05_model)
@@ -689,6 +747,7 @@ class Pi05ExpertWrapper:
     + prefix_pad_masks + noise, runs the Euler loop (num_steps iterations;
     1 for SnapFlow students with target_time=1), returns actions.
     """
+
     def __new__(cls, pi05_model, num_steps):
         impl = _build_expert_class()
         return impl(pi05_model, num_steps)
@@ -711,6 +770,7 @@ class Pi05ExpertPerStepWrapper:
     See features/03_export/per-step-expert-export.md for the spec.
     Used when ``export_pi05_decomposed(..., per_step_expert=True)``.
     """
+
     def __new__(cls, pi05_model):
         impl = _build_expert_per_step_class()
         return impl(pi05_model)
@@ -737,15 +797,23 @@ def _build_prefix_class():
 
         def forward(
             self,
-            img_base, img_wrist_l, img_wrist_r,
-            mask_base, mask_wrist_l, mask_wrist_r,
-            lang_tokens, lang_masks,
+            img_base,
+            img_wrist_l,
+            img_wrist_r,
+            mask_base,
+            mask_wrist_l,
+            mask_wrist_r,
+            lang_tokens,
+            lang_masks,
         ):
             images = [img_base, img_wrist_l, img_wrist_r]
             img_masks = [mask_base, mask_wrist_l, mask_wrist_r]
 
             prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix(
-                images, img_masks, lang_tokens, lang_masks,
+                images,
+                img_masks,
+                lang_tokens,
+                lang_masks,
             )
             prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
             prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
@@ -817,7 +885,7 @@ def _build_expert_class():
         def forward(self, *args):
             # args layout (default): 36 past_kv tensors + prefix_pad_masks + noise.
             # args layout (state_out): same + state tensor (last position).
-            past_flat = args[:PI05_PALIGEMMA_LAYERS * 2]
+            past_flat = args[: PI05_PALIGEMMA_LAYERS * 2]
             prefix_pad_masks = args[PI05_PALIGEMMA_LAYERS * 2]
             noise = args[PI05_PALIGEMMA_LAYERS * 2 + 1]
             state = args[PI05_PALIGEMMA_LAYERS * 2 + 2] if self._is_state_out else None
@@ -830,6 +898,7 @@ def _build_expert_class():
             # real DynamicCache (isinstance check) so we can't pass a
             # shim.
             from transformers.cache_utils import DynamicCache
+
             past_kv = DynamicCache()
             for i in range(PI05_PALIGEMMA_LAYERS):
                 past_kv.update(
@@ -848,8 +917,10 @@ def _build_expert_class():
             for step in range(self.n_steps):
                 time_val = 1.0 + step * dt
                 time_tensor = torch.full(
-                    (x_t.shape[0],), time_val,
-                    dtype=torch.float32, device=x_t.device,
+                    (x_t.shape[0],),
+                    time_val,
+                    dtype=torch.float32,
+                    device=x_t.device,
                 )
                 # State-out variant: pass state= to denoise_step. Default
                 # path leaves it unset.
@@ -918,7 +989,7 @@ def _build_expert_per_step_class():
         def forward(self, *args):
             # args layout (default):    36 past_kv + prefix_pad_masks + x_t + t.
             # args layout (state_out):  same + state tensor (last position).
-            past_flat = args[:PI05_PALIGEMMA_LAYERS * 2]
+            past_flat = args[: PI05_PALIGEMMA_LAYERS * 2]
             prefix_pad_masks = args[PI05_PALIGEMMA_LAYERS * 2]
             x_t = args[PI05_PALIGEMMA_LAYERS * 2 + 1]
             t = args[PI05_PALIGEMMA_LAYERS * 2 + 2]
@@ -928,6 +999,7 @@ def _build_expert_per_step_class():
             # (see _Pi05ExpertWrapper above) — same source of past_kv, same
             # layer-by-layer .update() pattern. Bit-for-bit equivalent.
             from transformers.cache_utils import DynamicCache
+
             past_kv = DynamicCache()
             for i in range(PI05_PALIGEMMA_LAYERS):
                 past_kv.update(
@@ -976,6 +1048,7 @@ class _FlatCache:
     — the only attributes pi_gemma's forward path reads from past_kv
     under our denoise_step patch.
     """
+
     def __init__(self, flat: tuple, num_layers: int):
         self.key_cache = [flat[2 * i] for i in range(num_layers)]
         self.value_cache = [flat[2 * i + 1] for i in range(num_layers)]
@@ -993,6 +1066,7 @@ class _FlatCache:
 def _require_decomposed_deps() -> None:
     """Decomposed export shares the monolithic ``[monolithic]`` extra."""
     from tether.exporters.monolithic import _require_monolithic_deps
+
     _require_monolithic_deps()
 
 

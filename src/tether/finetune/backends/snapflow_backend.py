@@ -67,6 +67,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -87,6 +88,53 @@ DEFAULT_CONSISTENCY_ALPHA: float = 1.0
 # Save a student checkpoint every N steps (same convention as
 # lerobot-train). Override via cfg.extra_lerobot_args["checkpoint_every"].
 DEFAULT_CHECKPOINT_EVERY: int = 1_000
+
+
+class EmptyTrainingEpochError(RuntimeError):
+    """Raised when a finite training loader yields no batches in an epoch."""
+
+    def __init__(self, *, completed_steps: int, requested_steps: int) -> None:
+        self.completed_steps = completed_steps
+        self.requested_steps = requested_steps
+        super().__init__(
+            "SnapFlow dataloader yielded no batches before training completed "
+            f"({completed_steps}/{requested_steps} steps). Check that the dataset "
+            "contains at least batch_size samples, or disable drop_last."
+        )
+
+
+def _iter_training_batches(
+    loader: Any,
+    num_steps: int,
+) -> Iterator[tuple[int, Any]]:
+    """Yield global ``(step, batch)`` pairs across finite loader epochs.
+
+    A fresh iteration starts whenever the finite loader is exhausted. This is
+    deliberately implemented without ``itertools.cycle``: cycle retains every
+    yielded batch, which can pin large CPU or accelerator tensors in memory.
+
+    Raises:
+        EmptyTrainingEpochError: if a fresh epoch yields no batches before the
+            requested number of steps has completed.
+    """
+    if num_steps <= 0:
+        raise ValueError(f"num_steps must be positive; got {num_steps}")
+
+    step = 0
+    while step < num_steps:
+        yielded_batch = False
+        for batch in loader:
+            yielded_batch = True
+            step += 1
+            yield step, batch
+            if step == num_steps:
+                return
+
+        if not yielded_batch:
+            raise EmptyTrainingEpochError(
+                completed_steps=step,
+                requested_steps=num_steps,
+            )
 
 
 class SnapFlowBackend:
@@ -289,7 +337,7 @@ class SnapFlowBackend:
             )
             heartbeat_t0 = _time.time()
             heartbeat_step0 = 0
-            for step, batch in enumerate(loader, start=1):
+            for step, batch in _iter_training_batches(loader, cfg.num_steps):
                 # Apply lerobot's preprocessor pipeline: rename_map (image keys),
                 # tokenizer (task -> language_tokens), device transfer, normalize.
                 # v0.5 state-out: preprocess twice — teacher sees state-in-lang,
@@ -387,18 +435,47 @@ class SnapFlowBackend:
                         "on_checkpoint", ctx, step=step, ckpt_path=last_ckpt,
                     )
 
-                if step >= cfg.num_steps:
-                    break
+        except EmptyTrainingEpochError as e:
+            logger.error("[snapflow] %s", e)
+            ctx.hooks.run(
+                "on_end",
+                ctx,
+                status="training_failed",
+                steps_completed=e.completed_steps,
+            )
+            return CheckpointResult(
+                final_checkpoint_path=Path(cfg.output),
+                training_steps_completed=e.completed_steps,
+                status="training_failed",
+                error=str(e),
+            )
         finally:
             log_handle.close()
 
-        # ---- 8. Ensure we have a final checkpoint -------------------------
-        if last_ckpt is None:
-            last_ckpt = _save_student_checkpoint(
-                student, checkpoint_root, step or 0,
+        # ---- 8. Require exact completion before success artifacts ----------
+        if step != cfg.num_steps:
+            error = (
+                "SnapFlow training ended before the requested step count "
+                f"({step}/{cfg.num_steps} steps); refusing to report success."
+            )
+            logger.error("[snapflow] %s", error)
+            ctx.hooks.run(
+                "on_end", ctx, status="training_failed", steps_completed=step,
+            )
+            return CheckpointResult(
+                final_checkpoint_path=Path(cfg.output),
+                training_steps_completed=step,
+                status="training_failed",
+                error=error,
             )
 
-        # ---- 9. Provenance stamp ------------------------------------------
+        # ---- 9. Ensure we have a final checkpoint -------------------------
+        if last_ckpt is None:
+            last_ckpt = _save_student_checkpoint(
+                student, checkpoint_root, step,
+            )
+
+        # ---- 10. Provenance stamp -----------------------------------------
         _write_provenance(
             last_ckpt,
             teacher_dir=loaded.checkpoint_dir,
@@ -407,7 +484,7 @@ class SnapFlowBackend:
             consistency_alpha=consistency_alpha,
         )
 
-        # ---- 10. Fire on_end + return -------------------------------------
+        # ---- 11. Fire on_end + return -------------------------------------
         ctx.hooks.run(
             "on_end", ctx, status="ok", steps_completed=step,
         )

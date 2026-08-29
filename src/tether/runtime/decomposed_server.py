@@ -112,8 +112,8 @@ class Pi05DecomposedServer:
         # BID (Bidirectional Decoding) chunk-selection config — alternative to
         # A2C2 head. Set via set_bid_config() from create_app at lifespan time.
         # None = no BID (default; single-sample inference path). Mutually
-        # exclusive with _a2c2_hook in Phase 1; create_app validates the
-        # mutex at startup.
+        # exclusive with _a2c2_hook in Phase 1; create_app and both setters
+        # enforce BID precedence.
         self._bid_config: Any = None
         # Per-server previous-chunk buffer for BID coherence scoring. Holds
         # the last emitted (post-denorm? no — pre-denorm) chunk so the next
@@ -166,13 +166,9 @@ class Pi05DecomposedServer:
 
     def _load_config(self) -> dict[str, Any]:
         """Read tether_config.json from the export dir."""
-        config_path = self.export_dir / "tether_config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"tether_config.json not found in {self.export_dir}. "
-                f"Decomposed exports must include the config sibling."
-            )
-        return json.loads(config_path.read_text())
+        from tether.export_config import load_tether_config
+
+        return load_tether_config(self.export_dir)
 
     def load(self) -> None:
         """Load the decomposed inference + tokenizer + tether_config."""
@@ -186,15 +182,15 @@ class Pi05DecomposedServer:
 
         # Pull canonical fields from config; validate export_kind.
         export_kind = self.config.get("export_kind", "")
-        if export_kind != "decomposed":
+        if export_kind != "decomposed_onnx":
             raise ValueError(
-                f"Pi05DecomposedServer requires export_kind='decomposed', "
+                f"Pi05DecomposedServer requires export_kind='decomposed_onnx', "
                 f"got {export_kind!r}. Use the matching server class for "
                 f"this export type (monolithic -> Pi0OnnxServer / "
                 f"SmolVLAOnnxServer; legacy decomposed -> TetherServer)."
             )
 
-        self.action_dim = int(self.config.get("action_dim", 7))
+        self.action_dim = int(self.config["action_dim"])
         self.chunk_size = int(
             self.config.get("chunk_size") or self.config.get("action_chunk_size", DEFAULT_CHUNK_SIZE)
         )
@@ -647,7 +643,7 @@ class Pi05DecomposedServer:
             # head's residuals are in normalized units (~[-1,1]) while
             # denormalized actions have very different magnitudes (~[0.5m]).
             a2c2_decision_meta: dict[str, Any] | None = None
-            if self._a2c2_hook is not None:
+            if self._bid_config is None and self._a2c2_hook is not None:
                 a2c2_decision_meta = self._apply_a2c2_normalized(actions_padded)
 
             # 6. Postprocess -- denormalize THEN slice to action_dim.
@@ -712,6 +708,13 @@ class Pi05DecomposedServer:
 
         Returns nothing. Setting None disables internal a2c2 application.
         """
+        if hook is not None and self._bid_config is not None:
+            self._a2c2_hook = None
+            logger.warning(
+                "A2C2 hook ignored because BID is enabled; Phase 1 gives BID "
+                "precedence and does not compose the two correction paths."
+            )
+            return
         self._a2c2_hook = hook
         if hook is not None:
             logger.info(
@@ -737,9 +740,10 @@ class Pi05DecomposedServer:
             if self._a2c2_hook is not None:
                 logger.warning(
                     "BID config set while A2C2 hook is also bound — Phase 1 "
-                    "treats these as mutually exclusive; BID will run, A2C2 "
-                    "hook output will be ignored on this server."
+                    "treats these as mutually exclusive; BID wins and A2C2 "
+                    "is disabled on this server."
                 )
+                self._a2c2_hook = None
             logger.info(
                 "Pi05DecomposedServer BID enabled: n_candidates=%d, "
                 "coherence_window=%d, metric=%s",

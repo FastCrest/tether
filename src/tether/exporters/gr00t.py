@@ -17,7 +17,6 @@ lands the export refactor in the same PR as the spine composition.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from pathlib import Path
@@ -34,6 +33,18 @@ from tether.exporters.onnx_export import export_module_to_onnx, optimize_onnx
 from tether.exporters.trt_build import build_engine, check_trtexec
 
 logger = logging.getLogger(__name__)
+
+
+def _raw_action_dim_from_checkpoint(
+    state_dict: dict[str, torch.Tensor], embodiment_id: int = 0
+) -> int:
+    """Derive neutral robot action width from the checkpoint action encoder."""
+    weights = state_dict[GR00T_META_KEYS["action_enc_W1_W"]]
+    if weights.ndim != 3 or embodiment_id < 0 or embodiment_id >= weights.shape[0]:
+        raise ValueError(
+            "GR00T action encoder W1 must have shape [embodiment, raw_action_dim, hidden]"
+        )
+    return int(weights.shape[1])
 
 
 def export_gr00t(
@@ -116,19 +127,22 @@ def export_gr00t(
         except RuntimeError as e:
             logger.warning("TRT build failed: %s", e)
 
+    raw_action_dim = _raw_action_dim_from_checkpoint(state_dict)
     meta_with_action_dim = dict(meta)
-    meta_with_action_dim["action_dim"] = hidden
+    meta_with_action_dim["action_dim"] = raw_action_dim
     export_config = {
         "model_id": config.model_id,
         "model_type": "gr00t",
+        "export_kind": "decomposed_onnx",
         "target": config.target,
         "precision": config.precision,
         "opset": config.opset,
         "num_denoising_steps": 4,
         "action_chunk_size": chunk_size,
-        "action_dim": hidden,
+        "action_dim": raw_action_dim,
         "hidden": hidden,
         "output_dim": meta["output_dim"],
+        "pipeline": "gr00t_token_expert",
         "note": "expert accepts action tokens (hidden-dim), emits velocity tokens (output_dim). "
                 "action_decoder (per-embodiment) needed downstream to recover native actions.",
         "hardware": {
@@ -140,8 +154,29 @@ def export_gr00t(
         "expert": meta_with_action_dim,
         "spine_path": True,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    optional_artifacts = []
+    if "expert_trt" in result["files"]:
+        optional_artifacts.append(("expert_stack.trt", "engine"))
+    canonical = build_producer_config(
+        output_dir,
+        producer="expert_stack",
+        model_id=config.model_id,
+        model_type="gr00t",
+        action_dim=raw_action_dim,
+        num_denoising_steps=4,
+        opset=config.opset,
+        optional_artifacts=optional_artifacts,
+        metadata={
+            **export_config,
+            "extensions": {
+                "token_input_dim": hidden,
+                "token_output_dim": meta["output_dim"],
+            },
+        },
+    )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
     return result
 
@@ -228,6 +263,7 @@ def export_gr00t_full(
     export_config = {
         "model_id": config.model_id,
         "model_type": "gr00t",
+        "export_kind": "decomposed_onnx",
         "full_stack": True,
         "embodiment_id": embodiment_id,
         "target": config.target,
@@ -247,8 +283,23 @@ def export_gr00t_full(
         "expert": meta_with_action_dim,
         "spine_path": True,
     }
-    config_path = output_dir / "tether_config.json"
-    config_path.write_text(json.dumps(export_config, indent=2))
+    from tether.export_config import build_producer_config, write_tether_config
+
+    optional_artifacts = []
+    if "expert_trt" in result["files"]:
+        optional_artifacts.append(("expert_stack.trt", "engine"))
+    canonical = build_producer_config(
+        output_dir,
+        producer="expert_stack",
+        model_id=config.model_id,
+        model_type="gr00t",
+        action_dim=raw_action_dim,
+        num_denoising_steps=4,
+        opset=config.opset,
+        optional_artifacts=optional_artifacts,
+        metadata=export_config,
+    )
+    config_path = write_tether_config(output_dir, canonical)
     result["files"]["config"] = str(config_path)
     return result
 
@@ -526,9 +577,6 @@ def build_gr00t_expert_stack(
     vlm_kv_dim = k_w_0.shape[1]  # for cross-attn block
 
     # Block 1 is self-attn (odd idx); kv_in == hidden
-    k_w_1 = state_dict[f"{GR00T_BLOCK_PREFIX}1.attn1.to_k.weight"]
-    self_kv_in = k_w_1.shape[1]
-
     # Infer num_heads by factoring num_q; head_dim=48 is the convention from config
     head_dim = 48
     num_heads = num_q // head_dim
@@ -839,7 +887,7 @@ def build_gr00t_full_stack(
         "W3_W": state_dict[GR00T_META_KEYS["action_enc_W3_W"]].float(),
         "W3_b": state_dict[GR00T_META_KEYS["action_enc_W3_b"]].float(),
     }
-    raw_action_dim = enc_weights["W1_W"].shape[1]   # [32, 128, 1536] → 128
+    raw_action_dim = _raw_action_dim_from_checkpoint(state_dict, embodiment_id)
     hidden = enc_weights["W1_W"].shape[2]
 
     action_encoder = GR00TActionEncoder(

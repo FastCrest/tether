@@ -7,8 +7,9 @@ license signatures against this key on every load (offline; no network
 call required for signature verification — only the heartbeat needs the
 network, and only daily).
 
-Phase 2 will support multiple trusted keys (current + previous N) for key
-rotation. Today we ship a single bundled key.
+Key rotation is represented as an allowlisted mapping. Releases add the next
+public key before the Worker switches signers, keep both keys during the
+overlap, and remove the retired key only in a later release.
 
 The PUBLIC key in this file is intentional and safe to publish — that's
 what public keys are for. The PRIVATE key lives only in the Cloudflare
@@ -24,3 +25,10 @@ BUNDLED_PUBLIC_KEY_B64 = "luURwH5bpH5qHc7eTa3xyCiTc4X6cqXzunzw0bCeSzw="
 # with a key the client knows about (rejects licenses signed by a different
 # deployment, e.g., a forked or compromised license server).
 BUNDLED_KEY_ID = "key_moq2zo8m_279ec0def41c69b8"
+
+# Trusted signing keys for licenses and heartbeat attestations. Never fetch
+# this set from the network at verification time: trust is established by the
+# signed package release, not by the server being checked.
+TRUSTED_PUBLIC_KEYS_B64 = {
+    BUNDLED_KEY_ID: BUNDLED_PUBLIC_KEY_B64,
+}

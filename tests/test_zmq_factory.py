@@ -3,6 +3,7 @@
 Validates that create_zmq_server wires a mock runtime into a PolicyServer
 with predict_action, reset, and get_status endpoints.
 """
+
 from __future__ import annotations
 
 import threading
@@ -10,6 +11,7 @@ import time
 
 import msgpack
 import numpy as np
+import pytest
 import zmq
 
 from tether.runtime.transports.zmq.factory import create_zmq_server
@@ -52,10 +54,13 @@ def test_predict_action_returns_action_data():
     port = server.bound_port
     sock = _client(port)
 
-    result = _send_recv(sock, {
-        "endpoint": "predict_action",
-        "data": {"obs": "test"},
-    })
+    result = _send_recv(
+        sock,
+        {
+            "endpoint": "predict_action",
+            "data": {"obs": "test"},
+        },
+    )
 
     assert "action_data" in result
     assert "infer_time_ms" in result
@@ -63,6 +68,7 @@ def test_predict_action_returns_action_data():
 
     # Deserialize and verify shape
     import io
+
     actions = np.load(io.BytesIO(result["action_data"]))
     assert actions.shape == (1, 50, 7)
 
@@ -104,6 +110,18 @@ def test_get_status_returns_stats():
 
     server.close()
     thread.join(timeout=2)
+
+
+def test_factory_default_is_loopback():
+    server, thread = _start_server()
+    assert server.bound_address.startswith("tcp://127.0.0.1:")
+    server.close()
+    thread.join(timeout=2)
+
+
+def test_factory_rejects_public_bind_without_complete_security():
+    with pytest.raises(ValueError, match="Refusing insecure ZMQ bind"):
+        create_zmq_server(_MockRuntime(), host="0.0.0.0", port=0)
 
 
 # ── CLI flag ─────────────────────────────────────────────────────────

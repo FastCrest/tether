@@ -1,31 +1,11 @@
-"""Pro-tier license loader — HW-bound JWT with 24h heartbeat semantics.
-
-Per ADR 2026-04-25-self-distilling-serve-architecture decision #5:
-HW-bound signed JWT at `~/.tether/pro.license`, bound to
-machine_fingerprint, with 24h server heartbeat for revocation.
-
-Phase 1 ships the substrate:
-- License file format (JSON envelope; field shape locked)
-- Validation logic (file exists + parses + not expired + HW matches +
-  heartbeat fresh)
-- HAS a `signature` field reserved for cryptographic verification but
-  Phase 1 doesn't run actual crypto (license signing infra is a
-  Phase 1.5 follow-up per ADR open-items)
-
-Phase 1.5 wires actual signature verification + remote heartbeat
-endpoint. The interface stays stable across the upgrade — customers'
-license files don't get re-issued.
-
-License is REQUIRED to enable `--pro` features. Absence = exit 1 with
-a clear error pointing the customer at their account dashboard.
-"""
+"""Signed v2 Pro license loader with server-confirmed heartbeat validity."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
-import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
@@ -33,12 +13,8 @@ from typing import Any, ClassVar
 logger = logging.getLogger(__name__)
 
 
-# Bumped on a breaking license-format change.
-#   v1 = unsigned dev license (Phase 1, accepted with warning when bundled
-#        public key not yet deployed; will be rejected once Phase 1.5 lands)
-#   v2 = Ed25519-signed via the license worker (Phase 1.5, required for paid)
-# load_license() accepts both versions; v1 falls through with a deprecation
-# warning, v2 must verify against the bundled public key.
+# Released runtimes accept exactly signed v2. The legacy constant remains only
+# so migration tooling can identify old files; it is never an accepted version.
 LICENSE_VERSION = 2
 LICENSE_VERSION_LEGACY_UNSIGNED = 1
 
@@ -46,11 +22,8 @@ LICENSE_VERSION_LEGACY_UNSIGNED = 1
 # (Phase 1.5 wiring) OR `TETHER_PRO_LICENSE` env var.
 DEFAULT_LICENSE_PATH = "~/.tether/pro.license"
 
-# Heartbeat freshness window. After 24h without successful validation
-# (which Phase 1.5 ties to a remote endpoint), the license is treated
-# as stale + refused. Phase 1's heartbeat is purely local — increments
-# on every successful validation. Operators who don't restart in 24h
-# get caught.
+# Compatibility name for callers displaying the maximum server-confirmed
+# validity. The signed attestation is authoritative; local timestamps are not.
 HEARTBEAT_FRESHNESS_S = 24 * 3600
 
 
@@ -74,41 +47,38 @@ class HardwareFingerprintLite:
 
 @dataclass(frozen=True)
 class ProLicense:
-    """Frozen license. Loaded once at startup, validated, never mutated.
-
-    Phase 1 fields (LOCKED — additive-only Phase 2 evolution):
-    - license_version (int)
-    - customer_id (str)
-    - tier (str — "pro" today; "enterprise" reserved for Phase 2)
-    - issued_at (ISO 8601 UTC)
-    - expires_at (ISO 8601 UTC)
-    - hardware_binding (HardwareFingerprintLite — matched at load time)
-    - signature (str — base64 of HMAC-SHA256 in Phase 1.5; placeholder
-      string in Phase 1)
-    - last_heartbeat_at (ISO 8601 — local timestamp of most-recent
-      successful validation; refreshed on save)
-    """
+    """Frozen signed license plus non-serialized runtime lease metadata."""
 
     license_version: int
+    license_id: str
     customer_id: str
     tier: str
     issued_at: str
     expires_at: str
+    max_seats: int
     hardware_binding: HardwareFingerprintLite
-    signature: str = ""
+    signature: str
+    key_id: str
+    # Retained only for reading older v2 envelopes and CLI display. It has no
+    # authority and is never refreshed locally.
     last_heartbeat_at: str = ""
+    attestation_valid_until: int = field(default=0, compare=False, repr=False)
+    heartbeat_cache_file: str = field(default="", compare=False, repr=False)
 
     SCHEMA_VERSION: ClassVar[int] = LICENSE_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "license_version": self.license_version,
+            "license_id": self.license_id,
             "customer_id": self.customer_id,
             "tier": self.tier,
             "issued_at": self.issued_at,
             "expires_at": self.expires_at,
+            "max_seats": self.max_seats,
             "hardware_binding": asdict(self.hardware_binding),
             "signature": self.signature,
+            "key_id": self.key_id,
             "last_heartbeat_at": self.last_heartbeat_at,
         }
 
@@ -116,12 +86,15 @@ class ProLicense:
     def from_dict(cls, d: dict[str, Any]) -> "ProLicense":
         return cls(
             license_version=int(d["license_version"]),
+            license_id=str(d["license_id"]),
             customer_id=str(d["customer_id"]),
             tier=str(d["tier"]),
             issued_at=str(d["issued_at"]),
             expires_at=str(d["expires_at"]),
+            max_seats=int(d["max_seats"]),
             hardware_binding=HardwareFingerprintLite(**d["hardware_binding"]),
-            signature=str(d.get("signature", "")),
+            signature=str(d["signature"]),
+            key_id=str(d["key_id"]),
             last_heartbeat_at=str(d.get("last_heartbeat_at", "")),
         )
 
@@ -168,8 +141,7 @@ class LicenseHardwareMismatch(LicenseError):
 
 
 class LicenseHeartbeatStale(LicenseError):
-    """Last successful validation is > HEARTBEAT_FRESHNESS_S old. Phase 1
-    requires a server restart to refresh; Phase 1.5 wires remote heartbeat."""
+    """No usable server-signed heartbeat attestation remains."""
 
 
 class LicenseCorrupt(LicenseError):
@@ -180,18 +152,21 @@ def load_license(
     *,
     path: str | Path = DEFAULT_LICENSE_PATH,
     current_hardware: HardwareFingerprintLite,
-    skip_heartbeat_check: bool = False,
+    heartbeat_endpoint: str | None = None,
+    heartbeat_timeout_s: float = 5.0,
 ) -> ProLicense:
-    """Load + validate the license. Refreshes the local heartbeat on
-    success.
+    """Verify a signed v2 license and obtain server-confirmed validity.
+
+    Every load attempts a fresh signed heartbeat. Only a temporary network
+    failure may fall back to a previously persisted, still-valid signed
+    attestation. The license file itself is never rewritten by this function.
 
     Raises:
         LicenseMissing: file absent
         LicenseCorrupt: unparseable / wrong schema
         LicenseExpired: past expires_at
         LicenseHardwareMismatch: HW fingerprint different
-        LicenseHeartbeatStale: > 24h since last validation
-            (skip_heartbeat_check=True bypasses for tests / first-run)
+        LicenseHeartbeatStale: no fresh server response or usable signed cache
     """
     path_obj = Path(path).expanduser()
     if not path_obj.exists():
@@ -209,33 +184,18 @@ def load_license(
             f"Pro license at {path_obj} is corrupt or schema-mismatched: {exc}"
         ) from exc
 
-    if license.license_version not in (LICENSE_VERSION, LICENSE_VERSION_LEGACY_UNSIGNED):
+    if license.license_version != LICENSE_VERSION:
         raise LicenseCorrupt(
-            f"Pro license version {license.license_version} not supported "
-            f"(expected {LICENSE_VERSION} signed, or {LICENSE_VERSION_LEGACY_UNSIGNED} "
-            f"legacy unsigned). Re-issue with the latest license worker."
+            f"Pro license version {license.license_version} is not accepted; "
+            f"released runtimes require signed version {LICENSE_VERSION}. "
+            "Re-issue with the current license worker."
         )
 
-    # Phase 1.5: verify Ed25519 signature for v2 licenses. Legacy v1 licenses
-    # fall through with a deprecation warning so existing dev installs don't
-    # break overnight; future release will reject them entirely.
-    if license.license_version == LICENSE_VERSION:
-        try:
-            from tether.pro.signature import verify_license_signature
-            verify_license_signature(data)
-        except Exception as exc:  # noqa: BLE001 — wrap in LicenseCorrupt below
-            raise LicenseCorrupt(
-                f"Pro license signature verification failed: {exc}. "
-                f"Either the license file was tampered with, or the bundled "
-                f"public key in src/tether/pro/_public_key.py is stale "
-                f"(re-fetch via `wrangler tail` on the deployed license worker)."
-            ) from exc
-    else:
-        logger.warning(
-            "Pro license is v%d (legacy unsigned). Re-issue as v%d via the "
-            "deployed license worker before this format is removed.",
-            LICENSE_VERSION_LEGACY_UNSIGNED, LICENSE_VERSION,
-        )
+    try:
+        from tether.pro.signature import verify_license_signature
+        verify_license_signature(data)
+    except Exception as exc:  # noqa: BLE001
+        raise LicenseCorrupt(f"Pro license signature verification failed: {exc}") from exc
 
     if license.is_expired():
         raise LicenseExpired(
@@ -250,52 +210,64 @@ def load_license(
             f"Re-issue for this host at https://tether.fastcrest.com/pro/rebind."
         )
 
-    if not skip_heartbeat_check and license.is_heartbeat_stale():
-        raise LicenseHeartbeatStale(
-            f"Pro license heartbeat stale ({license.heartbeat_age_s():.0f}s "
-            f"old, max {HEARTBEAT_FRESHNESS_S}s). Restart the server to "
-            f"refresh; persistent staleness indicates a bypass attempt."
-        )
-
-    # Phase 1: signature is a placeholder; Phase 1.5 wires actual
-    # cryptographic verification. We log when the signature is empty so
-    # operators see the development-mode posture.
-    if not license.signature:
-        logger.warning(
-            "Pro license has empty signature field — running in Phase 1 "
-            "development mode (no cryptographic verification). Phase 1.5 "
-            "will require a signed license."
-        )
-
-    # Refresh local heartbeat so the next validation passes for another 24h
-    refreshed = ProLicense(
-        license_version=license.license_version,
-        customer_id=license.customer_id,
-        tier=license.tier,
-        issued_at=license.issued_at,
-        expires_at=license.expires_at,
-        hardware_binding=license.hardware_binding,
-        signature=license.signature,
-        last_heartbeat_at=datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        ),
+    from tether import __version__
+    from tether.pro.heartbeat import (
+        HeartbeatNetworkError,
+        HeartbeatProtocolError,
+        enforce_attestation,
+        heartbeat_cache_path,
+        load_cached_attestation,
+        send_heartbeat,
     )
+
+    cache_path = heartbeat_cache_path(path_obj)
+    fingerprint_text = (
+        f"{current_hardware.gpu_uuid}|{current_hardware.gpu_name}|"
+        f"{current_hardware.cpu_count}"
+    )
+    fingerprint = hashlib.sha256(fingerprint_text.encode("utf-8")).hexdigest()[:32]
     try:
-        tmp = path_obj.with_suffix(path_obj.suffix + ".tmp")
-        tmp.write_text(json.dumps(refreshed.to_dict(), indent=2, sort_keys=True))
-        tmp.replace(path_obj)
-        os.chmod(path_obj, 0o600)
-    except Exception as exc:  # noqa: BLE001 — heartbeat write failure shouldn't kill startup
-        logger.warning(
-            "Pro license heartbeat write failed at %s: %s — license still "
-            "valid for this session, but next validation will use the OLD "
-            "heartbeat timestamp. Investigate filesystem permissions.",
-            path_obj, exc,
+        attestation = send_heartbeat(
+            license_id=license.license_id,
+            hardware_fingerprint=fingerprint,
+            tether_version=__version__,
+            license_expires_at=license.expires_at,
+            cache_path=cache_path,
+            endpoint=heartbeat_endpoint,
+            timeout_s=heartbeat_timeout_s,
         )
+    except HeartbeatNetworkError as exc:
+        logger.warning(
+            "License heartbeat unavailable; checking verified cache: %s", exc,
+        )
+        try:
+            attestation = load_cached_attestation(
+                cache_path=cache_path,
+                license_id=license.license_id,
+                license_expires_at=license.expires_at,
+            )
+            enforce_attestation(attestation, license_expires_at=license.expires_at)
+        except Exception as cache_exc:  # noqa: BLE001
+            raise LicenseHeartbeatStale(
+                "No fresh server heartbeat and no usable signed heartbeat cache"
+            ) from cache_exc
+    except HeartbeatProtocolError as exc:
+        raise LicenseHeartbeatStale(
+            f"License heartbeat response was not trustworthy: {exc}"
+        ) from exc
+
+    validated = replace(
+        license,
+        attestation_valid_until=attestation.valid_until,
+        heartbeat_cache_file=str(cache_path),
+        last_heartbeat_at=datetime.fromtimestamp(
+            attestation.issued_at, tz=timezone.utc,
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
 
     logger.info(
         "Pro license valid — customer_id=%s tier=%s expires_at=%s",
-        license.customer_id, license.tier, license.expires_at,
+        validated.customer_id, validated.tier, validated.expires_at,
     )
 
     # Best-effort telemetry heartbeat (opt-out via TETHER_NO_TELEMETRY=1).
@@ -305,16 +277,15 @@ def load_license(
     # can re-emit a richer heartbeat post-server-startup if desired.
     # Telemetry failure never blocks startup — see pro/telemetry.py.
     try:
-        from tether import __version__
         from tether.pro.telemetry import emit as _emit_telemetry
         _emit_telemetry(
-            customer_id=refreshed.customer_id,
+            customer_id=validated.customer_id,
             tether_version=__version__,
         )
     except Exception:  # noqa: BLE001 — telemetry must never break licensing
         pass
 
-    return refreshed
+    return validated
 
 
 def issue_dev_license(
@@ -325,21 +296,11 @@ def issue_dev_license(
     valid_for_days: int = 30,
     path: str | Path = DEFAULT_LICENSE_PATH,
 ) -> ProLicense:
-    """Issue a development-mode license for local testing.
-
-    Phase 1 has no signing infra; this writes an unsigned license that
-    `load_license` accepts (with a warning). Phase 1.5 will require all
-    licenses to come from the signing endpoint; `issue_dev_license` will
-    move to a `--dev-license` CLI flag that emits a warning at startup.
-
-    Writes as license_version=LICENSE_VERSION_LEGACY_UNSIGNED so the
-    loader takes the legacy unsigned path. Writing it as the current
-    LICENSE_VERSION (=2) trips signature verification, which fails on
-    the empty signature field — the dev path stops working.
-    """
+    """Write a legacy marker for tooling tests; released loaders reject it."""
     now = datetime.now(timezone.utc)
     license = ProLicense(
         license_version=LICENSE_VERSION_LEGACY_UNSIGNED,
+        license_id=f"lic_dev_{int(now.timestamp())}",
         customer_id=customer_id,
         tier=tier,
         issued_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
@@ -348,9 +309,11 @@ def issue_dev_license(
             if valid_for_days == 0
             else (now + _days(valid_for_days)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         ),
+        max_seats=1,
         hardware_binding=hardware,
         signature="",  # unsigned dev license
-        last_heartbeat_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        key_id="",
+        last_heartbeat_at="",
     )
     path_obj = Path(path).expanduser()
     path_obj.parent.mkdir(parents=True, exist_ok=True)

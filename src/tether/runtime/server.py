@@ -82,6 +82,7 @@ logger = logging.getLogger(__name__)
 _tracer = get_tracer(__name__)
 REQUEST_ID_HEADER = "X-Tether-Request-ID"
 REQUEST_ID_ALIASES = (REQUEST_ID_HEADER, "X-Request-ID")
+LICENSE_HEARTBEAT_REFRESH_MARGIN_S = 30
 _request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "tether_request_id",
     default="",
@@ -91,6 +92,129 @@ try:
     from tether import __version__ as _TETHER_VERSION
 except ImportError:
     _TETHER_VERSION = ""
+
+
+def _paid_license_deadline(pro_license: Any) -> int:
+    from datetime import datetime
+    from tether.pro.heartbeat import HEARTBEAT_CLOCK_SKEW_S
+
+    return min(
+        int(pro_license.attestation_valid_until) + HEARTBEAT_CLOCK_SKEW_S,
+        int(datetime.fromisoformat(
+            pro_license.expires_at.replace("Z", "+00:00")
+        ).timestamp()),
+    )
+
+
+def _paid_license_admitted(server: Any, *, now_s: int | None = None) -> bool:
+    """Synchronous paid-request gate; event-loop timing cannot bypass it."""
+    if getattr(server, "pro_license", None) is None:
+        return True
+    current = int(time.time()) if now_s is None else int(now_s)
+    deadline = int(getattr(server, "_pro_license_deadline", 0))
+    if current >= deadline:
+        server.health_state = "degraded"
+        return False
+    return True
+
+
+def _accept_heartbeat_renewal(
+    server: Any,
+    attestation: Any,
+    *,
+    previous_deadline: int,
+    completed_at_s: int,
+) -> bool:
+    """Install a renewal only when it completed strictly before old expiry."""
+    if (
+        completed_at_s >= previous_deadline
+        or int(getattr(server, "_pro_license_deadline", 0)) != previous_deadline
+    ):
+        server.health_state = "degraded"
+        return False
+    new_deadline = _paid_license_deadline(
+        SimpleNamespace(
+            attestation_valid_until=attestation.valid_until,
+            expires_at=server.pro_license.expires_at,
+        )
+    )
+    if new_deadline <= completed_at_s:
+        server.health_state = "degraded"
+        return False
+    server._pro_license_deadline = new_deadline
+    return True
+
+
+def _heartbeat_refresh_delay(*, deadline_s: int, now_s: int) -> int:
+    from tether.pro.heartbeat import HEARTBEAT_RETRY_S
+
+    return min(
+        HEARTBEAT_RETRY_S,
+        max(0, int(deadline_s) - int(now_s) - LICENSE_HEARTBEAT_REFRESH_MARGIN_S),
+    )
+
+
+async def _refresh_paid_heartbeat_once(
+    server: Any,
+    *,
+    send_heartbeat_fn: Any,
+    license_id: str,
+    hardware_fingerprint: str,
+    tether_version: str,
+    license_expires_at: str,
+    cache_path: str | Path,
+    previous_deadline: int,
+) -> bool:
+    """Refresh without granting a timed-out worker thread local authority."""
+    import asyncio
+
+    from tether.pro.heartbeat import persist_verified_attestation
+
+    remaining = int(previous_deadline) - int(time.time())
+    heartbeat_task = asyncio.create_task(
+        asyncio.to_thread(
+            send_heartbeat_fn,
+            license_id=license_id,
+            hardware_fingerprint=hardware_fingerprint,
+            tether_version=tether_version,
+            license_expires_at=license_expires_at,
+            # asyncio cancellation cannot stop a running worker thread. It
+            # must therefore be incapable of mutating the authoritative cache.
+            cache_path=None,
+        )
+    )
+    try:
+        # Shield the thread-backed task so Python 3.10's wait_for does not
+        # wait for an uncancellable executor call before reporting timeout.
+        # The worker has no authority to update the cache or deadline, so it
+        # is safe to let it finish after the caller has failed closed.
+        attestation = await asyncio.wait_for(
+            asyncio.shield(heartbeat_task),
+            timeout=max(0.001, remaining),
+        )
+    except asyncio.TimeoutError:
+        # Retrieve any eventual exception from the detached task rather than
+        # leaving an unobserved-task warning at loop shutdown.
+        def _consume_late_result(task: asyncio.Task[Any]) -> None:
+            try:
+                task.result()
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        heartbeat_task.add_done_callback(_consume_late_result)
+        raise
+    completed_at = int(time.time())
+    if not _accept_heartbeat_renewal(
+        server,
+        attestation,
+        previous_deadline=previous_deadline,
+        completed_at_s=completed_at,
+    ):
+        return False
+    # Only the event-loop owner may persist, and only after the old lease and
+    # concurrent-deadline checks accepted this exact verified result.
+    persist_verified_attestation(attestation, cache_path=cache_path)
+    return True
 
 
 def _coerce_optional_float(value: Any) -> float | None:
@@ -708,10 +832,11 @@ class TetherServer:
         self._replan_threshold: float = 0.5
 
     def _load_config(self) -> dict[str, Any]:
-        config_path = self.export_dir / "tether_config.json"
-        if config_path.exists():
-            return json.loads(config_path.read_text())
-        return {}
+        from tether.export_config import load_tether_config, require_supported_pipeline
+
+        config = load_tether_config(self.export_dir)
+        require_supported_pipeline(config, set(), "TetherServer")
+        return config
 
     def configure_replan(
         self,
@@ -842,7 +967,7 @@ class TetherServer:
         start = time.perf_counter()
 
         expert_meta = self.config.get("expert", {})
-        self.action_dim = self.config.get("action_dim", expert_meta.get("action_dim", 32))
+        self.action_dim = int(self.config["action_dim"])
         self.chunk_size = self.config.get(
             "action_chunk_size",
             self.config.get("chunk_size", 50),
@@ -1769,7 +1894,9 @@ def create_app(
     max_similar_skips: int = 3,
     a2c2_checkpoint: str | None = None,  # path to .npz A2C2 head; None disables A2C2
     a2c2_latency_threshold_ms: float = 40.0,  # hook auto-skip when latency_p95 < this (ms)
-    a2c2_success_threshold: float = 0.90,  # hook auto-skip when /act success rate > this; set to 1.01 to disable
+    # Advanced request-health gate; 1.01 disables it so default gating is
+    # latency-only. Values < 1.0 measure /act errors, not robot task success.
+    a2c2_success_threshold: float = 1.01,
     # BID (Bidirectional Decoding) — alternative to A2C2 head per arxiv
     # 2408.17355 + 2026-04-29 a2c2-correction research-revisit Lens 4. When
     # bid_n_candidates > 0, server samples N chunks per /act + picks best
@@ -1800,6 +1927,8 @@ def create_app(
     shadow_policy: str | None = None,  # shadow mode: mirror sampled traffic to this export
     shadow_sample: float = 1.0,  # fraction of /act traffic mirrored to shadow_policy
     shadow_queue_size: int = 32,  # bounded pending shadow requests; 0 disables queueing
+    pro: bool = False,
+    pro_license: str | Path | None = None,
 ) -> Any:
     """Create a FastAPI app for serving VLA predictions.
 
@@ -1838,6 +1967,12 @@ def create_app(
     /act returns 503 with Retry-After: 60. Successful /act resets the
     counter. Default 5. Set to 0 to disable.
 
+    pro: explicit paid-serving mode. When True, ``pro_license`` (or
+    ``TETHER_PRO_LICENSE`` / the default path) is loaded, signature-checked,
+    and heartbeat-confirmed synchronously before the app is returned. Any
+    failure aborts startup. Passing ``pro_license`` without ``pro=True`` is an
+    error.
+
     inference_executor_workers / inference_executor_queue: bounded async
     offload capacity for synchronous predict work. Saturation returns an
     `inference_executor_full` error result instead of growing an unbounded
@@ -1869,29 +2004,36 @@ def create_app(
 
     # Dispatch order:
     #   1. TETHER_NATIVE=1 — SmolVLANativeServer (PyTorch native path)
-    #   2. tether_config.json export_kind == "monolithic" → model-specific
+    #   2. tether_config.json export_kind == "monolithic_onnx" → model-specific
     #      monolithic server (Pi0OnnxServer / SmolVLAOnnxServer). This is
     #      the cos=1.0 verified production path as of 2026-04-18.
     #   3. Default: TetherServer (legacy decomposed path).
     _config_path = Path(export_dir) / "tether_config.json"
-    _monolithic_cfg = {}
-    if _config_path.exists():
-        try:
-            _monolithic_cfg = json.loads(_config_path.read_text())
-        except Exception:
-            _monolithic_cfg = {}
+    from tether.export_config import decomposed_layout, load_tether_config
+
+    _monolithic_cfg = load_tether_config(_config_path)
+
+    def _decomposed_layout(config: dict[str, Any]) -> str:
+        return decomposed_layout(config)
+
+    def _require_native_smolvla(config: dict[str, Any], label: str) -> None:
+        if (
+            config.get("model_type") != "smolvla"
+            or config.get("export_kind") != "decomposed_onnx"
+            or _decomposed_layout(config) not in {"expert_stack", "smolvla_full_bundle"}
+        ):
+            raise ValueError(
+                f"TETHER_NATIVE=1 requires a SmolVLA expert_stack/full-bundle decomposed export; "
+                f"{label} declares model_type={config.get('model_type')!r}, "
+                f"export_kind={config.get('export_kind')!r}"
+            )
 
     def _build_shadow_server(shadow_export_dir: str | Path) -> Any:
         shadow_export_dir = Path(shadow_export_dir)
-        shadow_cfg_path = shadow_export_dir / "tether_config.json"
-        shadow_cfg: dict[str, Any] = {}
-        if shadow_cfg_path.exists():
-            try:
-                shadow_cfg = json.loads(shadow_cfg_path.read_text())
-            except Exception:
-                shadow_cfg = {}
+        shadow_cfg = load_tether_config(shadow_export_dir)
 
         if _os.environ.get("TETHER_NATIVE", "0") == "1":
+            _require_native_smolvla(shadow_cfg, "shadow export")
             from tether.runtime.smolvla_native import SmolVLANativeServer
             shadow_srv = SmolVLANativeServer(
                 shadow_export_dir,
@@ -1905,7 +2047,10 @@ def create_app(
                 max_batch=max_batch,
                 batch_timeout_ms=batch_timeout_ms,
             )
-        elif shadow_cfg.get("export_kind") == "decomposed":
+        elif (
+            shadow_cfg.get("export_kind") == "decomposed_onnx"
+            and _decomposed_layout(shadow_cfg) == "pi05_split"
+        ):
             from tether.runtime.decomposed_server import Pi05DecomposedServer
             shadow_srv = Pi05DecomposedServer(
                 shadow_export_dir,
@@ -1921,8 +2066,26 @@ def create_app(
                 action_similarity_threshold=action_similarity_threshold,
                 max_similar_skips=max_similar_skips,
             )
-        elif shadow_cfg.get("export_kind") == "monolithic":
-            model_type = shadow_cfg.get("model_type", "smolvla")
+        elif (
+            shadow_cfg.get("export_kind") == "decomposed_onnx"
+            and _decomposed_layout(shadow_cfg) in {"expert_stack", "smolvla_full_bundle"}
+        ):
+            shadow_srv = TetherServer(
+                shadow_export_dir,
+                device=device,
+                providers=providers,
+                strict_providers=strict_providers,
+                safety_config=safety_config,
+                adaptive_steps=adaptive_steps,
+                cloud_fallback_url=cloud_fallback_url,
+                deadline_ms=deadline_ms,
+                max_batch=max_batch,
+                batch_timeout_ms=batch_timeout_ms,
+                inference_executor_workers=inference_executor_workers,
+                inference_executor_queue=inference_executor_queue,
+            )
+        elif shadow_cfg.get("export_kind") == "monolithic_onnx":
+            model_type = shadow_cfg["model_type"]
             if model_type == "pi0":
                 from tether.runtime.pi0_onnx_server import Pi0OnnxServer
                 shadow_srv = Pi0OnnxServer(
@@ -1970,25 +2133,15 @@ def create_app(
                     f"Shadow runtime for model_type={model_type!r} is not supported"
                 )
         else:
-            shadow_srv = TetherServer(
-                shadow_export_dir,
-                device=device,
-                providers=providers,
-                strict_providers=strict_providers,
-                safety_config=safety_config,
-                adaptive_steps=adaptive_steps,
-                cloud_fallback_url=cloud_fallback_url,
-                deadline_ms=deadline_ms,
-                max_batch=max_batch,
-                batch_timeout_ms=batch_timeout_ms,
-                inference_executor_workers=inference_executor_workers,
-                inference_executor_queue=inference_executor_queue,
+            raise ValueError(
+                f"Shadow serving does not support export_kind={shadow_cfg.get('export_kind')!r}"
             )
         shadow_srv.embodiment_config = embodiment_config
         shadow_srv._inference_policy_slot = "shadow"  # type: ignore[attr-defined]
         return shadow_srv
 
     if _os.environ.get("TETHER_NATIVE", "0") == "1":
+        _require_native_smolvla(_monolithic_cfg, "primary export")
         from tether.runtime.smolvla_native import SmolVLANativeServer
         server = SmolVLANativeServer(
             export_dir,
@@ -2002,7 +2155,10 @@ def create_app(
             max_batch=max_batch,
             batch_timeout_ms=batch_timeout_ms,
         )
-    elif _monolithic_cfg.get("export_kind") == "decomposed":
+    elif (
+        _monolithic_cfg.get("export_kind") == "decomposed_onnx"
+        and _decomposed_layout(_monolithic_cfg) == "pi05_split"
+    ):
         # Per ADR 2026-04-25-decomposed-dispatch-via-tether-serve: the
         # decomposed export (vlm_prefix.onnx + expert_denoise.onnx) needs
         # the wrapper around Pi05DecomposedInference, NOT the legacy
@@ -2024,8 +2180,26 @@ def create_app(
             action_similarity_threshold=action_similarity_threshold,
             max_similar_skips=max_similar_skips,
         )
-    elif _monolithic_cfg.get("export_kind") == "monolithic":
-        _model_type = _monolithic_cfg.get("model_type", "smolvla")
+    elif (
+        _monolithic_cfg.get("export_kind") == "decomposed_onnx"
+        and _decomposed_layout(_monolithic_cfg) in {"expert_stack", "smolvla_full_bundle"}
+    ):
+        server = TetherServer(
+            export_dir,
+            device=device,
+            providers=providers,
+            strict_providers=strict_providers,
+            safety_config=safety_config,
+            adaptive_steps=adaptive_steps,
+            cloud_fallback_url=cloud_fallback_url,
+            deadline_ms=deadline_ms,
+            max_batch=max_batch,
+            batch_timeout_ms=batch_timeout_ms,
+            inference_executor_workers=inference_executor_workers,
+            inference_executor_queue=inference_executor_queue,
+        )
+    elif _monolithic_cfg.get("export_kind") == "monolithic_onnx":
+        _model_type = _monolithic_cfg["model_type"]
         if _model_type == "pi0":
             from tether.runtime.pi0_onnx_server import Pi0OnnxServer
             server = Pi0OnnxServer(
@@ -2074,20 +2248,36 @@ def create_app(
                 f"supported. v0.2 covers smolvla, pi0, pi05, and gr00t."
             )
     else:
-        server = TetherServer(
-            export_dir,
-            device=device,
-            providers=providers,
-            strict_providers=strict_providers,
-            safety_config=safety_config,
-            adaptive_steps=adaptive_steps,
-            cloud_fallback_url=cloud_fallback_url,
-            deadline_ms=deadline_ms,
-            max_batch=max_batch,
-            batch_timeout_ms=batch_timeout_ms,
-            inference_executor_workers=inference_executor_workers,
-            inference_executor_queue=inference_executor_queue,
+        raise ValueError(
+            f"Serving does not support export_kind={_monolithic_cfg.get('export_kind')!r}"
         )
+
+    # Paid mode is explicit and is validated before the app/lifespan exists.
+    # A missing, invalid, revoked, or offline-first license aborts startup.
+    if pro_license is not None and not pro:
+        raise ValueError("pro_license requires pro=True (CLI: --pro)")
+    server.pro_license = None  # type: ignore[attr-defined]
+    server._pro_license_deadline = 0  # type: ignore[attr-defined]
+    if pro:
+        from tether.pro.activate import probe_hardware_binding
+        from tether.pro.license import (
+            DEFAULT_LICENSE_PATH,
+            HardwareFingerprintLite,
+            load_license,
+        )
+
+        configured_path = (
+            pro_license
+            or _os.environ.get("TETHER_PRO_LICENSE")
+            or DEFAULT_LICENSE_PATH
+        )
+        hardware = HardwareFingerprintLite(**probe_hardware_binding())
+        loaded_license = load_license(
+            path=configured_path,
+            current_hardware=hardware,
+        )
+        server.pro_license = loaded_license  # type: ignore[attr-defined]
+        server._pro_license_deadline = _paid_license_deadline(loaded_license)  # type: ignore[attr-defined]
 
     # Attach embodiment config (B.1) — optional, downstream consumers
     # (RTC adapter, action denormalization, tether doctor) read via
@@ -2413,7 +2603,7 @@ def create_app(
                 server.a2c2_internal = True  # type: ignore[attr-defined]
             logger.info(
                 "A2C2 hook loaded: checkpoint=%s, "
-                "latency_threshold_ms=%.1f, success_threshold=%.2f, "
+                "latency_threshold_ms=%.1f, request_success_threshold=%.2f, "
                 "applied=%s",
                 a2c2_checkpoint,
                 server.a2c2_hook.config.latency_threshold_ms,
@@ -2441,17 +2631,24 @@ def create_app(
             )
             if hasattr(server, "set_bid_config"):
                 server.set_bid_config(_bid_cfg)  # type: ignore[attr-defined]
+                if getattr(server, "a2c2_hook", None) is not None:
+                    # BID wins the Phase 1 mutex. Clear both the public hook
+                    # used by the /act handler and any server-internal binding
+                    # so correction cannot run after candidate selection.
+                    if hasattr(server, "set_a2c2_hook"):
+                        server.set_a2c2_hook(None)
+                    server.a2c2_hook = None  # type: ignore[attr-defined]
+                    server.a2c2_internal = False  # type: ignore[attr-defined]
+                    logger.warning(
+                        "Both --bid-num-candidates and --a2c2-checkpoint set; "
+                        "Phase 1 treats these as mutually exclusive. BID is "
+                        "enabled and A2C2 is disabled."
+                    )
                 logger.info(
                     "BID enabled on server: N=%d, window=%d, metric=%s",
                     _bid_cfg.n_candidates, _bid_cfg.coherence_window,
                     _bid_cfg.coherence_metric,
                 )
-                if a2c2_checkpoint:
-                    logger.warning(
-                        "Both --bid-num-candidates and --a2c2-checkpoint set; "
-                        "Phase 1 treats these as mutually exclusive. BID will "
-                        "run; A2C2 head output ignored."
-                    )
             else:
                 logger.warning(
                     "--bid-num-candidates=%d set but server type %s does not "
@@ -2464,6 +2661,21 @@ def create_app(
                 "Failed to configure BID (n=%d): %s — falling back to single-sample",
                 bid_n_candidates, exc,
             )
+
+    # Warn only when the request-health gate remains active. A successfully
+    # configured BID path clears A2C2 above, so the transient hook load should
+    # not produce a misleading gate-enabled warning.
+    if (
+        getattr(server, "a2c2_hook", None) is not None
+        and a2c2_success_threshold < 1.0
+    ):
+        logger.warning(
+            "A2C2 request-health gate enabled at %.2f: this signal only "
+            "records whether /act returned an error; it is not robot task "
+            "success. Healthy HTTP traffic can disable corrections. The "
+            "default 1.01 leaves gating latency-only.",
+            a2c2_success_threshold,
+        )
 
     # The cuda_graphs_enabled flag is consumed by Pi05DecomposedInference when
     # that backend is instantiated (scripts/modal_*_decomposed.py paths, and
@@ -2962,8 +3174,9 @@ def create_app(
                 "uses direct predict_from_base64_async path",
                 type(server).__name__,
             )
-        # Pro tier: start daily heartbeat background task if a Pro license is
-        # loaded. The task runs send_heartbeat() every 24h until cancellation.
+        # Pro tier: refresh the signed heartbeat lease in the background and
+        # fail /act closed when revocation, suspension, expiry, or the bounded
+        # offline grace deadline is reached.
         # Defensive — does nothing on free tier where server.pro_license is None.
         _heartbeat_task = None
         _pro_license = getattr(server, "pro_license", None)
@@ -2973,48 +3186,71 @@ def create_app(
                 from tether.pro.heartbeat import (
                     LicenseExpiredAtServer,
                     LicenseRevokedError,
+                    LicenseSuspendedError,
                     send_heartbeat,
                 )
                 _hb_fp = heartbeat_fingerprint()
-                _hb_license_id = _pro_license.customer_id  # license dict / dataclass — has customer_id
+                _hb_license_id = _pro_license.license_id
                 _hb_version = getattr(server, "_tether_version", None) or "unknown"
 
                 async def _heartbeat_loop():
                     import asyncio as _asyncio_hb
+                    import time as _time_hb
                     while True:
+                        previous_deadline = int(server._pro_license_deadline)  # type: ignore[attr-defined]
+                        seconds_left = previous_deadline - int(_time_hb.time())
+                        if seconds_left <= 0:
+                            logger.error("Pro heartbeat lease expired; refusing new requests")
+                            server.health_state = "degraded"  # type: ignore[attr-defined]
+                            break
+                        sleep_for = _heartbeat_refresh_delay(
+                            deadline_s=previous_deadline,
+                            now_s=int(_time_hb.time()),
+                        )
+                        if sleep_for:
+                            await _asyncio_hb.sleep(sleep_for)
+                        # Recheck immediately before network I/O. Admission also
+                        # checks synchronously on every /act request.
+                        if not _paid_license_admitted(server):
+                            logger.error("Pro heartbeat lease expired before refresh")
+                            break
+                        previous_deadline = int(server._pro_license_deadline)  # type: ignore[attr-defined]
                         try:
-                            send_heartbeat(
+                            if not await _refresh_paid_heartbeat_once(
+                                server,
+                                send_heartbeat_fn=send_heartbeat,
                                 license_id=_hb_license_id,
                                 hardware_fingerprint=_hb_fp,
                                 tether_version=_hb_version,
-                            )
+                                license_expires_at=_pro_license.expires_at,
+                                cache_path=_pro_license.heartbeat_cache_file,
+                                previous_deadline=previous_deadline,
+                            ):
+                                logger.error("Discarded heartbeat renewal completed after lease deadline")
+                                break
                             logger.debug("Pro heartbeat sent for %s", _hb_license_id)
-                        except LicenseRevokedError as exc:
-                            logger.error("Pro license revoked: %s. Server will refuse new requests.", exc)
+                        except (LicenseRevokedError, LicenseExpiredAtServer, LicenseSuspendedError) as exc:
+                            logger.error("Pro license is no longer active: %s", exc)
                             server.health_state = "degraded"  # type: ignore[attr-defined]
                             break
-                        except LicenseExpiredAtServer as exc:
-                            logger.error("Pro license expired at server: %s.", exc)
-                            server.health_state = "degraded"  # type: ignore[attr-defined]
-                            break
-                        except Exception as exc:  # noqa: BLE001 — soft failure, retry next tick
-                            logger.debug("Heartbeat soft failure (will retry): %s", exc)
-                        # 24h interval. Cached license stays valid until
-                        # HEARTBEAT_FRESHNESS_S elapses since the last successful
-                        # heartbeat (handled in pro/license.py at next startup).
-                        await _asyncio_hb.sleep(24 * 3600)
+                        except Exception as exc:  # noqa: BLE001
+                            if not _paid_license_admitted(server):
+                                logger.error("Pro heartbeat failed past grace deadline: %s", exc)
+                                break
+                            logger.warning("Pro heartbeat unavailable; retrying within signed lease: %s", exc)
 
                 import asyncio as _asyncio_lifespan
                 _heartbeat_task = _asyncio_lifespan.create_task(_heartbeat_loop())
                 logger.info(
-                    "Pro daily heartbeat started for license %s", _hb_license_id,
+                    "Pro signed-heartbeat monitor started for license %s", _hb_license_id,
                 )
-            except Exception as exc:  # noqa: BLE001 — never block startup on heartbeat scaffolding
-                logger.warning("Pro heartbeat scaffolding failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Pro heartbeat monitor failed to start: %s", exc)
+                server.health_state = "degraded"  # type: ignore[attr-defined]
 
         # Curate uploader scaffolding — daily background upload of the
         # contribution queue at ~/.tether/contribute/queue/. Posts to the
-        # live contribution-worker (https://tether-contributions.fastcrest
+        # live contribution-worker (https://reflex-contributions.fastcrest
         # .workers.dev) by default. Set TETHER_CURATE_DRY_RUN=1 to keep
         # files locally without uploading; TETHER_CONTRIB_ENDPOINT to point
         # at a self-hosted worker.
@@ -3160,6 +3396,7 @@ def create_app(
         # skip the server during warmup, on warmup failure, and after
         # circuit-breaker degradation. Body always returns the granular state
         # for human debugging.
+        _paid_license_admitted(server)
         state = getattr(server, "health_state", "initializing")
         body = {
             "status": "ok" if state == "ready" else "not_ready",
@@ -3188,6 +3425,15 @@ def create_app(
 
     @app.post("/act")
     async def act(request: PredictRequest, _auth: None = Depends(_require_api_key)):
+        if not _paid_license_admitted(server):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "pro-license-lease-expired",
+                    "hint": "paid serving failed closed at the signed heartbeat deadline",
+                },
+                headers={"Retry-After": "60"},
+            )
         # Circuit breaker: refuse traffic when the consecutive-crash threshold
         # has tripped. Operators must restart the server to clear "degraded".
         # Returns 503 + Retry-After=60 so well-behaved clients back off.
@@ -3525,10 +3771,11 @@ def create_app(
 
             # A2C2 correction hook (Phase 1 a2c2-correction Day 3).
             # Applies a per-step residual correction to the action chunk
-            # when latency p95 ≥ threshold AND success rate ≤ threshold.
-            # Cold-start + no-hook → no-op. Per-act outcome recorded into
-            # the hook's rolling windows AFTER the apply call so the
-            # current request's signal joins the steady-state distribution.
+            # when latency p95 ≥ threshold. An explicitly configured legacy
+            # request-health gate may also skip on error-free HTTP traffic;
+            # it is disabled by default. Cold-start + no-hook → no-op.
+            # Per-act outcome is recorded AFTER the apply call so the current
+            # request's signal joins the steady-state distribution.
             _a2c2 = getattr(server, "a2c2_hook", None)
             _a2c2_internal = getattr(server, "a2c2_internal", False)
             if (
@@ -3753,17 +4000,20 @@ def create_app(
                 span.set_attribute("tether.injected_latency_ms", _inj)
                 await _asyncio.sleep(_inj / 1000.0)
 
-            # A2C2 outcome bookkeeping — feed the latency + success signal
-            # into the hook's rolling windows so subsequent should_apply()
-            # decisions reflect this request. Records regardless of whether
-            # we applied or skipped this time.
+            # A2C2 outcome bookkeeping — feed latency + HTTP request health
+            # into the rolling windows so subsequent should_apply() decisions
+            # reflect this request. This is not a robot task-success signal.
+            # Record regardless of whether correction applied this time.
             if _a2c2 is not None and isinstance(result, dict):
                 try:
                     _latency_ms = float(result.get("latency_ms", 0.0))
                     if _inj > 0:
                         _latency_ms += _inj  # client-perceived latency
-                    _success = "error" not in result
-                    _a2c2.record_outcome(latency_ms=_latency_ms, success=_success)
+                    _request_succeeded = "error" not in result
+                    _a2c2.record_outcome(
+                        latency_ms=_latency_ms,
+                        success=_request_succeeded,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("a2c2_hook.record_outcome_failed: %s", exc)
 

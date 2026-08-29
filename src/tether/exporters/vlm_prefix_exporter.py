@@ -17,7 +17,6 @@ in the ONNX graph via ``patch_onnx_type_mismatches``.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -438,47 +437,91 @@ def export_vlm_prefix(
     except ImportError:
         logger.warning("onnxruntime not installed -- skipping ONNX validation")
 
-    # 7. Write / update tether_config.json
-    config_path = output_dir / "tether_config.json"
-    config: dict[str, Any] = {}
-    if config_path.exists():
-        config = json.loads(config_path.read_text())
-
-    config["vlm_image_size"] = [image_size, image_size]
-    config["vlm_hidden_size"] = vlm_hidden_size  # 960 — VLM-internal dim (for state encoder)
-    config["vlm_kv_dim"] = vlm_kv_dim            # 320 — expert cross-attn input dim
-    # L dim in the per-layer tensor; SmolVLA truncates the SmolVLM2 decoder
-    # to 16 of 32 layers at export time, and the expert has a matching count.
-    config["vlm_num_layers"] = SMOLVLA_NUM_DECODER_LAYERS
-    config["vlm_prefix_onnx"] = "vision_encoder.onnx"
-    config["vlm_model_id"] = checkpoint_path_or_id
-    config["export_version"] = "0.5"  # split vlm_k/vlm_v with RoPE on k
-
-    config_path.write_text(json.dumps(config, indent=2))
-    logger.info("Updated config: %s", config_path)
-
-    # 8. Export text embedder
-    text_emb_path = export_text_embedder(
+    # 7. Export text embedder
+    export_text_embedder(
         checkpoint_path_or_id=checkpoint_path_or_id,
         output_dir=output_dir,
         opset=opset,
     )
 
-    # 9. Export decoder prefill
-    decoder_path = export_decoder_prefill(
+    # 8. Export decoder prefill
+    export_decoder_prefill(
         checkpoint_path_or_id=checkpoint_path_or_id,
         output_dir=output_dir,
         opset=opset,
     )
 
-    # Update config with all export paths
-    config = json.loads(config_path.read_text())
-    config["text_embedder_onnx"] = "text_embedder.onnx"
-    config["decoder_prefill_onnx"] = "decoder_prefill.onnx"
-    config_path.write_text(json.dumps(config, indent=2))
+    # Update the validated config only after every declared artifact exists.
+    config_path = _update_vlm_manifest(
+        output_dir,
+        checkpoint_path_or_id=checkpoint_path_or_id,
+        image_size=image_size,
+        vlm_hidden_size=vlm_hidden_size,
+        vlm_kv_dim=vlm_kv_dim,
+    )
     logger.info("Updated config with text_embedder + decoder_prefill: %s", config_path)
 
     return onnx_path
+
+
+def _update_vlm_manifest(
+    output_dir: str | Path,
+    *,
+    checkpoint_path_or_id: str,
+    image_size: int,
+    vlm_hidden_size: int,
+    vlm_kv_dim: int,
+) -> Path:
+    """Replace the VLM component's manifest entries from its known outputs."""
+    from tether.export_config import (
+        SMOLVLA_VLM_MODEL_PATHS,
+        load_tether_config,
+        replace_owned_onnx_artifacts,
+        write_tether_config,
+    )
+
+    output_dir = Path(output_dir)
+    config = load_tether_config(output_dir)
+    extensions = dict(config.get("extensions", {}))
+    artifact_owners = dict(extensions.get("artifact_owners", {}))
+    previous_owned = artifact_owners.get("smolvla_vlm", [])
+    if not isinstance(previous_owned, list) or not all(
+        isinstance(path, str) for path in previous_owned
+    ):
+        previous_owned = []
+
+    # Migrate the old append-only manifest deterministically. Standard ONNX
+    # external-data names use ``<graph>.data``; arbitrary names are tracked by
+    # the owner list from the first canonical run onward.
+    legacy_owned = {
+        value
+        for key in ("vlm_prefix_onnx", "text_embedder_onnx", "decoder_prefill_onnx")
+        if isinstance((value := config.get(key)), str)
+    }
+    for item in config["artifacts"]:
+        path = str(item.get("path", ""))
+        if any(path == model or path.startswith(f"{model}.") for model in SMOLVLA_VLM_MODEL_PATHS):
+            legacy_owned.add(path)
+
+    config["artifacts"], current_owned = replace_owned_onnx_artifacts(
+        output_dir,
+        config["artifacts"],
+        model_paths=SMOLVLA_VLM_MODEL_PATHS,
+        previously_owned_paths=[*previous_owned, *sorted(legacy_owned)],
+    )
+    artifact_owners["smolvla_vlm"] = current_owned
+    extensions["artifact_owners"] = artifact_owners
+    config["extensions"] = extensions
+    config["vlm_image_size"] = [image_size, image_size]
+    config["vlm_hidden_size"] = vlm_hidden_size
+    config["vlm_kv_dim"] = vlm_kv_dim
+    config["vlm_num_layers"] = SMOLVLA_NUM_DECODER_LAYERS
+    config["vlm_prefix_onnx"] = "vision_encoder.onnx"
+    config["text_embedder_onnx"] = "text_embedder.onnx"
+    config["decoder_prefill_onnx"] = "decoder_prefill.onnx"
+    config["vlm_model_id"] = checkpoint_path_or_id
+    config["export_version"] = "0.5"
+    return write_tether_config(output_dir, config)
 
 
 # ---------------------------------------------------------------------------
