@@ -115,6 +115,11 @@ def test_config_accepts_empty_tasks_tuple():
     assert cfg.tasks == ()
 
 
+def test_config_rejects_unsafe_evidence_run_id():
+    with pytest.raises(ValueError, match="evidence_run_id"):
+        LiberoSuiteConfig(evidence_run_id="../overwrite")
+
+
 # ---------------------------------------------------------------------------
 # EpisodeResult validation + cross-field invariants
 # ---------------------------------------------------------------------------

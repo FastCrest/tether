@@ -26,12 +26,13 @@ server; we call policy.select_action directly).
  10. 180° H+W image flip via numpy slicing (matches OpenPI exactly)
 
 Usage:
-    modal run scripts/modal_libero_lerobot_native.py --tasks 0 --num-episodes 1
-    modal run scripts/modal_libero_lerobot_native.py --tasks all --num-episodes 5
+    modal run scripts/modal_libero_lerobot_native.py --tasks 0 --num-episodes 1 --evidence-run-id smoke-001
+    modal run scripts/modal_libero_lerobot_native.py --tasks all --num-episodes 5 --evidence-run-id benchmark-001
 """
 import json
 import os
 import modal
+import re
 
 app = modal.App("tether-libero-lerobot-native")
 
@@ -130,6 +131,18 @@ TASK_SUITE_MAX_STEPS = {
 }
 
 
+EVIDENCE_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def evidence_output_path(*, run_id: str, suite: str, checkpoint_tag: str, seed: int) -> str:
+    """Return a unique, volume-relative evidence destination."""
+    if not EVIDENCE_RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("evidence run ID must be 1-64 safe filename characters")
+    if checkpoint_tag not in {"parent", "adapter"}:
+        raise ValueError("checkpoint tag must be parent or adapter")
+    return f"/onnx_out/evaluation-evidence/{run_id}/{suite}/{checkpoint_tag}/seed-{seed}"
+
+
 _onnx_output_volume = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=True)
 _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
 
@@ -168,6 +181,7 @@ def run_ported_libero(
     evidence_max_bytes: int = 268435456,
     evidence_max_frames: int = 600,
     evidence_frame_stride: int = 2,
+    evidence_interrupt_after_steps: int = 0,
 ):
     """Port of openpi/examples/libero/main.py rolled out end-to-end.
 
@@ -499,6 +513,8 @@ def run_ported_libero(
                     )
                 plan_request = None
                 plan_offset = 0
+                evidence_manifest = None
+                validation_interrupted = False
                 if video_frames is not None:
                     video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
@@ -508,15 +524,27 @@ def run_ported_libero(
                         if t < num_steps_wait:
                             obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
                             if evidence:
+                                interrupt_now = (
+                                    evidence_interrupt_after_steps > 0
+                                    and evidence.step_count + 1 >= evidence_interrupt_after_steps
+                                )
                                 evidence.record_step(
                                     step_index=t, phase="settling", observation=_observation_record(obs),
                                     action=list(LIBERO_DUMMY_ACTION), policy_request=None,
-                                    task_events=[{"kind": "episode_started"}] if t == 0 else [],
+                                    task_events=(
+                                        ([{"kind": "episode_started"}] if t == 0 else [])
+                                        + ([{"kind": "validation_interruption"}] if interrupt_now else [])
+                                    ),
                                     frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
                                 )
+                                if interrupt_now:
+                                    evidence_manifest = evidence.interrupt("validation_interruption")
+                                    validation_interrupted = True
                             if video_frames is not None:
                                 video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                             t += 1
+                            if validation_interrupted:
+                                break
                             continue
 
                         # Dump obs schema on first real step
@@ -659,6 +687,10 @@ def run_ported_libero(
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(action.tolist())
                         if evidence:
+                            interrupt_now = (
+                                evidence_interrupt_after_steps > 0
+                                and evidence.step_count + 1 >= evidence_interrupt_after_steps
+                            )
                             evidence.record_step(
                                 step_index=t, phase="policy", observation=_observation_record(obs),
                                 action=np.asarray(action, dtype=np.float32).reshape(-1)[:7].tolist(),
@@ -666,9 +698,12 @@ def run_ported_libero(
                                 task_events=(
                                     [{"kind": "task_success"}] if done else
                                     [{"kind": "step_limit_reached"}] if t + 1 >= max_steps + num_steps_wait else []
-                                ),
+                                ) + ([{"kind": "validation_interruption"}] if interrupt_now else []),
                                 frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
                             )
+                            if interrupt_now:
+                                evidence_manifest = evidence.interrupt("validation_interruption")
+                                validation_interrupted = True
                         plan_offset += 1
                         if video_frames is not None:
                             video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
@@ -677,6 +712,8 @@ def run_ported_libero(
                             results["total_success"] += 1
                             break
                         t += 1
+                        if validation_interrupted:
+                            break
                     except Exception as e:
                         err_tb = traceback.format_exc()
                         print(f"  step error: {e}")
@@ -697,15 +734,20 @@ def run_ported_libero(
                     "init_idx": int(init_idx),
                     "steps": int(t),
                     "success": bool(done),
-                    "terminal_reason": "success" if done else "timeout",
+                    "terminal_reason": (
+                        "validation_interruption" if validation_interrupted else
+                        "success" if done else "timeout"
+                    ),
                 }
                 if evidence and not evidence.closed:
                     manifest = evidence.finish(episode_record["terminal_reason"])
+                    evidence_manifest = manifest
+                if evidence and evidence_manifest:
                     episode_record.update({
                         "evidence_path": str(evidence.root),
-                        "evidence_complete": manifest["complete"],
-                        "evidence_truncated": manifest["truncated"],
-                        "evidence_recording_errors": manifest["recording_errors"],
+                        "evidence_complete": evidence_manifest["complete"],
+                        "evidence_truncated": evidence_manifest["truncated"],
+                        "evidence_recording_errors": evidence_manifest["recording_errors"],
                     })
                 task_result["episodes"].append(episode_record)
                 task_result["total"] += 1
@@ -788,6 +830,9 @@ def main(
     evidence_max_bytes: int = 268435456,
     evidence_max_frames: int = 600,
     evidence_frame_stride: int = 2,
+    evidence_run_id: str = "",
+    evidence_interrupt_after_steps: int = 0,
+    remote_timeout_s: int = 900,
 ):
     """
     --num-episodes N          episodes per task (OpenPI default: 50)
@@ -814,13 +859,18 @@ def main(
         task_list = [int(t) for t in tasks.split(",")]
     which = f"snapflow-student={snapflow_student}" if snapflow_student else f"model={model_id}"
     checkpoint_tag = "adapter" if adapter_path else "parent"
-    evidence_dir = (
-        f"/onnx_out/evaluation-evidence/{suite}/{checkpoint_tag}/seed-{seed}"
-        if capture_evidence else ""
-    )
+    if capture_evidence and not evidence_run_id:
+        raise ValueError("--evidence-run-id is required when capture is enabled")
+    if not 60 <= remote_timeout_s <= 1500:
+        raise ValueError("--remote-timeout-s must be between 60 and 1500")
+    if evidence_interrupt_after_steps < 0:
+        raise ValueError("--evidence-interrupt-after-steps cannot be negative")
+    evidence_dir = evidence_output_path(
+        run_id=evidence_run_id, suite=suite, checkpoint_tag=checkpoint_tag, seed=seed,
+    ) if capture_evidence else ""
     print(f"Running OpenPI-port LIBERO {suite}: {which} tasks={task_list or 'all'}, "
           f"{num_episodes} eps each")
-    r = run_ported_libero.remote(
+    r = run_ported_libero.with_options(timeout=remote_timeout_s).remote(
         model_id=model_id,
         num_episodes=num_episodes,
         task_suite_name=suite,
@@ -838,6 +888,7 @@ def main(
         evidence_max_bytes=evidence_max_bytes,
         evidence_max_frames=evidence_max_frames,
         evidence_frame_stride=evidence_frame_stride,
+        evidence_interrupt_after_steps=evidence_interrupt_after_steps,
     )
     print("\n=== RESULT ===")
     print(f"  model: {r.get('model')}")

@@ -30,3 +30,11 @@ def test_retrieval_uses_safe_volume_path_and_validates(tmp_path):
 def test_retrieval_rejects_unsafe_paths(path):
     with pytest.raises(ValueError):
         module.safe_remote_path(path)
+
+
+def test_retrieval_rejects_nonempty_destination(tmp_path):
+    destination = tmp_path / "download"
+    destination.mkdir()
+    (destination / "existing.txt").write_text("keep")
+    with pytest.raises(ValueError, match="empty"):
+        module.retrieve("evaluation-evidence/run", destination)

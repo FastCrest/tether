@@ -32,6 +32,7 @@ import logging
 import re
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -172,6 +173,7 @@ def run_libero_on_modal(
     # within one Modal call (cheaper cold-start than per-task fan-out
     # at the Tether layer).
     all_episodes: list[EpisodeResult] = []
+    evidence_run_id = config.evidence_run_id or f"tether-{uuid.uuid4().hex}"
     for suite in suites:
         invocation = _invoke_one_suite(
             modal_invoker=modal_invoker,
@@ -186,6 +188,7 @@ def run_libero_on_modal(
             evidence_max_bytes=config.evidence_max_bytes,
             evidence_max_frames=config.evidence_max_frames,
             evidence_frame_stride=config.evidence_frame_stride,
+            evidence_run_id=evidence_run_id,
             timeout_s=suite_timeout_s,
         )
         episodes = _parse_invocation_to_episodes(invocation)
@@ -208,6 +211,7 @@ def _invoke_one_suite(
     evidence_max_bytes: int,
     evidence_max_frames: int,
     evidence_frame_stride: int,
+    evidence_run_id: str,
     timeout_s: float,
 ) -> ModalInvocationResult:
     """Subprocess one `modal run scripts/modal_libero_*.py --suite X
@@ -223,6 +227,7 @@ def _invoke_one_suite(
         "--evidence-max-bytes", str(evidence_max_bytes),
         "--evidence-max-frames", str(evidence_max_frames),
         "--evidence-frame-stride", str(evidence_frame_stride),
+        "--evidence-run-id", evidence_run_id,
     ]
     if checkpoint.revision:
         cmd.extend(["--revision", checkpoint.revision])

@@ -82,6 +82,7 @@ class LiberoSuiteConfig:
     evidence_max_bytes: int = 256 * 1024 * 1024
     evidence_max_frames: int = 600
     evidence_frame_stride: int = 2
+    evidence_run_id: str = ""
 
     def __post_init__(self) -> None:
         if self.num_episodes < 1:
@@ -102,6 +103,12 @@ class LiberoSuiteConfig:
             )
         if self.evidence_max_bytes < 1 or self.evidence_max_frames < 1 or self.evidence_frame_stride < 1:
             raise ValueError("evidence capture limits must be positive")
+        if self.evidence_run_id and (
+            len(self.evidence_run_id) > 64
+            or not self.evidence_run_id[0].isalnum()
+            or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in self.evidence_run_id)
+        ):
+            raise ValueError("evidence_run_id must be 1-64 safe filename characters")
         # Normalize tasks: empty tuple OR tuple of non-empty strings
         for task in self.tasks:
             if not task or not isinstance(task, str):

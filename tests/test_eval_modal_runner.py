@@ -345,6 +345,7 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
 
     config = LiberoSuiteConfig(
         num_episodes=5, tasks=("libero_object",), seed=42,
+        evidence_run_id="capture-validation-20260913",
     )
     run_libero_on_modal(
         config=config, export_dir=tmp_path,
@@ -360,6 +361,7 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
     assert "5" in cmd
     assert "--tasks" in cmd
     assert "all" in cmd
+    assert cmd[cmd.index("--evidence-run-id") + 1] == "capture-validation-20260913"
 
 
 def test_run_libero_invokes_per_suite_for_multiple_tasks(tmp_path):
