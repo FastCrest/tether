@@ -164,6 +164,10 @@ def run_ported_libero(
     snapflow_onnx: str = "",
     preprocessor_ref: str = "",
     save_video_dir: str = "",
+    evidence_dir: str = "",
+    evidence_max_bytes: int = 268435456,
+    evidence_max_frames: int = 600,
+    evidence_frame_stride: int = 2,
 ):
     """Port of openpi/examples/libero/main.py rolled out end-to-end.
 
@@ -176,6 +180,7 @@ def run_ported_libero(
     import traceback
     import numpy as np
     import torch
+    from tether.eval.evidence_capture import CaptureLimits, EpisodeEvidenceWriter
 
     # PyTorch 2.6+ changed torch.load default to weights_only=True, which
     # refuses to unpickle LIBERO's init_state files (they embed numpy globals).
@@ -406,6 +411,15 @@ def run_ported_libero(
             batch[key] = _to_tensor(image)
         return batch
 
+    def _observation_record(obs):
+        return {
+            "eef_position": np.asarray(obs.get("robot0_eef_pos", []), dtype=np.float32).tolist(),
+            "eef_quaternion": np.asarray(obs.get("robot0_eef_quat", []), dtype=np.float32).tolist(),
+            "gripper_qpos": np.asarray(obs.get("robot0_gripper_qpos", []), dtype=np.float32).tolist(),
+            "agentview_shape": list(getattr(obs.get("agentview_image"), "shape", ())),
+            "wrist_shape": list(getattr(obs.get("robot0_eye_in_hand_image"), "shape", ())),
+        }
+
     # ─── Results struct ──────────────────────────────────────────────
     results = {
         "schema_version": 1,
@@ -452,6 +466,7 @@ def run_ported_libero(
         }
 
         for ep in range(num_episodes):
+            evidence = None
             try:
                 env.reset()
                 # CRITICAL: rotate init state per episode (fixes #2375)
@@ -462,6 +477,28 @@ def run_ported_libero(
                 t = 0
                 done = False
                 video_frames = [] if save_video_dir else None
+                if evidence_dir:
+                    from pathlib import Path as _P
+                    evidence = EpisodeEvidenceWriter(
+                        _P(evidence_dir) / f"task-{task_idx}" / f"episode-{ep}",
+                        provenance={
+                            "suite": task_suite_name, "task_index": task_idx,
+                            "task_description": task_description, "seed": seed,
+                            "episode_index": ep, "init_index": init_idx,
+                            "policy": {
+                                "kind": "smolvla-lora" if adapter_path else "full",
+                                "source": adapter_path or model_id, "revision": revision or None,
+                                "adapter": adapter_path or None, "adapter_base": adapter_base or None,
+                                "adapter_base_revision": adapter_base_revision or None,
+                            },
+                        },
+                        limits=CaptureLimits(
+                            max_bytes=evidence_max_bytes, max_frames=evidence_max_frames,
+                            frame_stride=evidence_frame_stride,
+                        ),
+                    )
+                plan_request = None
+                plan_offset = 0
                 if video_frames is not None:
                     video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
@@ -470,6 +507,13 @@ def run_ported_libero(
                         # num_steps_wait: let objects settle
                         if t < num_steps_wait:
                             obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            if evidence:
+                                evidence.record_step(
+                                    step_index=t, phase="settling", observation=_observation_record(obs),
+                                    action=list(LIBERO_DUMMY_ACTION), policy_request=None,
+                                    task_events=[{"kind": "episode_started"}] if t == 0 else [],
+                                    frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+                                )
                             if video_frames is not None:
                                 video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                             t += 1
@@ -485,6 +529,7 @@ def run_ported_libero(
                             print(f"[debug] obs keys: {obs_info}")
 
                         if not action_plan:
+                            request_started = time.monotonic()
                             batch = _build_batch(obs, task_description)
                             batch_pp = preprocessor(batch)
                             batch_pp = {
@@ -600,11 +645,31 @@ def run_ported_libero(
                             # Trim to 7-dim LIBERO action
                             chunk_np = chunk_np[:, :7]
                             action_plan.extend(chunk_np[:replan_steps])
+                            request_finished = time.monotonic()
+                            plan_request = {
+                                "started_s": request_started - evidence.started_mono if evidence else None,
+                                "finished_s": request_finished - evidence.started_mono if evidence else None,
+                                "duration_ms": (request_finished - request_started) * 1000.0,
+                                "planned_actions": len(action_plan),
+                            }
+                            plan_offset = 0
                             if t == num_steps_wait and ep == 0 and task_idx == tasks_to_run[0]:
                                 print(f"[debug] first action: {chunk_np[0]}")
 
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(action.tolist())
+                        if evidence:
+                            evidence.record_step(
+                                step_index=t, phase="policy", observation=_observation_record(obs),
+                                action=np.asarray(action, dtype=np.float32).reshape(-1)[:7].tolist(),
+                                policy_request={**(plan_request or {}), "action_offset": plan_offset},
+                                task_events=(
+                                    [{"kind": "task_success"}] if done else
+                                    [{"kind": "step_limit_reached"}] if t + 1 >= max_steps + num_steps_wait else []
+                                ),
+                                frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+                            )
+                        plan_offset += 1
                         if video_frames is not None:
                             video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                         if done:
@@ -620,17 +685,29 @@ def run_ported_libero(
                             "task": task_idx, "ep": ep,
                             "error": str(e), "tb": err_tb[-400:],
                         })
+                        if evidence:
+                            evidence.interrupt("adapter_error")
                         break
 
                 # Cast to Python primitives so the result dict deserializes
                 # cleanly on any local Python (numpy.bool_ pickles with numpy
                 # globals → Modal client needs numpy to unpack, avoidable).
-                task_result["episodes"].append({
+                episode_record = {
                     "ep": int(ep),
                     "init_idx": int(init_idx),
                     "steps": int(t),
                     "success": bool(done),
-                })
+                    "terminal_reason": "success" if done else "timeout",
+                }
+                if evidence and not evidence.closed:
+                    manifest = evidence.finish(episode_record["terminal_reason"])
+                    episode_record.update({
+                        "evidence_path": str(evidence.root),
+                        "evidence_complete": manifest["complete"],
+                        "evidence_truncated": manifest["truncated"],
+                        "evidence_recording_errors": manifest["recording_errors"],
+                    })
+                task_result["episodes"].append(episode_record)
                 task_result["total"] += 1
                 results["total_eps"] += 1
                 print(f"  ep {ep} (init_idx={init_idx}): "
@@ -653,6 +730,20 @@ def run_ported_libero(
                     "task": task_idx, "ep": ep,
                     "error": str(e), "tb": err_tb[-400:],
                 })
+                if evidence and not evidence.closed:
+                    evidence_manifest = evidence.interrupt("adapter_error")
+                else:
+                    evidence_manifest = None
+                task_result["episodes"].append({
+                    "ep": int(ep), "init_idx": int(locals().get("init_idx", ep)),
+                    "steps": int(locals().get("t", 0)), "success": False,
+                    "terminal_reason": "adapter_error", "error": str(e),
+                    **({
+                        "evidence_path": str(evidence.root),
+                        "evidence_complete": evidence_manifest["complete"],
+                        "evidence_truncated": evidence_manifest["truncated"],
+                    } if evidence and evidence_manifest else {}),
+                })
                 task_result["total"] += 1
                 results["total_eps"] += 1
 
@@ -669,6 +760,8 @@ def run_ported_libero(
         if results["total_eps"] else 0.0
     )
     results["success_rate_pct"] = round(success_rate, 1)
+    if evidence_dir:
+        _onnx_output_volume.commit()
     print(f"\n====== {task_suite_name} (OpenPI-ported) ======")
     print(f"  Model: {model_id}")
     print(f"  Success: {results['total_success']}/{results['total_eps']} "
@@ -691,6 +784,10 @@ def main(
     adapter_base: str = "",
     adapter_base_revision: str = "",
     seed: int = 7,
+    capture_evidence: bool = True,
+    evidence_max_bytes: int = 268435456,
+    evidence_max_frames: int = 600,
+    evidence_frame_stride: int = 2,
 ):
     """
     --num-episodes N          episodes per task (OpenPI default: 50)
@@ -716,6 +813,11 @@ def main(
     else:
         task_list = [int(t) for t in tasks.split(",")]
     which = f"snapflow-student={snapflow_student}" if snapflow_student else f"model={model_id}"
+    checkpoint_tag = "adapter" if adapter_path else "parent"
+    evidence_dir = (
+        f"/onnx_out/evaluation-evidence/{suite}/{checkpoint_tag}/seed-{seed}"
+        if capture_evidence else ""
+    )
     print(f"Running OpenPI-port LIBERO {suite}: {which} tasks={task_list or 'all'}, "
           f"{num_episodes} eps each")
     r = run_ported_libero.remote(
@@ -732,6 +834,10 @@ def main(
         adapter_base=adapter_base,
         adapter_base_revision=adapter_base_revision,
         seed=seed,
+        evidence_dir=evidence_dir,
+        evidence_max_bytes=evidence_max_bytes,
+        evidence_max_frames=evidence_max_frames,
+        evidence_frame_stride=evidence_frame_stride,
     )
     print("\n=== RESULT ===")
     print(f"  model: {r.get('model')}")

@@ -182,6 +182,10 @@ def run_libero_on_modal(
             seed=config.seed,
             checkpoint=checkpoint,
             task_indices=config.task_indices,
+            capture_evidence=config.capture_evidence,
+            evidence_max_bytes=config.evidence_max_bytes,
+            evidence_max_frames=config.evidence_max_frames,
+            evidence_frame_stride=config.evidence_frame_stride,
             timeout_s=suite_timeout_s,
         )
         episodes = _parse_invocation_to_episodes(invocation)
@@ -200,6 +204,10 @@ def _invoke_one_suite(
     seed: int,
     checkpoint: CheckpointSpec,
     task_indices: tuple[int, ...],
+    capture_evidence: bool,
+    evidence_max_bytes: int,
+    evidence_max_frames: int,
+    evidence_frame_stride: int,
     timeout_s: float,
 ) -> ModalInvocationResult:
     """Subprocess one `modal run scripts/modal_libero_*.py --suite X
@@ -211,6 +219,10 @@ def _invoke_one_suite(
         "--num-episodes", str(num_episodes),
         "--tasks", ",".join(str(i) for i in task_indices) if task_indices else "all",
         "--model-id", checkpoint.source,
+        "--capture-evidence", "true" if capture_evidence else "false",
+        "--evidence-max-bytes", str(evidence_max_bytes),
+        "--evidence-max-frames", str(evidence_max_frames),
+        "--evidence-frame-stride", str(evidence_frame_stride),
     ]
     if checkpoint.revision:
         cmd.extend(["--revision", checkpoint.revision])
@@ -295,6 +307,16 @@ def _parse_modal_stdout(stdout: str, *, suite: str) -> dict | None:
         if parsed.get("schema_version") != 1 or parsed.get("suite") != suite:
             logger.warning("modal result envelope has the wrong schema or suite")
             return None
+        for task in parsed.get("per_task", []):
+            if "episodes" in task:
+                task["episodes"] = [
+                    {
+                        **episode,
+                        "episode_index": episode.get("episode_index", episode.get("ep")),
+                        "n_steps": episode.get("n_steps", episode.get("steps", 0)),
+                    }
+                    for episode in task["episodes"]
+                ]
         return parsed
 
     # Look for the end-of-suite summary header
@@ -416,6 +438,9 @@ def _parse_invocation_to_episodes(
                     "Task did not succeed before the step limit." if actual else
                     "Per-episode root cause unavailable from Modal aggregate output (Phase 1 limit)."
                 ),
+                evidence_path=actual.get("evidence_path") if actual else None,
+                evidence_complete=actual.get("evidence_complete") if actual else None,
+                evidence_truncated=actual.get("evidence_truncated") if actual else None,
             ))
 
     return out

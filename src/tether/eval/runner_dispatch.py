@@ -240,6 +240,9 @@ def _build_report_from_flat_episodes(
                 n_steps=ep.n_steps,
                 video_path=ep.video_path,
                 error_message=ep.error_message,
+                evidence_path=ep.evidence_path,
+                evidence_complete=ep.evidence_complete,
+                evidence_truncated=ep.evidence_truncated,
             )
             for i, ep in enumerate(eps)
         ]

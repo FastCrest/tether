@@ -184,6 +184,9 @@ def build_envelope(
             "n_steps": ep.n_steps,
             "video_path": ep.video_path,
             "error_message": ep.error_message,
+            "evidence_path": ep.evidence_path,
+            "evidence_complete": ep.evidence_complete,
+            "evidence_truncated": ep.evidence_truncated,
         }
         for r in report.results
         for ep in r.episodes

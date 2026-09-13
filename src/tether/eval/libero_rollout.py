@@ -106,6 +106,9 @@ def run_libero_rollout(
     label: str = "rollout",
     use_native: bool = False,
     capture_trajectories: bool = False,
+    evidence_dir: str = "",
+    evidence_limits: Any | None = None,
+    evidence_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run LIBERO rollouts through the given inference + processor pipeline.
 
@@ -140,6 +143,7 @@ def run_libero_rollout(
     """
     # Lazy imports — LIBERO + mujoco only needed at rollout time, not at module load.
     import collections
+    import json
     import math
     import time
     import traceback
@@ -147,6 +151,7 @@ def run_libero_rollout(
 
     import numpy as np
     import torch
+    from tether.eval.evidence_capture import CaptureLimits, EpisodeEvidenceWriter
 
     # The Pi05DecomposedInference module uses logger.info(...) for provider
     # diagnostics; default root handler is WARN which swallows those.
@@ -257,6 +262,15 @@ def run_libero_rollout(
             batch[key] = _to_tensor(image)
         return batch
 
+    def _observation_record(obs):
+        return {
+            "eef_position": np.asarray(obs.get("robot0_eef_pos", []), dtype=np.float32).tolist(),
+            "eef_quaternion": np.asarray(obs.get("robot0_eef_quat", []), dtype=np.float32).tolist(),
+            "gripper_qpos": np.asarray(obs.get("robot0_gripper_qpos", []), dtype=np.float32).tolist(),
+            "agentview_shape": list(getattr(obs.get("agentview_image"), "shape", ())),
+            "wrist_shape": list(getattr(obs.get("robot0_eye_in_hand_image"), "shape", ())),
+        }
+
     # ─── Results ─────────────────────────────────────────────────────
     results = {
         "model": label,
@@ -291,6 +305,7 @@ def run_libero_rollout(
         }
 
         for ep in range(num_episodes):
+            evidence = None
             try:
                 env.reset()
                 init_idx = ep % len(initial_states)
@@ -302,6 +317,27 @@ def run_libero_rollout(
                 t = 0
                 done = False
                 video_frames = [] if save_video_dir else None
+                if evidence_dir:
+                    episode_dir = Path(evidence_dir) / f"task-{task_idx}" / f"episode-{ep}"
+                    evidence = EpisodeEvidenceWriter(
+                        episode_dir,
+                        provenance={
+                            **(evidence_provenance or {}),
+                            "suite": task_suite_name,
+                            "task_index": task_idx,
+                            "task_description": task_description,
+                            "seed": seed,
+                            "episode_index": ep,
+                            "init_index": init_idx,
+                            "policy": {
+                                **(evidence_provenance or {}).get("policy", {}),
+                                "identity": label,
+                            },
+                        },
+                        limits=evidence_limits or CaptureLimits(),
+                    )
+                plan_request = None
+                plan_offset = 0
                 ep_applied_actions: list = []  # per-step executed action (capture_trajectories)
                 ep_eef_positions: list = []
                 if video_frames is not None:
@@ -313,6 +349,13 @@ def run_libero_rollout(
                     try:
                         if t < num_steps_wait:
                             obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            if evidence:
+                                evidence.record_step(
+                                    step_index=t, phase="settling", observation=_observation_record(obs),
+                                    action=list(LIBERO_DUMMY_ACTION), policy_request=None,
+                                    task_events=[{"kind": "episode_started"}] if t == 0 else [],
+                                    frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+                                )
                             if video_frames is not None:
                                 video_frames.append(
                                     np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
@@ -321,6 +364,7 @@ def run_libero_rollout(
                             continue
 
                         if not action_plan:
+                            request_started = time.monotonic()
                             batch = _build_batch(obs, task_description)
                             batch_pp = preprocessor(batch)
                             batch_pp = {
@@ -384,6 +428,14 @@ def run_libero_rollout(
                                     chunk_np_post = chunk_np_post[0]
                                 chunk_np_post = chunk_np_post[:, :7]
                                 action_plan.extend(chunk_np_post[:replan_steps])
+                            request_finished = time.monotonic()
+                            plan_request = {
+                                "started_s": request_started - evidence.started_mono if evidence else None,
+                                "finished_s": request_finished - evidence.started_mono if evidence else None,
+                                "duration_ms": (request_finished - request_started) * 1000.0,
+                                "planned_actions": len(action_plan),
+                            }
+                            plan_offset = 0
 
                         action = action_plan.popleft()
                         if capture_trajectories:
@@ -395,6 +447,18 @@ def run_libero_rollout(
                                 np.asarray(action, dtype=np.float32).reshape(-1)[:7]
                             )
                         obs, _, done, info = env.step(np.asarray(action).tolist())
+                        if evidence:
+                            evidence.record_step(
+                                step_index=t, phase="policy", observation=_observation_record(obs),
+                                action=np.asarray(action, dtype=np.float32).reshape(-1)[:7].tolist(),
+                                policy_request={**(plan_request or {}), "action_offset": plan_offset},
+                                task_events=(
+                                    [{"kind": "task_success"}] if done else
+                                    [{"kind": "step_limit_reached"}] if t + 1 >= max_steps + num_steps_wait else []
+                                ),
+                                frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+                            )
+                        plan_offset += 1
                         if capture_trajectories and "robot0_eef_pos" in obs:
                             ep_eef_positions.append(np.asarray(obs["robot0_eef_pos"], dtype=np.float32))
                         if video_frames is not None:
@@ -412,10 +476,18 @@ def run_libero_rollout(
                             "error": f"{step_exc}",
                             "traceback": tb.splitlines()[-5:],
                         })
+                        if evidence:
+                            evidence.interrupt("adapter_error")
                         raise
 
                 success = bool(done)
                 episode_rec = {"ep": ep, "success": success, "steps": t}
+                if evidence:
+                    manifest = evidence.finish("success" if success else "timeout")
+                    episode_rec["evidence_path"] = str(evidence.root)
+                    episode_rec["evidence_complete"] = manifest["complete"]
+                    episode_rec["evidence_truncated"] = manifest["truncated"]
+                    episode_rec["terminal_reason"] = manifest["terminal_reason"]
                 if capture_trajectories:
                     episode_rec["actions"] = [a.tolist() for a in ep_applied_actions]
                     episode_rec["eef_positions"] = [p.tolist() for p in ep_eef_positions]
@@ -436,9 +508,21 @@ def run_libero_rollout(
 
             except Exception as ep_exc:
                 print(f"  ep {ep}: ERROR {ep_exc}")
-                task_result["episodes"].append({
+                failed_episode = {
                     "ep": ep, "success": False, "error": str(ep_exc),
-                })
+                    "terminal_reason": "adapter_error",
+                }
+                if evidence:
+                    if not evidence.closed:
+                        manifest = evidence.interrupt("adapter_error")
+                    else:
+                        manifest = json.loads(evidence.manifest_path.read_text())
+                    failed_episode.update({
+                        "evidence_path": str(evidence.root),
+                        "evidence_complete": manifest["complete"],
+                        "evidence_truncated": manifest["truncated"],
+                    })
+                task_result["episodes"].append(failed_episode)
                 task_result["total"] += 1
 
         env.close()

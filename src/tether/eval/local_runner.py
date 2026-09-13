@@ -9,6 +9,7 @@ from typing import Callable
 
 from tether.eval.checkpoints import CheckpointSpec
 from tether.eval.libero import EpisodeResult, EvalReport, LiberoSuiteConfig, TaskResult
+from tether.eval.evidence_capture import CaptureLimits
 
 
 class LocalEvaluationUnavailable(RuntimeError):
@@ -111,6 +112,22 @@ def run_local_libero(
             num_episodes=config.num_episodes, seed=config.seed,
             save_video_dir=config.output_dir + "/videos" if config.video else "",
             label=checkpoint.identity, use_native=True,
+            evidence_dir=config.output_dir + "/evidence" if config.capture_evidence else "",
+            evidence_limits=CaptureLimits(
+                max_bytes=config.evidence_max_bytes,
+                max_frames=config.evidence_max_frames,
+                frame_stride=config.evidence_frame_stride,
+            ),
+            evidence_provenance={
+                "policy": {
+                    "kind": checkpoint.kind,
+                    "source": checkpoint.source,
+                    "revision": checkpoint.revision,
+                    "identity": checkpoint.identity,
+                    "adapter_base": checkpoint.base,
+                    "adapter_base_revision": checkpoint.base_revision,
+                }
+            },
         )
         errors = {(e.get("task_idx"), e.get("episode")): e for e in raw.get("errors", [])}
         for task in raw.get("per_task", []):
@@ -124,6 +141,9 @@ def run_local_libero(
                     success=ok, terminal_reason=reason,
                     wall_clock_s=float(item.get("wall_clock_s", 0)), n_steps=int(item.get("steps", 0)),
                     video_path=item.get("video_path"), error_message=str(error or item.get("error")) if (error or item.get("error")) else (None if ok else "Task did not succeed before the step limit."),
+                    evidence_path=item.get("evidence_path"),
+                    evidence_complete=item.get("evidence_complete"),
+                    evidence_truncated=item.get("evidence_truncated"),
                 ))
             task_results.append(TaskResult.from_episodes(f"{suite}_task_{task['task_idx']}", episodes))
     return EvalReport.from_task_results(

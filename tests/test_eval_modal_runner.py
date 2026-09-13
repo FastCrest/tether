@@ -173,6 +173,25 @@ def test_recorded_unsuccessful_episode_is_timeout_not_adapter_error():
     assert episode.error_message == "Task did not succeed before the step limit."
 
 
+def test_machine_envelope_preserves_capture_fields():
+    payload = {
+        "schema_version": 1, "suite": "libero_10", "total_success": 0,
+        "total_eps": 1, "success_rate_pct": 0.0,
+        "per_task": [{"task_idx": 0, "success": 0, "total": 1, "episodes": [{
+            "ep": 0, "steps": 530, "success": False,
+            "evidence_path": "/onnx_out/evaluation-evidence/run/task-0/episode-0",
+            "evidence_complete": True, "evidence_truncated": False,
+        }]}],
+    }
+    parsed = _parse_modal_stdout(
+        MODAL_RESULT_PREFIX + json.dumps(payload), suite="libero_10"
+    )
+    episode = _parse_invocation_to_episodes(_make_invocation(parsed=parsed, suite="libero_10"))[0]
+    assert episode.evidence_path.endswith("episode-0")
+    assert episode.evidence_complete is True
+    assert episode.evidence_truncated is False
+
+
 def test_episodes_modal_returncode_nonzero_yields_failure_row():
     invocation = _make_invocation(
         returncode=1, stderr="modal app crashed",
