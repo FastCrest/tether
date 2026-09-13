@@ -156,6 +156,23 @@ def test_episodes_failure_carries_phase1_limit_message():
     assert "Phase 1 limit" in eps[0].error_message
 
 
+def test_recorded_unsuccessful_episode_is_timeout_not_adapter_error():
+    parsed = {
+        "suite": "libero_10", "total_success": 0, "total_eps": 1,
+        "success_rate_pct": 0.0,
+        "per_task": [{
+            "task_idx": 0, "success": 0, "total": 1,
+            "episodes": [{"episode_index": 0, "success": False, "n_steps": 530}],
+        }],
+    }
+    episode = _parse_invocation_to_episodes(
+        _make_invocation(parsed=parsed, suite="libero_10")
+    )[0]
+    assert episode.terminal_reason == "timeout"
+    assert episode.n_steps == 530
+    assert episode.error_message == "Task did not succeed before the step limit."
+
+
 def test_episodes_modal_returncode_nonzero_yields_failure_row():
     invocation = _make_invocation(
         returncode=1, stderr="modal app crashed",

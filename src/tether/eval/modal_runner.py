@@ -339,11 +339,10 @@ def _parse_invocation_to_episodes(
     """Translate a ModalInvocationResult into per-(task, episode)
     EpisodeResult rows.
 
-    Modal's existing script returns aggregate per-task counts (not
-    per-episode). We synthesize per-episode rows: first N successes
-    are success=True, remaining failures are success=False with
-    terminal_reason="adapter_error" (we don't have per-episode root
-    cause from the aggregate).
+    Older output contains aggregate per-task counts only. Newer output
+    includes episode success and step counts. A recorded unsuccessful
+    episode is a timeout; adapter_error remains reserved for missing or
+    unparseable episode evidence.
 
     On any parse failure -> one adapter_error EpisodeResult per
     expected-episode so the caller sees a row with structured error.
@@ -407,7 +406,9 @@ def _parse_invocation_to_episodes(
                 task_id=task_id,
                 episode_index=ep_idx,
                 success=success,
-                terminal_reason="success" if success else "adapter_error",
+                terminal_reason=(
+                    "success" if success else "timeout" if actual else "adapter_error"
+                ),
                 wall_clock_s=invocation.elapsed_s / max(n_total, 1),
                 n_steps=actual["n_steps"] if actual else TASK_SUITE_MAX_STEPS.get(suite, 0),
                 video_path=None,
