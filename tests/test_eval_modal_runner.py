@@ -362,6 +362,8 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
     assert "--tasks" in cmd
     assert "all" in cmd
     assert cmd[cmd.index("--evidence-run-id") + 1] == "capture-validation-20260913"
+    assert "--capture-evidence" in cmd
+    assert "true" not in cmd
 
 
 def test_run_libero_invokes_per_suite_for_multiple_tasks(tmp_path):

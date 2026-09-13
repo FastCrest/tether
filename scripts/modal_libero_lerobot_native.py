@@ -515,6 +515,7 @@ def run_ported_libero(
                 plan_offset = 0
                 evidence_manifest = None
                 validation_interrupted = False
+                episode_error_reason = None
                 if video_frames is not None:
                     video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
@@ -723,7 +724,8 @@ def run_ported_libero(
                             "error": str(e), "tb": err_tb[-400:],
                         })
                         if evidence:
-                            evidence.interrupt("adapter_error")
+                            evidence_manifest = evidence.interrupt("adapter_error")
+                        episode_error_reason = "adapter_error"
                         break
 
                 # Cast to Python primitives so the result dict deserializes
@@ -736,6 +738,7 @@ def run_ported_libero(
                     "success": bool(done),
                     "terminal_reason": (
                         "validation_interruption" if validation_interrupted else
+                        episode_error_reason if episode_error_reason else
                         "success" if done else "timeout"
                     ),
                 }

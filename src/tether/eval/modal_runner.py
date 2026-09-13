@@ -223,7 +223,7 @@ def _invoke_one_suite(
         "--num-episodes", str(num_episodes),
         "--tasks", ",".join(str(i) for i in task_indices) if task_indices else "all",
         "--model-id", checkpoint.source,
-        "--capture-evidence", "true" if capture_evidence else "false",
+        "--capture-evidence" if capture_evidence else "--no-capture-evidence",
         "--evidence-max-bytes", str(evidence_max_bytes),
         "--evidence-max-frames", str(evidence_max_frames),
         "--evidence-frame-stride", str(evidence_frame_stride),
