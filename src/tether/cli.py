@@ -2884,6 +2884,7 @@ def serve(
                 ),
                 adaptive_high_action_delta=aac_high_action_delta,
                 adaptive_high_latency_ms=aac_high_latency_ms,
+                strict_policy_kwargs=True,
             )
         except ValueError as exc:
             err_console.print(f"[red]Invalid RTC config: {exc}[/red]")
