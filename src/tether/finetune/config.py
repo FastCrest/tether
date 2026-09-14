@@ -170,6 +170,14 @@ class FinetuneConfig:
     2026-04-25-self-distilling-serve-architecture: balances adaptation
     against base-distribution preservation."""
 
+    resume: bool = False
+    """Resume the latest valid LeRobot checkpoint under ``output/training``.
+
+    Tether keeps the output directory and asks the pinned LeRobot trainer to
+    restore its saved train state. Distillation backends do not support this
+    contract yet and fail before starting work.
+    """
+
     def __post_init__(self) -> None:
         self.output = Path(self.output)
         if not (0.0 <= self.mix_ratio <= 1.0):

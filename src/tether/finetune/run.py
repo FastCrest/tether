@@ -75,6 +75,12 @@ def _validate_config(cfg: FinetuneConfig) -> list[str]:
         errs.append(
             f"v0.3 only supports --backend lerobot; {cfg.backend!r} lands in v0.5+"
         )
+    if cfg.resume and (is_distill or cfg.backend != "lerobot"):
+        errs.append("resume is supported only by the LeRobot fine-tuning backend")
+    if cfg.resume and not (cfg.output / "training" / "checkpoints").is_dir():
+        errs.append(
+            "resume requires an existing output/training/checkpoints directory"
+        )
     if cfg.precision not in ("bf16", "fp32"):
         errs.append(
             f"precision must be bf16 or fp32; got {cfg.precision!r}"
@@ -202,6 +208,8 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
             f"--peft.method_type=lora",
             f"--peft.r={cfg.lora_rank}",
         ])
+    if cfg.resume:
+        cmd.append("--resume=true")
     for k, v in cfg.extra_lerobot_args.items():
         cmd.append(f"--{k}={v}")
     return cmd

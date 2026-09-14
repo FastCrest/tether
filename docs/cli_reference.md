@@ -493,14 +493,28 @@ Full subcommand list: `tether models --help`.
 Train models. Two subcommands — finetune an existing checkpoint, or distill a teacher into a 1-NFE student via SnapFlow.
 
 ```bash
-# Finetune
-tether train finetune --base smolvla-base --data ./my_dataset/
+# Finetune a pinned base and dataset
+tether train finetune \
+  --base lerobot/smolvla_base \
+  --base-revision <commit> \
+  --dataset organization/dataset \
+  --dataset-revision <commit> \
+  --output ./smolvla-candidate
+
+# Continue the same LeRobot job after it saved a trainer checkpoint
+tether train finetune \
+  --base lerobot/smolvla_base \
+  --dataset organization/dataset \
+  --output ./smolvla-candidate \
+  --resume
 
 # Distill (1-step student from N-step teacher)
 tether train distill --teacher ./teacher_export/ --steps 1
 ```
 
-Full subcommand list: `tether train --help`. See [`docs/self_distilling_serve.md`](./self_distilling_serve.md) for the continuous-distill loop (Pro tier).
+`--resume` uses the latest trainer checkpoint under `OUTPUT/training/checkpoints`. It does not support SnapFlow distillation yet. The caller must reuse the original base, dataset, recipe and output directory.
+
+Full subcommand list: `tether train --help`. See [`docs/self_distilling_serve.md`](./self_distilling_serve.md) for the continuous-distill loop (Pro tier) and [`docs/model_qualification.md`](./model_qualification.md) for the checked boundary of each registry family.
 
 ---
 

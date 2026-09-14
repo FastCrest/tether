@@ -217,6 +217,26 @@ class TestLerobotCommandBuild:
         cmd = _build_lerobot_command(cfg)
         assert "--policy.freeze_vision_encoder=true" in cmd
 
+    def test_resume_uses_existing_checkpoint_and_lerobot_resume_flag(self, tmp_path):
+        (tmp_path / "training" / "checkpoints" / "000010").mkdir(parents=True)
+        cfg = FinetuneConfig(
+            base="lerobot/smolvla_base",
+            dataset="lerobot/libero",
+            output=tmp_path,
+            resume=True,
+        )
+        assert _validate_config(cfg) == []
+        assert "--resume=true" in _build_lerobot_command(cfg)
+
+    def test_resume_without_checkpoint_is_rejected(self, tmp_path):
+        cfg = FinetuneConfig(
+            base="lerobot/smolvla_base",
+            dataset="lerobot/libero",
+            output=tmp_path,
+            resume=True,
+        )
+        assert any("resume requires" in item for item in _validate_config(cfg))
+
 
 class TestCheckpointLocation:
     def test_missing_dir_returns_none(self, tmp_path):
