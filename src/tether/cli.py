@@ -2214,6 +2214,7 @@ def serve(
     ),
     api_key: str = typer.Option(
         "",
+        envvar="TETHER_API_KEY",
         help="If set, every /act and /config request must include a matching "
              "X-Tether-Key header or it's rejected 401. /health stays "
              "unauthenticated so load balancers can probe readiness. For "
