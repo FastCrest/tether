@@ -261,6 +261,8 @@ def run_replay(
     # Replay loop
     diffs: list[dict[str, Any]] = []
     n_replayed = 0
+    n_skipped = 0
+    n_errors = 0
     n_pass_actions = 0
     n_pass_latency = 0
     n_pass_cache = 0
@@ -286,9 +288,31 @@ def run_replay(
         recorded_latency = rec.get("latency", {}) or {}
         recorded_cache = rec.get("cache")
 
-        # Need full image to invoke the model. Skip replay for actions/latency
-        # if absent; cache diff can run from recorded-only metadata if needed.
+        per_record: dict[str, Any] = {
+            "seq": rec.get("seq"),
+            "request_id": req.get("request_id"),
+            "episode_id": req.get("episode_id"),
+            "timestamp": rec.get("timestamp"),
+            "recorded_actions": recorded_actions,
+            "recorded_latency": recorded_latency,
+            "request": {
+                "instruction": req.get("instruction", ""),
+                "state": req.get("state"),
+                "image_sha256": req.get("image_sha256"),
+            },
+        }
+
+        # A replay without the original camera input is not comparable. Keep a
+        # result row so callers can distinguish missing evidence from a pass.
         if not req.get("image_b64"):
+            per_record.update(
+                status="skipped",
+                reason="The trace does not contain the full recorded image.",
+                replayed_actions=None,
+                replayed_latency=None,
+            )
+            diffs.append(per_record)
+            n_skipped += 1
             n_replayed += 1
             continue
 
@@ -300,14 +324,30 @@ def run_replay(
             )
         except Exception as e:  # noqa: BLE001
             print(f"  seq={rec.get('seq')}: replay raised {type(e).__name__}: {e}")
+            per_record.update(
+                status="error",
+                reason=f"{type(e).__name__}: {e}",
+                replayed_actions=None,
+                replayed_latency=None,
+            )
+            diffs.append(per_record)
+            n_errors += 1
             n_replayed += 1
             continue
 
-        per_record: dict[str, Any] = {"seq": rec.get("seq")}
+        replayed_actions = replay_resp.get("actions", [])
+        replayed_latency = {
+            "total_ms": float(replay_resp.get("latency_ms", 0.0)),
+        }
+        per_record.update(
+            status="replayed",
+            reason=None,
+            replayed_actions=replayed_actions,
+            replayed_latency=replayed_latency,
+        )
         line_parts: list[str] = [f"  seq={rec.get('seq'):4d}"]
 
         if do_actions:
-            replayed_actions = replay_resp.get("actions", [])
             d_a = diff_actions(recorded_actions, replayed_actions)
             per_record["actions"] = d_a
             if d_a["passed"]:
@@ -319,9 +359,6 @@ def run_replay(
 
         if do_latency:
             # Replay latency comes from the predict_from_base64 result
-            replayed_latency = {
-                "total_ms": float(replay_resp.get("latency_ms", 0.0)),
-            }
             d_l = diff_latency(recorded_latency, replayed_latency)
             per_record["latency"] = d_l
             if d_l["passed"]:
@@ -338,18 +375,25 @@ def run_replay(
             )
 
         if do_cache:
-            # Day 3: recorded-vs-recorded since the replay path doesn't yet
-            # surface its own cache state. Stub mirrors recorded_cache for
-            # the replay side until cache instrumentation lands in serve.
-            replayed_cache = recorded_cache  # placeholder
-            d_c = diff_cache(recorded_cache, replayed_cache)
-            per_record["cache"] = d_c
-            if d_c["passed"]:
-                n_pass_cache += 1
-            line_parts.append(
-                f"cache: {d_c['recorded_status']}→{d_c['replayed_status']} "
-                f"[{'PASS' if d_c['passed'] else 'FAIL'}]"
-            )
+            replayed_cache = replay_resp.get("cache")
+            if replayed_cache is None:
+                per_record["cache"] = {
+                    "comparable": False,
+                    "recorded_status": (recorded_cache or {}).get("status", "n/a"),
+                    "replayed_status": "not-recorded",
+                    "passed": False,
+                }
+                line_parts.append("cache: replay result did not report cache evidence [UNKNOWN]")
+            else:
+                d_c = diff_cache(recorded_cache, replayed_cache)
+                d_c["comparable"] = True
+                per_record["cache"] = d_c
+                if d_c["passed"]:
+                    n_pass_cache += 1
+                line_parts.append(
+                    f"cache: {d_c['recorded_status']}→{d_c['replayed_status']} "
+                    f"[{'PASS' if d_c['passed'] else 'FAIL'}]"
+                )
 
         diffs.append(per_record)
         n_replayed += 1
@@ -358,20 +402,23 @@ def run_replay(
     # Summary
     print("\nSummary:")
     print(f"  replayed: {n_replayed}")
-    print(f"  diffed:   {len(diffs)}")
+    print(f"  diffed:   {sum(item.get('status') == 'replayed' for item in diffs)}")
+    print(f"  skipped:  {n_skipped}")
+    print(f"  errors:   {n_errors}")
+    comparable = sum(item.get("status") == "replayed" for item in diffs)
     if do_actions:
         print(
-            f"  actions:  {n_pass_actions}/{len(diffs)} pass "
+            f"  actions:  {n_pass_actions}/{comparable} pass "
             f"(cos≥0.999, max_abs<1e-3)"
         )
     if do_latency:
         print(
-            f"  latency:  {n_pass_latency}/{len(diffs)} pass "
+            f"  latency:  {n_pass_latency}/{comparable} pass "
             f"(within ±5% of recorded total_ms)"
         )
     if do_cache:
         print(
-            f"  cache:    {n_pass_cache}/{len(diffs)} pass "
+            f"  cache:    {n_pass_cache}/{sum(bool((item.get('cache') or {}).get('comparable')) for item in diffs)} pass "
             f"(status match)"
         )
 
@@ -384,7 +431,9 @@ def run_replay(
                         "model": model,
                         "diff_mode": diff_mode,
                         "n_replayed": n_replayed,
-                        "n_diffed": len(diffs),
+                        "n_diffed": sum(item.get("status") == "replayed" for item in diffs),
+                        "n_skipped": n_skipped,
+                        "n_errors": n_errors,
                         "n_pass_actions": n_pass_actions if do_actions else None,
                         "n_pass_latency": n_pass_latency if do_latency else None,
                         "n_pass_cache": n_pass_cache if do_cache else None,
@@ -399,9 +448,13 @@ def run_replay(
 
     # --fail-on dispatch
     fail_codes = {
-        "actions": (do_actions, n_pass_actions, len(diffs)),
-        "latency": (do_latency, n_pass_latency, len(diffs)),
-        "cache": (do_cache, n_pass_cache, len(diffs)),
+        "actions": (do_actions, n_pass_actions, sum(item.get("status") == "replayed" for item in diffs)),
+        "latency": (do_latency, n_pass_latency, sum(item.get("status") == "replayed" for item in diffs)),
+        "cache": (
+            do_cache,
+            n_pass_cache,
+            sum(bool((item.get("cache") or {}).get("comparable")) for item in diffs),
+        ),
     }
     if fail_on:
         if fail_on not in fail_codes:
@@ -416,7 +469,7 @@ def run_replay(
                 f"ERROR: --fail-on {fail_on} requires --diff {fail_on} or --diff all"
             )
             return 1
-        if passed < total:
+        if total == 0 or passed < total:
             return 3
 
     return 0
