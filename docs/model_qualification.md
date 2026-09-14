@@ -8,6 +8,10 @@ The current qualified Studio path is SmolVLA LoRA with pinned parent and dataset
 
 Other families remain visible for inspection. Their qualification records say whether checkpoint loading or export code exists and whether training or task evaluation still lacks acceptance evidence. A benchmark proves timing for the measured artifact and host. It does not prove task success or device readiness.
 
+Each family record also lists its acceptance requirements. pi0 and pi0.5 need pinned checkpoints, export parity and matched development and held-out task evidence. GR00T needs the same evidence for its own exporter and task adapter. OpenVLA additionally needs tokenized-action parity. Code presence or a passing fixture does not satisfy these requirements.
+
+RTC is not currently qualified as an end-to-end serving path. The server records chunk carry state, but its ordinary request path does not yet inject RTC guidance into the policy denoising loop. Strict CLI configuration rejects policies that do not accept the RTC keyword contract instead of silently returning plain inference. Qualification still requires a per-step expert path plus Linux GPU execution evidence.
+
 When adding a family or registry entry:
 
 1. Add its family to `FAMILY_QUALIFICATIONS`.
