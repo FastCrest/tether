@@ -11,7 +11,31 @@ import time
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
+CAPTURE_SEMANTICS = {
+    "step_observation": (
+        "Exact post-env-step proprio record: end-effector position/quaternion, gripper qpos, "
+        "and source image shapes. It is the state resulting from the recorded applied action."
+    ),
+    "step_action": "Exact 7-D environment action applied immediately before the recorded observation.",
+    "policy_request": (
+        "Monotonic request start/finish/duration plus planned-action count and action offset. "
+        "One request may be referenced by several executed chunk actions."
+    ),
+    "task_events": "Observed evaluator events such as episode_started, task_success, or step_limit_reached.",
+    "camera_frame": (
+        "Sampled post-env-step agent-view frame at the configured stride. Wrist pixels are not retained by this capture level."
+    ),
+    "terminal_reason": "Observed evaluator terminal classification: success, timeout, adapter_error, or interruption.",
+    "not_captured": [
+        "Raw wrist-camera pixels",
+        "The raw policy-input image tensor after preprocessing",
+        "Language tokens/attention masks",
+        "Noise tensors or model-internal action chunks beyond the applied action",
+        "A separate raw pre-action observation on step zero",
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -99,6 +123,7 @@ class EpisodeEvidenceWriter:
             "truncated": self.truncated,
             "truncation_reasons": self.truncation_reasons,
             "recording_errors": self.errors,
+            "capture_semantics": CAPTURE_SEMANTICS,
             "artifacts": artifacts,
         }
         self._atomic_json(self.manifest_path, manifest)
@@ -145,10 +170,13 @@ class EpisodeEvidenceWriter:
             "timestamp_s": max(0.0, time.monotonic() - self.started_mono),
             "phase": phase,
             "observation": observation,
+            "observation_semantics": "post-env-step",
             "action": action,
+            "action_semantics": "applied-before-recorded-observation",
             "policy_request": policy_request,
             "task_events": task_events,
             "camera_frame": frame_path,
+            "camera_frame_semantics": "post-env-step-agentview-sampled" if frame_path else None,
         }
         encoded = json.dumps(record, separators=(",", ":")) + "\n"
         if self.bytes_written + len(encoded.encode()) > self.limits.max_bytes:
@@ -183,8 +211,10 @@ def validate_episode_evidence(root: str | Path) -> dict[str, Any]:
     root = Path(root).resolve()
     manifest_path = root / "episode-manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    if manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("kind") != "tether-checkpoint-episode-evidence":
+    schema = manifest.get("schema_version")
+    if schema not in SUPPORTED_SCHEMA_VERSIONS or manifest.get("kind") != "tether-checkpoint-episode-evidence":
         raise ValueError("unsupported episode evidence manifest")
+    artifact_paths = set()
     for item in manifest.get("artifacts", []):
         relative = Path(item["path"])
         if relative.is_absolute() or ".." in relative.parts:
@@ -194,7 +224,45 @@ def validate_episode_evidence(root: str | Path) -> dict[str, Any]:
             raise ValueError("artifact leaves evidence directory")
         if not path.is_file() or path.stat().st_size != item["size_bytes"] or _digest(path) != item["sha256"]:
             raise ValueError(f"artifact validation failed: {relative}")
+        artifact_paths.add(relative.as_posix())
+
+    if schema >= 2:
+        if manifest.get("capture_semantics") != CAPTURE_SEMANTICS:
+            raise ValueError("schema-2 capture semantics are missing or changed")
+        steps_path = root / "steps.jsonl"
+        rows = []
+        if steps_path.is_file():
+            for line in steps_path.read_text().splitlines():
+                if line.strip():
+                    rows.append(json.loads(line))
+        if len(rows) != int(manifest.get("counts", {}).get("steps", -1)):
+            raise ValueError("step count does not match steps.jsonl")
+        for index, row in enumerate(rows):
+            if row.get("step_index") != index:
+                raise ValueError("captured steps are not a contiguous prefix")
+            if row.get("observation_semantics") != "post-env-step":
+                raise ValueError("step observation semantics are missing")
+            if row.get("action_semantics") != "applied-before-recorded-observation":
+                raise ValueError("step action semantics are missing")
+            if not isinstance(row.get("observation"), dict):
+                raise ValueError("captured step is missing its proprio observation")
+            action = row.get("action")
+            if not isinstance(action, list) or len(action) != 7:
+                raise ValueError("captured step must retain the exact 7-D applied action")
+            frame = row.get("camera_frame")
+            if frame is not None and frame not in artifact_paths:
+                raise ValueError("step camera frame is not covered by the artifact manifest")
+        frame_artifacts = [path for path in artifact_paths if path.startswith("frames/")]
+        if len(frame_artifacts) != int(manifest.get("counts", {}).get("frames", -1)):
+            raise ValueError("frame count does not match retained frame artifacts")
     return manifest
 
 
-__all__ = ["CaptureLimits", "EpisodeEvidenceWriter", "validate_episode_evidence"]
+__all__ = [
+    "SCHEMA_VERSION",
+    "SUPPORTED_SCHEMA_VERSIONS",
+    "CAPTURE_SEMANTICS",
+    "CaptureLimits",
+    "EpisodeEvidenceWriter",
+    "validate_episode_evidence",
+]
