@@ -54,11 +54,13 @@ def _adapter(
     enabled: bool = False,
     execute_hz: float = 100.0,
     rtc_execution_horizon: int = 10,
+    strict_policy_kwargs: bool = False,
 ) -> RtcAdapter:
     cfg = RtcAdapterConfig(
         enabled=enabled,
         execute_hz=execute_hz,
         rtc_execution_horizon=rtc_execution_horizon,
+        strict_policy_kwargs=strict_policy_kwargs,
     )
     return RtcAdapter(
         policy=policy,
@@ -181,6 +183,13 @@ class TestPredictChunkWithRtc:
         assert len(adapter.latency._samples) == 1
         # Sample should be tiny but nonzero (no real work done by the mock)
         assert adapter.latency._samples[0] >= 0.0
+
+    def test_strict_mode_rejects_policy_without_rtc_contract(self):
+        policy = _RtcRejectingPolicy()
+        adapter = _adapter(policy, strict_policy_kwargs=True)
+        with pytest.raises(RuntimeError, match="plain inference would not apply RTC"):
+            adapter.predict_chunk_with_rtc({"image": "fake"})
+        assert policy.calls == []
 
     def test_chunk_count_not_incremented_by_predict(self):
         """chunk_count is incremented in merge_and_update, not predict.

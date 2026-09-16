@@ -118,6 +118,29 @@ class TestSchemaCheck:
         assert result.detail["dataset_action_dim"] == 6
         assert result.detail["base_action_dim"] == 7
 
+    def test_smolvla_padding_capacity_allows_different_native_action_dim(self):
+        result = self._run_with_mocks(
+            {"action": {"shape": [7]}},
+            {
+                "output_features": {"action": {"shape": [6]}},
+                "max_action_dim": 32,
+            },
+        )
+        assert result.severity == "ok"
+        assert result.detail["uses_action_padding"] is True
+        assert result.detail["max_action_dim"] == 32
+
+    def test_dataset_wider_than_padding_capacity_fails(self):
+        result = self._run_with_mocks(
+            {"action": {"shape": [33]}},
+            {
+                "output_features": {"action": {"shape": [6]}},
+                "max_action_dim": 32,
+            },
+        )
+        assert result.severity == "fail"
+        assert result.detail["max_action_dim"] == 32
+
     def test_unresolvable_dataset_warns(self):
         """Network issue or local dataset → warn, don't fail."""
         result = self._run_with_mocks(

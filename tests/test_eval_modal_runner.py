@@ -1,6 +1,7 @@
 """Tests for src/tether/eval/modal_runner.py — Modal subprocess wrapper."""
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 from tether.eval.libero import EpisodeResult, LiberoSuiteConfig
 from tether.eval.modal_runner import (
     DEFAULT_MODAL_SCRIPT,
+    MODAL_RESULT_PREFIX,
     TASK_SUITE_MAX_STEPS,
     ModalInvocationResult,
     ModalNotInstalledError,
@@ -54,6 +56,35 @@ def test_parse_extracts_aggregate_counts():
     assert len(parsed["per_task"]) == 2
     assert parsed["per_task"][0] == {"task_idx": 0, "success": 3, "total": 5}
     assert parsed["per_task"][1] == {"task_idx": 1, "success": 4, "total": 5}
+
+
+def test_parse_prefers_machine_readable_envelope_with_checkpoint_identity():
+    envelope = {
+        "schema_version": 1,
+        "suite": "libero_10",
+        "model": "org/candidate",
+        "revision": "candidate-sha",
+        "checkpoint_kind": "smolvla-lora",
+        "adapter_base": "lerobot/smolvla_base",
+        "adapter_base_revision": "base-sha",
+        "task_indices": [0],
+        "seed": 8001,
+        "total_success": 1,
+        "total_eps": 1,
+        "success_rate_pct": 100.0,
+        "per_task": [{"task_idx": 0, "success": 1, "total": 1}],
+    }
+    stdout = "build log\n" + MODAL_RESULT_PREFIX + json.dumps(envelope) + "\nfinished\n"
+    assert _parse_modal_stdout(stdout, suite="libero_10") == envelope
+
+
+def test_parse_rejects_result_envelope_for_another_suite():
+    stdout = MODAL_RESULT_PREFIX + json.dumps({
+        "schema_version": 1,
+        "suite": "libero_goal",
+        "per_task": [],
+    })
+    assert _parse_modal_stdout(stdout, suite="libero_10") is None
 
 
 def test_parse_handles_zero_per_task_lines_when_aggregate_present():
@@ -123,6 +154,42 @@ def test_episodes_failure_carries_phase1_limit_message():
     eps = _parse_invocation_to_episodes(invocation)
     assert not eps[0].success
     assert "Phase 1 limit" in eps[0].error_message
+
+
+def test_recorded_unsuccessful_episode_is_timeout_not_adapter_error():
+    parsed = {
+        "suite": "libero_10", "total_success": 0, "total_eps": 1,
+        "success_rate_pct": 0.0,
+        "per_task": [{
+            "task_idx": 0, "success": 0, "total": 1,
+            "episodes": [{"episode_index": 0, "success": False, "n_steps": 530}],
+        }],
+    }
+    episode = _parse_invocation_to_episodes(
+        _make_invocation(parsed=parsed, suite="libero_10")
+    )[0]
+    assert episode.terminal_reason == "timeout"
+    assert episode.n_steps == 530
+    assert episode.error_message == "Task did not succeed before the step limit."
+
+
+def test_machine_envelope_preserves_capture_fields():
+    payload = {
+        "schema_version": 1, "suite": "libero_10", "total_success": 0,
+        "total_eps": 1, "success_rate_pct": 0.0,
+        "per_task": [{"task_idx": 0, "success": 0, "total": 1, "episodes": [{
+            "ep": 0, "steps": 530, "success": False,
+            "evidence_path": "/onnx_out/evaluation-evidence/run/task-0/episode-0",
+            "evidence_complete": True, "evidence_truncated": False,
+        }]}],
+    }
+    parsed = _parse_modal_stdout(
+        MODAL_RESULT_PREFIX + json.dumps(payload), suite="libero_10"
+    )
+    episode = _parse_invocation_to_episodes(_make_invocation(parsed=parsed, suite="libero_10"))[0]
+    assert episode.evidence_path.endswith("episode-0")
+    assert episode.evidence_complete is True
+    assert episode.evidence_truncated is False
 
 
 def test_episodes_modal_returncode_nonzero_yields_failure_row():
@@ -278,6 +345,7 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
 
     config = LiberoSuiteConfig(
         num_episodes=5, tasks=("libero_object",), seed=42,
+        evidence_run_id="capture-validation-20260913",
     )
     run_libero_on_modal(
         config=config, export_dir=tmp_path,
@@ -293,6 +361,9 @@ def test_run_libero_passes_correct_cli_args(tmp_path):
     assert "5" in cmd
     assert "--tasks" in cmd
     assert "all" in cmd
+    assert cmd[cmd.index("--evidence-run-id") + 1] == "capture-validation-20260913"
+    assert "--capture-evidence" in cmd
+    assert "true" not in cmd
 
 
 def test_run_libero_invokes_per_suite_for_multiple_tasks(tmp_path):

@@ -30,6 +30,12 @@ class FinetuneConfig:
     """Output directory. Will contain model.onnx + VERIFICATION.md after
     successful run."""
 
+    base_revision: str | None = None
+    """Exact Hugging Face revision for a remote base checkpoint."""
+
+    dataset_revision: str | None = None
+    """Exact Hugging Face dataset revision passed to LeRobot."""
+
     num_steps: int = 20_000
     """Total training steps. For SmolVLA LoRA, 2-20k is typical depending
     on dataset size."""
@@ -163,6 +169,14 @@ class FinetuneConfig:
     catastrophic-forgetting risk). Default 0.5 (50/50) per ADR
     2026-04-25-self-distilling-serve-architecture: balances adaptation
     against base-distribution preservation."""
+
+    resume: bool = False
+    """Resume the latest valid LeRobot checkpoint under ``output/training``.
+
+    Tether keeps the output directory and asks the pinned LeRobot trainer to
+    restore its saved train state. Distillation backends do not support this
+    contract yet and fail before starting work.
+    """
 
     def __post_init__(self) -> None:
         self.output = Path(self.output)

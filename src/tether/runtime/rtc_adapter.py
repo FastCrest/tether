@@ -127,6 +127,7 @@ class RtcAdapterConfig:
     adaptive_high_correction_magnitude: float = 0.20
     adaptive_high_action_delta: float = 0.25
     adaptive_high_latency_ms: float = 120.0
+    strict_policy_kwargs: bool = False
 
     def __post_init__(self) -> None:
         """Validate the Tether-side extras. lerobot's RTCConfig validates
@@ -407,7 +408,14 @@ class RtcAdapter:
         t0 = time.monotonic()
         try:
             actions = self.policy.predict_action_chunk(**batch, **rtc_kwargs)
-        except TypeError:
+        except TypeError as exc:
+            if self.config.strict_policy_kwargs:
+                raise RuntimeError(
+                    "RTC is enabled, but this policy does not implement the "
+                    "inference_delay, prev_chunk_left_over, and "
+                    "execution_horizon contract. Use a qualified per-step "
+                    "expert export; plain inference would not apply RTC."
+                ) from exc
             # Policy doesn't accept RTC kwargs — fall back to plain call.
             # Useful for monolithic-ONNX policies whose forward doesn't
             # take inference_delay. The chunk we get back is the same

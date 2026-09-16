@@ -14,8 +14,10 @@ registry. See architecture doc Section D for the full target shape.
 from __future__ import annotations
 
 import logging
+import json
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +74,12 @@ def _validate_config(cfg: FinetuneConfig) -> list[str]:
     if cfg.backend != "lerobot":
         errs.append(
             f"v0.3 only supports --backend lerobot; {cfg.backend!r} lands in v0.5+"
+        )
+    if cfg.resume and (is_distill or cfg.backend != "lerobot"):
+        errs.append("resume is supported only by the LeRobot fine-tuning backend")
+    if cfg.resume and not (cfg.output / "training" / "checkpoints").is_dir():
+        errs.append(
+            "resume requires an existing output/training/checkpoints directory"
         )
     if cfg.precision not in ("bf16", "fp32"):
         errs.append(
@@ -138,6 +146,8 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     # builder. In particular, LeRobot 0.5.1 rejects policy.path + policy.type,
     # while the older pretrained_* spellings are not valid selection flags.
     reserved_policy_args = {
+        "policy.input_features",
+        "policy.output_features",
         "policy.path",
         "policy.type",
         "policy.pretrained_path",
@@ -179,6 +189,13 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     else:
         # LeRobot 0.5.1 loads both config and weights through policy.path.
         cmd.append(f"--policy.path={cfg.base}")
+        # Foundation checkpoints carry the feature names of their pretraining
+        # embodiment. LeRobot's documented PEFT path clears those fields so it
+        # derives camera, state, and action features from the selected dataset.
+        cmd.append("--policy.input_features=null")
+        cmd.append("--policy.output_features=null")
+    if cfg.dataset_revision:
+        cmd.append(f"--dataset.revision={cfg.dataset_revision}")
     if is_from_scratch and cfg.chunk_size:
         # ACT (and similar chunked policies) need chunk_size; pretrained bases
         # bake this in. auto_soarm convention (per its train.py): set
@@ -191,6 +208,8 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
             f"--peft.method_type=lora",
             f"--peft.r={cfg.lora_rank}",
         ])
+    if cfg.resume:
+        cmd.append("--resume=true")
     for k, v in cfg.extra_lerobot_args.items():
         cmd.append(f"--{k}={v}")
     return cmd
@@ -412,6 +431,24 @@ def run_finetune(cfg: FinetuneConfig, *, hooks=None) -> FinetuneResult:
                 output_dir=cfg.output,
                 error=None,
             )
+
+    if cfg.base_revision and cfg.base and not Path(cfg.base).expanduser().exists():
+        from huggingface_hub import snapshot_download
+
+        source = cfg.base
+        resolved = snapshot_download(source, revision=cfg.base_revision)
+        provenance = {
+            "schema": 1,
+            "repository": source,
+            "revision": cfg.base_revision,
+            "resolved_path": resolved,
+            "dataset_repository": cfg.dataset,
+            "dataset_revision": cfg.dataset_revision,
+        }
+        (cfg.output / "training-source.json").write_text(
+            json.dumps(provenance, indent=2) + "\n"
+        )
+        cfg = replace(cfg, base=resolved)
 
     logger.info("[finetune] start: phase=%s base=%s dataset=%s output=%s steps=%d",
                 cfg.phase, cfg.base, cfg.dataset, cfg.output, cfg.num_steps)
