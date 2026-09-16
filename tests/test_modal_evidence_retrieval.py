@@ -24,7 +24,10 @@ def test_retrieval_uses_safe_volume_path_and_validates(tmp_path):
             step_index=0,
             phase="settling",
             observation={},
-            action=None,
+            # Schema 2 requires every captured step to retain its exact 7-D
+            # applied action. A settling step records the LIBERO dummy action,
+            # exactly as libero_rollout does; `action=None` predates that rule.
+            action=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0],
             policy_request=None,
             task_events=[],
         )
