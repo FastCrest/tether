@@ -36,6 +36,7 @@ def _build(**overrides):
         "platform_system": "Darwin",
         "ort_providers": ["CPUExecutionProvider"],
         "requested_provider": "CPUExecutionProvider",
+        "cpu_fallback_disabled": False,
         "input_seed": 42,
         "noise_seed": 99,
         "num_steps": 10,
@@ -63,10 +64,22 @@ def test_linux_cuda_passing_receipt_records_external_acceptance():
         platform_system="Linux",
         ort_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         requested_provider="CUDAExecutionProvider",
+        cpu_fallback_disabled=True,
     )
     assert receipt["verdict"] == "passed"
     assert receipt["external_acceptance"] == "recorded"
     assert receipt["execution"]["scope"] == "linux-cuda"
+
+
+def test_linux_cuda_with_cpu_fallback_allowed_is_not_external_acceptance():
+    receipt = _build(
+        platform_system="Linux",
+        ort_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        requested_provider="CUDAExecutionProvider",
+        cpu_fallback_disabled=False,
+    )
+    assert receipt["verdict"] == "passed"
+    assert receipt["external_acceptance"] == "not-run"
 
 
 def test_failure_never_records_external_acceptance():
@@ -74,6 +87,7 @@ def test_failure_never_records_external_acceptance():
         platform_system="Linux",
         ort_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         requested_provider="CUDAExecutionProvider",
+        cpu_fallback_disabled=True,
         full_cosine=0.98,
     )
     assert receipt["verdict"] == "failed"
