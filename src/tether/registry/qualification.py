@@ -19,12 +19,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
             "Studio has retained real SmolVLA LoRA and native LIBERO evidence.",
             "Local native LIBERO execution requires Linux and CUDA.",
         ],
-        "acceptance": [
-            "pinned checkpoint",
-            "LoRA training receipt",
-            "matched LIBERO development",
-            "matched LIBERO held-out",
-        ],
+        "acceptance": ["pinned checkpoint", "LoRA training receipt", "matched LIBERO development", "matched LIBERO held-out"],
     },
     "pi0": {
         "checkpoint": "runtime-implemented",
@@ -34,14 +29,9 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "studio_recipe": None,
         "notes": [
             "Do not qualify from registry metadata alone.",
-            "A versioned exact-revision/shared-input ONNX parity receipt harness exists, but no retained Linux-CUDA acceptance receipt is recorded yet.",
+            "An exact-revision/shared-input ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
         ],
-        "acceptance": [
-            "pinned checkpoint",
-            "shared-noise export parity receipt",
-            "matched task development",
-            "matched task held-out",
-        ],
+        "acceptance": ["pinned checkpoint", "shared-noise export parity receipt", "matched task development", "matched task held-out"],
     },
     "pi05": {
         "checkpoint": "runtime-implemented",
@@ -50,12 +40,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "evaluation": "runtime-evidence-only",
         "studio_recipe": None,
         "notes": ["Studio has no accepted pi0.5 training and decision journey."],
-        "acceptance": [
-            "pinned teacher and student",
-            "export parity receipt",
-            "matched LIBERO development",
-            "matched LIBERO held-out",
-        ],
+        "acceptance": ["pinned teacher and student", "export parity receipt", "matched LIBERO development", "matched LIBERO held-out"],
     },
     "groot": {
         "checkpoint": "runtime-implemented",
@@ -64,12 +49,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "evaluation": "not-qualified",
         "studio_recipe": None,
         "notes": ["GPU export parity does not establish task success."],
-        "acceptance": [
-            "pinned checkpoint",
-            "export parity receipt",
-            "matched task development",
-            "matched task held-out",
-        ],
+        "acceptance": ["pinned checkpoint", "export parity receipt", "matched task development", "matched task held-out"],
     },
     "openvla": {
         "checkpoint": "runtime-implemented",
@@ -78,12 +58,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "evaluation": "not-qualified",
         "studio_recipe": None,
         "notes": ["The tokenized action path needs its own matched evaluation contract."],
-        "acceptance": [
-            "pinned checkpoint",
-            "tokenized-action parity receipt",
-            "matched task development",
-            "matched task held-out",
-        ],
+        "acceptance": ["pinned checkpoint", "tokenized-action parity receipt", "matched task development", "matched task held-out"],
     },
     "dreamzero": {
         "checkpoint": "registry-only",
@@ -92,12 +67,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "evaluation": "not-qualified",
         "studio_recipe": None,
         "notes": ["Requires a 40 GB class GPU and a verified exporter path."],
-        "acceptance": [
-            "pinned checkpoint",
-            "verified exporter",
-            "task adapter",
-            "matched development and held-out evidence",
-        ],
+        "acceptance": ["pinned checkpoint", "verified exporter", "task adapter", "matched development and held-out evidence"],
     },
     "molmoact2": {
         "checkpoint": "registry-only",
@@ -106,12 +76,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "evaluation": "not-qualified",
         "studio_recipe": None,
         "notes": ["Registry metadata has not been accepted as execution evidence."],
-        "acceptance": [
-            "pinned checkpoint",
-            "verified exporter",
-            "task adapter",
-            "matched development and held-out evidence",
-        ],
+        "acceptance": ["pinned checkpoint", "verified exporter", "task adapter", "matched development and held-out evidence"],
     },
 }
 
