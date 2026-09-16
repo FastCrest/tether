@@ -64,6 +64,7 @@ def build_pi0_export_parity_receipt(
     platform_system: str,
     ort_providers: list[str],
     requested_provider: str,
+    cpu_fallback_disabled: bool,
     input_seed: int,
     noise_seed: int,
     num_steps: int,
@@ -90,6 +91,8 @@ def build_pi0_export_parity_receipt(
     shared_input_sha256 = _sha256(shared_input_sha256, label="shared_input_sha256")
     export_identity = _validate_artifact_identity(export_identity)
 
+    if not isinstance(cpu_fallback_disabled, bool):
+        raise Pi0ExportParityError("cpu_fallback_disabled must be boolean.")
     if isinstance(input_seed, bool) or not isinstance(input_seed, int):
         raise Pi0ExportParityError("input_seed must be an integer.")
     if isinstance(noise_seed, bool) or not isinstance(noise_seed, int):
@@ -121,7 +124,11 @@ def build_pi0_export_parity_receipt(
         and first_max_abs < MAX_ABS_ERROR
         and full_max_abs < MAX_ABS_ERROR
     )
-    linux_cuda = platform_system == "Linux" and requested_provider == "CUDAExecutionProvider"
+    linux_cuda = (
+        platform_system == "Linux"
+        and requested_provider == "CUDAExecutionProvider"
+        and cpu_fallback_disabled
+    )
     external_acceptance = "recorded" if passed and linux_cuda else "not-run"
 
     return {
@@ -135,6 +142,7 @@ def build_pi0_export_parity_receipt(
             "platform_system": platform_system,
             "requested_provider": requested_provider,
             "active_ort_providers": providers,
+            "cpu_fallback_disabled": cpu_fallback_disabled,
             "scope": "linux-cuda" if linux_cuda else "local-or-noncuda",
         },
         "shared_input": {
