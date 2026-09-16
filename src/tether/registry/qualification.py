@@ -51,7 +51,10 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "training": "not-qualified",
         "evaluation": "not-qualified",
         "studio_recipe": None,
-        "notes": ["GPU export parity does not establish task success."],
+        "notes": [
+            "GPU export parity does not establish task success.",
+            "An exact-revision/shared-input per-step ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
+        ],
         "acceptance": ["pinned checkpoint", "export parity receipt", "matched task development", "matched task held-out"],
     },
     "openvla": {
