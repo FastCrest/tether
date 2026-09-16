@@ -420,9 +420,13 @@ def run_libero_rollout(
             _quat2axisangle(np.asarray(obs["robot0_eef_quat"], dtype=np.float32).copy()),
             np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32),
         ]).astype(np.float32)
+        # Derive visual keys from the policy config when it exposes them. Not every
+        # caller does: `tether verify` passes a minimal policy context, so this must
+        # degrade to the LIBERO defaults rather than raise.
+        declared_features = getattr(cfg, "input_features", None) or {}
         visual_keys = [
             key
-            for key, feature in cfg.input_features.items()
+            for key, feature in declared_features.items()
             if str(getattr(feature, "type", "")).upper().endswith("VISUAL")
         ]
         if not visual_keys:
