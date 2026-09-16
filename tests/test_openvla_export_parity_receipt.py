@@ -15,6 +15,12 @@ REVISION = "a" * 40
 TETHER_COMMIT = "b" * 40
 NORM_SHA = "c" * 64
 INPUT_SHA = "d" * 64
+REFERENCE_RUNTIME = {
+    "torch": "2.2.0+cu121",
+    "transformers": "4.40.1",
+    "tokenizers": "0.19.1",
+    "timm": "0.9.10",
+}
 EXPORT_IDENTITY = {
     "schema": 1,
     "kind": "openvla-optimum-onnx",
@@ -40,6 +46,7 @@ def _build(**overrides):
         "model_revision": REVISION,
         "tether_commit": TETHER_COMMIT,
         "export_identity": EXPORT_IDENTITY,
+        "reference_runtime": REFERENCE_RUNTIME,
         "platform_system": "Darwin",
         "ort_providers": ["CPUExecutionProvider"],
         "requested_provider": "CPUExecutionProvider",
@@ -69,6 +76,7 @@ def test_exact_tokens_and_actions_pass_but_local_is_not_external():
     assert receipt["decoder_contract"]["tokenizer_vocab_size"] == 32000
     assert receipt["decoder_contract"]["padded_logit_vocab_size"] == 32064
     assert receipt["decoder_contract"]["n_bin_centers"] == 255
+    assert receipt["reference_runtime"]["supported"] is True
 
 
 def test_one_token_mismatch_fails_even_when_actions_match():
@@ -89,7 +97,7 @@ def test_action_difference_fails_even_when_tokens_match():
     assert receipt["verdict"] == "failed"
 
 
-def test_linux_cuda_no_fallback_can_record_external_acceptance():
+def test_linux_cuda_no_fallback_supported_runtime_can_record_external_acceptance():
     receipt = _build(
         platform_system="Linux",
         ort_providers=["CUDAExecutionProvider"],
@@ -97,6 +105,21 @@ def test_linux_cuda_no_fallback_can_record_external_acceptance():
         cpu_fallback_disabled=True,
     )
     assert receipt["external_acceptance"] == "recorded"
+
+
+def test_newer_transformers_stack_cannot_be_external_acceptance():
+    runtime = dict(REFERENCE_RUNTIME)
+    runtime["transformers"] = "5.3.0"
+    receipt = _build(
+        reference_runtime=runtime,
+        platform_system="Linux",
+        ort_providers=["CUDAExecutionProvider"],
+        requested_provider="CUDAExecutionProvider",
+        cpu_fallback_disabled=True,
+    )
+    assert receipt["verdict"] == "passed"
+    assert receipt["reference_runtime"]["supported"] is False
+    assert receipt["external_acceptance"] == "not-run"
 
 
 def test_linux_cuda_with_cpu_fallback_allowed_is_not_external():
@@ -122,6 +145,13 @@ def test_token_and_action_lengths_must_match_action_dim():
         _build(export_token_ids=TOKENS[:-1])
     with pytest.raises(OpenVLAExportParityError, match="exactly 7 action"):
         _build(export_actions=ACTIONS[:-1])
+
+
+def test_padded_only_token_ids_are_rejected():
+    changed = TOKENS.copy()
+    changed[0] = 32063
+    with pytest.raises(OpenVLAExportParityError, match="outside tokenizer_vocab_size"):
+        _build(export_token_ids=changed)
 
 
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
