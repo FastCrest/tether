@@ -25,6 +25,10 @@ def finetune_command(
         help="HF model id of the base checkpoint, e.g. lerobot/smolvla_base. "
              "Leave empty for from-scratch training (set --policy + --mode full).",
     ),
+    base_revision: str = typer.Option(
+        "", "--base-revision",
+        help="Exact Hugging Face revision for the remote base checkpoint.",
+    ),
     policy: str = typer.Option(
         "auto",
         "--policy",
@@ -42,6 +46,10 @@ def finetune_command(
         ...,
         "--dataset",
         help="HF dataset id to fine-tune on, e.g. lerobot/libero",
+    ),
+    dataset_revision: str = typer.Option(
+        "", "--dataset-revision",
+        help="Exact Hugging Face revision for the training dataset.",
     ),
     output: str = typer.Option(
         ...,
@@ -99,6 +107,11 @@ def finetune_command(
              "or gated-repo flows where preflight can't resolve schema. "
              "Only set if you know what you're doing.",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume the latest valid LeRobot checkpoint in OUTPUT. The base, dataset, and recipe must match the original run.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Fine-tune a VLA and auto-export to deployable ONNX.
@@ -124,7 +137,9 @@ def finetune_command(
 
     cfg = FinetuneConfig(
         base=base,
+        base_revision=base_revision or None,
         dataset=dataset,
+        dataset_revision=dataset_revision or None,
         output=Path(output),
         num_steps=num_steps,
         batch_size=batch_size,
@@ -139,6 +154,7 @@ def finetune_command(
         skip_export=skip_export,
         dry_run=dry_run,
         skip_preflight=skip_preflight,
+        resume=resume,
     )
 
     console.print(f"[bold]tether finetune[/bold] — v0.3 MVP (SmolVLA LoRA)")

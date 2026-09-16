@@ -70,6 +70,7 @@ class LiberoSuiteConfig:
 
     num_episodes: int = DEFAULT_NUM_EPISODES
     tasks: tuple[str, ...] = ()  # empty = all 90 LIBERO tasks
+    task_indices: tuple[int, ...] = ()
     runtime: str = "modal"
     video: bool = False
     output_dir: str = "./eval_output"
@@ -77,6 +78,11 @@ class LiberoSuiteConfig:
     max_parallel: int = 1
     cost_preview: bool = False
     episode_timeout_s: float = DEFAULT_EPISODE_TIMEOUT_S
+    capture_evidence: bool = True
+    evidence_max_bytes: int = 256 * 1024 * 1024
+    evidence_max_frames: int = 600
+    evidence_frame_stride: int = 2
+    evidence_run_id: str = ""
 
     def __post_init__(self) -> None:
         if self.num_episodes < 1:
@@ -95,12 +101,22 @@ class LiberoSuiteConfig:
             raise ValueError(
                 f"episode_timeout_s must be > 0, got {self.episode_timeout_s}"
             )
+        if self.evidence_max_bytes < 1 or self.evidence_max_frames < 1 or self.evidence_frame_stride < 1:
+            raise ValueError("evidence capture limits must be positive")
+        if self.evidence_run_id and (
+            len(self.evidence_run_id) > 64
+            or not self.evidence_run_id[0].isalnum()
+            or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in self.evidence_run_id)
+        ):
+            raise ValueError("evidence_run_id must be 1-64 safe filename characters")
         # Normalize tasks: empty tuple OR tuple of non-empty strings
         for task in self.tasks:
             if not task or not isinstance(task, str):
                 raise ValueError(
                     f"each task must be a non-empty string, got {task!r}"
                 )
+        if any(index < 0 for index in self.task_indices):
+            raise ValueError("task_indices must contain non-negative integers")
 
 
 @dataclass(frozen=True)
@@ -116,6 +132,9 @@ class EpisodeResult:
     n_steps: int
     video_path: str | None  # None when --video unset OR encode failed
     error_message: str | None  # populated when terminal_reason != "success"
+    evidence_path: str | None = None
+    evidence_complete: bool | None = None
+    evidence_truncated: bool | None = None
 
     def __post_init__(self) -> None:
         if self.terminal_reason not in ALL_TERMINAL_REASONS:

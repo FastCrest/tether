@@ -177,6 +177,15 @@ eval = [
     "gymnasium",
     "h5py",
 ]
+eval-local = [
+    "lerobot[smolvla]==0.5.1; python_version >= '3.12' and sys_platform == 'linux'",
+    "peft; python_version >= '3.12' and sys_platform == 'linux'",
+    "mujoco==3.3.2; sys_platform == 'linux'",
+    "robosuite==1.4.1; sys_platform == 'linux'",
+    "bddl==1.0.1; sys_platform == 'linux'",
+    "opencv-python-headless; sys_platform == 'linux'",
+    "h5py; sys_platform == 'linux'",
+]
 dev = ["pytest>=8.0", "ruff>=0.4.0", "mypy>=1.10", "httpx>=0.24.0", "pytest-asyncio>=0.23"]
 # MCP server — exposes Tether as a Model Context Protocol tool surface so
 # agents (Claude Desktop, Cursor, custom) can call /act as a tool. Additive

@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from tether.eval.checkpoints import CheckpointSpec
 from tether.eval.libero import (
     ALL_RUNTIMES,
     EpisodeResult,
@@ -147,6 +148,7 @@ def resolve_suite_runner(
     runtime: str,
     export_dir: Path,
     repo_root: Path | None = None,
+    checkpoint: CheckpointSpec | None = None,
 ) -> SuiteRunner:
     """Return a full-suite SuiteRunner for runtimes that aggregate.
 
@@ -164,16 +166,15 @@ def resolve_suite_runner(
         )
 
     if runtime == "modal":
-        return _make_modal_suite_runner(export_dir=export_dir, repo_root=repo_root)
-    # runtime == "local" — local should use resolve_task_runner; this
-    # path exists for symmetry + so callers can branch consistently.
-    return _make_local_suite_stub(export_dir)
+        return _make_modal_suite_runner(export_dir=export_dir, repo_root=repo_root, checkpoint=checkpoint)
+    return _make_local_suite_runner(checkpoint)
 
 
 def _make_modal_suite_runner(
     *,
     export_dir: Path,
     repo_root: Path | None,
+    checkpoint: CheckpointSpec | None,
 ) -> SuiteRunner:
     """Real Modal suite runner. Wraps modal_runner.run_libero_on_modal
     + builds the EvalReport from the flat EpisodeResult list."""
@@ -186,6 +187,7 @@ def _make_modal_suite_runner(
         started_at = datetime.now(timezone.utc)
         episodes = run_libero_on_modal(
             config=config,
+            checkpoint=checkpoint,
             export_dir=_export_dir,
             repo_root=repo_root,
         )
@@ -200,19 +202,14 @@ def _make_modal_suite_runner(
     return _runner
 
 
-def _make_local_suite_stub(export_dir: Path) -> SuiteRunner:
-    """Local suite runner stub. Phase 1 local always per-episode via
-    LiberoSuite.run; this returns a single-row error report so callers
-    that misroute see a structured failure."""
+def _make_local_suite_runner(checkpoint: CheckpointSpec | None) -> SuiteRunner:
+    """Run the requested SmolVLA checkpoint on a compatible Linux GPU host."""
 
     def _runner(config: LiberoSuiteConfig, _export_dir: Path) -> EvalReport:
-        started_at = datetime.now(timezone.utc)
-        finished_at = started_at
-        return EvalReport.from_task_results(
-            suite="libero", runtime="local", seed=config.seed,
-            started_at=started_at, finished_at=finished_at,
-            results=[],
-        )
+        if checkpoint is None:
+            raise ValueError("A resolved checkpoint is required for local evaluation.")
+        from tether.eval.local_runner import run_local_libero
+        return run_local_libero(config, checkpoint)
 
     return _runner
 
@@ -243,6 +240,9 @@ def _build_report_from_flat_episodes(
                 n_steps=ep.n_steps,
                 video_path=ep.video_path,
                 error_message=ep.error_message,
+                evidence_path=ep.evidence_path,
+                evidence_complete=ep.evidence_complete,
+                evidence_truncated=ep.evidence_truncated,
             )
             for i, ep in enumerate(eps)
         ]

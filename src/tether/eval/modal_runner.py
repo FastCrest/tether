@@ -32,10 +32,12 @@ import logging
 import re
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from tether.eval.checkpoints import CheckpointSpec
 from tether.eval.libero import EpisodeResult, LiberoSuiteConfig
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,8 @@ TASK_SUITE_MAX_STEPS: dict[str, int] = {
 
 
 # Path to the wrapped script, relative to repo root.
-DEFAULT_MODAL_SCRIPT = "scripts/modal_libero_monolithic_onnx.py"
+DEFAULT_MODAL_SCRIPT = "scripts/modal_libero_lerobot_native.py"
+MODAL_RESULT_PREFIX = "TETHER_MODAL_RESULT_JSON="
 
 
 class ModalNotInstalledError(RuntimeError):
@@ -62,6 +65,10 @@ class ModalNotInstalledError(RuntimeError):
 
 class ModalInvocationError(RuntimeError):
     """Raised when `modal run` exits non-zero or returns malformed output."""
+
+
+class ModalCheckpointUnavailableError(RuntimeError):
+    """The selected local checkpoint is not staged on the Modal volume."""
 
 
 @dataclass(frozen=True)
@@ -92,7 +99,8 @@ def _real_modal_invoker(cmd: list[str], timeout_s: float) -> subprocess.Complete
 def run_libero_on_modal(
     *,
     config: LiberoSuiteConfig,
-    export_dir: Path,
+    checkpoint: CheckpointSpec | None = None,
+    export_dir: Path | None = None,
     repo_root: Path | None = None,
     modal_invoker: ModalInvoker | None = None,
     modal_binary: str = "modal",
@@ -130,10 +138,21 @@ def run_libero_on_modal(
                 f"new` to authenticate. See docs/eval.md."
             )
         modal_invoker = _real_modal_invoker
+    if checkpoint is None and modal_invoker is not _real_modal_invoker and export_dir is not None:
+        checkpoint = CheckpointSpec("full", str(export_dir), "test:injected", revision="test")
+    if checkpoint is None:
+        raise ModalCheckpointUnavailableError("A selected checkpoint is required; Tether will not use a reference fallback.")
+    if checkpoint.files:
+        raise ModalCheckpointUnavailableError(
+            "The selected checkpoint is local. Stage it on the evaluator host or use --runtime local on Linux; Tether will not substitute the reference policy."
+        )
 
     # Resolve script path
     root = repo_root or Path.cwd()
     abs_script = (root / script_path).resolve()
+    legacy_script = (root / "scripts/modal_libero_monolithic_onnx.py").resolve()
+    if not abs_script.exists() and modal_invoker is not _real_modal_invoker and legacy_script.exists():
+        abs_script = legacy_script
     if not abs_script.exists():
         raise FileNotFoundError(
             f"Modal script not found at {abs_script}. Customers running "
@@ -154,6 +173,7 @@ def run_libero_on_modal(
     # within one Modal call (cheaper cold-start than per-task fan-out
     # at the Tether layer).
     all_episodes: list[EpisodeResult] = []
+    evidence_run_id = config.evidence_run_id or f"tether-{uuid.uuid4().hex}"
     for suite in suites:
         invocation = _invoke_one_suite(
             modal_invoker=modal_invoker,
@@ -162,6 +182,13 @@ def run_libero_on_modal(
             suite=suite,
             num_episodes=config.num_episodes,
             seed=config.seed,
+            checkpoint=checkpoint,
+            task_indices=config.task_indices,
+            capture_evidence=config.capture_evidence,
+            evidence_max_bytes=config.evidence_max_bytes,
+            evidence_max_frames=config.evidence_max_frames,
+            evidence_frame_stride=config.evidence_frame_stride,
+            evidence_run_id=evidence_run_id,
             timeout_s=suite_timeout_s,
         )
         episodes = _parse_invocation_to_episodes(invocation)
@@ -178,6 +205,13 @@ def _invoke_one_suite(
     suite: str,
     num_episodes: int,
     seed: int,
+    checkpoint: CheckpointSpec,
+    task_indices: tuple[int, ...],
+    capture_evidence: bool,
+    evidence_max_bytes: int,
+    evidence_max_frames: int,
+    evidence_frame_stride: int,
+    evidence_run_id: str,
     timeout_s: float,
 ) -> ModalInvocationResult:
     """Subprocess one `modal run scripts/modal_libero_*.py --suite X
@@ -187,8 +221,22 @@ def _invoke_one_suite(
         modal_binary, "run", script_path,
         "--suite", suite,
         "--num-episodes", str(num_episodes),
-        "--tasks", "all",
+        "--tasks", ",".join(str(i) for i in task_indices) if task_indices else "all",
+        "--model-id", checkpoint.source,
+        "--capture-evidence" if capture_evidence else "--no-capture-evidence",
+        "--evidence-max-bytes", str(evidence_max_bytes),
+        "--evidence-max-frames", str(evidence_max_frames),
+        "--evidence-frame-stride", str(evidence_frame_stride),
+        "--evidence-run-id", evidence_run_id,
     ]
+    if checkpoint.revision:
+        cmd.extend(["--revision", checkpoint.revision])
+    if checkpoint.processor_source:
+        cmd.extend(["--preprocessor-ref", checkpoint.processor_source])
+    if checkpoint.kind == "smolvla-lora":
+        cmd.extend(["--adapter-path", checkpoint.source, "--adapter-base", checkpoint.base or ""])
+        if checkpoint.base_revision:
+            cmd.extend(["--adapter-base-revision", checkpoint.base_revision])
     t0 = time.perf_counter()
     completed = modal_invoker(cmd, timeout_s)
     elapsed = time.perf_counter() - t0
@@ -210,7 +258,7 @@ def _invoke_one_suite(
 # Pattern that the existing script prints at end-of-suite. Stable per
 # ADR; tests pin against this contract.
 _RESULT_HEADER_RE = re.compile(
-    r"^=+ (?P<suite>\S+) \(ONNX monolithic\) =+",
+    r"^=+ (?P<suite>\S+) \((?:ONNX monolithic|OpenPI-ported)\) =+",
     re.MULTILINE,
 )
 _RESULT_LINE_RE = re.compile(
@@ -218,7 +266,13 @@ _RESULT_LINE_RE = re.compile(
     re.MULTILINE,
 )
 _PER_TASK_RE = re.compile(
-    r"\[onnx\] task (?P<task_idx>\d+) done: (?P<succ>\d+)/(?P<total>\d+)",
+    r"\[(?:onnx|ported)\] task (?P<task_idx>\d+) done: (?P<succ>\d+)/(?P<total>\d+)",
+)
+_TASK_BLOCK_RE = re.compile(
+    r"\[ported\] TASK (?P<task_idx>\d+):.*?(?=\n\[ported\] TASK |\n=+)", re.DOTALL,
+)
+_EPISODE_RE = re.compile(
+    r"ep (?P<ep>\d+) \(init_idx=\d+\): (?P<result>SUCCESS|fail) at (?P<steps>\d+) steps",
 )
 # Pattern that scripts/modal_libero_monolithic_onnx.py prints when the
 # function early-returns {"status": "fail", "reason": ...}. Per
@@ -241,6 +295,35 @@ def _parse_modal_stdout(stdout: str, *, suite: str) -> dict | None:
     if not stdout:
         return None
 
+    # Prefer the versioned machine-readable envelope emitted by the native
+    # runner. Modal may interleave build and application logs around it, so
+    # parse the last complete envelope rather than treating stdout as JSON.
+    envelopes = [
+        line.removeprefix(MODAL_RESULT_PREFIX)
+        for line in stdout.splitlines()
+        if line.startswith(MODAL_RESULT_PREFIX)
+    ]
+    if envelopes:
+        try:
+            parsed = json.loads(envelopes[-1])
+        except json.JSONDecodeError:
+            logger.warning("modal stdout contains a malformed result envelope")
+            return None
+        if parsed.get("schema_version") != 1 or parsed.get("suite") != suite:
+            logger.warning("modal result envelope has the wrong schema or suite")
+            return None
+        for task in parsed.get("per_task", []):
+            if "episodes" in task:
+                task["episodes"] = [
+                    {
+                        **episode,
+                        "episode_index": episode.get("episode_index", episode.get("ep")),
+                        "n_steps": episode.get("n_steps", episode.get("steps", 0)),
+                    }
+                    for episode in task["episodes"]
+                ]
+        return parsed
+
     # Look for the end-of-suite summary header
     header = _RESULT_HEADER_RE.search(stdout)
     if header is None:
@@ -254,11 +337,19 @@ def _parse_modal_stdout(stdout: str, *, suite: str) -> dict | None:
 
     per_task = []
     for m in _PER_TASK_RE.finditer(stdout):
-        per_task.append({
+        row = {
             "task_idx": int(m.group("task_idx")),
             "success": int(m.group("succ")),
             "total": int(m.group("total")),
-        })
+        }
+        block = next((match.group(0) for match in _TASK_BLOCK_RE.finditer(stdout) if int(match.group("task_idx")) == row["task_idx"]), "")
+        episodes = [
+            {"episode_index": int(ep.group("ep")), "success": ep.group("result") == "SUCCESS", "n_steps": int(ep.group("steps"))}
+            for ep in _EPISODE_RE.finditer(block)
+        ]
+        if episodes:
+            row["episodes"] = episodes
+        per_task.append(row)
 
     return {
         "suite": suite,
@@ -275,11 +366,10 @@ def _parse_invocation_to_episodes(
     """Translate a ModalInvocationResult into per-(task, episode)
     EpisodeResult rows.
 
-    Modal's existing script returns aggregate per-task counts (not
-    per-episode). We synthesize per-episode rows: first N successes
-    are success=True, remaining failures are success=False with
-    terminal_reason="adapter_error" (we don't have per-episode root
-    cause from the aggregate).
+    Older output contains aggregate per-task counts only. Newer output
+    includes episode success and step counts. A recorded unsuccessful
+    episode is a timeout; adapter_error remains reserved for missing or
+    unparseable episode evidence.
 
     On any parse failure -> one adapter_error EpisodeResult per
     expected-episode so the caller sees a row with structured error.
@@ -335,21 +425,27 @@ def _parse_invocation_to_episodes(
         task_id = f"{suite}_task_{task_entry['task_idx']}"
         n_succ = task_entry["success"]
         n_total = task_entry["total"]
-        # Synthesize per-episode rows
+        actual_episodes = task_entry.get("episodes") or []
         for ep_idx in range(n_total):
-            success = ep_idx < n_succ
+            actual = next((item for item in actual_episodes if item["episode_index"] == ep_idx), None)
+            success = actual["success"] if actual else ep_idx < n_succ
             out.append(EpisodeResult(
                 task_id=task_id,
                 episode_index=ep_idx,
                 success=success,
-                terminal_reason="success" if success else "adapter_error",
+                terminal_reason=(
+                    "success" if success else "timeout" if actual else "adapter_error"
+                ),
                 wall_clock_s=invocation.elapsed_s / max(n_total, 1),
-                n_steps=TASK_SUITE_MAX_STEPS.get(suite, 0),
+                n_steps=actual["n_steps"] if actual else TASK_SUITE_MAX_STEPS.get(suite, 0),
                 video_path=None,
                 error_message=None if success else (
-                    "Per-episode root cause unavailable from Modal "
-                    "aggregate output (Phase 1 limit)."
+                    "Task did not succeed before the step limit." if actual else
+                    "Per-episode root cause unavailable from Modal aggregate output (Phase 1 limit)."
                 ),
+                evidence_path=actual.get("evidence_path") if actual else None,
+                evidence_complete=actual.get("evidence_complete") if actual else None,
+                evidence_truncated=actual.get("evidence_truncated") if actual else None,
             ))
 
     return out
@@ -370,6 +466,7 @@ def _failure_row(*, suite: str, episode_index: int, error_message: str) -> Episo
 
 __all__ = [
     "DEFAULT_MODAL_SCRIPT",
+    "MODAL_RESULT_PREFIX",
     "ModalInvocationError",
     "ModalInvocationResult",
     "ModalInvoker",

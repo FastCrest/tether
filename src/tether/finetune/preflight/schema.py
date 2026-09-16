@@ -137,6 +137,8 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
 
     ds_dim = _extract_dataset_action_dim(features)
     base_dim = _extract_base_action_dim(base_config)
+    max_action_dim = base_config.get("max_action_dim")
+    max_action_dim = int(max_action_dim) if max_action_dim is not None else None
 
     if ds_dim is None or base_dim is None:
         return PreflightCheck(
@@ -147,6 +149,23 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
         )
 
     if ds_dim != base_dim:
+        if max_action_dim is not None and ds_dim <= max_action_dim:
+            return PreflightCheck(
+                name="schema",
+                severity="ok",
+                summary=(
+                    f"dataset action is {ds_dim}-D; the base metadata is "
+                    f"{base_dim}-D and supports padding to {max_action_dim}-D"
+                ),
+                detail={
+                    "dataset": cfg.dataset,
+                    "dataset_action_dim": ds_dim,
+                    "base": cfg.base,
+                    "base_action_dim": base_dim,
+                    "max_action_dim": max_action_dim,
+                    "uses_action_padding": True,
+                },
+            )
         return PreflightCheck(
             name="schema",
             severity="fail",
@@ -163,6 +182,7 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
                 "dataset_action_dim": ds_dim,
                 "base": cfg.base,
                 "base_action_dim": base_dim,
+                "max_action_dim": max_action_dim,
             },
         )
 
