@@ -23,8 +23,9 @@ The harness mechanically:
 5. hashes the complete ONNX artifact directory with the public artifact-identity contract;
 6. hashes the shared input tensors including names, dtypes, shapes and bytes;
 7. records the exact Tether Git commit, platform and active ONNX Runtime providers;
-8. evaluates the fixed pi0 parity thresholds; and
-9. emits `TETHER_PI0_EXPORT_PARITY_JSON=<receipt>` plus a durable JSON receipt.
+8. disables ONNX Runtime CPU execution-provider fallback when CUDA is requested;
+9. evaluates the fixed pi0 parity thresholds; and
+10. emits `TETHER_PI0_EXPORT_PARITY_JSON=<receipt>` plus a durable JSON receipt.
 
 A passing local CPU/macOS run is useful debugging evidence but remains `external_acceptance=not-run`. External acceptance is recorded only when all of the following are mechanically true in the same run:
 
@@ -34,6 +35,7 @@ A passing local CPU/macOS run is useful debugging evidence but remains `external
 - the requested ONNX Runtime provider is active;
 - the platform is Linux;
 - the requested provider is `CUDAExecutionProvider`;
+- CPU execution-provider fallback is disabled for that CUDA session;
 - reference and export output shapes match;
 - first-action and full-chunk cosine are at least `0.999`;
 - first-action and full-chunk max absolute error are below `0.1`.
