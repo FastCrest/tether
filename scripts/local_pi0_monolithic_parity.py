@@ -6,7 +6,8 @@ result is emitted as the versioned public receipt consumed by Tether Studio M4
 #51 qualification work.
 
 This script can run on CPU for local debugging, but the receipt records external
-acceptance only for a passing Linux run with an active CUDAExecutionProvider.
+acceptance only for a passing Linux run with an active CUDAExecutionProvider and
+ONNX Runtime CPU execution-provider fallback disabled.
 """
 from __future__ import annotations
 
@@ -14,11 +15,11 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import platform
 import subprocess
 import sys
 import types
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -141,7 +142,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         default="CPUExecutionProvider",
-        help="Exact ONNX Runtime provider to request. External acceptance requires CUDAExecutionProvider.",
+        help=(
+            "Exact ONNX Runtime provider to request. External acceptance requires "
+            "CUDAExecutionProvider."
+        ),
     )
     parser.add_argument("--num-steps", type=int, default=10)
     parser.add_argument("--input-seed", type=int, default=42)
@@ -166,12 +170,13 @@ def main(argv: list[str] | None = None) -> int:
     _patch_pi0_for_transformers_457()
     _patch_create_causal_mask_kwarg()
 
+    import onnxruntime as ort
     from huggingface_hub import snapshot_download
     from lerobot.policies.pi0.modeling_pi0 import PI0Policy
     from lerobot.processor.converters import batch_to_transition, transition_to_batch
     from lerobot.processor.pipeline import PolicyProcessorPipeline
-    import onnxruntime as ort
 
+    tether_commit = _repo_commit()
     print(
         f"Loading exact PyTorch reference {args.model_source}@{args.model_revision}...",
         flush=True,
@@ -237,7 +242,15 @@ def main(argv: list[str] | None = None) -> int:
     reference_np = reference.cpu().numpy().astype(np.float32)
 
     print(f"Running exact ONNX artifact with {args.provider}...", flush=True)
-    session = ort.InferenceSession(str(onnx_path), providers=[args.provider])
+    cpu_fallback_disabled = args.provider == "CUDAExecutionProvider"
+    session_options = ort.SessionOptions()
+    if cpu_fallback_disabled:
+        session_options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    session = ort.InferenceSession(
+        str(onnx_path),
+        sess_options=session_options,
+        providers=[args.provider],
+    )
     active_providers = list(session.get_providers())
     export_np = np.asarray(session.run(None, shared)[0], dtype=np.float32)
 
@@ -251,17 +264,18 @@ def main(argv: list[str] | None = None) -> int:
     export_identity = build_artifact_identity(
         onnx_dir,
         source="pi0-monolithic-export",
-        revision=_repo_commit(),
+        revision=tether_commit,
         kind="pi0-monolithic-onnx",
     )
     receipt = build_pi0_export_parity_receipt(
         model_source=args.model_source,
         model_revision=args.model_revision,
-        tether_commit=_repo_commit(),
+        tether_commit=tether_commit,
         export_identity=export_identity,
         platform_system=platform.system(),
         ort_providers=active_providers,
         requested_provider=args.provider,
+        cpu_fallback_disabled=cpu_fallback_disabled,
         input_seed=args.input_seed,
         noise_seed=args.noise_seed,
         num_steps=args.num_steps,
@@ -280,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  export artifact sha:  {export_identity['artifact_sha256']}")
     print(f"  shared input sha:     {shared_input_sha256}")
     print(f"  providers:            {active_providers}")
+    print(f"  CPU fallback off:     {cpu_fallback_disabled}")
     print(f"  first cosine:         {first_cosine:+.8f}")
     print(f"  first max_abs:        {first_max_abs:.4e}")
     print(f"  full cosine:          {full_cosine:+.8f}")
