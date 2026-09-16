@@ -1,63 +1,61 @@
 """OpenVLA — non-spine model, ships as a shim (per lift #1 decision S-4).
 
 OpenVLA is **intentionally NOT on the BaseVLA spine.** It's an autoregressive
-Llama-2-7B with an argmax-over-bins action head — doesn't fit the
-flow-matching component pattern that the spine's 6-slot taxonomy is
-built around. Forcing it onto the spine would require either a fake
-"argmax head" that doesn't share any abstraction with FlowMatchingHead
-/ DITHead, or contorting the spine to fit. Neither pulls its weight.
+Llama-2-7B with a tokenized action head — unlike the flow-matching component
+pattern used by Tether's custom pi0/pi0.5/SmolVLA/GR00T exporters.
 
-Per decision S-4 (in
-``reflex_context/01_decisions/2026-05-19-fluxvla-lift-program-decisions.md``):
+Per decision S-4:
 
-  - OpenVLA stays a shim with the existing ``optimum-cli export onnx``
-    + bin-to-continuous postprocess flow.
-  - ``ModelEntry`` declares ``vla_type="_openvla_shim"`` to mark this
-    non-spine status.
-  - The spine's ABC enforcement (REQUIRED_SLOTS / OPTIONAL_SLOTS) is
-    not violated — there's no ``OpenVLAVLA(BaseVLA)`` class to misuse.
+  - OpenVLA stays a shim around a standard HuggingFace/Optimum ONNX export.
+  - ``ModelEntry`` declares ``vla_type="_openvla_shim"``.
+  - Tether owns the OpenVLA-specific token-to-continuous postprocess and parity
+    evidence rather than duplicating Optimum's generic transformer exporter.
 
-OpenVLA is architecturally very different from the flow-matching VLAs
-that Tether's custom exporters target (SmolVLA, pi0, pi0.5, GR00T).
-Its "action head" is literally `argmax(lm_logits[:, -action_dim:])`
-followed by a bin-to-continuous lookup:
+## Action semantics
 
-    bin_idx = vocab_size - token_id - 1
-    action_normalized = linspace(-1, 1, 256)[bin_idx]
+OpenVLA generates one action token autoregressively for each action dimension.
+Those exact generated token IDs are decoded as:
+
+    discretized = tokenizer_vocab_size - action_token_ids
+    bin_idx = clip(discretized - 1, 0, len(bin_centers) - 1)
+    action_normalized = bin_centers[bin_idx]
     action = unnormalize(action_normalized, norm_stats[dataset])
 
-There is no dedicated action expert to reconstruct. The full model is
-Llama-2-7B + DINOv2 + SigLIP + 3-layer projector — ~7.5B params of
-standard transformers architecture that HuggingFace's optimum-onnx
-already knows how to export.
+``bin_centers`` are the 255 centers between 256 uniformly spaced edges over
+[-1, 1]. For openvla-7b the tokenizer vocabulary is 32000 even though the LM
+logit width may be padded to 32064.
 
-## The recommended workflow
+A single prompt-forward logits tensor is **not** the OpenVLA action output. The
+model must run the normal greedy autoregressive generation loop and retain the
+seven generated token IDs (or one next-token logit row per generation step).
 
-Rather than duplicate optimum-onnx for no architectural insight,
-Tether points users at the existing path and helps with the only
-OpenVLA-specific bit — the bin-to-action postprocessing:
+## Recommended workflow
+
+Use the normal HuggingFace/Optimum export path rather than a Tether-specific
+7B transformer exporter:
 
     pip install 'optimum[onnxruntime]'
     optimum-cli export onnx --model openvla/openvla-7b ./openvla_onnx/
 
-    # Then at inference time:
-    from tether.postprocess.openvla import decode_actions
-    logits = ort_session.run(None, {...})[0]  # [b, seq, vocab]
-    actions = decode_actions(
-        logits=logits,
-        action_dim=7,
-        dataset_name="bridge_orig",  # or whatever norm_stats key
-        norm_stats=config["norm_stats"],
+Then run greedy autoregressive generation with the exported model. Once the
+exact generated action token IDs are available:
+
+    from tether.postprocess.openvla import decode_token_ids
+
+    actions = decode_token_ids(
+        generated_action_token_ids,
+        vocab_size=processor.tokenizer.vocab_size,
+        norm_stats=norm_stats,
+        dataset_name="bridge_orig",
     )
 
-## Why Tether's value-add is low here
+If a runtime records the next-token logits for each generation step instead,
+``decode_actions`` accepts exactly ``[batch, action_dim, padded_vocab]`` — one
+row per autoregressive step. It deliberately rejects arbitrary prompt-sequence
+logits so a single forward pass cannot be mistaken for generated actions.
 
-Tether exists to unlock VLAs that HF can't ship — those with custom
-action experts (flow matching over action chunks, AdaRMSNorm/AdaLN
-time conditioning, alternating cross/self-attn on VLM KV caches).
-OpenVLA has none of these. It is a vanilla VLM with a post-processing
-trick. The right abstraction is a 30-line helper, not a 600-line
-exporter.
+For Studio qualification, use the exact tokenized-action/export parity harness
+and receipt contract rather than treating exporter existence as parity.
 """
 
 from __future__ import annotations
@@ -70,18 +68,21 @@ from tether.config import ExportConfig
 
 
 _OPENVLA_HINT = """\
-OpenVLA (openvla/openvla-7b) is a vanilla Llama-2-7B VLM — its "action
-head" is argmax(lm_logits[:, -7:]) + bin lookup, not a custom expert
-stack. Tether's exporters reconstruct flow-matching action experts that
-HuggingFace can't ship; OpenVLA has no such expert, so there's nothing
-Tether-specific to build.
+OpenVLA (openvla/openvla-7b) is a vanilla autoregressive VLM whose action output
+is generated token IDs followed by OpenVLA's action-token decoder. Tether does
+not duplicate Optimum's standard transformer export path.
 
-Use the normal HuggingFace path instead:
+Use:
     pip install 'optimum[onnxruntime]'
     optimum-cli export onnx --model openvla/openvla-7b ./openvla_onnx/
 
-For the bin-to-action postprocessing, use:
-    from tether.postprocess.openvla import decode_actions
+Run the exported model autoregressively to generate the action token sequence,
+then decode those exact IDs with:
+    from tether.postprocess.openvla import decode_token_ids
+
+A single prompt-forward ONNX logits tensor is not equivalent to OpenVLA action
+generation and must not be decoded as though its last sequence positions were
+generated actions.
 """
 
 
