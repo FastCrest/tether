@@ -9,6 +9,12 @@ import numpy as np
 OPENVLA_EXPORT_PARITY_SCHEMA = 1
 MARKER = "TETHER_OPENVLA_EXPORT_PARITY_JSON="
 MAX_ACTION_ABS_ERROR = 1e-6
+SUPPORTED_REFERENCE_RUNTIME = {
+    "transformers": "4.40.1",
+    "tokenizers": "0.19.1",
+    "timm": "0.9.10",
+}
+SUPPORTED_TORCH_PREFIX = "2.2.0"
 _EXACT_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -72,12 +78,26 @@ def _actions(value: object, *, label: str, action_dim: int) -> np.ndarray:
     return array
 
 
+def _runtime_versions(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise OpenVLAExportParityError("reference_runtime must be an object.")
+    required = ("torch", "transformers", "tokenizers", "timm")
+    result: dict[str, str] = {}
+    for key in required:
+        item = value.get(key)
+        if not isinstance(item, str) or not item.strip():
+            raise OpenVLAExportParityError(f"reference_runtime.{key} is required.")
+        result[key] = item.strip()
+    return result
+
+
 def build_openvla_export_parity_receipt(
     *,
     model_source: str,
     model_revision: str,
     tether_commit: str,
     export_identity: dict[str, Any],
+    reference_runtime: dict[str, str],
     platform_system: str,
     ort_providers: list[str],
     requested_provider: str,
@@ -105,6 +125,7 @@ def build_openvla_export_parity_receipt(
     norm_stats_sha256 = _sha256(norm_stats_sha256, label="norm_stats_sha256")
     shared_input_sha256 = _sha256(shared_input_sha256, label="shared_input_sha256")
     export_identity = _validate_artifact_identity(export_identity)
+    reference_runtime = _runtime_versions(reference_runtime)
 
     for label, value in (
         ("action_dim", action_dim),
@@ -139,6 +160,15 @@ def build_openvla_export_parity_receipt(
         label="export_token_ids",
         action_dim=action_dim,
     )
+    for label, tokens in (
+        ("reference_token_ids", reference_tokens),
+        ("export_token_ids", export_tokens),
+    ):
+        if any(token < 0 or token >= tokenizer_vocab_size for token in tokens):
+            raise OpenVLAExportParityError(
+                f"{label} contains an ID outside tokenizer_vocab_size={tokenizer_vocab_size}."
+            )
+
     reference_action_values = _actions(
         reference_actions,
         label="reference_actions",
@@ -152,9 +182,13 @@ def build_openvla_export_parity_receipt(
 
     exact_token_match = reference_tokens == export_tokens
     action_abs_error = np.abs(reference_action_values - export_action_values)
-    action_max_abs = float(action_abs_error.max(initial=0.0))
+    action_max_abs = float(np.max(action_abs_error))
     actions_match = math.isfinite(action_max_abs) and action_max_abs <= MAX_ACTION_ABS_ERROR
     passed = exact_token_match and actions_match
+    reference_runtime_supported = all(
+        reference_runtime[key] == expected
+        for key, expected in SUPPORTED_REFERENCE_RUNTIME.items()
+    ) and reference_runtime["torch"].startswith(SUPPORTED_TORCH_PREFIX)
     linux_cuda = (
         platform_system == "Linux"
         and requested_provider == "CUDAExecutionProvider"
@@ -168,6 +202,14 @@ def build_openvla_export_parity_receipt(
         "model": {"source": source, "revision": model_revision},
         "implementation": {"tether_commit": tether_commit},
         "export_identity": export_identity,
+        "reference_runtime": {
+            **reference_runtime,
+            "supported": reference_runtime_supported,
+            "required": {
+                **SUPPORTED_REFERENCE_RUNTIME,
+                "torch_prefix": SUPPORTED_TORCH_PREFIX,
+            },
+        },
         "decoder_contract": {
             "tokenizer_vocab_size": tokenizer_vocab_size,
             "padded_logit_vocab_size": padded_logit_vocab_size,
@@ -203,9 +245,12 @@ def build_openvla_export_parity_receipt(
             "maximum_action_abs_error_inclusive": MAX_ACTION_ABS_ERROR,
         },
         "verdict": "passed" if passed else "failed",
-        "external_acceptance": "recorded" if passed and linux_cuda else "not-run",
+        "external_acceptance": (
+            "recorded" if passed and linux_cuda and reference_runtime_supported else "not-run"
+        ),
         "limitations": [
             "This receipt proves the tokenized-action export path only for the exact hashed ONNX artifact, model revision, Tether commit, processor input, dataset norm stats and provider recorded here.",
+            "OpenVLA reference acceptance is limited to its upstream-supported dependency stack; a numerically passing result on another Transformers stack is not external acceptance.",
             "It does not establish task success, training support, deployment readiness or physical safety.",
         ],
     }
@@ -215,6 +260,8 @@ __all__ = [
     "OPENVLA_EXPORT_PARITY_SCHEMA",
     "MARKER",
     "MAX_ACTION_ABS_ERROR",
+    "SUPPORTED_REFERENCE_RUNTIME",
+    "SUPPORTED_TORCH_PREFIX",
     "OpenVLAExportParityError",
     "build_openvla_export_parity_receipt",
 ]
