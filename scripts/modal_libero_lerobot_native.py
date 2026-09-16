@@ -169,6 +169,7 @@ def run_ported_libero(
     replan_steps: int = 5,
     num_steps_wait: int = 10,
     seed: int = 7,
+    wall_clock_budget_s: float = 0.0,
     revision: str = "",
     adapter_path: str = "",
     adapter_base: str = "",
@@ -462,6 +463,16 @@ def run_ported_libero(
     print(f"[ported] Running tasks: {tasks_to_run}")
 
     # ─── Main loop: tasks × episodes ─────────────────────────────────
+    # Wall-clock self-kill. Modal's declared `timeout=` is a hard external kill
+    # that loses partial evidence; this is an internal budget that stops cleanly
+    # and still writes what it has. 0 disables it.
+    _deadline = time.monotonic() + wall_clock_budget_s if wall_clock_budget_s > 0 else None
+    results["wall_clock_budget_s"] = wall_clock_budget_s
+    results["wall_clock_exhausted"] = False
+
+    def _out_of_time() -> bool:
+        return _deadline is not None and time.monotonic() >= _deadline
+
     for task_idx in tasks_to_run:
         task = task_suite.get_task(task_idx)
         task_description = task.language
@@ -480,6 +491,11 @@ def run_ported_libero(
         }
 
         for ep in range(num_episodes):
+            if _out_of_time():
+                results["wall_clock_exhausted"] = True
+                print(f"  [watchdog] wall-clock budget {wall_clock_budget_s}s exhausted; "
+                      f"stopping before task {task_idx} episode {ep}", flush=True)
+                break
             evidence = None
             try:
                 env.reset()
@@ -520,6 +536,14 @@ def run_ported_libero(
                     video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
                 while t < max_steps + num_steps_wait:
+                    if _out_of_time():
+                        results["wall_clock_exhausted"] = True
+                        print(f"  [watchdog] wall-clock budget exhausted mid-episode at step {t}",
+                              flush=True)
+                        if evidence:
+                            evidence.interrupt("wall_clock_budget_exhausted")
+                            evidence = None
+                        break
                     try:
                         # num_steps_wait: let objects settle
                         if t < num_steps_wait:
@@ -873,7 +897,12 @@ def main(
     ) if capture_evidence else ""
     print(f"Running OpenPI-port LIBERO {suite}: {which} tasks={task_list or 'all'}, "
           f"{num_episodes} eps each")
-    r = run_ported_libero.with_options(timeout=remote_timeout_s).remote(
+    # modal >= 1.4 removed Function.with_options; the per-call timeout override no
+    # longer exists. The function's declared `timeout=` stays the outer ceiling and
+    # the caller's budget is enforced inside the function instead, which also stops
+    # cleanly rather than losing partial evidence to an external kill.
+    r = run_ported_libero.remote(
+        wall_clock_budget_s=float(remote_timeout_s),
         model_id=model_id,
         num_episodes=num_episodes,
         task_suite_name=suite,
