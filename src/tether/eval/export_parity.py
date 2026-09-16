@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from typing import Any
@@ -65,6 +66,19 @@ def _validate_artifact_identity(
     return value
 
 
+def _normalize_subject_context(value: dict[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ExportParityError("subject_context must be an object when provided.")
+    try:
+        encoded = json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":"))
+        normalized = json.loads(encoded)
+    except (TypeError, ValueError) as exc:
+        raise ExportParityError("subject_context must contain finite JSON values.") from exc
+    return normalized
+
+
 def build_reference_export_parity_receipt(
     *,
     family: str,
@@ -90,6 +104,7 @@ def build_reference_export_parity_receipt(
     full_max_abs: float,
     minimum_cosine: float = DEFAULT_MIN_COSINE,
     maximum_absolute_error: float = DEFAULT_MAX_ABS_ERROR,
+    subject_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an exact-reference/shared-input export parity receipt.
 
@@ -115,6 +130,7 @@ def build_reference_export_parity_receipt(
         maximum_absolute_error,
         label="maximum_absolute_error",
     )
+    subject_context = _normalize_subject_context(subject_context)
 
     if minimum_cosine > 1.0:
         raise ExportParityError("minimum_cosine cannot exceed 1.0.")
@@ -163,6 +179,7 @@ def build_reference_export_parity_receipt(
         "family": family,
         "model": {"source": source, "revision": model_revision},
         "implementation": {"tether_commit": tether_commit},
+        "subject_context": subject_context,
         "export_identity": export_identity,
         "execution": {
             "platform_system": platform_system,
