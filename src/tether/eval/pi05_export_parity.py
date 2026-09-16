@@ -10,14 +10,14 @@ from tether.eval.export_parity import (
     build_reference_export_parity_receipt,
 )
 
-PI0_EXPORT_PARITY_SCHEMA = REFERENCE_EXPORT_PARITY_SCHEMA
-MARKER = "TETHER_PI0_EXPORT_PARITY_JSON="
+PI05_EXPORT_PARITY_SCHEMA = REFERENCE_EXPORT_PARITY_SCHEMA
+MARKER = "TETHER_PI05_EXPORT_PARITY_JSON="
 MIN_COSINE = DEFAULT_MIN_COSINE
 MAX_ABS_ERROR = DEFAULT_MAX_ABS_ERROR
-Pi0ExportParityError = ExportParityError
+Pi05ExportParityError = ExportParityError
 
 
-def build_pi0_export_parity_receipt(
+def build_pi05_export_parity_receipt(
     *,
     model_source: str,
     model_revision: str,
@@ -38,12 +38,12 @@ def build_pi0_export_parity_receipt(
     full_cosine: float,
     full_max_abs: float,
 ) -> dict[str, Any]:
-    """Build the public pi0 export-parity prerequisite receipt for Studio M4 #51."""
+    """Build the public pi0.5 export-parity prerequisite receipt for Studio M4 #52."""
 
     return build_reference_export_parity_receipt(
-        family="pi0",
-        receipt_kind="pi0-reference-shared-input-export-parity",
-        artifact_kind="pi0-monolithic-onnx",
+        family="pi05",
+        receipt_kind="pi05-reference-shared-input-export-parity",
+        artifact_kind="pi05-monolithic-onnx",
         model_source=model_source,
         model_revision=model_revision,
         tether_commit=tether_commit,
@@ -68,10 +68,10 @@ def build_pi0_export_parity_receipt(
 
 
 __all__ = [
-    "PI0_EXPORT_PARITY_SCHEMA",
+    "PI05_EXPORT_PARITY_SCHEMA",
     "MARKER",
     "MIN_COSINE",
     "MAX_ABS_ERROR",
-    "Pi0ExportParityError",
-    "build_pi0_export_parity_receipt",
+    "Pi05ExportParityError",
+    "build_pi05_export_parity_receipt",
 ]
