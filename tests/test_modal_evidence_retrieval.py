@@ -15,13 +15,24 @@ spec.loader.exec_module(module)
 
 def test_retrieval_uses_safe_volume_path_and_validates(tmp_path):
     calls = []
+
     def runner(command, check):
         calls.append(command)
         root = Path(command[-1]) / "task-0/episode-0"
         writer = EpisodeEvidenceWriter(root, provenance={"seed": 7})
-        writer.record_step(step_index=0, phase="settling", observation={}, action=None, policy_request=None, task_events=[])
+        writer.record_step(
+            step_index=0,
+            phase="settling",
+            observation={},
+            action=None,
+            policy_request=None,
+            task_events=[],
+        )
         writer.finish("timeout")
-    manifests = module.retrieve("evaluation-evidence/libero_10/parent/seed-7", tmp_path / "download", runner=runner)
+
+    manifests = module.retrieve(
+        "evaluation-evidence/libero_10/parent/seed-7", tmp_path / "download", runner=runner
+    )
     assert len(manifests) == 1
     assert calls[0][:4] == ["modal", "volume", "get", "pi0-onnx-outputs"]
 

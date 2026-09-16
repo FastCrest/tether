@@ -14,7 +14,12 @@ VOLUME = "pi0-onnx-outputs"
 
 def safe_remote_path(value: str) -> str:
     path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "evaluation-evidence":
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or not path.parts
+        or path.parts[0] != "evaluation-evidence"
+    ):
         raise ValueError("remote path must stay under evaluation-evidence/")
     return path.as_posix()
 
@@ -52,10 +57,14 @@ def main() -> None:
     parser.add_argument("--max-bytes", type=int, default=512 * 1024 * 1024)
     args = parser.parse_args()
     manifests = retrieve(
-        args.remote, args.destination,
-        modal_binary=args.modal_binary, max_bytes=args.max_bytes,
+        args.remote,
+        args.destination,
+        modal_binary=args.modal_binary,
+        max_bytes=args.max_bytes,
     )
-    print(f"Validated {len(manifests)} episode evidence manifest(s) in {args.destination.resolve()}")
+    print(
+        f"Validated {len(manifests)} episode evidence manifest(s) in {args.destination.resolve()}"
+    )
 
 
 if __name__ == "__main__":

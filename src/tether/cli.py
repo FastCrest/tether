@@ -1529,7 +1529,6 @@ def eval_cmd(
     )
     from tether.eval.libero import (
         ALL_RUNTIMES,
-        LiberoSuite,
         LiberoSuiteConfig,
     )
     from tether.eval.preflight import PreflightSmokeTest
@@ -1537,7 +1536,6 @@ def eval_cmd(
     from tether.eval.runner_dispatch import (
         default_libero_tasks,
         resolve_suite_runner,
-        resolve_task_runner,
     )
 
     # ---- Validate inputs at the CLI layer (fail loud) ----
@@ -1667,10 +1665,10 @@ def eval_cmd(
     # ---- Resolve runner + dispatch ----
     # Modal: full-suite dispatch via tether.eval.modal_runner (one Modal
     # call per suite; saves N cold-starts vs per-episode fan-out).
-    # Local: per-(task, episode) dispatch via LiberoSuite.run loop.
+    # Local: dispatched through the same resolve_suite_runner seam.
     console.print(f"\n[dim]Running suite...[/dim]")
-    # Resolve task list (modal_runner needs explicit tasks; LiberoSuite.run
-    # accepts a tasks_provider fallback).
+    # Resolve task list: both suite runners need explicit tasks, so fill them
+    # from the default provider when the caller passed none.
     runtime_config = config
     if not parsed_tasks:
         runtime_config = LiberoSuiteConfig(

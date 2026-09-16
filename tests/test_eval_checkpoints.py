@@ -18,7 +18,10 @@ def test_lora_identity_includes_adapter_files_and_base(tmp_path):
     assert spec.base == "org/base"
     assert spec.base_revision == "base-rev"
     assert spec.identity.startswith("sha256:")
-    assert {item["path"] for item in spec.files} == {"adapter_config.json", "adapter_model.safetensors"}
+    assert {item["path"] for item in spec.files} == {
+        "adapter_config.json",
+        "adapter_model.safetensors",
+    }
 
 
 def test_remote_checkpoint_requires_revision():
@@ -37,12 +40,22 @@ def test_local_runner_passes_exact_cases_and_preserves_real_outcomes():
 
     def rollout(**kwargs):
         captured.update(kwargs)
-        return {"per_task": [{"task_idx": 2, "episodes": [
-            {"ep": 0, "success": True, "steps": 12},
-            {"ep": 1, "success": False, "steps": 220},
-        ]}], "errors": []}
+        return {
+            "per_task": [
+                {
+                    "task_idx": 2,
+                    "episodes": [
+                        {"ep": 0, "success": True, "steps": 12},
+                        {"ep": 1, "success": False, "steps": 220},
+                    ],
+                }
+            ],
+            "errors": [],
+        }
 
-    config = LiberoSuiteConfig(tasks=("libero_spatial",), task_indices=(2,), num_episodes=2, seed=41, runtime="local")
+    config = LiberoSuiteConfig(
+        tasks=("libero_spatial",), task_indices=(2,), num_episodes=2, seed=41, runtime="local"
+    )
     report = run_local_libero(config, checkpoint, loader=loader, rollout=rollout)
     assert captured["task_indices"] == [2]
     assert captured["seed"] == 41
@@ -79,20 +92,46 @@ def test_local_lora_loader_forwards_pinned_adapter_and_base_revisions(monkeypatc
             return policy
 
     monkeypatch.setitem(sys.modules, "peft", types.SimpleNamespace(PeftModel=Peft))
-    monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(snapshot_download=lambda source, **kwargs: "/adapter"))
-    monkeypatch.setitem(sys.modules, "lerobot.configs.policies", types.SimpleNamespace(
-        PreTrainedConfig=types.SimpleNamespace(from_pretrained=lambda source: "dataset-config")
-    ))
-    monkeypatch.setitem(sys.modules, "lerobot.processor.converters", types.SimpleNamespace(
-        batch_to_transition=object(), policy_action_to_transition=object(),
-        transition_to_batch=object(), transition_to_policy_action=object(),
-    ))
-    monkeypatch.setitem(sys.modules, "lerobot.processor.pipeline", types.SimpleNamespace(PolicyProcessorPipeline=Pipeline))
-    monkeypatch.setitem(sys.modules, "lerobot.policies.smolvla.modeling_smolvla", types.SimpleNamespace(SmolVLAPolicy=Policy))
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=lambda source, **kwargs: "/adapter"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "lerobot.configs.policies",
+        types.SimpleNamespace(
+            PreTrainedConfig=types.SimpleNamespace(from_pretrained=lambda source: "dataset-config")
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "lerobot.processor.converters",
+        types.SimpleNamespace(
+            batch_to_transition=object(),
+            policy_action_to_transition=object(),
+            transition_to_batch=object(),
+            transition_to_policy_action=object(),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "lerobot.processor.pipeline",
+        types.SimpleNamespace(PolicyProcessorPipeline=Pipeline),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "lerobot.policies.smolvla.modeling_smolvla",
+        types.SimpleNamespace(SmolVLAPolicy=Policy),
+    )
 
     spec = CheckpointSpec(
-        "smolvla-lora", "org/adapter", "hf-lora:org/adapter@adapter-rev+org/base@base-rev",
-        revision="adapter-rev", base="org/base", base_revision="base-rev",
+        "smolvla-lora",
+        "org/adapter",
+        "hf-lora:org/adapter@adapter-rev+org/base@base-rev",
+        revision="adapter-rev",
+        base="org/base",
+        base_revision="base-rev",
     )
     load_smolvla_checkpoint(spec)
     assert calls["base"] == ("org/base", {"config": "dataset-config", "revision": "base-rev"})
@@ -125,11 +164,19 @@ def test_modal_command_names_selected_adapter_and_never_uses_reference(tmp_path)
         captured.append(command)
         return subprocess.CompletedProcess(command, 1, "", "fixture stop")
 
-    spec = resolve_checkpoint("org/candidate", kind="smolvla-lora", base="org/base", revision="adapter-rev", base_revision="base-rev")
+    spec = resolve_checkpoint(
+        "org/candidate",
+        kind="smolvla-lora",
+        base="org/base",
+        revision="adapter-rev",
+        base_revision="base-rev",
+    )
     assert spec.identity == "hf-lora:org/candidate@adapter-rev+org/base@base-rev"
     run_libero_on_modal(
         config=LiberoSuiteConfig(tasks=("libero_10",), task_indices=(2,), num_episodes=1),
-        checkpoint=spec, repo_root=tmp_path, modal_invoker=invoke,
+        checkpoint=spec,
+        repo_root=tmp_path,
+        modal_invoker=invoke,
     )
     command = captured[0]
     assert command[command.index("--model-id") + 1] == "org/candidate"

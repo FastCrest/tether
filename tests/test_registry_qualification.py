@@ -1,5 +1,9 @@
 from tether.registry.models import list_families
-from tether.registry.qualification import FAMILY_QUALIFICATIONS, qualification_for, qualification_gaps
+from tether.registry.qualification import (
+    FAMILY_QUALIFICATIONS,
+    qualification_for,
+    qualification_gaps,
+)
 
 
 def test_every_registry_family_has_an_explicit_qualification():

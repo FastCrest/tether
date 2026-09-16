@@ -70,9 +70,7 @@ def test_replay_report_marks_missing_images_and_fail_on(monkeypatch, tmp_path):
     report = tmp_path / "report.json"
     monkeypatch.setattr(cli, "_load_target_server", lambda _path: _Server())
 
-    assert cli.run_replay(
-        str(trace), str(model), output_json=str(report), fail_on="actions"
-    ) == 3
+    assert cli.run_replay(str(trace), str(model), output_json=str(report), fail_on="actions") == 3
     payload = json.loads(report.read_text())
     assert payload["summary"]["n_diffed"] == 0
     assert payload["summary"]["n_skipped"] == 1

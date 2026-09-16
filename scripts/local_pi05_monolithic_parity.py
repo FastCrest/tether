@@ -7,6 +7,7 @@ The receipt is the public prerequisite consumed by Tether Studio M4 #52.
 A CPU run is useful local evidence only. External acceptance requires a passing
 Linux run with CUDAExecutionProvider and ONNX Runtime CPU EP fallback disabled.
 """
+
 from __future__ import annotations
 
 import argparse

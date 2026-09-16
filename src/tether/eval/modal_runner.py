@@ -25,6 +25,7 @@ reference export (hardcoded in the script). Arbitrary --export_dir
 support is Phase 2 (per docs/eval.md "What's deliberately NOT
 shipped Phase 1").
 """
+
 from __future__ import annotations
 
 import json
@@ -35,7 +36,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from tether.eval.checkpoints import CheckpointSpec
 from tether.eval.libero import EpisodeResult, LiberoSuiteConfig
@@ -92,7 +93,10 @@ ModalInvoker = Callable[[list[str], float], subprocess.CompletedProcess]
 def _real_modal_invoker(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess:
     """Production caller: invoke `modal run ...` subprocess."""
     return subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout_s,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
     )
 
 
@@ -141,7 +145,9 @@ def run_libero_on_modal(
     if checkpoint is None and modal_invoker is not _real_modal_invoker and export_dir is not None:
         checkpoint = CheckpointSpec("full", str(export_dir), "test:injected", revision="test")
     if checkpoint is None:
-        raise ModalCheckpointUnavailableError("A selected checkpoint is required; Tether will not use a reference fallback.")
+        raise ModalCheckpointUnavailableError(
+            "A selected checkpoint is required; Tether will not use a reference fallback."
+        )
     if checkpoint.files:
         raise ModalCheckpointUnavailableError(
             "The selected checkpoint is local. Stage it on the evaluator host or use --runtime local on Linux; Tether will not substitute the reference policy."
@@ -151,7 +157,11 @@ def run_libero_on_modal(
     root = repo_root or Path.cwd()
     abs_script = (root / script_path).resolve()
     legacy_script = (root / "scripts/modal_libero_monolithic_onnx.py").resolve()
-    if not abs_script.exists() and modal_invoker is not _real_modal_invoker and legacy_script.exists():
+    if (
+        not abs_script.exists()
+        and modal_invoker is not _real_modal_invoker
+        and legacy_script.exists()
+    ):
         abs_script = legacy_script
     if not abs_script.exists():
         raise FileNotFoundError(
@@ -164,8 +174,7 @@ def run_libero_on_modal(
     suites = list(config.tasks) if config.tasks else []
     if not suites:
         logger.warning(
-            "run_libero_on_modal: empty config.tasks; returning empty "
-            "EpisodeResult list"
+            "run_libero_on_modal: empty config.tasks; returning empty EpisodeResult list"
         )
         return []
 
@@ -217,17 +226,28 @@ def _invoke_one_suite(
     """Subprocess one `modal run scripts/modal_libero_*.py --suite X
     --num-episodes N --tasks all` invocation."""
     import time
+
     cmd = [
-        modal_binary, "run", script_path,
-        "--suite", suite,
-        "--num-episodes", str(num_episodes),
-        "--tasks", ",".join(str(i) for i in task_indices) if task_indices else "all",
-        "--model-id", checkpoint.source,
+        modal_binary,
+        "run",
+        script_path,
+        "--suite",
+        suite,
+        "--num-episodes",
+        str(num_episodes),
+        "--tasks",
+        ",".join(str(i) for i in task_indices) if task_indices else "all",
+        "--model-id",
+        checkpoint.source,
         "--capture-evidence" if capture_evidence else "--no-capture-evidence",
-        "--evidence-max-bytes", str(evidence_max_bytes),
-        "--evidence-max-frames", str(evidence_max_frames),
-        "--evidence-frame-stride", str(evidence_frame_stride),
-        "--evidence-run-id", evidence_run_id,
+        "--evidence-max-bytes",
+        str(evidence_max_bytes),
+        "--evidence-max-frames",
+        str(evidence_max_frames),
+        "--evidence-frame-stride",
+        str(evidence_frame_stride),
+        "--evidence-run-id",
+        evidence_run_id,
     ]
     if checkpoint.revision:
         cmd.extend(["--revision", checkpoint.revision])
@@ -269,7 +289,8 @@ _PER_TASK_RE = re.compile(
     r"\[(?:onnx|ported)\] task (?P<task_idx>\d+) done: (?P<succ>\d+)/(?P<total>\d+)",
 )
 _TASK_BLOCK_RE = re.compile(
-    r"\[ported\] TASK (?P<task_idx>\d+):.*?(?=\n\[ported\] TASK |\n=+)", re.DOTALL,
+    r"\[ported\] TASK (?P<task_idx>\d+):.*?(?=\n\[ported\] TASK |\n=+)",
+    re.DOTALL,
 )
 _EPISODE_RE = re.compile(
     r"ep (?P<ep>\d+) \(init_idx=\d+\): (?P<result>SUCCESS|fail) at (?P<steps>\d+) steps",
@@ -337,14 +358,25 @@ def _parse_modal_stdout(stdout: str, *, suite: str) -> dict | None:
 
     per_task = []
     for m in _PER_TASK_RE.finditer(stdout):
-        row = {
+        row: dict[str, Any] = {
             "task_idx": int(m.group("task_idx")),
             "success": int(m.group("succ")),
             "total": int(m.group("total")),
         }
-        block = next((match.group(0) for match in _TASK_BLOCK_RE.finditer(stdout) if int(match.group("task_idx")) == row["task_idx"]), "")
+        block = next(
+            (
+                match.group(0)
+                for match in _TASK_BLOCK_RE.finditer(stdout)
+                if int(match.group("task_idx")) == row["task_idx"]
+            ),
+            "",
+        )
         episodes = [
-            {"episode_index": int(ep.group("ep")), "success": ep.group("result") == "SUCCESS", "n_steps": int(ep.group("steps"))}
+            {
+                "episode_index": int(ep.group("ep")),
+                "success": ep.group("result") == "SUCCESS",
+                "n_steps": int(ep.group("steps")),
+            }
             for ep in _EPISODE_RE.finditer(block)
         ]
         if episodes:
@@ -376,13 +408,16 @@ def _parse_invocation_to_episodes(
     """
     suite = invocation.suite
     if invocation.returncode != 0:
-        return [_failure_row(
-            suite=suite, episode_index=0,
-            error_message=(
-                f"`modal run` exited {invocation.returncode}. "
-                f"stderr (last 500 chars): {invocation.stderr[-500:]}"
-            ),
-        )]
+        return [
+            _failure_row(
+                suite=suite,
+                episode_index=0,
+                error_message=(
+                    f"`modal run` exited {invocation.returncode}. "
+                    f"stderr (last 500 chars): {invocation.stderr[-500:]}"
+                ),
+            )
+        ]
 
     if invocation.parsed_result is None:
         # Check for the explicit fail-status marker first (cleaner
@@ -390,35 +425,39 @@ def _parse_invocation_to_episodes(
         fail_status = _FAIL_STATUS_RE.search(invocation.stdout or "")
         if fail_status is not None:
             reason_match = _FAIL_REASON_RE.search(invocation.stdout or "")
-            reason = (
-                reason_match.group("reason").strip()
-                if reason_match else "(no reason printed)"
-            )
-            return [_failure_row(
-                suite=suite, episode_index=0,
+            reason = reason_match.group("reason").strip() if reason_match else "(no reason printed)"
+            return [
+                _failure_row(
+                    suite=suite,
+                    episode_index=0,
+                    error_message=(f"modal script reported status=FAIL: {reason}"),
+                )
+            ]
+        return [
+            _failure_row(
+                suite=suite,
+                episode_index=0,
                 error_message=(
-                    f"modal script reported status=FAIL: {reason}"
+                    "modal stdout did not contain expected summary marker. "
+                    "Possible mid-run crash. stdout (last 500 chars): "
+                    f"{invocation.stdout[-500:]}"
                 ),
-            )]
-        return [_failure_row(
-            suite=suite, episode_index=0,
-            error_message=(
-                "modal stdout did not contain expected summary marker. "
-                "Possible mid-run crash. stdout (last 500 chars): "
-                f"{invocation.stdout[-500:]}"
-            ),
-        )]
+            )
+        ]
 
     per_task = invocation.parsed_result.get("per_task", [])
     if not per_task:
         # Parsed but no per-task lines (suite ran with 0 tasks?)
-        return [_failure_row(
-            suite=suite, episode_index=0,
-            error_message=(
-                "modal stdout parsed but per_task list empty. "
-                "Suite may have failed before any task ran."
-            ),
-        )]
+        return [
+            _failure_row(
+                suite=suite,
+                episode_index=0,
+                error_message=(
+                    "modal stdout parsed but per_task list empty. "
+                    "Suite may have failed before any task ran."
+                ),
+            )
+        ]
 
     out: list[EpisodeResult] = []
     for task_entry in per_task:
@@ -427,26 +466,33 @@ def _parse_invocation_to_episodes(
         n_total = task_entry["total"]
         actual_episodes = task_entry.get("episodes") or []
         for ep_idx in range(n_total):
-            actual = next((item for item in actual_episodes if item["episode_index"] == ep_idx), None)
+            actual = next(
+                (item for item in actual_episodes if item["episode_index"] == ep_idx), None
+            )
             success = actual["success"] if actual else ep_idx < n_succ
-            out.append(EpisodeResult(
-                task_id=task_id,
-                episode_index=ep_idx,
-                success=success,
-                terminal_reason=(
-                    "success" if success else "timeout" if actual else "adapter_error"
-                ),
-                wall_clock_s=invocation.elapsed_s / max(n_total, 1),
-                n_steps=actual["n_steps"] if actual else TASK_SUITE_MAX_STEPS.get(suite, 0),
-                video_path=None,
-                error_message=None if success else (
-                    "Task did not succeed before the step limit." if actual else
-                    "Per-episode root cause unavailable from Modal aggregate output (Phase 1 limit)."
-                ),
-                evidence_path=actual.get("evidence_path") if actual else None,
-                evidence_complete=actual.get("evidence_complete") if actual else None,
-                evidence_truncated=actual.get("evidence_truncated") if actual else None,
-            ))
+            out.append(
+                EpisodeResult(
+                    task_id=task_id,
+                    episode_index=ep_idx,
+                    success=success,
+                    terminal_reason=(
+                        "success" if success else "timeout" if actual else "adapter_error"
+                    ),
+                    wall_clock_s=invocation.elapsed_s / max(n_total, 1),
+                    n_steps=actual["n_steps"] if actual else TASK_SUITE_MAX_STEPS.get(suite, 0),
+                    video_path=None,
+                    error_message=None
+                    if success
+                    else (
+                        "Task did not succeed before the step limit."
+                        if actual
+                        else "Per-episode root cause unavailable from Modal aggregate output (Phase 1 limit)."
+                    ),
+                    evidence_path=actual.get("evidence_path") if actual else None,
+                    evidence_complete=actual.get("evidence_complete") if actual else None,
+                    evidence_truncated=actual.get("evidence_truncated") if actual else None,
+                )
+            )
 
     return out
 

@@ -66,7 +66,9 @@ def _digest(path: Path) -> str:
 class EpisodeEvidenceWriter:
     """Append evidence without retaining trajectories or frames in memory."""
 
-    def __init__(self, root: str | Path, *, provenance: dict[str, Any], limits: CaptureLimits | None = None):
+    def __init__(
+        self, root: str | Path, *, provenance: dict[str, Any], limits: CaptureLimits | None = None
+    ):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.frames = self.root / "frames"
@@ -105,11 +107,13 @@ class EpisodeEvidenceWriter:
         for path in sorted(self.root.rglob("*")):
             if not path.is_file() or path == self.manifest_path or path.name.endswith(".tmp"):
                 continue
-            artifacts.append({
-                "path": path.relative_to(self.root).as_posix(),
-                "size_bytes": path.stat().st_size,
-                "sha256": _digest(path),
-            })
+            artifacts.append(
+                {
+                    "path": path.relative_to(self.root).as_posix(),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": _digest(path),
+                }
+            )
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "kind": "tether-checkpoint-episode-evidence",
@@ -150,10 +154,13 @@ class EpisodeEvidenceWriter:
                 try:
                     from io import BytesIO
                     from PIL import Image
+
                     frame_path = f"frames/{step_index:06d}.jpg"
                     target = self.root / frame_path
                     encoded_frame = BytesIO()
-                    Image.fromarray(frame).save(encoded_frame, format="JPEG", quality=self.limits.jpeg_quality)
+                    Image.fromarray(frame).save(
+                        encoded_frame, format="JPEG", quality=self.limits.jpeg_quality
+                    )
                     frame_bytes = encoded_frame.getvalue()
                     if self.bytes_written + len(frame_bytes) > self.limits.max_bytes:
                         self._mark_truncated("byte limit")
@@ -212,7 +219,10 @@ def validate_episode_evidence(root: str | Path) -> dict[str, Any]:
     manifest_path = root / "episode-manifest.json"
     manifest = json.loads(manifest_path.read_text())
     schema = manifest.get("schema_version")
-    if schema not in SUPPORTED_SCHEMA_VERSIONS or manifest.get("kind") != "tether-checkpoint-episode-evidence":
+    if (
+        schema not in SUPPORTED_SCHEMA_VERSIONS
+        or manifest.get("kind") != "tether-checkpoint-episode-evidence"
+    ):
         raise ValueError("unsupported episode evidence manifest")
     artifact_paths = set()
     for item in manifest.get("artifacts", []):
@@ -222,7 +232,11 @@ def validate_episode_evidence(root: str | Path) -> dict[str, Any]:
         path = (root / relative).resolve()
         if root not in path.parents:
             raise ValueError("artifact leaves evidence directory")
-        if not path.is_file() or path.stat().st_size != item["size_bytes"] or _digest(path) != item["sha256"]:
+        if (
+            not path.is_file()
+            or path.stat().st_size != item["size_bytes"]
+            or _digest(path) != item["sha256"]
+        ):
             raise ValueError(f"artifact validation failed: {relative}")
         artifact_paths.add(relative.as_posix())
 

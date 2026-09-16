@@ -119,7 +119,9 @@ def build_reference_export_parity_receipt(
     artifact_kind = artifact_kind.strip()
     source = model_source.strip()
     if not family or not receipt_kind or not artifact_kind or not source:
-        raise ExportParityError("family, receipt_kind, artifact_kind and model_source are required.")
+        raise ExportParityError(
+            "family, receipt_kind, artifact_kind and model_source are required."
+        )
 
     model_revision = _exact_revision(model_revision, label="model_revision")
     tether_commit = _exact_revision(tether_commit, label="tether_commit")
@@ -142,9 +144,13 @@ def build_reference_export_parity_receipt(
         raise ExportParityError("noise_seed must be an integer.")
     if isinstance(num_steps, bool) or not isinstance(num_steps, int) or num_steps <= 0:
         raise ExportParityError("num_steps must be a positive integer.")
-    if not reference_shape or not export_shape or any(
-        isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0
-        for dim in [*reference_shape, *export_shape]
+    if (
+        not reference_shape
+        or not export_shape
+        or any(
+            isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0
+            for dim in [*reference_shape, *export_shape]
+        )
     ):
         raise ExportParityError("reference_shape and export_shape must contain positive integers.")
 
