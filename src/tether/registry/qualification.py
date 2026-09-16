@@ -27,7 +27,10 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "training": "not-qualified",
         "evaluation": "not-qualified",
         "studio_recipe": None,
-        "notes": ["Do not qualify from registry metadata alone."],
+        "notes": [
+            "Do not qualify from registry metadata alone.",
+            "An exact-revision/shared-input ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
+        ],
         "acceptance": ["pinned checkpoint", "shared-noise export parity receipt", "matched task development", "matched task held-out"],
     },
     "pi05": {
