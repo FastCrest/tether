@@ -39,7 +39,10 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         "training": "snapflow-hardware-gated",
         "evaluation": "runtime-evidence-only",
         "studio_recipe": None,
-        "notes": ["Studio has no accepted pi0.5 training and decision journey."],
+        "notes": [
+            "Studio has no accepted pi0.5 training and decision journey.",
+            "An exact-revision/shared-input ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
+        ],
         "acceptance": ["pinned teacher and student", "export parity receipt", "matched LIBERO development", "matched LIBERO held-out"],
     },
     "groot": {
