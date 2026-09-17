@@ -26,7 +26,7 @@ Cost notes: SmolVLA LoRA on a 500-sample dataset for 2000 steps runs
 bigger backbone — budget accordingly.
 """
 import os
-import subprocess
+import json
 import modal
 
 app = modal.App("tether-finetune")
@@ -40,18 +40,6 @@ def _hf_secret():
         return modal.Secret.from_dict({"HF_TOKEN": token})
     return modal.Secret.from_name("huggingface")
 
-
-def _repo_head_sha() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        ).decode().strip()[:12]
-    except Exception:
-        return "main"
-
-
-_HEAD = _repo_head_sha()
 
 hf_cache = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
 onnx_output = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=True)
@@ -92,15 +80,10 @@ image = (
         "typer",
         "rich",
     )
-    .run_commands(
-        # [monolithic] extra pulls onnx-diagnostic + optree + scipy,
-        # which tether.exporters.monolithic needs at import time for the
-        # auto-export chain that runs after training succeeds.
-        # GITHUB_TOKEN injected from modal secret `github-token` because
-        # the repo is private.
-        f'pip install "fastcrest-tether[monolithic] @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
-        secrets=[modal.Secret.from_name("github-token")],
-    )
+    .add_local_dir("src", "/opt/tether/src", copy=True)
+    .add_local_file("pyproject.toml", "/opt/tether/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/opt/tether/README.md", copy=True)
+    .run_commands('pip install "/opt/tether[monolithic]"')
     .env({
         "HF_HOME": HF_CACHE_PATH,
         "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers",
@@ -111,13 +94,18 @@ image = (
 @app.function(
     image=image,
     gpu="A10G",
-    timeout=21600,  # 6 hr — SmolVLA LoRA runs typically finish in <1hr
+    cpu=4.0,
+    memory=16384,
+    retries=0,
+    timeout=3600,
     volumes={HF_CACHE_PATH: hf_cache, ONNX_OUTPUT_PATH: onnx_output},
     secrets=[_hf_secret()],
 )
 def finetune_modal(
     base: str = "lerobot/smolvla_base",
+    base_revision: str = "",
     dataset: str = "lerobot/libero",
+    dataset_revision: str = "",
     output_subdir: str = "finetune_smolvla_libero",
     num_steps: int = 5000,
     batch_size: int = 8,
@@ -127,6 +115,8 @@ def finetune_modal(
     seed: int = 42,
     target: str = "desktop",
     skip_export: bool = False,
+    save_freq: int = 0,
+    log_freq: int = 0,
 ):
     """Run tether.finetune.run_finetune on Modal."""
     import logging
@@ -141,7 +131,9 @@ def finetune_modal(
 
     cfg = FinetuneConfig(
         base=base,
+        base_revision=base_revision or None,
         dataset=dataset,
+        dataset_revision=dataset_revision or None,
         output=output,
         num_steps=num_steps,
         batch_size=batch_size,
@@ -151,6 +143,15 @@ def finetune_modal(
         seed=seed,
         target=target,
         skip_export=skip_export,
+        # lerobot-train defaults save_freq=20000 and log_freq=200, so any run
+        # shorter than 20k steps produces exactly one checkpoint, and a short one
+        # produces a single metric point. Studio's checkpoint inventory and
+        # training dashboard need an inventory and a series, not one of each.
+        # FinetuneConfig already forwards arbitrary lerobot args, so use that
+        # rather than adding a second mechanism. 0 keeps lerobot's default.
+        extra_lerobot_args={
+            k: v for k, v in (("save_freq", save_freq), ("log_freq", log_freq)) if v > 0
+        },
     )
     result = run_finetune(cfg)
 
@@ -180,7 +181,9 @@ def finetune_modal(
 @app.local_entrypoint()
 def main(
     base: str = "lerobot/smolvla_base",
+    base_revision: str = "",
     dataset: str = "lerobot/libero",
+    dataset_revision: str = "",
     output_subdir: str = "finetune_smolvla_libero",
     steps: int = 5000,
     batch_size: int = 8,
@@ -190,6 +193,8 @@ def main(
     seed: int = 42,
     target: str = "desktop",
     skip_export: bool = False,
+    save_freq: int = 0,
+    log_freq: int = 0,
 ):
     print(f"[tether finetune on Modal]")
     print(f"  base:    {base}")
@@ -199,7 +204,9 @@ def main(
           f"lora_r={lora_rank}")
     r = finetune_modal.remote(
         base=base,
+        base_revision=base_revision,
         dataset=dataset,
+        dataset_revision=dataset_revision,
         output_subdir=output_subdir,
         num_steps=steps,
         batch_size=batch_size,
@@ -209,7 +216,22 @@ def main(
         seed=seed,
         target=target,
         skip_export=skip_export,
+        save_freq=save_freq,
+        log_freq=log_freq,
     )
     print("\n=== RESULT ===")
     for k, v in r.items():
         print(f"  {k}: {v}")
+    envelope = {
+        "schema_version": 1,
+        "base": base,
+        "base_revision": base_revision or None,
+        "dataset": dataset,
+        "dataset_revision": dataset_revision or None,
+        "seed": seed,
+        "steps": steps,
+        "batch_size": batch_size,
+        "lora_rank": lora_rank,
+        "result": r,
+    }
+    print("TETHER_MODAL_TRAIN_RESULT_JSON=" + json.dumps(envelope, sort_keys=True, separators=(",", ":")))

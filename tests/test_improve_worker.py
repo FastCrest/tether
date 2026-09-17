@@ -300,7 +300,12 @@ def test_modal_follow_up_script_exists_and_uses_worker_contract() -> None:
     assert "fastcrest.improve.worker_result.v1" in source
     assert "run_improve_worker" in source
     assert "output_uri" in source
-    assert "with_options(gpu=gpu" in source
+    # The worker must request a GPU. It used to do that with
+    # `with_options(gpu=gpu)`, which modal >= 1.4 removed, so the GPU is now
+    # declared on the function and the --gpu flag is validated against it.
+    # Assert the intent, not the removed API.
+    assert "DECLARED_GPU" in source
+    assert "gpu=DECLARED_GPU" in source
     assert "modal run scripts/real_improve_worker_modal.py" in MODAL_GPU_FOLLOW_UP_COMMAND
 
 

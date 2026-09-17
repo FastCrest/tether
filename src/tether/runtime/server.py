@@ -1978,6 +1978,14 @@ def create_app(
     `inference_executor_full` error result instead of growing an unbounded
     default-executor queue.
     """
+    if rtc_config is not None and getattr(rtc_config, "enabled", False):
+        raise RuntimeError(
+            "RTC serving is not connected to the HTTP /act inference path. "
+            "Start without --rtc. The RTC adapter has unit coverage, but the "
+            "loaded policy must expose a differentiable per-denoise-step "
+            "contract before real-time chunking can be served honestly."
+        )
+
     try:
         from contextlib import asynccontextmanager
         from fastapi import Depends, FastAPI, Header, HTTPException
@@ -3946,6 +3954,7 @@ def create_app(
                     routing=_routing_for_record,
                     guard=_guard_for_record,
                     rtc=_rtc_for_record,
+                    cache=result.get("cache"),
                 )
                 if rec_seq >= 0:
                     span.set_attribute("tether.record.seq", rec_seq)

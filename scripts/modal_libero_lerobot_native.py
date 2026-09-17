@@ -26,12 +26,13 @@ server; we call policy.select_action directly).
  10. 180° H+W image flip via numpy slicing (matches OpenPI exactly)
 
 Usage:
-    modal run scripts/modal_libero_lerobot_native.py --tasks 0 --num-episodes 1
-    modal run scripts/modal_libero_lerobot_native.py --tasks all --num-episodes 5
+    modal run scripts/modal_libero_lerobot_native.py --tasks 0 --num-episodes 1 --evidence-run-id smoke-001
+    modal run scripts/modal_libero_lerobot_native.py --tasks all --num-episodes 5 --evidence-run-id benchmark-001
 """
+import json
 import os
-import subprocess
 import modal
+import re
 
 app = modal.App("tether-libero-lerobot-native")
 
@@ -52,19 +53,6 @@ def _hf_secret():
         return modal.Secret.from_name("huggingface")
     except Exception:
         return modal.Secret.from_dict({})
-
-
-def _repo_head_sha() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        ).decode().strip()[:12]
-    except Exception:
-        return "main"
-
-
-_HEAD = _repo_head_sha()
 
 
 # Image: Python 3.12 + lerobot 0.5.1 + LIBERO + MuJoCo + robosuite 1.4.1.
@@ -103,6 +91,7 @@ image = (
         "gym",
         "gymnasium",
         "lerobot==0.5.1",
+        "peft",
         "num2words",
         "imageio",  # replay video save (optional)
     )
@@ -112,13 +101,11 @@ image = (
     )
     .add_local_file("scripts/patch_libero.py", "/root/patch_libero.py", copy=True)
     .run_commands("python /root/patch_libero.py")
-    # Pull tether so `tether.distill.snapflow_pi0_model` is importable
-    # when --snapflow-student is used. Uses the github-token secret to
-    # clone the private repo. Cheap — this only pulls the Python package.
-    .run_commands(
-        f'pip install "fastcrest-tether @ git+https://x-access-token:$GITHUB_TOKEN@github.com/FastCrest/tether@{_HEAD}"',
-        secrets=[modal.Secret.from_name("github-token")],
-    )
+    # Package the checked-out source so the build needs no repository token.
+    .add_local_dir("src", "/opt/tether/src", copy=True)
+    .add_local_file("pyproject.toml", "/opt/tether/pyproject.toml", copy=True)
+    .add_local_file("README.md", "/opt/tether/README.md", copy=True)
+    .run_commands("pip install /opt/tether")
     .env({
         "MUJOCO_GL": "osmesa",
         "PYOPENGL_PLATFORM": "osmesa",
@@ -144,6 +131,18 @@ TASK_SUITE_MAX_STEPS = {
 }
 
 
+EVIDENCE_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def evidence_output_path(*, run_id: str, suite: str, checkpoint_tag: str, seed: int) -> str:
+    """Return a unique, volume-relative evidence destination."""
+    if not EVIDENCE_RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("evidence run ID must be 1-64 safe filename characters")
+    if checkpoint_tag not in {"parent", "adapter"}:
+        raise ValueError("checkpoint tag must be parent or adapter")
+    return f"/onnx_out/evaluation-evidence/{run_id}/{suite}/{checkpoint_tag}/seed-{seed}"
+
+
 _onnx_output_volume = modal.Volume.from_name("pi0-onnx-outputs", create_if_missing=True)
 _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
 
@@ -151,7 +150,10 @@ _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True
 @app.function(
     image=image,
     gpu="A10G",
-    timeout=7200,
+    cpu=4.0,
+    memory=16384,
+    retries=0,
+    timeout=1500,
     secrets=[_hf_secret()],
     volumes={
         "/onnx_out": _onnx_output_volume,
@@ -167,10 +169,20 @@ def run_ported_libero(
     replan_steps: int = 5,
     num_steps_wait: int = 10,
     seed: int = 7,
+    wall_clock_budget_s: float = 0.0,
+    revision: str = "",
+    adapter_path: str = "",
+    adapter_base: str = "",
+    adapter_base_revision: str = "",
     snapflow_student: str = "",
     snapflow_onnx: str = "",
     preprocessor_ref: str = "",
     save_video_dir: str = "",
+    evidence_dir: str = "",
+    evidence_max_bytes: int = 268435456,
+    evidence_max_frames: int = 600,
+    evidence_frame_stride: int = 2,
+    evidence_interrupt_after_steps: int = 0,
 ):
     """Port of openpi/examples/libero/main.py rolled out end-to-end.
 
@@ -183,6 +195,7 @@ def run_ported_libero(
     import traceback
     import numpy as np
     import torch
+    from tether.eval.episode_evidence import CaptureLimits, EpisodeEvidenceWriter
 
     # PyTorch 2.6+ changed torch.load default to weights_only=True, which
     # refuses to unpickle LIBERO's init_state files (they embed numpy globals).
@@ -197,11 +210,15 @@ def run_ported_libero(
     print(f"[ported] Loading {model_id}...")
     t0 = time.time()
     from lerobot.processor.pipeline import PolicyProcessorPipeline
+    from lerobot.configs.policies import PreTrainedConfig
     from lerobot.processor.converters import (
         batch_to_transition, transition_to_batch,
         policy_action_to_transition, transition_to_policy_action,
     )
     from huggingface_hub import snapshot_download
+
+    def _resolve_repo(ref: str, **kwargs):
+        return ref if os.path.isdir(ref) else snapshot_download(ref, **kwargs)
 
     # Dispatch:
     # - snapflow_onnx set → load ONNX session via onnxruntime (no PyTorch
@@ -224,6 +241,7 @@ def run_ported_libero(
         from tether.distill.snapflow_pi0_model import load_snapflow_student
         print(f"[ported] Loading SnapFlow student from {snapflow_student} (1-NFE inference)")
         policy = load_snapflow_student(snapflow_student)
+        rollout_config = policy.config
         detected_type = "snapflow_student_onnx" if use_onnx else "snapflow_student"
         repo_dir = preprocessor_ref or snapflow_student
         if use_onnx:
@@ -249,8 +267,40 @@ def run_ported_libero(
             policy_cls = SmolVLAPolicy
             detected_type = "smolvla"
         print(f"[ported] Detected policy type: {detected_type} ({policy_cls.__name__})")
-        policy = policy_cls.from_pretrained(model_id)
-        repo_dir = snapshot_download(model_id)
+        load_kwargs = {"revision": revision} if revision else {}
+        if adapter_path:
+            if not adapter_base:
+                raise ValueError("A SmolVLA LoRA adapter requires --adapter-base.")
+            from peft import PeftModel
+            base_kwargs = {"revision": adapter_base_revision} if adapter_base_revision else {}
+            adapter_kwargs = {"revision": revision} if revision else {}
+            repo_dir = _resolve_repo(adapter_path, **adapter_kwargs)
+            rollout_config = PreTrainedConfig.from_pretrained(repo_dir)
+            policy = SmolVLAPolicy.from_pretrained(
+                adapter_base,
+                config=rollout_config,
+                **base_kwargs,
+            )
+            rollout_config = policy.config
+            policy = PeftModel.from_pretrained(policy, adapter_path, **adapter_kwargs)
+            # The adapter checkpoint contains the dataset-derived processor
+            # configs written by LeRobot training. Reusing the base policy's
+            # processors here would silently normalize LIBERO observations
+            # and actions with the wrong statistics.
+            detected_type = "smolvla-lora"
+        else:
+            if preprocessor_ref:
+                repo_dir = _resolve_repo(preprocessor_ref)
+                rollout_config = PreTrainedConfig.from_pretrained(repo_dir)
+                policy = policy_cls.from_pretrained(
+                    model_id,
+                    config=rollout_config,
+                    **load_kwargs,
+                )
+            else:
+                policy = policy_cls.from_pretrained(model_id, **load_kwargs)
+                repo_dir = snapshot_download(model_id, **load_kwargs)
+            rollout_config = policy.config
 
     policy.eval().to("cuda").to(torch.float32)
 
@@ -273,7 +323,7 @@ def run_ported_libero(
     )
     if is_state_out:
         from tether.distill.pi05_state_out_processor import swap_prepare_step_in_pipeline
-        max_state_dim = getattr(policy.config, "max_state_dim", 32)
+        max_state_dim = getattr(rollout_config, "max_state_dim", 32)
         swap_prepare_step_in_pipeline(preprocessor, max_state_dim=max_state_dim)
         print(f"[ported] Swapped preprocessor for state-out (max_state_dim={max_state_dim})")
     # Postprocessor unnormalizes policy output back to env action space.
@@ -360,19 +410,44 @@ def run_ported_libero(
             np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32),
         ]).astype(np.float32)
 
+        visual_keys = [
+            key
+            for key, feature in rollout_config.input_features.items()
+            if str(getattr(feature, "type", "")).upper().endswith("VISUAL")
+        ]
+        if not visual_keys:
+            visual_keys = ["observation.images.image", "observation.images.image2"]
+
         batch = {
-            "observation.images.image": _to_tensor(img),
-            "observation.images.image2": _to_tensor(wrist_img),
             "observation.state": torch.from_numpy(state).unsqueeze(0).to("cuda"),
             "task": [task_description],
         }
+        for key, image in zip(visual_keys, (img, wrist_img), strict=False):
+            batch[key] = _to_tensor(image)
         return batch
+
+    def _observation_record(obs):
+        return {
+            "eef_position": np.asarray(obs.get("robot0_eef_pos", []), dtype=np.float32).tolist(),
+            "eef_quaternion": np.asarray(obs.get("robot0_eef_quat", []), dtype=np.float32).tolist(),
+            "gripper_qpos": np.asarray(obs.get("robot0_gripper_qpos", []), dtype=np.float32).tolist(),
+            "agentview_shape": list(getattr(obs.get("agentview_image"), "shape", ())),
+            "wrist_shape": list(getattr(obs.get("robot0_eye_in_hand_image"), "shape", ())),
+        }
 
     # ─── Results struct ──────────────────────────────────────────────
     results = {
+        "schema_version": 1,
         "model": model_id,
+        "revision": revision or None,
+        "checkpoint_kind": "smolvla-lora" if adapter_path else "full",
+        "adapter_path": adapter_path or None,
+        "adapter_base": adapter_base or None,
+        "adapter_base_revision": adapter_base_revision or None,
         "harness": "openpi-port-lerobot-native",
         "suite": task_suite_name,
+        "task_indices": task_indices,
+        "seed": seed,
         "num_episodes_per_task": num_episodes,
         "max_steps": max_steps,
         "resize_size": resize_size,
@@ -388,6 +463,16 @@ def run_ported_libero(
     print(f"[ported] Running tasks: {tasks_to_run}")
 
     # ─── Main loop: tasks × episodes ─────────────────────────────────
+    # Wall-clock self-kill. Modal's declared `timeout=` is a hard external kill
+    # that loses partial evidence; this is an internal budget that stops cleanly
+    # and still writes what it has. 0 disables it.
+    _deadline = time.monotonic() + wall_clock_budget_s if wall_clock_budget_s > 0 else None
+    results["wall_clock_budget_s"] = wall_clock_budget_s
+    results["wall_clock_exhausted"] = False
+
+    def _out_of_time() -> bool:
+        return _deadline is not None and time.monotonic() >= _deadline
+
     for task_idx in tasks_to_run:
         task = task_suite.get_task(task_idx)
         task_description = task.language
@@ -406,6 +491,12 @@ def run_ported_libero(
         }
 
         for ep in range(num_episodes):
+            if _out_of_time():
+                results["wall_clock_exhausted"] = True
+                print(f"  [watchdog] wall-clock budget {wall_clock_budget_s}s exhausted; "
+                      f"stopping before task {task_idx} episode {ep}", flush=True)
+                break
+            evidence = None
             try:
                 env.reset()
                 # CRITICAL: rotate init state per episode (fixes #2375)
@@ -416,17 +507,69 @@ def run_ported_libero(
                 t = 0
                 done = False
                 video_frames = [] if save_video_dir else None
+                if evidence_dir:
+                    from pathlib import Path as _P
+                    evidence = EpisodeEvidenceWriter(
+                        _P(evidence_dir) / f"task-{task_idx}" / f"episode-{ep}",
+                        provenance={
+                            "suite": task_suite_name, "task_index": task_idx,
+                            "task_description": task_description, "seed": seed,
+                            "episode_index": ep, "init_index": init_idx,
+                            "policy": {
+                                "kind": "smolvla-lora" if adapter_path else "full",
+                                "source": adapter_path or model_id, "revision": revision or None,
+                                "adapter": adapter_path or None, "adapter_base": adapter_base or None,
+                                "adapter_base_revision": adapter_base_revision or None,
+                            },
+                        },
+                        limits=CaptureLimits(
+                            max_bytes=evidence_max_bytes, max_frames=evidence_max_frames,
+                            frame_stride=evidence_frame_stride,
+                        ),
+                    )
+                plan_request = None
+                plan_offset = 0
+                evidence_manifest = None
+                validation_interrupted = False
+                episode_error_reason = None
                 if video_frames is not None:
                     video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
 
                 while t < max_steps + num_steps_wait:
+                    if _out_of_time():
+                        results["wall_clock_exhausted"] = True
+                        print(f"  [watchdog] wall-clock budget exhausted mid-episode at step {t}",
+                              flush=True)
+                        if evidence:
+                            evidence.interrupt("wall_clock_budget_exhausted")
+                            evidence = None
+                        break
                     try:
                         # num_steps_wait: let objects settle
                         if t < num_steps_wait:
                             obs, _, done, info = env.step(LIBERO_DUMMY_ACTION)
+                            if evidence:
+                                interrupt_now = (
+                                    evidence_interrupt_after_steps > 0
+                                    and evidence.step_count + 1 >= evidence_interrupt_after_steps
+                                )
+                                evidence.record_step(
+                                    step_index=t, phase="settling", observation=_observation_record(obs),
+                                    action=list(LIBERO_DUMMY_ACTION), policy_request=None,
+                                    task_events=(
+                                        ([{"kind": "episode_started"}] if t == 0 else [])
+                                        + ([{"kind": "validation_interruption"}] if interrupt_now else [])
+                                    ),
+                                    frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+                                )
+                                if interrupt_now:
+                                    evidence_manifest = evidence.interrupt("validation_interruption")
+                                    validation_interrupted = True
                             if video_frames is not None:
                                 video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                             t += 1
+                            if validation_interrupted:
+                                break
                             continue
 
                         # Dump obs schema on first real step
@@ -439,6 +582,7 @@ def run_ported_libero(
                             print(f"[debug] obs keys: {obs_info}")
 
                         if not action_plan:
+                            request_started = time.monotonic()
                             batch = _build_batch(obs, task_description)
                             batch_pp = preprocessor(batch)
                             batch_pp = {
@@ -461,7 +605,7 @@ def run_ported_libero(
                                     images, img_masks = policy._preprocess_images(batch_pp)
                                     lang_tokens = batch_pp[OBS_LANGUAGE_TOKENS]
                                     lang_masks = batch_pp[OBS_LANGUAGE_ATTENTION_MASK]
-                                    cfg = policy.config
+                                    cfg = rollout_config
                                     chunk_size = cfg.chunk_size
                                     action_dim_pad = cfg.max_action_dim
                                     bsize = images[0].shape[0]
@@ -536,7 +680,7 @@ def run_ported_libero(
                                     # path bypasses that wrapper, so replicate
                                     # the trim here.
                                     from lerobot.utils.constants import ACTION
-                                    orig_dim = policy.config.output_features[ACTION].shape[0]
+                                    orig_dim = rollout_config.output_features[ACTION].shape[0]
                                     chunk = chunk[:, :, :orig_dim]
                                 else:
                                     chunk = policy.predict_action_chunk(batch_pp)
@@ -554,11 +698,38 @@ def run_ported_libero(
                             # Trim to 7-dim LIBERO action
                             chunk_np = chunk_np[:, :7]
                             action_plan.extend(chunk_np[:replan_steps])
+                            request_finished = time.monotonic()
+                            plan_request = {
+                                "started_s": request_started - evidence.started_mono if evidence else None,
+                                "finished_s": request_finished - evidence.started_mono if evidence else None,
+                                "duration_ms": (request_finished - request_started) * 1000.0,
+                                "planned_actions": len(action_plan),
+                            }
+                            plan_offset = 0
                             if t == num_steps_wait and ep == 0 and task_idx == tasks_to_run[0]:
                                 print(f"[debug] first action: {chunk_np[0]}")
 
                         action = action_plan.popleft()
                         obs, _, done, info = env.step(action.tolist())
+                        if evidence:
+                            interrupt_now = (
+                                evidence_interrupt_after_steps > 0
+                                and evidence.step_count + 1 >= evidence_interrupt_after_steps
+                            )
+                            evidence.record_step(
+                                step_index=t, phase="policy", observation=_observation_record(obs),
+                                action=np.asarray(action, dtype=np.float32).reshape(-1)[:7].tolist(),
+                                policy_request={**(plan_request or {}), "action_offset": plan_offset},
+                                task_events=(
+                                    [{"kind": "task_success"}] if done else
+                                    [{"kind": "step_limit_reached"}] if t + 1 >= max_steps + num_steps_wait else []
+                                ) + ([{"kind": "validation_interruption"}] if interrupt_now else []),
+                                frame=np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+                            )
+                            if interrupt_now:
+                                evidence_manifest = evidence.interrupt("validation_interruption")
+                                validation_interrupted = True
+                        plan_offset += 1
                         if video_frames is not None:
                             video_frames.append(np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]))
                         if done:
@@ -566,6 +737,8 @@ def run_ported_libero(
                             results["total_success"] += 1
                             break
                         t += 1
+                        if validation_interrupted:
+                            break
                     except Exception as e:
                         err_tb = traceback.format_exc()
                         print(f"  step error: {e}")
@@ -574,17 +747,36 @@ def run_ported_libero(
                             "task": task_idx, "ep": ep,
                             "error": str(e), "tb": err_tb[-400:],
                         })
+                        if evidence:
+                            evidence_manifest = evidence.interrupt("adapter_error")
+                        episode_error_reason = "adapter_error"
                         break
 
                 # Cast to Python primitives so the result dict deserializes
                 # cleanly on any local Python (numpy.bool_ pickles with numpy
                 # globals → Modal client needs numpy to unpack, avoidable).
-                task_result["episodes"].append({
+                episode_record = {
                     "ep": int(ep),
                     "init_idx": int(init_idx),
                     "steps": int(t),
                     "success": bool(done),
-                })
+                    "terminal_reason": (
+                        "validation_interruption" if validation_interrupted else
+                        episode_error_reason if episode_error_reason else
+                        "success" if done else "timeout"
+                    ),
+                }
+                if evidence and not evidence.closed:
+                    manifest = evidence.finish(episode_record["terminal_reason"])
+                    evidence_manifest = manifest
+                if evidence and evidence_manifest:
+                    episode_record.update({
+                        "evidence_path": str(evidence.root),
+                        "evidence_complete": evidence_manifest["complete"],
+                        "evidence_truncated": evidence_manifest["truncated"],
+                        "evidence_recording_errors": evidence_manifest["recording_errors"],
+                    })
+                task_result["episodes"].append(episode_record)
                 task_result["total"] += 1
                 results["total_eps"] += 1
                 print(f"  ep {ep} (init_idx={init_idx}): "
@@ -607,6 +799,20 @@ def run_ported_libero(
                     "task": task_idx, "ep": ep,
                     "error": str(e), "tb": err_tb[-400:],
                 })
+                if evidence and not evidence.closed:
+                    evidence_manifest = evidence.interrupt("adapter_error")
+                else:
+                    evidence_manifest = None
+                task_result["episodes"].append({
+                    "ep": int(ep), "init_idx": int(locals().get("init_idx", ep)),
+                    "steps": int(locals().get("t", 0)), "success": False,
+                    "terminal_reason": "adapter_error", "error": str(e),
+                    **({
+                        "evidence_path": str(evidence.root),
+                        "evidence_complete": evidence_manifest["complete"],
+                        "evidence_truncated": evidence_manifest["truncated"],
+                    } if evidence and evidence_manifest else {}),
+                })
                 task_result["total"] += 1
                 results["total_eps"] += 1
 
@@ -623,6 +829,8 @@ def run_ported_libero(
         if results["total_eps"] else 0.0
     )
     results["success_rate_pct"] = round(success_rate, 1)
+    if evidence_dir:
+        _onnx_output_volume.commit()
     print(f"\n====== {task_suite_name} (OpenPI-ported) ======")
     print(f"  Model: {model_id}")
     print(f"  Success: {results['total_success']}/{results['total_eps']} "
@@ -640,6 +848,18 @@ def main(
     snapflow_onnx: str = "",
     preprocessor_ref: str = "",
     save_video_dir: str = "",
+    revision: str = "",
+    adapter_path: str = "",
+    adapter_base: str = "",
+    adapter_base_revision: str = "",
+    seed: int = 7,
+    capture_evidence: bool = True,
+    evidence_max_bytes: int = 268435456,
+    evidence_max_frames: int = 600,
+    evidence_frame_stride: int = 2,
+    evidence_run_id: str = "",
+    evidence_interrupt_after_steps: int = 0,
+    remote_timeout_s: int = 900,
 ):
     """
     --num-episodes N          episodes per task (OpenPI default: 50)
@@ -665,9 +885,24 @@ def main(
     else:
         task_list = [int(t) for t in tasks.split(",")]
     which = f"snapflow-student={snapflow_student}" if snapflow_student else f"model={model_id}"
+    checkpoint_tag = "adapter" if adapter_path else "parent"
+    if capture_evidence and not evidence_run_id:
+        raise ValueError("--evidence-run-id is required when capture is enabled")
+    if not 60 <= remote_timeout_s <= 1500:
+        raise ValueError("--remote-timeout-s must be between 60 and 1500")
+    if evidence_interrupt_after_steps < 0:
+        raise ValueError("--evidence-interrupt-after-steps cannot be negative")
+    evidence_dir = evidence_output_path(
+        run_id=evidence_run_id, suite=suite, checkpoint_tag=checkpoint_tag, seed=seed,
+    ) if capture_evidence else ""
     print(f"Running OpenPI-port LIBERO {suite}: {which} tasks={task_list or 'all'}, "
           f"{num_episodes} eps each")
+    # modal >= 1.4 removed Function.with_options; the per-call timeout override no
+    # longer exists. The function's declared `timeout=` stays the outer ceiling and
+    # the caller's budget is enforced inside the function instead, which also stops
+    # cleanly rather than losing partial evidence to an external kill.
     r = run_ported_libero.remote(
+        wall_clock_budget_s=float(remote_timeout_s),
         model_id=model_id,
         num_episodes=num_episodes,
         task_suite_name=suite,
@@ -676,6 +911,16 @@ def main(
         snapflow_onnx=snapflow_onnx,
         preprocessor_ref=preprocessor_ref,
         save_video_dir=save_video_dir,
+        revision=revision,
+        adapter_path=adapter_path,
+        adapter_base=adapter_base,
+        adapter_base_revision=adapter_base_revision,
+        seed=seed,
+        evidence_dir=evidence_dir,
+        evidence_max_bytes=evidence_max_bytes,
+        evidence_max_frames=evidence_max_frames,
+        evidence_frame_stride=evidence_frame_stride,
+        evidence_interrupt_after_steps=evidence_interrupt_after_steps,
     )
     print("\n=== RESULT ===")
     print(f"  model: {r.get('model')}")
@@ -686,3 +931,4 @@ def main(
         print(f"  task {task['task_idx']}: "
               f"{task['success']}/{task['total']} — "
               f"{task['task_description'][:60]}")
+    print("TETHER_MODAL_RESULT_JSON=" + json.dumps(r, sort_keys=True, separators=(",", ":")))

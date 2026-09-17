@@ -112,13 +112,9 @@ def _looks_like_pi05_model_ref(model: str) -> bool:
 
 def _is_jetson_linux_aarch64() -> bool:
     """Return True when running on a Jetson-class Linux/aarch64 host."""
-    import platform
+    from tether.jetson import is_jetson
 
-    return (
-        platform.system().lower() == "linux"
-        and platform.machine().lower() in {"aarch64", "arm64"}
-        and Path("/etc/nv_tegra_release").exists()
-    )
+    return is_jetson()
 
 
 def _version_callback(value: bool) -> None:
@@ -1433,7 +1429,28 @@ def benchmark_cmd(
 @app.command(name="eval")
 def eval_cmd(
     export_dir: str = typer.Argument(
-        help="Path to exported model directory (output of `tether export`)",
+        help="Local checkpoint directory or Hugging Face repository ID.",
+    ),
+    checkpoint_kind: str = typer.Option(
+        "auto", "--checkpoint-kind", help="auto | full | smolvla-lora.",
+    ),
+    checkpoint_revision: str = typer.Option(
+        "", "--checkpoint-revision", help="Required commit revision for Hugging Face checkpoints.",
+    ),
+    adapter_base: str = typer.Option(
+        "", "--adapter-base", help="Base checkpoint for a SmolVLA LoRA adapter.",
+    ),
+    adapter_base_revision: str = typer.Option(
+        "", "--adapter-base-revision", help="Exact revision of a remote LoRA base checkpoint.",
+    ),
+    processor_checkpoint: str = typer.Option(
+        "", "--processor-checkpoint", help="Dataset processor checkpoint used by a full parent during matched evaluation.",
+    ),
+    processor_revision: str = typer.Option(
+        "", "--processor-revision", help="Exact revision of a remote processor checkpoint.",
+    ),
+    task_indices: str = typer.Option(
+        "", "--task-indices", help="Comma-separated LIBERO task indices; empty means all tasks in each selected suite.",
     ),
     suite: str = typer.Option(
         "libero", "--suite",
@@ -1501,13 +1518,13 @@ def eval_cmd(
     """
     _setup_logging(verbose)
 
+    from tether.eval.checkpoints import CheckpointError, resolve_checkpoint
     from tether.eval.cost_model import (
         COST_PREVIEW_GUARDRAIL_USD,
         estimate_cost,
     )
     from tether.eval.libero import (
         ALL_RUNTIMES,
-        LiberoSuite,
         LiberoSuiteConfig,
     )
     from tether.eval.preflight import PreflightSmokeTest
@@ -1515,14 +1532,21 @@ def eval_cmd(
     from tether.eval.runner_dispatch import (
         default_libero_tasks,
         resolve_suite_runner,
-        resolve_task_runner,
     )
 
     # ---- Validate inputs at the CLI layer (fail loud) ----
-    export_path = Path(export_dir)
-    if not export_path.exists():
-        err_console.print(f"[red]Export directory not found: {export_dir}[/red]")
+    try:
+        checkpoint = resolve_checkpoint(
+            export_dir, kind=checkpoint_kind, base=adapter_base or None,
+            revision=checkpoint_revision or None,
+            base_revision=adapter_base_revision or None,
+            processor_source=processor_checkpoint or None,
+            processor_revision=processor_revision or None,
+        )
+    except CheckpointError as exc:
+        err_console.print(f"[red]Checkpoint error: {exc}[/red]")
         raise typer.Exit(1)
+    export_path = Path(checkpoint.source)
 
     if suite != "libero":
         err_console.print(
@@ -1542,12 +1566,18 @@ def eval_cmd(
     parsed_tasks: tuple[str, ...] = tuple(
         t.strip() for t in tasks.split(",") if t.strip()
     ) if tasks else ()
+    try:
+        parsed_task_indices = tuple(int(value.strip()) for value in task_indices.split(",") if value.strip())
+    except ValueError:
+        err_console.print("[red]Task indices must be comma-separated integers.[/red]")
+        raise typer.Exit(2)
 
     # Build config — validates num_episodes, max_parallel, episode_timeout_s
     try:
         config = LiberoSuiteConfig(
             num_episodes=num_episodes,
             tasks=parsed_tasks,
+            task_indices=parsed_task_indices,
             runtime=runtime,
             video=video,
             output_dir=output,
@@ -1562,6 +1592,7 @@ def eval_cmd(
     # ---- Banner echo ----
     console.print("\n[bold]Tether Eval[/bold]")
     console.print(f"  Export:      {export_dir}")
+    console.print(f"  Checkpoint:  {checkpoint.identity}")
     console.print(f"  Suite:       [cyan]{suite}[/cyan]")
     console.print(f"  Runtime:     [cyan]{runtime}[/cyan]")
     console.print(f"  Episodes:    {num_episodes} per task")
@@ -1630,41 +1661,30 @@ def eval_cmd(
     # ---- Resolve runner + dispatch ----
     # Modal: full-suite dispatch via tether.eval.modal_runner (one Modal
     # call per suite; saves N cold-starts vs per-episode fan-out).
-    # Local: per-(task, episode) dispatch via LiberoSuite.run loop.
+    # Local: dispatched through the same resolve_suite_runner seam.
     console.print(f"\n[dim]Running suite...[/dim]")
-    # Resolve task list (modal_runner needs explicit tasks; LiberoSuite.run
-    # accepts a tasks_provider fallback).
+    # Resolve task list: both suite runners need explicit tasks, so fill them
+    # from the default provider when the caller passed none.
     runtime_config = config
     if not parsed_tasks:
         runtime_config = LiberoSuiteConfig(
             num_episodes=num_episodes,
             tasks=tuple(default_libero_tasks()),
+            task_indices=parsed_task_indices,
             runtime=runtime, video=video, output_dir=output, seed=seed,
             max_parallel=max_parallel, cost_preview=cost_preview,
         )
 
-    if runtime == "modal":
-        from tether.eval.modal_runner import ModalNotInstalledError
-        suite_runner = resolve_suite_runner(
-            runtime=runtime, export_dir=export_path,
-        )
-        try:
-            report = suite_runner(runtime_config, export_path)
-        except ModalNotInstalledError as exc:
-            err_console.print(f"\n[red]{exc}[/red]")
-            raise typer.Exit(6)
-    else:
-        # local
-        task_runner = resolve_task_runner(
-            runtime=runtime, export_dir=export_path,
-        )
-        tasks_provider = None if parsed_tasks else default_libero_tasks
-        report = LiberoSuite.run(
-            export_dir=export_path,
-            config=runtime_config,
-            task_runner=task_runner,
-            tasks_provider=tasks_provider,
-        )
+    from tether.eval.local_runner import LocalEvaluationUnavailable
+    from tether.eval.modal_runner import ModalCheckpointUnavailableError, ModalNotInstalledError
+    suite_runner = resolve_suite_runner(
+        runtime=runtime, export_dir=export_path, checkpoint=checkpoint,
+    )
+    try:
+        report = suite_runner(runtime_config, export_path)
+    except (ModalNotInstalledError, ModalCheckpointUnavailableError, LocalEvaluationUnavailable) as exc:
+        err_console.print(f"\n[red]{exc}[/red]")
+        raise typer.Exit(6)
 
     # ---- Render summary ----
     console.print(
@@ -1711,6 +1731,7 @@ def eval_cmd(
         env=env_block,
         num_episodes_per_task=num_episodes,
         modal_block=modal_block,
+        checkpoint=checkpoint.to_dict(),
     )
     envelope_path = envelope.write_json(output_path / "report.json")
     console.print(f"\n  [dim]JSON envelope:[/dim] {envelope_path}")
@@ -2240,6 +2261,7 @@ def serve(
     ),
     api_key: str = typer.Option(
         "",
+        envvar="TETHER_API_KEY",
         help="If set, every /act and /config request must include a matching "
              "X-Tether-Key header or it's rejected 401. /health stays "
              "unauthenticated so load balancers can probe readiness. For "
@@ -2909,6 +2931,7 @@ def serve(
                 ),
                 adaptive_high_action_delta=aac_high_action_delta,
                 adaptive_high_latency_ms=aac_high_latency_ms,
+                strict_policy_kwargs=True,
             )
         except ValueError as exc:
             err_console.print(f"[red]Invalid RTC config: {exc}[/red]")
@@ -4401,42 +4424,29 @@ def doctor(
 
     # ─── Jetson JetPack guard ───────────────────────────────────────────
     # Jetson devices ship CUDA + cuDNN baked into JetPack at the OS level.
-    # Customers running ORT 1.25+ on JetPack 5.x (CUDA 11.4) will silently
+    # Customers running ORT 1.20+ on JetPack 5.x (CUDA 11.4) will silently
     # fall to CPU because ORT's bundled CUDA 12 EP can't find compatible
     # libs. Surface JetPack version + ORT compatibility loudly.
     try:
-        from pathlib import Path as _P
-        jetson_release = _P("/etc/nv_tegra_release")
-        if jetson_release.exists():
-            content = jetson_release.read_text(errors="ignore")
-            # Format example: "# R36 (release), REVISION: 4.0, GCID: ..."
-            jetpack_major = "unknown"
-            for line in content.splitlines():
-                if line.startswith("# R"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        jetpack_major = parts[1].lstrip("R")
-                    break
-            # JetPack R36+ ships CUDA 12.x; R35 ships CUDA 11.4
-            # ORT 1.20+ requires CUDA 12.x → R36+ is required for GPU EP.
-            try:
-                jp_int = int(jetpack_major)
-            except (TypeError, ValueError):
-                jp_int = 0
-            if jp_int and jp_int < 36:
+        from tether.jetson import l4t_release as _l4t
+
+        _release = _l4t()
+        if _release is not None:
+            _label = _release.jetpack or f"R{_release.major}"
+            if not _release.ships_cuda_12:
                 add(
                     "  → Jetson JetPack target",
                     False,
-                    f"❌ JetPack R{jetpack_major} ships CUDA 11.4. ORT 1.20+ "
+                    f"❌ JetPack {_label} ships CUDA 11.4. ORT 1.20+ "
                     f"requires CUDA 12.x → CUDAExecutionProvider will silently "
-                    f"fall to CPU. Upgrade to JetPack R36+ (Orin) or use "
+                    f"fall to CPU. Upgrade to JetPack 6 (L4T R36+, Orin) or use "
                     f"fastcrest-tether[serve,onnx] for CPU-only inference.",
                 )
-            elif jp_int >= 36:
+            else:
                 add(
                     "  → Jetson JetPack target",
                     True,
-                    f"JetPack R{jetpack_major} (CUDA 12.x compatible).",
+                    f"JetPack {_label} (L4T {_release}, CUDA 12.x compatible).",
                 )
     except (OSError, ImportError):
         pass

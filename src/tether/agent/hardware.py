@@ -8,8 +8,11 @@ import platform
 import socket
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
+
+from tether.jetson import cuda_version as _jetson_cuda_version
+from tether.jetson import l4t_release as _l4t_release
+from tether.jetson import tensorrt_version as _tensorrt_version
 
 JsonDict = dict[str, Any]
 
@@ -24,7 +27,12 @@ def collect_hardware_profile() -> JsonDict:
         "gpu_name": None,
         "cuda": None,
         "jetpack": None,
-        "tensorrt": _package_version("tensorrt"),
+        "l4t_release": None,
+        "jetpack_version": None,
+        # JetPack installs TensorRT through apt, so pip metadata is empty on a
+        # healthy Jetson. `tensorrt_version` reads NvInferVersion.h and dpkg
+        # first and falls back to pip.
+        "tensorrt": _tensorrt_version()[0],
     }
     _add_nvidia_smi(profile)
     _add_nvcc(profile)
@@ -65,25 +73,38 @@ def _add_nvidia_smi(profile: JsonDict) -> None:
 
 
 def _add_nvcc(profile: JsonDict) -> None:
+    """CUDA without nvidia-smi.
+
+    A Jetson has no nvidia-smi at all, and may have the CUDA runtime without
+    nvcc, so `/usr/local/cuda/version.json` is consulted as well.
+    """
     if profile.get("cuda"):
         return
     output = _run(["nvcc", "--version"])
-    if not output:
-        return
     marker = "release "
-    for line in output.splitlines():
-        if marker in line:
-            profile["cuda"] = line.split(marker, 1)[1].split(",", 1)[0].strip()
-            return
+    if output:
+        for line in output.splitlines():
+            if marker in line:
+                profile["cuda"] = line.split(marker, 1)[1].split(",", 1)[0].strip()
+                return
+    version, _source = _jetson_cuda_version()
+    if version:
+        profile["cuda"] = version
 
 
 def _add_jetpack(profile: JsonDict) -> None:
-    marker_path = Path("/etc/nv_tegra_release")
-    try:
-        if marker_path.exists():
-            profile["jetpack"] = marker_path.read_text(encoding="utf-8", errors="replace").strip()
-    except Exception:
+    """Record the L4T banner plus the JetPack version it implies.
+
+    `jetpack` keeps carrying the raw banner for existing consumers. The derived
+    fields are new: no file on a Jetson states a JetPack version, so anything
+    that wants one has to map it from the L4T release.
+    """
+    release = _l4t_release()
+    if release is None:
         return
+    profile["jetpack"] = release.raw
+    profile["l4t_release"] = str(release)
+    profile["jetpack_version"] = release.jetpack
 
 
 def _run(command: list[str]) -> str | None:

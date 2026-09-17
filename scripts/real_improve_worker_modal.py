@@ -55,7 +55,14 @@ image = (
 )
 
 
-@app.function(image=image, timeout=3600, scaledown_window=60)
+# modal >= 1.4 removed Function.with_options, so gpu and timeout can no longer be
+# overridden per call. A10G is declared here because it is the only value this
+# worker has ever been invoked with; --gpu is validated against it rather than
+# silently ignored.
+DECLARED_GPU = "A10G"
+
+
+@app.function(image=image, gpu=DECLARED_GPU, timeout=3600, scaledown_window=60)
 def run_worker_remote(
     worker_input: dict[str, Any],
     *,
@@ -107,8 +114,20 @@ def main(
     if not isinstance(payload, dict):
         raise SystemExit("--worker-input must be a JSON object")
 
-    runner = run_worker_remote.with_options(gpu=gpu, timeout=timeout_seconds)
-    result = runner.remote(payload, output_uri=output_uri, result_pretty=pretty)
+    if gpu != DECLARED_GPU:
+        raise SystemExit(
+            f"--gpu {gpu!r} cannot be honored: modal >= 1.4 removed the per-call "
+            f"option override, so this worker is fixed to {DECLARED_GPU!r} at "
+            f"declaration. Change DECLARED_GPU and redeploy to run on other hardware "
+            f"rather than having this flag silently ignored."
+        )
+    if timeout_seconds > 3600:
+        raise SystemExit(
+            f"--timeout-seconds {timeout_seconds} exceeds the declared 3600s function "
+            f"timeout and can no longer be raised per call. Lower it, or raise the "
+            f"declared timeout and redeploy."
+        )
+    result = run_worker_remote.remote(payload, output_uri=output_uri, result_pretty=pretty)
     encoded = json.dumps(
         result,
         indent=2 if pretty else None,

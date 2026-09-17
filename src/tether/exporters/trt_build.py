@@ -39,17 +39,20 @@ def build_engine(
     opt_shapes: dict[str, str] | None = None,
     max_shapes: dict[str, str] | None = None,
 ) -> Path:
-    """Build a TensorRT engine from an ONNX model using trtexec."""
+    """Build a TensorRT engine from an ONNX model using trtexec.
+
+    Returns the path to an engine that exists on disk. Raises ``RuntimeError``
+    if trtexec is missing, fails, or exits 0 without writing the engine — a
+    returned path is always a real file, so callers never need to re-check.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not check_trtexec():
-        logger.warning(
-            "trtexec not found. Install TensorRT or run on a system with TensorRT. "
-            "Skipping engine build for %s",
-            onnx_path.name,
+        raise RuntimeError(
+            f"TensorRT engine build failed for {onnx_path.name}: trtexec not found. "
+            "Install TensorRT or run on a system with TensorRT."
         )
-        return output_path
 
     cmd = [
         "trtexec",
@@ -83,6 +86,12 @@ def build_engine(
     if result.returncode != 0:
         logger.error("trtexec failed:\n%s", result.stderr[-2000:] if result.stderr else "no stderr")
         raise RuntimeError(f"TensorRT engine build failed for {onnx_path.name}")
+
+    if not output_path.exists():
+        raise RuntimeError(
+            f"TensorRT engine build failed for {onnx_path.name}: trtexec exited 0 but "
+            f"wrote no engine at {output_path}"
+        )
 
     logger.info("Built TRT engine: %s (%.1f MB)", output_path, output_path.stat().st_size / 1e6)
     return output_path

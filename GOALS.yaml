@@ -1,6 +1,10 @@
 version: 1
 mission: "Deploy any VLA model to any edge hardware. One command."
 
+# A `done` status requires the named check to exist and pass in the pinned
+# repository. Historical experiment notes may remain in the description, but
+# they do not replace a reproducible receipt. Omitted status means pending.
+
 # ── CURRENT FOCUS (updated 2026-04-19 post-GR00T-Eagle) ──────────────
 # GR00T EAGLE VLM COMPLETE: eagle_vlm.onnx (5.99 GB, cos=+1.000000) +
 # expert_stack_with_vlm.onnx (4.4 GB, cos=+1.000000) + end-to-end
@@ -80,19 +84,19 @@ goals:
     weight: 9
 
   - id: pi0-onnx-parity
-    status: done
+    status: partial
     description: "End-to-end pi0 ONNX export produces cos >= 0.999 vs reference PyTorch sample_actions on shared noise. Covers PaliGemma vision + Gemma language backbone + Gemma expert + flow matching loop. src/tether/exporters/pi0_exporter.py (584 lines) exists but cos-parity has never been verified on shared-noise discipline. The cross-framework moat for pi0 — one of 4 models claimed to work."
     check: "test -f tests/test_pi0_onnx_parity.py && .venv/bin/python -m pytest tests/test_pi0_onnx_parity.py -q 2>/dev/null"
     weight: 9
 
   - id: pi05-onnx-parity
-    status: done
+    status: partial
     description: "End-to-end pi0.5 ONNX export produces cos >= 0.999 vs reference PyTorch sample_actions. Requires AdaRMSNorm handling (DecomposedAdaRMSNorm exists in decompose.py). pi0_exporter.py export_pi05 is flagged 'not yet supported' pending this work."
     check: "test -f tests/test_pi05_onnx_parity.py && .venv/bin/python -m pytest tests/test_pi05_onnx_parity.py -q 2>/dev/null"
     weight: 7
 
   - id: gr00t-onnx-parity
-    status: done
+    status: partial
     description: "End-to-end NVIDIA GR00T N1.6 ONNX export produces cos >= 0.999 vs reference PyTorch. Requires DiT + AdaLN (2-chunk scale+shift) handling. src/tether/exporters/gr00t_exporter.py (756 lines) exists; cos-parity never verified under shared-noise discipline."
     check: "test -f tests/test_gr00t_onnx_parity.py && .venv/bin/python -m pytest tests/test_gr00t_onnx_parity.py -q 2>/dev/null"
     weight: 7
@@ -205,6 +209,7 @@ goals:
     weight: 4
 
   - id: sqlite-audit-log
+    status: partial
     description: "tether serve --audit-db appends every /act call to a SHA-256 hash-chain SQLite log. RAISED weight 3 -> 8 (2026-04-23) per metrics gap audit — audit log is trust infrastructure (regulated industries unlock + customer compliance), not low-priority code. Long-term enterprise moat per wedge_priority_ranking guard wedge."
     check: "test -f src/tether/safety/audit_log.py && .venv/bin/python -c 'from tether.safety.audit_log import AuditLog' 2>/dev/null"
     weight: 8
@@ -376,7 +381,7 @@ goals:
 
   - id: distill-state-out-pi05-v0.5
     status: partial
-    description: "v0.5 RETRY SUCCESS 2026-04-22 PM. First attempt FAILED (0/4 LIBERO timeouts) due to SnapFlow self-distill having no teacher term + additive-bias state injection too weak. Retry plan shipped 4 changes: (1) loss → teacher-supervised L2(v_student, v_teacher); (2) state injection → prepend-as-token (pi0 pattern); (3) state_proj → warm-init from lerobot/pi0_libero_finetuned_v044; (4) optional state-sensitivity penalty (alpha=0.1). Stage-3 5k distill at A100-80GB batch=4 in 67min. LIBERO eval: 14/15 = 93.3%, EXACTLY matches pi0.5 PyTorch teacher baseline (28/30 = 93.3%). Per task: 0=4/5, 1=5/5, 2=5/5. State-out architecture is viable. Total cost: ~\$5. Full result + reasoning: reflex_vault 03_experiments/2026-04-22-v0.5-retry-stage3-libero-result.md. PARTIAL because the LOAD-BEARING product claim — cache-on LIBERO ≥ cache-off — has not yet been measured. That requires decomposed export of the v0.5 retry student + cache-on/off LIBERO eval. If cache-on ≥ cache-off, mark done + start serve work; else pivot to action-chunk caching."
+    description: "v0.5 RETRY SUCCESS 2026-04-22 PM. First attempt FAILED (0/4 LIBERO timeouts) due to SnapFlow self-distill having no teacher term + additive-bias state injection too weak. Retry plan shipped 4 changes: (1) loss → teacher-supervised L2(v_student, v_teacher); (2) state injection → prepend-as-token (pi0 pattern); (3) state_proj → warm-init from lerobot/pi0_libero_finetuned_v044; (4) optional state-sensitivity penalty (alpha=0.1). Stage-3 5k distill at A100-80GB batch=4 in 67min. LIBERO eval: 14/15 = 93.3%, EXACTLY matches pi0.5 PyTorch teacher baseline (28/30 = 93.3%). Per task: 0=4/5, 1=5/5, 2=5/5. State-out architecture is viable. Total cost: about $5. Full result + reasoning: reflex_vault 03_experiments/2026-04-22-v0.5-retry-stage3-libero-result.md. PARTIAL because the LOAD-BEARING product claim — cache-on LIBERO ≥ cache-off — has not yet been measured. That requires decomposed export of the v0.5 retry student + cache-on/off LIBERO eval. If cache-on ≥ cache-off, mark done + start serve work; else pivot to action-chunk caching."
     check: "grep -q 'SnapFlowPI05StateOutPytorch' src/tether/distill/snapflow_pi0_model.py 2>/dev/null"
     weight: 9
 

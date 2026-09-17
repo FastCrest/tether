@@ -47,16 +47,40 @@ logger = logging.getLogger(__name__)
 _denoise_phase: list[bool] = [False]
 
 
-_CCM_NONE_RATIONALE = (
-    "The `create_causal_mask -> None` shim is load-bearing for num_steps>1. "
-    "Transformers 5.3 rebuilds a prefix-only [1,1,Q,past_len] mask that fails "
-    "to broadcast against the actual [1,H,Q,past_len+suffix_len] attention "
-    "scores under torch.export FakeTensor tracing (the `835 -> 886` expand "
-    "error). Skipping the rebuild unblocks export. For SmolVLA (SmolLM2 "
-    "attention path) this has NO semantic effect — cos=1.0 preserved. For "
-    "pi0 (PaliGemma + Gemma) this skips prefix-pad masking -> cos=0.977 at "
-    "num_steps=10. See 01_architecture/pi0_monolithic_wrap_pattern.md."
+_CCM_DISPATCH_RATIONALE = (
+    "`create_causal_mask` is dispatched for num_steps>1 export: an "
+    "already-prepared 4D mask is returned unchanged, everything else returns "
+    "None. Transformers 5.3 rebuilds a prefix-only [1,1,Q,past_len] mask that "
+    "fails to broadcast against the actual [1,H,Q,past_len+suffix_len] "
+    "attention scores under torch.export FakeTensor tracing (the `835 -> 886` "
+    "expand error); returning None for that case unblocks export. SmolVLA "
+    "(SmolLM2 path) applies its own 3D mask inside its attention "
+    "implementation and never reaches the 4D branch — cos=1.0 either way. "
+    "pi0/pi0.5 (PaliGemma + Gemma) pass the 4D block-causal mask built by the "
+    "export denoise_step patch, and returning it preserves prefix-pad "
+    "masking: measured cos=1.000000 at num_steps=10 (2026-04-19) vs cos=0.977 "
+    "when the mask was dropped. See 01_architecture/pi0_monolithic_wrap_pattern.md."
 )
+
+
+def _causal_mask_export_shim(*args, **kwargs):
+    """Stand-in for ``transformers.masking_utils.create_causal_mask`` under
+    ``torch.export``.
+
+    Returns the caller's mask unchanged when it is already a prepared 4D mask
+    (pi0/pi0.5 with the F.pad-based ``denoise_step`` patch installed by
+    :func:`apply_export_patches`), otherwise ``None`` to skip the rebuild that
+    cannot be traced. Module level so it is importable and testable without a
+    transformers/lerobot install.
+    """
+    if "inputs_embeds" in kwargs and "input_embeds" not in kwargs:
+        kwargs["input_embeds"] = kwargs.pop("inputs_embeds")
+    attn = kwargs.get("attention_mask")
+    if attn is None and len(args) >= 3:
+        attn = args[2]
+    if attn is not None and getattr(attn, "ndim", None) == 4:
+        return attn
+    return None
 
 _TOKENIZER_REFS = {
     "pi0": "google/paligemma-3b-pt-224",
@@ -240,31 +264,34 @@ def apply_export_patches() -> None:
             except ImportError:
                 pass
 
-    # create_causal_mask -> None. Bypasses the mask rebuild that would
-    # trigger the 835->886 broadcast error under torch.export FakeTensor
-    # tracing with num_steps>1.
+    # create_causal_mask -> dispatch (see _causal_mask_export_shim).
     #
-    # Semantic impact is backbone-specific:
-    # - SmolVLA (SmolLM2 path): free, cos=1.0 preserved at machine precision.
-    # - pi0 (PaliGemma + Gemma): skips prefix-pad masking, cos drops to
-    #   ~0.977 at num_steps=10. v0.3 fix requires patching Gemma's inner
-    #   attention (not create_causal_mask) — a 2026-04-19 investigation
-    #   confirmed the 4D mask pi0 builds ([1,1,51,886]) is already
-    #   [1,1,51,835] by the time it reaches create_causal_mask under
-    #   tracing. The torch.cat of prefix+suffix masks doesn't survive
-    #   FakeTensor propagation. See 01_architecture/pi0_monolithic_wrap_pattern.md
+    # A prepared 4D mask is passed through; everything else returns None to
+    # bypass the mask rebuild that would trigger the 835->886 broadcast error
+    # under torch.export FakeTensor tracing with num_steps>1.
+    #
+    # The pass-through branch is what makes pi0/pi0.5 parity cos=1.0 rather
+    # than 0.977: the mask the denoise_step patch below builds with F.pad is
+    # the correct [1,1,suffix_len,prefix_len+suffix_len] block-causal mask,
+    # and dropping it silently removes prefix-pad masking on the PaliGemma +
+    # Gemma path. Returning None unconditionally (the state this module
+    # shipped in before 2026-09-16) is what the 0.977 row in
+    # reflex_context/measured_numbers.md measured; the 2026-04-19 row that
+    # measured cos=1.000000 was produced by scripts/modal_pi0_monolithic_export.py,
+    # whose shim already dispatched on 4D. That dispatch was lost when this
+    # module was extracted from the Modal scripts.
+    #
+    # SmolVLA is unaffected either way: its expert stack applies a 3D mask
+    # inside its own attention implementation (lerobot smolvla
+    # smolvlm_with_expert.eager_attention_forward), so it never takes the
+    # 4D branch. See 01_architecture/pi0_monolithic_wrap_pattern.md
     from transformers import masking_utils
 
-    def _ccm_shim(*args, **kwargs):
-        if "inputs_embeds" in kwargs and "input_embeds" not in kwargs:
-            kwargs["input_embeds"] = kwargs.pop("inputs_embeds")
-        return None
-
-    masking_utils.create_causal_mask = _ccm_shim
+    masking_utils.create_causal_mask = _causal_mask_export_shim
     try:
         from lerobot.policies import pi_gemma as _pg
         if hasattr(_pg, "create_causal_mask"):
-            _pg.create_causal_mask = _ccm_shim
+            _pg.create_causal_mask = _causal_mask_export_shim
     except ImportError:
         pass
 
@@ -741,8 +768,15 @@ def export_pi0_monolithic(
 ) -> dict[str, Any]:
     """Export pi0 as a single monolithic ONNX.
 
-    Parity: cos=1.0 at num_steps=1, cos=0.977 at num_steps=10 (the ccm=None
-    shim skips prefix-pad masking on pi0's PaliGemma path — v0.3 fix tracked).
+    Parity: cos=1.0 at num_steps=1 and at num_steps=10. The num_steps=10 path
+    needs the full fix stack in :func:`apply_export_patches` — the F.pad mask
+    assembly, the frozen ``DynamicLayer.update`` and the 4D pass-through in
+    :func:`_causal_mask_export_shim`. Dropping any one of them regresses
+    num_steps=10 parity (cos=0.977 when the 4D mask is discarded).
+
+    The cos=1.0 figure is a Linux/CUDA measurement (2026-04-19,
+    reflex_context/measured_numbers.md). Landing this module does not produce
+    a receipt; see docs/pi0-export-parity.md.
 
     Args, returns: same shape as ``export_smolvla_monolithic``.
     """
@@ -880,7 +914,7 @@ def _write_tether_config(
         "max_state_dim": getattr(policy_config, "max_state_dim", 32),
         "opset": 19,
         "export_kind": "monolithic_onnx",
-        "notes": _CCM_NONE_RATIONALE if num_steps > 1 else None,
+        "notes": _CCM_DISPATCH_RATIONALE if num_steps > 1 else None,
         **tokenizer_meta,
     }
     from tether.export_config import build_producer_config, write_tether_config
@@ -921,8 +955,9 @@ def export_pi05_monolithic(
 
     Structurally identical wrap to pi0 — the only deltas are: (1) no
     state arg (state is tokenized into language), (2) PI05Pytorch class.
-    The three-patch stack (F.pad mask, frozen DynamicLayer.update,
-    past_kv.seq_length for mask) is applied by apply_export_patches(),
+    The four-patch stack (F.pad mask, frozen DynamicLayer.update,
+    past_kv.seq_length for mask, and the 4D pass-through in
+    _causal_mask_export_shim) is applied by apply_export_patches(),
     so pi0.5 inherits the cos=1.0 fix for free.
 
     Parity: cos=1.0, max_abs ~2.38e-07 at num_steps=10 vs PyTorch
