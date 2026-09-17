@@ -3954,6 +3954,7 @@ def create_app(
                     routing=_routing_for_record,
                     guard=_guard_for_record,
                     rtc=_rtc_for_record,
+                    cache=result.get("cache"),
                 )
                 if rec_seq >= 0:
                     span.set_attribute("tether.record.seq", rec_seq)

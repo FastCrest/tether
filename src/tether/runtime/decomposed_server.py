@@ -682,6 +682,19 @@ class Pi05DecomposedServer:
                 "latency_ms": elapsed_ms,
                 "inference_mode": self._inference_mode,
             }
+            # Per-request cache decision (hit/miss/off + which key component
+            # invalidated). `/act` forwards this into the JSONL record's
+            # `cache` block; without it `evidence.cache.status` is permanently
+            # "n/a" and the Grafana cache panel renders empty.
+            # Optional primitive capability — this class duck-types its
+            # inference backend (same contract note as the class docstring),
+            # and a backend with no cache has no decision to report. Absent
+            # decision => no `cache` key => evidence.cache stays "n/a", which
+            # is the honest reading.
+            _last_decision = getattr(self._inference, "last_cache_decision", None)
+            cache_decision = _last_decision() if callable(_last_decision) else None
+            if cache_decision is not None:
+                result_dict["cache"] = cache_decision
             if a2c2_decision_meta is not None:
                 result_dict.update(a2c2_decision_meta)
             if bid_telemetry is not None:

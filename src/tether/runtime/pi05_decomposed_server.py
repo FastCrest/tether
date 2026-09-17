@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,29 @@ from typing import Any
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _cache_key_hex(image_phashes: tuple[bytes, ...], lang_hash: bytes) -> str:
+    """Short stable hex id for the cache key this call looked up.
+
+    Not a security digest — it exists so a run record, a replay diff and the
+    Studio Comparison view can join on "was this the same cache key" without
+    carrying the raw phash/token bytes around.
+    """
+    h = hashlib.sha256()
+    for phash in image_phashes:
+        h.update(phash)
+    h.update(lang_hash)
+    return h.hexdigest()[:16]
+
+
+def episode_lang_hash(lang_tokens: Any) -> bytes:
+    """The episode cache's half of its own key. Imported lazily so this module
+    stays importable without the episode-cache dependency chain."""
+    from tether.runtime.episode_cache import lang_hash as _lang_hash
+
+    return _lang_hash(lang_tokens)
+
 
 
 @dataclass
@@ -361,6 +385,11 @@ class Pi05DecomposedInference:
 
         self._cache: CacheEntry | None = None
         self._stats = CacheStats()
+        # Per-request cache decision, thread-local because
+        # DecomposedServer.predict_from_base64_async offloads to a thread pool
+        # (decomposed_server.py:522) — a plain instance field would attribute
+        # one request's hit to another request's record.
+        self._decision = threading.local()
 
         # Episode cache — instantiated only when cache_level='episode'.
         # Lives alongside the single-slot _cache rather than replacing it
@@ -393,6 +422,39 @@ class Pi05DecomposedInference:
         if not hasattr(self, "_last_temporal_action_decision"):
             self._last_temporal_action_decision = None
         return self._temporal_reuse_policy
+
+    # ---- Per-request cache decision ---------------------------------
+
+    def _record_cache_decision(
+        self,
+        *,
+        status: str,
+        level: str,
+        reason: str,
+        key: str | None = None,
+    ) -> None:
+        """Retain the cache decision this call actually made.
+
+        ``status`` is one of ``hit`` / ``miss`` / ``off``. ``reason`` names why
+        — for a miss, which key component invalidated the entry. This is what
+        ``/act`` writes into the JSONL record's ``cache`` block so a replay diff
+        can compare cache behaviour instead of assuming it (docs/record_replay.md).
+        """
+        # Instances rebuilt with __new__ (tests, restore paths) never ran
+        # __init__ — same guard as _ensure_temporal_reuse_policy.
+        if not hasattr(self, "_decision"):
+            self._decision = threading.local()
+        self._decision.value = {
+            "status": status,
+            "level": level,
+            "reason": reason,
+            "key": key,
+        }
+
+    def last_cache_decision(self) -> dict[str, Any] | None:
+        """The cache decision made by the most recent ``predict_action_chunk``
+        **on the calling thread**, or None if none has run on it yet."""
+        return getattr(getattr(self, "_decision", None), "value", None)
 
     # ---- Public API -------------------------------------------------
 
@@ -467,6 +529,12 @@ class Pi05DecomposedInference:
             self._last_temporal_action_decision = decision
             if decision.reuse:
                 self._stats.action_hits += 1
+                self._record_cache_decision(
+                    status="hit",
+                    level="action",
+                    reason=str(decision.reason or "reuse"),
+                    key=_cache_key_hex(image_phashes, lang_hash),
+                )
                 return entry.actions.copy()
         if self.cache_level == "action":
             self._stats.action_misses += 1
@@ -610,6 +678,7 @@ class Pi05DecomposedInference:
         self._action_cache = None
         self._last_temporal_action_decision = None
         self._call_index = 0
+        self._decision = threading.local()
         episode_cache = getattr(self, "_episode_cache", None)
         if episode_cache is not None:
             episode_cache.reset()
@@ -642,10 +711,17 @@ class Pi05DecomposedInference:
         (needs fresh state + noise per timestep)."""
         assert self._episode_cache is not None
         hit = self._episode_cache.lookup(episode_id, lang_tokens)
+        episode_key = _cache_key_hex((episode_id.encode("utf-8"),), episode_lang_hash(lang_tokens))
         if hit is not None:
+            self._record_cache_decision(
+                status="hit", level="episode", reason="key_match", key=episode_key,
+            )
             past_kv = hit.past_kv
             prefix_pad = hit.prefix_pad_masks
         else:
+            self._record_cache_decision(
+                status="miss", level="episode", reason="cold", key=episode_key,
+            )
             # Cache miss — run the VLM forward
             prefix_feed: dict[str, np.ndarray] = {
                 "img_base": img_base, "img_wrist_l": img_wrist_l, "img_wrist_r": img_wrist_r,
@@ -712,18 +788,35 @@ class Pi05DecomposedInference:
             if stale:
                 self._stats.evictions_ttl += 1
                 self._cache = None
+                miss_reason = "stale"
             elif entry.lang_hash != lang_hash:
                 self._stats.evictions_lang += 1
                 self._cache = None
+                miss_reason = "language_changed"
             elif not self._phashes_match(entry.image_phashes, image_phashes):
                 self._stats.evictions_phash += 1
                 self._cache = None
+                miss_reason = "image_changed"
             else:
                 self._stats.hits += 1
+                self._record_cache_decision(
+                    status="hit",
+                    level="prefix",
+                    reason="key_match",
+                    key=_cache_key_hex(image_phashes, lang_hash),
+                )
                 return entry.past_kv, entry.prefix_pad_masks
+        else:
+            miss_reason = "cold" if self.enable_cache else "disabled"
 
         # Cache miss (or disabled): run VLM
         self._stats.misses += 1
+        self._record_cache_decision(
+            status="miss" if self.enable_cache else "off",
+            level="prefix" if self.enable_cache else "none",
+            reason=miss_reason,
+            key=_cache_key_hex(image_phashes, lang_hash),
+        )
         prefix_feed = {
             "img_base": img_base.astype(np.float32, copy=False),
             "img_wrist_l": img_wrist_l.astype(np.float32, copy=False),
