@@ -147,9 +147,11 @@ REGISTRY: tuple[ModelEntry, ...] = (
         benchmarks=(),  # in-house numbers TBD
         requires_export=True,
         description="OpenVLA — vanilla Llama-2-7B VLM with discrete action tokens. "
-                    "Export uses optimum-cli onnx path + the bin-to-continuous postprocess "
-                    "helper at `tether.postprocess.openvla.decode_actions`. Run `tether "
-                    "export openvla-7b` after pull.",
+                    "The bin-to-continuous decoder at "
+                    "`tether.postprocess.openvla.decode_actions` is implemented and "
+                    "verified; the ONNX export is NOT. `tether export openvla-7b` raises, "
+                    "and `optimum-cli export onnx` cannot handle openvla's remote-code "
+                    "model_type. See docs/openvla-export-parity.md.",
         license="mit",
         hf_revision=None,
         # Decision S-4: OpenVLA stays a shim, not on the BaseVLA spine.

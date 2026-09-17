@@ -56,8 +56,10 @@ def build_openvla_export_parity_receipt(
 ) -> dict[str, Any]:
     """Build the public OpenVLA export-parity prerequisite receipt for Studio M4 #54.
 
-    OpenVLA is not on the flow-matching spine: it ships as a shim over
-    ``optimum-cli export onnx`` plus :mod:`tether.postprocess.openvla`. The
+    OpenVLA is not on the flow-matching spine. The intended shim was
+    ``optimum-cli export onnx`` plus :mod:`tether.postprocess.openvla`, but that
+    export path does not exist (``docs/openvla-export-parity.md``), so no receipt
+    from this builder has ever been produced from a real artifact. The
     subject of this receipt is therefore the pair (exported LM graph, tokenized
     action decoder), and it gates on exact action-token agreement in addition to
     the shared continuous-action cosine and max-absolute-error thresholds.

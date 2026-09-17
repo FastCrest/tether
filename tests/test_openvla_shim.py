@@ -74,8 +74,14 @@ def test_openvla_module_at_new_path():
 
 
 def test_export_openvla_raises_with_hint():
-    """The shim's export_openvla raises NotImplementedError pointing
-    at the optimum-cli + decode_actions path."""
+    """The shim's export_openvla raises NotImplementedError.
+
+    The hint used to send users to `optimum-cli export onnx --model
+    openvla/openvla-7b`, which cannot work: Optimum dispatches on
+    config.model_type and openvla-7b's is the remote-code "openvla", not a
+    supported ONNX architecture. Assert the hint says so rather than
+    advertising it, so the false instruction cannot come back.
+    """
     from tether.config import ExportConfig
     from tether.exporters.openvla import export_openvla
 
@@ -88,4 +94,5 @@ def test_export_openvla_raises_with_hint():
         export_openvla(cfg)
     msg = str(excinfo.value)
     assert "optimum-cli" in msg
+    assert "does not work" in msg, "the hint must not advertise the optimum-cli path"
     assert "decode_actions" in msg
