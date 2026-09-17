@@ -112,13 +112,9 @@ def _looks_like_pi05_model_ref(model: str) -> bool:
 
 def _is_jetson_linux_aarch64() -> bool:
     """Return True when running on a Jetson-class Linux/aarch64 host."""
-    import platform
+    from tether.jetson import is_jetson
 
-    return (
-        platform.system().lower() == "linux"
-        and platform.machine().lower() in {"aarch64", "arm64"}
-        and Path("/etc/nv_tegra_release").exists()
-    )
+    return is_jetson()
 
 
 def _version_callback(value: bool) -> None:
@@ -4428,42 +4424,29 @@ def doctor(
 
     # ─── Jetson JetPack guard ───────────────────────────────────────────
     # Jetson devices ship CUDA + cuDNN baked into JetPack at the OS level.
-    # Customers running ORT 1.25+ on JetPack 5.x (CUDA 11.4) will silently
+    # Customers running ORT 1.20+ on JetPack 5.x (CUDA 11.4) will silently
     # fall to CPU because ORT's bundled CUDA 12 EP can't find compatible
     # libs. Surface JetPack version + ORT compatibility loudly.
     try:
-        from pathlib import Path as _P
-        jetson_release = _P("/etc/nv_tegra_release")
-        if jetson_release.exists():
-            content = jetson_release.read_text(errors="ignore")
-            # Format example: "# R36 (release), REVISION: 4.0, GCID: ..."
-            jetpack_major = "unknown"
-            for line in content.splitlines():
-                if line.startswith("# R"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        jetpack_major = parts[1].lstrip("R")
-                    break
-            # JetPack R36+ ships CUDA 12.x; R35 ships CUDA 11.4
-            # ORT 1.20+ requires CUDA 12.x → R36+ is required for GPU EP.
-            try:
-                jp_int = int(jetpack_major)
-            except (TypeError, ValueError):
-                jp_int = 0
-            if jp_int and jp_int < 36:
+        from tether.jetson import l4t_release as _l4t
+
+        _release = _l4t()
+        if _release is not None:
+            _label = _release.jetpack or f"R{_release.major}"
+            if not _release.ships_cuda_12:
                 add(
                     "  → Jetson JetPack target",
                     False,
-                    f"❌ JetPack R{jetpack_major} ships CUDA 11.4. ORT 1.20+ "
+                    f"❌ JetPack {_label} ships CUDA 11.4. ORT 1.20+ "
                     f"requires CUDA 12.x → CUDAExecutionProvider will silently "
-                    f"fall to CPU. Upgrade to JetPack R36+ (Orin) or use "
+                    f"fall to CPU. Upgrade to JetPack 6 (L4T R36+, Orin) or use "
                     f"fastcrest-tether[serve,onnx] for CPU-only inference.",
                 )
-            elif jp_int >= 36:
+            else:
                 add(
                     "  → Jetson JetPack target",
                     True,
-                    f"JetPack R{jetpack_major} (CUDA 12.x compatible).",
+                    f"JetPack {_label} (L4T {_release}, CUDA 12.x compatible).",
                 )
     except (OSError, ImportError):
         pass
