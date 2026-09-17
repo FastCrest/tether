@@ -23,8 +23,12 @@ Its "action head" is literally `argmax(lm_logits[:, -action_dim:])`
 followed by a bin-to-continuous lookup:
 
     bin_idx = vocab_size - token_id - 1
-    action_normalized = linspace(-1, 1, 256)[bin_idx]
+    action_normalized = bin_centers[bin_idx]
     action = unnormalize(action_normalized, norm_stats[dataset])
+
+where ``vocab_size`` is the effective text vocab
+(``text_config.vocab_size - pad_to_multiple_of``, 32000 for openvla-7b)
+and ``bin_centers`` are the centers between 256 edges over [-1, 1].
 
 There is no dedicated action expert to reconstruct. The full model is
 Llama-2-7B + DINOv2 + SigLIP + 3-layer projector — ~7.5B params of
