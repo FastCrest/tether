@@ -3540,7 +3540,7 @@ def models():
         "pi0": "[green]✓ ONNX + validated[/green]",
         "pi05": "[green]✓ ONNX + AdaRMSNorm[/green]",
         "gr00t": "[green]✓ DiT + AdaLN + validated[/green]",
-        "openvla": "[yellow]use optimum-onnx; Tether only ships postprocess helpers[/yellow]",
+        "openvla": "[red]no export path; decoder only (docs/openvla-export-parity.md)[/red]",
     }
 
     for key, info in SUPPORTED_MODELS.items():
