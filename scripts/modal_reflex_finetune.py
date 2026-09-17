@@ -115,6 +115,8 @@ def finetune_modal(
     seed: int = 42,
     target: str = "desktop",
     skip_export: bool = False,
+    save_freq: int = 0,
+    log_freq: int = 0,
 ):
     """Run tether.finetune.run_finetune on Modal."""
     import logging
@@ -141,6 +143,15 @@ def finetune_modal(
         seed=seed,
         target=target,
         skip_export=skip_export,
+        # lerobot-train defaults save_freq=20000 and log_freq=200, so any run
+        # shorter than 20k steps produces exactly one checkpoint, and a short one
+        # produces a single metric point. Studio's checkpoint inventory and
+        # training dashboard need an inventory and a series, not one of each.
+        # FinetuneConfig already forwards arbitrary lerobot args, so use that
+        # rather than adding a second mechanism. 0 keeps lerobot's default.
+        extra_lerobot_args={
+            k: v for k, v in (("save_freq", save_freq), ("log_freq", log_freq)) if v > 0
+        },
     )
     result = run_finetune(cfg)
 
@@ -182,6 +193,8 @@ def main(
     seed: int = 42,
     target: str = "desktop",
     skip_export: bool = False,
+    save_freq: int = 0,
+    log_freq: int = 0,
 ):
     print(f"[tether finetune on Modal]")
     print(f"  base:    {base}")
@@ -203,6 +216,8 @@ def main(
         seed=seed,
         target=target,
         skip_export=skip_export,
+        save_freq=save_freq,
+        log_freq=log_freq,
     )
     print("\n=== RESULT ===")
     for k, v in r.items():
