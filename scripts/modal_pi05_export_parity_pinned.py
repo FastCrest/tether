@@ -194,8 +194,12 @@ def run_export_parity(
     _smoke_sess = _ort.InferenceSession(
         _smoke.SerializeToString(), sess_options=_so, providers=["CUDAExecutionProvider"]
     )
-    assert _smoke_sess.get_providers() == ["CUDAExecutionProvider"], (
-        f"CUDA EP smoke providers: {_smoke_sess.get_providers()}"
+    _smoke_providers = _smoke_sess.get_providers()
+    # Membership (not equality): ORT always lists CPUExecutionProvider, but
+    # with cpu-ep fallback disabled it is inert -- same semantics as the
+    # receipt gate (`requested_provider in active providers`).
+    assert _smoke_providers[0] == "CUDAExecutionProvider", (
+        f"CUDA EP smoke providers: {_smoke_providers}"
     )
     _z = _smoke_sess.run(
         None,
