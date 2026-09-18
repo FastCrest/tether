@@ -273,8 +273,16 @@ def run_export_cpu(
 
 
 @app.local_entrypoint()
-def main() -> None:
-    result = run_export_cpu.remote()
+def main(
+    tether_revision: str = TETHER_REVISION,
+    reuse_export: bool = True,
+    run_harness: bool = True,
+) -> None:
+    result = run_export_cpu.remote(
+        tether_revision=tether_revision,
+        reuse_export=reuse_export,
+        run_harness=run_harness,
+    )
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
