@@ -66,7 +66,7 @@ image = (
         "torch",
         "safetensors>=0.4.0",
         "huggingface_hub",
-        "transformers>=4.51",
+        "transformers==5.3.0",
         "onnx>=1.16",
         "onnxruntime>=1.20",
         "onnxscript>=0.1",

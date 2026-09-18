@@ -75,8 +75,9 @@ image = (
         "accelerate",
         "draccus",
     )
-    # transformers 5.x accepts huggingface-hub>=1.0 (which lerobot pins)
-    .pip_install("transformers>=5.0,<6.0")
+    # transformers==5.3.0 EXACTLY: the monolithic exporter refuses anything
+    # else (5.4+ has a q_length regression in masking_utils.sdpa_mask).
+    .pip_install("transformers==5.3.0")
     .env({
         "HF_HOME": HF_CACHE_PATH,
         "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers",
