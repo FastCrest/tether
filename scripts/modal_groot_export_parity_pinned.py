@@ -87,6 +87,7 @@ image = (
         "nvidia-cublas-cu12>=12.0,<13.0",
         "nvidia-cudnn-cu12>=9.0,<10.0",
         "nvidia-cufft-cu12>=11.0,<12.0",
+        "nvidia-curand-cu12>=10.0,<11.0",
         extra_options="--no-deps",
     )
     .pip_install("onnxruntime-gpu>=1.20,<1.24")
@@ -98,6 +99,7 @@ image = (
             "/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:"
             "/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:"
             "/usr/local/lib/python3.12/site-packages/nvidia/cufft/lib:"
+            "/usr/local/lib/python3.12/site-packages/nvidia/curand/lib:"
             "/usr/local/cuda/lib64"
         ),
     })
