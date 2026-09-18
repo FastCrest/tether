@@ -316,8 +316,16 @@ def run_export_parity(
 
 
 @app.local_entrypoint()
-def main() -> None:
-    result = run_export_parity.remote()
+def main(
+    tether_revision: str = TETHER_REVISION,
+    reuse_export: bool = False,
+    num_steps: int = 10,
+) -> None:
+    result = run_export_parity.remote(
+        tether_revision=tether_revision,
+        reuse_export=reuse_export,
+        num_steps=num_steps,
+    )
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
