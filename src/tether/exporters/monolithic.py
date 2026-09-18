@@ -1083,8 +1083,43 @@ def export_pi05_monolithic(
     }
 
 
+def _pad_bool_true_last_dim(masks: Any, pad_left: int, pad_right: int) -> Any:
+    """Pad a bool mask with True columns along the last dim WITHOUT F.pad.
+
+    ``F.pad(..., value=True)`` on a bool tensor lowers to ONNX Pad, for
+    which ORT's CUDA EP has no kernel: the pi0.5 monolithic export carried
+    exactly one such node (bool ``[1,50,784] -> [1,50,834]``) and the
+    no-CPU-fallback gate failed the session at creation (M4 #52). A Concat
+    with a True block lowers to ONNX Concat, which probes CUDA-clean, and
+    is bit-identical (True-pad + AND-mask = same allowed positions).
+
+    The True block is built as scalar-ones + expand (no factory call with
+    symbolic sizes) so it traces under torch.export exactly like the
+    pre-existing ``[:, None, :].expand(...)`` in this mask build.
+    """
+    import torch
+
+    parts = []
+    if pad_left:
+        parts.append(
+            torch.ones((), dtype=torch.bool, device=masks.device).expand(
+                *masks.shape[:-1], pad_left
+            )
+        )
+    parts.append(masks)
+    if pad_right:
+        parts.append(
+            torch.ones((), dtype=torch.bool, device=masks.device).expand(
+                *masks.shape[:-1], pad_right
+            )
+        )
+    if len(parts) == 1:
+        return masks
+    return torch.cat(parts, dim=-1)
+
+
 def _apply_pi05_denoise_step_patch() -> None:
-    """Patch PI05Pytorch.denoise_step with the F.pad mask + frozen-cache
+    """Patch PI05Pytorch.denoise_step with the Pad-free mask + frozen-cache
     flag. Called from export_pi05_monolithic after apply_export_patches(),
     which already installed the DynamicLayer.update freeze.
 
@@ -1099,7 +1134,6 @@ def _apply_pi05_denoise_step_patch() -> None:
     """
     try:
         import torch
-        import torch.nn.functional as _F
         from lerobot.policies.pi05 import modeling_pi05 as _mp05
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks as _make
 
@@ -1116,13 +1150,15 @@ def _apply_pi05_denoise_step_patch() -> None:
             pad_deficit = prefix_len - prefix_pad_masks.shape[1]
             prefix_pad_masks_extended = prefix_pad_masks
             if pad_deficit > 0:
-                prefix_pad_masks_extended = _F.pad(prefix_pad_masks, (0, pad_deficit), value=True)
+                prefix_pad_masks_extended = _pad_bool_true_last_dim(
+                    prefix_pad_masks, 0, pad_deficit
+                )
 
             prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(batch_size, suffix_len, prefix_len)
             suffix_att_2d_masks = _make(suffix_pad_masks, suffix_att_masks)
 
-            prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
-            suffix_allowed = _F.pad(suffix_att_2d_masks, (prefix_len, 0), value=True)
+            prefix_allowed = _pad_bool_true_last_dim(prefix_pad_2d_masks, 0, suffix_len)
+            suffix_allowed = _pad_bool_true_last_dim(suffix_att_2d_masks, prefix_len, 0)
             full_att_2d_masks = prefix_allowed & suffix_allowed
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
