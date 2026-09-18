@@ -196,11 +196,18 @@ def run_export_parity(
 
     export_dir = Path(PARITY_OUT_PATH) / "pi05" / "export"
     existing = export_dir / "model.onnx"
-    if reuse_export and existing.is_file() and existing.stat().st_size > 10**9:
+    # model.onnx may be graph-only with weights in model.onnx.data: count
+    # the whole artifact dir, which is also what the receipt hashes.
+    existing_bytes = (
+        sum(f.stat().st_size for f in export_dir.glob("*") if f.is_file())
+        if existing.is_file()
+        else 0
+    )
+    if reuse_export and existing_bytes > 10**9:
         export_result = {
             "status": "reused",
             "onnx_path": str(existing),
-            "size_mb": existing.stat().st_size / 1e6,
+            "size_mb": existing_bytes / 1e6,
             "num_steps": num_steps,
         }
         _progress(f"reusing retained export ({export_result['size_mb']:.1f}MB)")
