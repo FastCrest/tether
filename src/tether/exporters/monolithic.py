@@ -482,7 +482,6 @@ def apply_export_patches() -> None:
     # sample_actions(num_steps=10) at cos=1.0, max_abs ~2e-07 (float32
     # precision floor).
     try:
-        import torch.nn.functional as _F
         from transformers.cache_utils import DynamicLayer as _DL
         from lerobot.policies.pi0 import modeling_pi0 as _mp0
         from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks as _make_att_2d_masks
@@ -512,13 +511,15 @@ def apply_export_patches() -> None:
             pad_deficit = prefix_len - prefix_pad_masks.shape[1]
             prefix_pad_masks_extended = prefix_pad_masks
             if pad_deficit > 0:
-                prefix_pad_masks_extended = _F.pad(prefix_pad_masks, (0, pad_deficit), value=True)
+                prefix_pad_masks_extended = _pad_bool_true_last_dim(
+                    prefix_pad_masks, 0, pad_deficit
+                )
 
             prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(batch_size, suffix_len, prefix_len)
             suffix_att_2d_masks = _make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 
-            prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
-            suffix_allowed = _F.pad(suffix_att_2d_masks, (prefix_len, 0), value=True)
+            prefix_allowed = _pad_bool_true_last_dim(prefix_pad_2d_masks, 0, suffix_len)
+            suffix_allowed = _pad_bool_true_last_dim(suffix_att_2d_masks, prefix_len, 0)
             full_att_2d_masks = prefix_allowed & suffix_allowed
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
