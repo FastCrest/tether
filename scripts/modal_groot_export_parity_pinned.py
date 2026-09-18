@@ -203,6 +203,22 @@ def run_export_parity(
         _progress(f"export ok: {export_result.get('size_mb', 0):.1f}MB")
     summary["export"] = export_result
 
+    # Release the export phase's cached GPU blocks before the parity
+    # subprocess: the harness loads the reference beside the parent, and
+    # the parent's caching-allocator reservation would OOM it (observed
+    # on pi0.5: parent held 22.03/22.06 GiB, child got 16 MiB free).
+    import gc as _gc
+
+    _gc.collect()
+    try:
+        import torch as _torch
+
+        if _torch.cuda.is_available():
+            _torch.cuda.empty_cache()
+    except Exception as exc:  # noqa: BLE001 -- diagnostic only
+        print(f"[warn] cuda cache release failed: {exc!r}", flush=True)
+    _progress("parent GPU cache released")
+
     # 3. Receipt-grade parity with CUDA, CPU fallback disabled.
     receipt_path = Path(PARITY_OUT_PATH) / "groot" / "groot-export-parity-receipt.json"
     cmd = [
