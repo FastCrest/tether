@@ -249,6 +249,10 @@ def export_openvla_monolithic(
     _real_ones = torch.ones
 
     def _traceable_full(size: Any, fill_value: Any, *args: Any, **kwargs: Any) -> Any:
+        # The tracer rejects a bool Scalar overload (aten::mul(Tensor, bool));
+        # normalize True/False to 1/0 first — value-identical in every dtype.
+        if isinstance(fill_value, bool):
+            fill_value = 1 if fill_value else 0
         return _real_ones(size, *args, **kwargs) * fill_value
 
     # Static shapes (no dynamic_axes): upstream supports batch size 1 only
