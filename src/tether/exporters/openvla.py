@@ -238,22 +238,38 @@ def export_openvla_monolithic(
     output_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = output_dir / "model.onnx"
 
-    logger.info("[openvla] torch.onnx.export (opset %d) ...", opset)
-    with torch.no_grad():
-        torch.onnx.export(
-            wrapper,
-            (dummy_ids, dummy_mask, dummy_pixels),
-            str(onnx_path),
-            input_names=["input_ids", "attention_mask", "pixel_values"],
-            output_names=["logits"],
-            dynamic_axes={
-                "input_ids": {0: "batch"},
-                "attention_mask": {0: "batch"},
-                "pixel_values": {0: "batch"},
-                "logits": {0: "batch"},
-            },
-            opset_version=opset,
-        )
+    # Traceability patch (pi0 `apply_export_patches` pattern): the pinned
+    # modeling code builds its patch attention mask with
+    # ``torch.full((B, N), True, dtype=..., device=...)``, whose overload
+    # the torchscript tracer cannot alias-analyze (``aten::full`` "isn't a
+    # special case" — first-hand 2026-09-18). ``torch.ones(size, dtype,
+    # device) * fill`` is value-identical (x * 1.0 is exact per IEEE;
+    # True -> 1 in integer dtypes) and traces to Ones/Mul. Scoped to the
+    # export call only; restored after.
+    _real_ones = torch.ones
+
+    def _traceable_full(size: Any, fill_value: Any, *args: Any, **kwargs: Any) -> Any:
+        return _real_ones(size, *args, **kwargs) * fill_value
+
+    # Static shapes (no dynamic_axes): upstream supports batch size 1 only
+    # (``prepare_inputs_for_generation`` raises for batch > 1), and static
+    # tracing keeps every factory size concrete — no dynamic Shape/Concat
+    # subgraphs for ORT's CUDA EP to force-move (cf. M4 #53).
+    logger.info("[openvla] torch.onnx.export (opset %d, static shapes) ...", opset)
+    _orig_full = torch.full
+    torch.full = _traceable_full  # type: ignore[method-assign]
+    try:
+        with torch.no_grad():
+            torch.onnx.export(
+                wrapper,
+                (dummy_ids, dummy_mask, dummy_pixels),
+                str(onnx_path),
+                input_names=["input_ids", "attention_mask", "pixel_values"],
+                output_names=["logits"],
+                opset_version=opset,
+            )
+    finally:
+        torch.full = _orig_full
     logger.info("[openvla] ONNX export ok")
 
     size_mb = onnx_path.stat().st_size / 1e6
