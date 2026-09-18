@@ -2,7 +2,9 @@
 
 OpenVLA is deliberately not on Tether's flow-matching spine
 (``src/tether/exporters/openvla.py``): the ONNX graph comes from
-``optimum-cli export onnx`` and Tether owns only the bin-to-continuous decode in
+``export_openvla_monolithic`` (plain torch.onnx.export of the pinned
+reference's multimodal forward — optimum has no ``openvla`` OnnxConfig
+mapping) and Tether owns only the bin-to-continuous decode in
 ``tether.postprocess.openvla``. The subject of this receipt is therefore that
 pair. Because the action head is ``argmax`` over the top ``n_action_bins``
 vocabulary tokens, the harness gates on exact action-token agreement as well as
@@ -104,6 +106,25 @@ def _effective_vocab_size(config: object) -> int:
     return padded - pad_to_multiple_of
 
 
+def _pixel_channels(config: object) -> int:
+    """Channel count ``pixel_values`` must carry for this checkpoint.
+
+    ``openvla-7b`` sets ``use_fused_vision_backbone: true`` and its
+    ``PrismaticVisionBackbone.forward`` runs ``torch.split(pixel_values,
+    [3, 3], dim=1)`` (one 3-channel image per tower), so the tensor is
+    ``[bsz, 6, resolution, resolution]``. A 3-channel tensor raises inside
+    that split before a single logit is produced. Read the flag rather
+    than hard-coding 6, because a non-fused fine-tune takes 3.
+    """
+    fused = getattr(config, "use_fused_vision_backbone", None)
+    if not isinstance(fused, bool):
+        raise RuntimeError(
+            "Could not read use_fused_vision_backbone from the OpenVLA config; "
+            "refusing to guess the pixel_values channel count."
+        )
+    return 6 if fused else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Compare an exact OpenVLA ONNX export plus Tether's action decoder "
@@ -131,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--onnx-dir",
         default="/tmp/openvla_onnx",
-        help="Directory produced by `optimum-cli export onnx`, containing model.onnx.",
+        help="Directory holding model.onnx (tether.exporters.openvla.export_openvla_monolithic).",
     )
     parser.add_argument(
         "--provider",
@@ -193,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     vocab_size = _effective_vocab_size(config)
     n_action_bins = int(getattr(config, "n_action_bins", 256))
+    pixel_channels = _pixel_channels(config)
     reference_model = AutoModelForVision2Seq.from_pretrained(
         args.model_source,
         revision=args.model_revision,
@@ -213,7 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     shared = {
         "input_ids": rng.randint(0, vocab_size, size=(1, args.prompt_tokens), dtype=np.int64),
         "attention_mask": np.ones((1, args.prompt_tokens), dtype=np.int64),
-        "pixel_values": rng.randn(1, 3, args.image_size, args.image_size).astype(np.float32),
+        "pixel_values": rng.randn(1, pixel_channels, args.image_size, args.image_size).astype(
+            np.float32
+        ),
     }
     shared_input_sha256 = _shared_input_digest(shared)
 
@@ -305,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  exact model revision: {args.model_revision}")
     print(f"  decode vocab size:    {vocab_size}")
     print(f"  action bins:          {n_action_bins}")
+    print(f"  pixel_values shape:   {list(shared['pixel_values'].shape)}")
     print(f"  dataset:              {args.dataset_name or '(normalized)'}")
     print(f"  export artifact sha:  {export_identity['artifact_sha256']}")
     print(f"  shared input sha:     {shared_input_sha256}")
