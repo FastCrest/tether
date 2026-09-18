@@ -66,10 +66,20 @@ image = (
         "torch",
         "safetensors>=0.4.0",
         "huggingface_hub",
+        # transformers==5.3.0 EXACTLY: the monolithic exporter refuses
+        # anything else.
         "transformers==5.3.0",
         "onnx>=1.16",
         "onnxruntime>=1.20",
         "onnxscript>=0.1",
+        # monolithic dep group (export_gr00t_monolithic gates on these):
+        "lerobot==0.5.1",
+        "num2words",
+        "onnx-diagnostic>=0.9",
+        "optree",
+        "scipy",
+        "accelerate",
+        "draccus",
         "numpy",
         "Pillow",
         "typer",
