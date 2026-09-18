@@ -123,7 +123,8 @@ def run_export_parity(
     model_revision: str = PI05_BASE_REVISION,
     tether_revision: str = TETHER_REVISION,
     num_steps: int = 10,
-    watchdog_seconds: float = 3000,
+    reuse_export: bool = True,
+    watchdog_seconds: float = 3300,
 ) -> dict:
     import subprocess
     import sys
@@ -194,10 +195,20 @@ def run_export_parity(
     from tether.exporters.monolithic import export_pi05_monolithic
 
     export_dir = Path(PARITY_OUT_PATH) / "pi05" / "export"
-    _progress("export_pi05_monolithic from pinned snapshot")
-    export_result = export_pi05_monolithic(snap, export_dir, num_steps=num_steps)
+    existing = export_dir / "model.onnx"
+    if reuse_export and existing.is_file() and existing.stat().st_size > 10**9:
+        export_result = {
+            "status": "reused",
+            "onnx_path": str(existing),
+            "size_mb": existing.stat().st_size / 1e6,
+            "num_steps": num_steps,
+        }
+        _progress(f"reusing retained export ({export_result['size_mb']:.1f}MB)")
+    else:
+        _progress("export_pi05_monolithic from pinned snapshot")
+        export_result = export_pi05_monolithic(snap, export_dir, num_steps=num_steps)
+        _progress(f"export ok: {export_result.get('size_mb', 0):.1f}MB")
     summary["export"] = export_result
-    _progress(f"export ok: {export_result.get('size_mb', 0):.1f}MB")
 
     # 3. Receipt-grade parity with CUDA, CPU fallback disabled.
     receipt_path = Path(PARITY_OUT_PATH) / "pi05" / "pi05-export-parity-receipt.json"
@@ -212,7 +223,13 @@ def run_export_parity(
         "--receipt", str(receipt_path),
     ]
     _progress("running receipt-grade parity (CUDA, no CPU fallback)")
-    proc = subprocess.run(cmd, cwd=str(pin_dir), capture_output=True, text=True)
+    harness_env = dict(_os.environ)
+    harness_env["PYTHONPATH"] = str(pin_dir / "src") + _os.pathsep + harness_env.get(
+        "PYTHONPATH", ""
+    )
+    proc = subprocess.run(
+        cmd, cwd=str(pin_dir), capture_output=True, text=True, env=harness_env
+    )
     print(proc.stdout[-6000:], flush=True)
     print(proc.stderr[-3000:], flush=True)
     summary["harness_returncode"] = proc.returncode

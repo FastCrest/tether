@@ -199,6 +199,12 @@ def run_export_attempt(
         cwd=str(pin_dir),
         capture_output=True,
         text=True,
+        env={
+            **_os.environ,
+            "PYTHONPATH": str(pin_dir / "src")
+            + _os.pathsep
+            + _os.environ.get("PYTHONPATH", ""),
+        },
     )
     record["harness_returncode"] = harness_proc.returncode
     record["harness_stdout_tail"] = harness_proc.stdout[-3000:]
