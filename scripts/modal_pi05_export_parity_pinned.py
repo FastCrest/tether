@@ -85,13 +85,17 @@ image = (
 )
 
 # GPU-aware image for the CUDAExecutionProvider parity session. Base image
-# has only `onnxruntime` (CPU); same stanza as
-# scripts/modal_pi05_monolithic_export.py.
+# has only `onnxruntime` (CPU). The repo's stanza (cudnn + cublas only) is
+# NOT enough: ORT fails to create the CUDA EP without the CUDA runtime
+# ("Require cuDNN 9.* and CUDA 12.*"), silently placing every node on CPU
+# and then failing the no-fallback gate. Verified 2026-09-18.
 gpu_image = (
     image.pip_install(
         "onnxruntime-gpu>=1.20,<1.24",
-        "nvidia-cudnn-cu12>=9.0,<10.0",
+        "nvidia-cuda-runtime-cu12>=12.0,<13.0",
         "nvidia-cublas-cu12>=12.0,<13.0",
+        "nvidia-cudnn-cu12>=9.0,<10.0",
+        "nvidia-cufft-cu12>=11.0,<12.0",
         extra_options="--no-deps",
     )
     .pip_install("onnxruntime-gpu>=1.20,<1.24")
@@ -101,8 +105,6 @@ gpu_image = (
             "/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:"
             "/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:"
             "/usr/local/lib/python3.12/site-packages/nvidia/cufft/lib:"
-            "/usr/local/lib/python3.12/site-packages/nvidia/curand/lib:"
-            "/usr/local/lib/python3.12/site-packages/nvidia/nccl/lib:"
             "/usr/local/cuda/lib64"
         ),
     })
@@ -164,6 +166,42 @@ def run_export_parity(
         "provider": "CUDAExecutionProvider",
         "num_steps": num_steps,
     }
+
+    # Fail fast if the CUDA EP cannot be created (a broken CUDA/cuDNN
+    # image otherwise surfaces 10 minutes later as a no-fallback gate
+    # failure after the reference has already run).
+    import numpy as _np
+
+    import onnx as _onnx
+    import onnxruntime as _ort
+
+    _node = _onnx.helper.make_node("Add", ["x", "y"], ["z"])
+    _graph = _onnx.helper.make_graph(
+        [_node],
+        "smoke",
+        [
+            _onnx.helper.make_tensor_value_info("x", _onnx.TensorProto.FLOAT, [1]),
+            _onnx.helper.make_tensor_value_info("y", _onnx.TensorProto.FLOAT, [1]),
+        ],
+        [_onnx.helper.make_tensor_value_info("z", _onnx.TensorProto.FLOAT, [1])],
+    )
+    _smoke = _onnx.helper.make_model(_graph, opset_imports=[_onnx.helper.make_opsetid("", 19)])
+    _smoke.ir_version = 10
+    _so = _ort.SessionOptions()
+    _so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+    _smoke_sess = _ort.InferenceSession(
+        _smoke.SerializeToString(), sess_options=_so, providers=["CUDAExecutionProvider"]
+    )
+    assert _smoke_sess.get_providers() == ["CUDAExecutionProvider"], (
+        f"CUDA EP smoke providers: {_smoke_sess.get_providers()}"
+    )
+    _z = _smoke_sess.run(
+        None,
+        {"x": _np.ones((1,), dtype=_np.float32), "y": _np.ones((1,), dtype=_np.float32)},
+    )[0]
+    assert float(_z[0]) == 2.0
+    summary["cuda_ep_smoke"] = f"ok (ort {_ort.__version__})"
+    _progress(f"CUDA EP smoke ok (ort {_ort.__version__})")
 
     # 1. Pin the implementation: clone + checkout the exact Tether commit.
     pin_dir = Path("/root/tether-pin")
