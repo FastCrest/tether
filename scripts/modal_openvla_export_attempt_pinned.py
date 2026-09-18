@@ -95,6 +95,7 @@ image = (
 def run_export_attempt(
     model_revision: str = OPENVLA_REVISION,
     tether_revision: str = TETHER_REVISION,
+    optimum_task: str = "image-text-to-text",
     watchdog_seconds: float = 1500,
 ) -> dict:
     import json as _json
@@ -162,12 +163,21 @@ def run_export_attempt(
     export_dir = Path(PARITY_OUT_PATH) / "openvla" / "export-attempt"
     export_dir.mkdir(parents=True, exist_ok=True)
     _progress("attempting optimum-cli export onnx from pinned snapshot")
+    # --task is required: Optimum cannot infer a task from a local snapshot
+    # dir. With the task given, export must then dispatch on
+    # config.model_type ("openvla") -- the step that has no mapping.
     export_proc = subprocess.run(
-        ["optimum-cli", "export", "onnx", "--model", snap, str(export_dir)],
+        [
+            "optimum-cli", "export", "onnx",
+            "--model", snap,
+            "--task", optimum_task,
+            str(export_dir),
+        ],
         capture_output=True,
         text=True,
         timeout=1200,
     )
+    record["optimum_task"] = optimum_task
     record["export_returncode"] = export_proc.returncode
     record["export_stdout_tail"] = export_proc.stdout[-3000:]
     record["export_stderr_tail"] = export_proc.stderr[-3000:]
