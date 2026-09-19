@@ -15,9 +15,9 @@ threshold, gate, fallback-flag, harness, exporter, or other-family change.
 
 | Metric | Measured | Gate | Headroom |
 |---|---|---|---|
-| first_cosine | 1.00000000 (0.99999999999976) | ≥ 0.9999 | ~2e-10 |
+| first_cosine | 1.00000000 (0.99999999999976) | ≥ 0.9999 | ~1e-4 above gate |
 | first_max_abs | 4.17e-07 | < 1e-3 | ~2400x |
-| full_cosine | 1.00000000 (0.99999999999935) | ≥ 0.9999 | ~6e-10 |
+| full_cosine | 1.00000000 (0.99999999999935) | ≥ 0.9999 | ~1e-4 above gate |
 | full_max_abs | 1.98e-06 | < 1e-3 | ~500x |
 
 Thresholds in the receipt are the pinned values
