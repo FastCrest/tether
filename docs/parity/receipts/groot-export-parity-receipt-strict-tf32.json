@@ -1,0 +1,98 @@
+{
+  "environment": {
+    "NVIDIA_TF32_OVERRIDE": "0",
+    "default_env_behavior": "unchanged; the default-env receipt groot-export-parity-receipt.json is retained as-is",
+    "math_mode": "strict-fp32 (cuBLAS/cuDNN IEEE fp32, TF32 disabled)",
+    "raw_harness_receipt_sha256": "577779938ea9761c681b2459c4ba3633710b264f457810342b10ebb56848b584"
+  },
+  "execution": {
+    "active_ort_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cpu_fallback_disabled": true,
+    "platform_system": "Linux",
+    "requested_provider": "CUDAExecutionProvider",
+    "scope": "linux-cuda"
+  },
+  "export_identity": {
+    "artifact_sha256": "b8ef0eb784171600ac17cefd1a82c1242d8bbd4d73e53e5e59b4d3c44e942150",
+    "artifacts": [
+      {
+        "path": "VERIFICATION.md",
+        "sha256": "a09813dfa67a04303d119a65367a9ad6778ff1617d3a21d5d07dfe34b46805de",
+        "size_bytes": 1227
+      },
+      {
+        "path": "model.onnx",
+        "sha256": "c2bcaaf79b40e7629cef040c2d7f1963f13e3d54fc7bb2832fd0a0941afbd90b",
+        "size_bytes": 1937734
+      },
+      {
+        "path": "model.onnx.data",
+        "sha256": "9e419fb8a8449ca707a7d999c3a3bb46e0655315352472c0c0d1e60cafcf1017",
+        "size_bytes": 4407492608
+      },
+      {
+        "path": "tether_config.json",
+        "sha256": "989bb17f024010f6e3e7074c07b59b22efc8b4cc7918b2e5bc07be704e6e4ec5",
+        "size_bytes": 2128
+      }
+    ],
+    "file_count": 4,
+    "hash_contract": "studio-training-artifacts-v1",
+    "kind": "groot-monolithic-onnx",
+    "revision": "4cf9854a72ca9c97ec6a7a398f4246650b001d2a",
+    "schema": 1,
+    "size_bytes": 4409433697,
+    "source": "groot-monolithic-export",
+    "symlink_policy": "excluded"
+  },
+  "external_acceptance": "recorded",
+  "family": "groot",
+  "implementation": {
+    "tether_commit": "4cf9854a72ca9c97ec6a7a398f4246650b001d2a"
+  },
+  "kind": "groot-reference-shared-input-export-parity",
+  "limitations": [
+    "This receipt proves parity only for the exact hashed ONNX artifact, exact model revision, exact Tether commit, provider and shared input recorded here.",
+    "It does not establish task success, training support, hardware deployment readiness or physical safety."
+  ],
+  "metrics": {
+    "first_cosine": 0.9999999999997629,
+    "first_max_abs": 4.172325134277344e-07,
+    "full_cosine": 0.9999999999993524,
+    "full_max_abs": 1.9818544387817383e-06
+  },
+  "model": {
+    "revision": "d0814e7ecb19202e7c8468b46098b0b7ef3a6d61",
+    "source": "nvidia/GR00T-N1.6-3B"
+  },
+  "schema": 1,
+  "shared_input": {
+    "export_shape": [
+      1,
+      50,
+      128
+    ],
+    "input_seed": 42,
+    "noise_seed": 99,
+    "num_steps": 1,
+    "reference_shape": [
+      1,
+      50,
+      128
+    ],
+    "sha256": "28ea4ecceeccb58568d7be15e7f4d8ae828ae3e84cee096c790a2b0b837aa582"
+  },
+  "subject_context": {
+    "denoise_loop": "external-runtime",
+    "embodiment_id": 0,
+    "export_semantics": "per-step-velocity"
+  },
+  "thresholds": {
+    "maximum_absolute_error_exclusive": 0.001,
+    "minimum_cosine": 0.9999
+  },
+  "verdict": "passed"
+}
