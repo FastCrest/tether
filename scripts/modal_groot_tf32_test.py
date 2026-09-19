@@ -150,7 +150,8 @@ def run_tf32_test() -> dict:
     import copy as _copy
 
     full_cuda = _copy.deepcopy(full).to("cuda")
-    assert _torch.backends.cuda.matmul.allow_tf32 is True
+    _torch.backends.cuda.matmul.allow_tf32 = True
+    _torch.backends.cudnn.allow_tf32 = True
     ref_cuda_tf32 = run_ref(full_cuda, "cuda")
     print("[tf32] ref_cuda_tf32 done", flush=True)
 
