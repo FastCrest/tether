@@ -35,16 +35,34 @@ Llama-2-7B + DINOv2 + SigLIP + 3-layer projector — ~7.5B params of
 standard transformers architecture that HuggingFace's optimum-onnx
 already knows how to export.
 
-## The recommended workflow
+## The workflow this file used to recommend does not work
 
-Rather than duplicate optimum-onnx for no architectural insight,
-Tether points users at the existing path and helps with the only
-OpenVLA-specific bit — the bin-to-action postprocessing:
+This module previously told users to run::
 
-    pip install 'optimum[onnxruntime]'
     optimum-cli export onnx --model openvla/openvla-7b ./openvla_onnx/
 
-    # Then at inference time:
+**That command cannot export openvla-7b** (VERIFIED 2026-09-16, rank 54).
+Optimum's ONNX exporter dispatches on ``config.model_type``; openvla-7b
+declares ``"model_type": "openvla"`` and reaches its implementation through
+``auto_map`` remote code, and ``openvla`` is not among Optimum's supported
+ONNX architectures. Optimum's own guide for ``trust_remote_code`` models
+requires a ``custom_onnx_configs`` mapping passed to ``main_export()`` in
+Python, and ``optimum-cli export onnx`` exposes no flag for it.
+
+Nothing else in this repository fills the gap either:
+``exporters.monolithic.export_monolithic`` is a switch over
+smolvla/pi0/pi05/gr00t LeRobot policies and raises ``ValueError`` for
+anything else.
+
+So there is **no** OpenVLA ONNX export path today. Closing that needs either
+an ``OnnxConfig`` for the fused dual-tower vision backbone plus Llama-2-7B
+driven through ``main_export(custom_onnx_configs=...)``, or an
+``export_openvla_monolithic`` following the ``export_smolvla_monolithic``
+shape. See ``docs/openvla-export-parity.md``.
+
+The decoder below this line *is* implemented and numerically verified against
+the reference arithmetic, so once a graph exists the inference side is::
+
     from tether.postprocess.openvla import decode_actions
     logits = ort_session.run(None, {...})[0]  # [b, seq, vocab]
     actions = decode_actions(
@@ -76,15 +94,17 @@ from tether.config import ExportConfig
 _OPENVLA_HINT = """\
 OpenVLA (openvla/openvla-7b) is a vanilla Llama-2-7B VLM — its "action
 head" is argmax(lm_logits[:, -7:]) + bin lookup, not a custom expert
-stack. Tether's exporters reconstruct flow-matching action experts that
-HuggingFace can't ship; OpenVLA has no such expert, so there's nothing
-Tether-specific to build.
+stack, so Tether ships no exporter for it.
 
-Use the normal HuggingFace path instead:
-    pip install 'optimum[onnxruntime]'
-    optimum-cli export onnx --model openvla/openvla-7b ./openvla_onnx/
+There is currently NO working OpenVLA ONNX export path, in Tether or out
+of it. `optimum-cli export onnx --model openvla/openvla-7b` does not work:
+Optimum dispatches on config.model_type, openvla-7b declares
+model_type="openvla" via trust_remote_code auto_map, and that is not a
+supported Optimum ONNX architecture. Optimum supports such models only
+through a custom_onnx_configs mapping passed to main_export() in Python,
+which the CLI cannot express. See docs/openvla-export-parity.md.
 
-For the bin-to-action postprocessing, use:
+The bin-to-action postprocessing IS implemented and verified:
     from tether.postprocess.openvla import decode_actions
 """
 

@@ -168,8 +168,8 @@ def test_openvla_in_registry():
     OpenVLA exporter shipped without registry entry."""
     matching = [e for e in REGISTRY if e.family == "openvla"]
     assert matching, (
-        "OpenVLA family missing from registry. README claims support via "
-        "optimum-cli + tether.postprocess.openvla.decode_actions."
+        "OpenVLA family missing from registry. README lists it as "
+        "decoder-only support via tether.postprocess.openvla.decode_actions."
     )
     assert any("openvla-7b" in e.hf_repo.lower() for e in matching), (
         "OpenVLA family present but openvla-7b not in registry."

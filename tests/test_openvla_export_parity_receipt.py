@@ -117,3 +117,41 @@ def test_decode_parameters_are_bound_into_the_receipt():
 def test_rejects_unusable_evidence(overrides):
     with pytest.raises(OpenVLAExportParityError):
         _build(**overrides)
+
+
+def _harness_module():
+    """Load the parity driver without importing it as a package.
+
+    ``torch`` is imported at the driver's module scope, so skip rather than
+    fail collection in an environment that has not installed it.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    pytest.importorskip("torch")
+    script = Path(__file__).parents[1] / "scripts/local_openvla_monolithic_parity.py"
+    spec = importlib.util.spec_from_file_location("local_openvla_monolithic_parity", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Config:
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+
+def test_fused_vision_backbone_needs_six_pixel_channels():
+    # openvla-7b stacks a DINOv2 image and a SigLIP image on the channel axis;
+    # PrismaticVisionBackbone.forward runs torch.split(pixel_values, [3, 3], dim=1),
+    # which raises on a 3-channel tensor before producing a single logit.
+    module = _harness_module()
+    assert module._pixel_channels(_Config(use_fused_vision_backbone=True)) == 6
+    assert module._pixel_channels(_Config(use_fused_vision_backbone=False)) == 3
+
+
+def test_missing_fused_backbone_flag_is_refused_not_guessed():
+    module = _harness_module()
+    with pytest.raises(RuntimeError, match="use_fused_vision_backbone"):
+        module._pixel_channels(_Config())

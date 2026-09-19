@@ -524,7 +524,7 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 | pi0.5 LIBERO-10 (FluxVLA) | `Rylinjames/pi05-libero10-finetune-v1` | 3.62B | ONNX + validated. 97.85% LIBERO-10 avg. Apache-2.0. |
 | GR00T N1.6 | `nvidia/GR00T-N1.6-3B` | 3.29B | ONNX + validated (max_diff=8.34e-07, **live VLM conditioning**) |
 | DreamZero WAM | `limxdynamics/FluxVLAEngine` | ~14B | ONNX + export. Joint video + action diffusion. 94.65% LIBERO avg. |
-| OpenVLA | `openvla/openvla-7b` | 7.5B | `optimum-cli export onnx` + `tether.postprocess.openvla.decode_actions` |
+| OpenVLA | `openvla/openvla-7b` | 7.5B | decoder only — `tether.postprocess.openvla.decode_actions`. **No ONNX export path exists yet**; see `docs/openvla-export-parity.md` |
 
 `tether models list` browses the curated registry; `tether models info <id>` shows benchmarks; `tether models pull <id>` downloads. OpenVLA is a vanilla Llama-2-7B VLM — there's no custom action expert to reconstruct, so we defer to the standard HuggingFace export path and ship only the bin-to-continuous postprocess helper.
 
@@ -579,7 +579,7 @@ Every response surfaces telemetry from each enabled wedge (`guard_clamped`, `gua
 
 ## What Tether is and isn't
 
-**Is:** the deployment layer between a trained VLA and a real robot. Cross-framework export verified at cos=+1.0000000 on four VLA families — SmolVLA + pi0 + pi0.5 (flow-matching, num_steps=10) + GR00T N1.6 (DDPM DiT, num_steps=4, **with Eagle 2.5 VL backbone producing live image+language KV**). DreamZero (world-action model — config + PyTorch runtime today, DiT ONNX in progress) and OpenVLA (optimum-cli shim + postprocess helper) are supported but not yet numerically verified through a Tether ONNX export. Plus a composable runtime (serve + safety + turbo + split), edge-first design targeting Jetson + desktop NVIDIA GPUs.
+**Is:** the deployment layer between a trained VLA and a real robot. Cross-framework export verified at cos=+1.0000000 on four VLA families — SmolVLA + pi0 + pi0.5 (flow-matching, num_steps=10) + GR00T N1.6 (DDPM DiT, num_steps=4, **with Eagle 2.5 VL backbone producing live image+language KV**). DreamZero (world-action model — config + PyTorch runtime today, DiT ONNX in progress) and OpenVLA (decoder + parity harness only — no exporter exists, see `docs/openvla-export-parity.md`) are supported but not yet numerically verified through a Tether ONNX export. Plus a composable runtime (serve + safety + turbo + split), edge-first design targeting Jetson + desktop NVIDIA GPUs.
 
 **Isn't:** a training framework (PyTorch/JAX own that) or a cloud inference provider (vLLM/Baseten own that). Tether's moat is the deployment toolchain: cross-framework ONNX with verified numerical parity, composable safety wedges, ROS2 + Docker + HTTP serving, and a deterministic export receipt (`VERIFICATION.md`) your QA team can audit.
 
