@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
 
     export_identity = build_artifact_identity(
         onnx_dir,
-        source="openvla-optimum-onnx-export",
+        source="openvla-monolithic-export",
         revision=tether_commit,
         kind="openvla-onnx",
     )
