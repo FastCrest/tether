@@ -779,6 +779,11 @@ def export_pi0_monolithic(
     reflex_context/measured_numbers.md). Landing this module does not produce
     a receipt; see docs/pi0-export-parity.md.
 
+    Trace dummy shapes (lang length, state length) are read off the pinned
+    processor's real output on the canonical probe task — the receipt
+    harness feeds that same tokenization, so export and harness agree by
+    construction.
+
     Args, returns: same shape as ``export_smolvla_monolithic``.
     """
     _require_monolithic_deps()
@@ -809,6 +814,35 @@ def export_pi0_monolithic(
     _force_eager_attn(policy.model)
     logger.info("[pi0] Loaded in %.1fs", time.time() - t0)
 
+    # Size the trace dummies from the pinned processor's real output, not a
+    # hardcoded lang length. The receipt harness feeds the processor's
+    # tokenization of the canonical probe task (48 tokens at the pinned
+    # pi0_base revision + lerobot 0.5.1); the old (B, 16) dummy froze a
+    # graph whose lang_tokens dim the shared inputs cannot feed
+    # (first-hand: "Got 48 Expected 16" at session.run). Same model_id,
+    # same pipeline, same task as the harness, so the two agree by
+    # construction; values stay random, only shapes are read.
+    from lerobot.processor.converters import batch_to_transition, transition_to_batch
+    from lerobot.processor.pipeline import PolicyProcessorPipeline
+    _probe_pre = PolicyProcessorPipeline.from_pretrained(
+        pretrained_model_name_or_path=model_id,
+        config_filename="policy_preprocessor.json",
+        to_transition=batch_to_transition,
+        to_output=transition_to_batch,
+        overrides={"device_processor": {"device": "cpu"}},
+    )
+    _probe_img = torch.zeros(3, 224, 224)
+    _probe_batch = _probe_pre({
+        "observation.images.base_0_rgb": _probe_img.unsqueeze(0),
+        "observation.images.left_wrist_0_rgb": _probe_img.unsqueeze(0),
+        "observation.images.right_wrist_0_rgb": _probe_img.unsqueeze(0),
+        "observation.state": torch.zeros(1, 14),
+        "task": ["pick up the red bowl"],
+    })
+    _lang_len = int(_probe_batch["observation.language.tokens"].shape[1])
+    _state_len = int(policy.prepare_state(_probe_batch).shape[1])
+    logger.info("[pi0] probe shapes: lang_len=%d state_len=%d", _lang_len, _state_len)
+
     class Pi0MonolithicWrapper(nn.Module):
         def __init__(self, pi0_model, n_steps):
             super().__init__()
@@ -834,7 +868,6 @@ def export_pi0_monolithic(
     B = 1
     chunk = cfg.chunk_size
     action_dim = cfg.max_action_dim
-    state_dim = getattr(cfg, "max_state_dim", 32)
 
     dummy = dict(
         img_base=torch.randn(B, 3, 224, 224, dtype=torch.float32),
@@ -843,9 +876,9 @@ def export_pi0_monolithic(
         mask_base=torch.ones(B, dtype=torch.bool),
         mask_wrist_l=torch.ones(B, dtype=torch.bool),
         mask_wrist_r=torch.ones(B, dtype=torch.bool),
-        lang_tokens=torch.randint(0, 257152, (B, 16), dtype=torch.long),
-        lang_masks=torch.ones(B, 16, dtype=torch.bool),
-        state=torch.randn(B, state_dim, dtype=torch.float32),
+        lang_tokens=torch.randint(0, 257152, (B, _lang_len), dtype=torch.long),
+        lang_masks=torch.ones(B, _lang_len, dtype=torch.bool),
+        state=torch.randn(B, _state_len, dtype=torch.float32),
         noise=torch.randn(B, chunk, action_dim, dtype=torch.float32),
     )
 
