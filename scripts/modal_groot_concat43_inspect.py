@@ -35,7 +35,6 @@ image = modal.Image.debian_slim(python_version="3.12").pip_install(
 def run_inspect(target: str = "node_Concat_43") -> dict:
     from pathlib import Path
 
-    import numpy as _np
     import onnx
     from onnx import TensorProto, numpy_helper
 
