@@ -168,7 +168,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1000,
-          "description": "Integer count of actions to lock during RTC replan. Per ADR 2026-04-25-auto-calibration-architecture decision #8. Legacy fractional values (0 < value < 1) auto-migrate to int(value * chunk_size) at load time with a one-time deprecation warning. Schema v2 will reject fractional values."
+          "description": "Integer count of actions to lock during RTC replan. Per ADR 2026-04-25-auto-calibration-architecture decision #8. Legacy fractional values (0 < value < 1) auto-migrate to round(value * chunk_size), minimum 1, at load time with a one-time deprecation warning. Schema v2 will reject fractional values."
         }
       }
     },

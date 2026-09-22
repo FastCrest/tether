@@ -70,7 +70,9 @@ FRANKA: dict = {
     "control": {
         "frequency_hz": 20.0,
         "chunk_size": 50,
-        "rtc_execution_horizon": 0.5,
+        # Integer count of actions locked during replan (ADR 2026-04-25 #8 —
+        # the legacy fractional form auto-migrates with a deprecation warning).
+        "rtc_execution_horizon": 25,
     },
     "constraints": {
         "max_ee_velocity": 1.0,
@@ -118,7 +120,9 @@ SO100: dict = {
         # TECHNICAL_PLAN line 1987. Customers with desktop GPU can override.
         "frequency_hz": 15.0,
         "chunk_size": 30,
-        "rtc_execution_horizon": 0.4,
+        # Integer count of actions locked during replan (ADR 2026-04-25 #8 —
+        # the legacy fractional form auto-migrates with a deprecation warning).
+        "rtc_execution_horizon": 12,
     },
     "constraints": {
         "max_ee_velocity": 0.5,
@@ -165,7 +169,9 @@ UR5: dict = {
         # UR native is ~125 Hz; we run at 20 Hz to match our action chunk cadence
         "frequency_hz": 20.0,
         "chunk_size": 50,
-        "rtc_execution_horizon": 0.5,
+        # Integer count of actions locked during replan (ADR 2026-04-25 #8 —
+        # the legacy fractional form auto-migrates with a deprecation warning).
+        "rtc_execution_horizon": 25,
     },
     "constraints": {
         # UR5 rated for 1.0 m/s; conservative cap at 1.2 with collision check on
