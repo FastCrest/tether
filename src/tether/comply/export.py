@@ -75,6 +75,25 @@ def _render_status(status: str) -> str:
     return "Gap"
 
 
+def _chain_status_text(audit: dict[str, Any]) -> str:
+    """Human-readable verdict for the recorder hash-chain verification.
+
+    Reports the *result* of record.verify_record_chain, not just the head hash —
+    so the technical file states whether tamper-evidence was actually checked
+    and passed, broke (with location), or wasn't applicable.
+    """
+    te = audit.get("tamper_evidence") or {}
+    verified = te.get("chain_verified")
+    if verified is True:
+        n = te.get("chained_file_count", 0)
+        return f"PASS ({n} chained file(s) verified)"
+    if verified is False:
+        loc = te.get("first_broken_file", "")
+        idx = te.get("first_broken_index")
+        return f"FAIL — chain broken at {loc} record #{idx} (edit/insert/reorder/truncate)"
+    return "n/a (no hash-chained records present)"
+
+
 def _render_technical_file(
     *,
     deployment: DeploymentMetadata,
@@ -121,6 +140,7 @@ def _render_technical_file(
         f"- Model hashes observed: {', '.join(audit.get('model_hashes', [])) or 'none'}",
         f"- Config hashes observed: {', '.join(audit.get('config_hashes', [])) or 'none'}",
         f"- Tamper-evidence head: {(audit.get('tamper_evidence') or {}).get('head', '')}",
+        f"- Tamper-evidence chain verified: {_chain_status_text(audit)}",
         f"- Safety violations: {audit.get('safety_violation_count', 0)}",
         f"- Errors: {audit.get('error_count', 0)}",
         "",

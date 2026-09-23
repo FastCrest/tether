@@ -20,6 +20,13 @@ def build_regulatory_mapping(evidence: dict[str, Any], *, sbom_present: bool) ->
     audit = evidence.get("audit_summary") or {}
     actionguard = evidence.get("actionguard") or {}
     audit_present = bool(audit.get("present") and audit.get("record_count", 0) > 0)
+    # Art-12 record-keeping evidence is only credible if the trace's tamper-
+    # evident chain actually verifies and nothing was silently dropped. A
+    # broken chain (edit/insert/reorder/truncate) or parse-skipped lines flip
+    # the audit summary's status to "tampered" — which must NOT count as
+    # covered record-keeping. chain_verified is None (n/a) for unchained logs.
+    audit_chain_broken = (audit.get("tamper_evidence") or {}).get("chain_verified") is False
+    audit_trustworthy = audit_present and audit.get("status") != "tampered" and not audit_chain_broken
     actionguard_present = bool(actionguard.get("present"))
     parity_present = bool(parity_cert)
     parity_signed = bool(parity_cert.get("signature"))
@@ -43,9 +50,9 @@ def build_regulatory_mapping(evidence: dict[str, Any], *, sbom_present: bool) ->
             regulation="EU AI Act (Regulation (EU) 2024/1689)",
             article="Article 12 - record keeping / logging",
             requirement="Keep automatic logs sufficient for traceability of high-risk AI operation.",
-            tether_evidence=["audit_summary.json", "tamper-evidence hash-chain head", "model/config hashes"],
+            tether_evidence=["audit_summary.json", "verified tamper-evidence hash-chain", "model/config hashes"],
             customer_gap="Manufacturer/operator must define retention policy, access controls, and operational log-review procedure.",
-            status=_status(audit_present, customer_gap="yes"),
+            status=_status(audit_trustworthy, customer_gap="yes"),
         ),
         RegulatoryControl(
             control_id="eu-ai-act.art-14",
