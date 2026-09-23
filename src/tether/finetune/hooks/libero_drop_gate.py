@@ -29,9 +29,22 @@ early runs, tightens later.
   benchmark command.
 - Runs LOCALLY with whatever hardware the orchestrator has. No Modal
   here — if Modal is needed, wire it into the CLI not the hook.
-- If LIBERO infra is unavailable (no env, no GPU), logs a warning and
-  skips the gate (doesn't abort). This is intentional: we don't want
-  a missing optional dep to kill an otherwise-successful distill run.
+- If LIBERO infra is unavailable, logs a warning and skips the gate
+  (doesn't abort). This is intentional: we don't want a missing optional
+  dep to kill an otherwise-successful distill run.
+
+## Harness availability (read this)
+
+The rollout harness (`tether.libero_harness`) is NOT shipped in the OSS
+package today (LIBERO was archived 2026-04-17), so in a stock install this
+gate ALWAYS takes the "unavailable" path and cannot verify task success.
+To make that honest rather than silent:
+
+  - the outcome is recorded on `report.libero_gate_status` (`passed`,
+    `failed`, `skipped_unavailable`, …) so a SKIP is never mistaken for a
+    PASS, and
+  - `libero_gate_require=True` makes an unavailable harness ABORT the ship
+    (fail-closed) instead of silently skipping.
 
 ## Configuration via ctx.config.extra_lerobot_args
 
@@ -39,6 +52,8 @@ early runs, tightens later.
 - `libero_gate_tasks: int = 8` — how many tasks to eval
 - `libero_gate_rollouts_per_task: int = 3` — episodes per task
 - `libero_gate_skip: bool = False` — disable the gate entirely
+- `libero_gate_require: bool = False` — abort if the harness can't run
+  (fail-closed) instead of skipping unverified
 """
 from __future__ import annotations
 
@@ -69,20 +84,31 @@ def libero_drop_gate(ctx, **payload) -> None:
     """
     cfg = ctx.config
     extra = cfg.extra_lerobot_args or {}
+    report = payload.get("report")
+
+    def _set_status(status: str) -> None:
+        if report is not None:
+            report.libero_gate_status = status
 
     if extra.get("libero_gate_skip"):
         logger.info("[libero_gate] skipped via extra_lerobot_args.libero_gate_skip")
+        _set_status("skipped_disabled")
         return
 
     # Only meaningful for distill runs — guard against accidental attach
     # to a fine-tune run where there's no teacher.
     if getattr(cfg, "phase", "train") != "distill":
         logger.debug("[libero_gate] phase != 'distill'; skipping")
+        _set_status("skipped_phase")
         return
 
     threshold = float(extra.get("libero_gate_threshold_pp", DEFAULT_GATE_THRESHOLD_PP))
     num_tasks = int(extra.get("libero_gate_tasks", DEFAULT_NUM_TASKS))
     rollouts = int(extra.get("libero_gate_rollouts_per_task", DEFAULT_ROLLOUTS_PER_TASK))
+    # Fail-closed option: when set, an unavailable LIBERO harness ABORTS the
+    # ship instead of silently skipping. Lets a production distill demand real
+    # task-success verification rather than trusting an inert gate.
+    require = bool(extra.get("libero_gate_require", False))
 
     teacher_export = cfg.teacher_export
     student_ckpt = payload.get("final_checkpoint_path")
@@ -92,6 +118,7 @@ def libero_drop_gate(ctx, **payload) -> None:
             "skipping (teacher=%r, student=%r)",
             teacher_export, student_ckpt,
         )
+        _set_status("skipped_missing_inputs")
         return
 
     try:
@@ -102,13 +129,33 @@ def libero_drop_gate(ctx, **payload) -> None:
             rollouts_per_task=rollouts,
         )
     except _LiberoUnavailable as e:
-        logger.warning(
-            "[libero_gate] LIBERO infra unavailable (%s); skipping gate. "
-            "Distill will ship without task-success verification.", e,
-        )
+        # IMPORTANT: this is the path every build hits today — the LIBERO
+        # harness module is not present, so the gate cannot verify task
+        # success. We record skipped_unavailable so a SKIP is never read as a
+        # PASS, and honor libero_gate_require for callers who want fail-closed.
+        _set_status("skipped_unavailable")
+        if require:
+            logger.error(
+                "[libero_gate] LIBERO harness unavailable (%s) and "
+                "libero_gate_require=True — aborting ship.", e,
+            )
+            ctx.extra["force_abort"] = True
+            ctx.extra["abort_reason"] = (
+                f"LIBERO task-success gate REQUIRED but harness unavailable: {e}. "
+                f"Set extra_lerobot_args.libero_gate_require=False to ship "
+                f"without task-success verification."
+            )
+        else:
+            logger.warning(
+                "[libero_gate] LIBERO harness unavailable (%s); gate did NOT "
+                "verify task success. Distill ships UNVERIFIED (report "
+                "libero_gate_status=skipped_unavailable). Set "
+                "libero_gate_require=True to fail closed.", e,
+            )
         return
     except Exception as e:
         logger.exception("[libero_gate] rollouts crashed: %s", e)
+        _set_status("crashed")
         ctx.extra["force_abort"] = True
         ctx.extra["abort_reason"] = f"libero_gate crashed: {type(e).__name__}: {e}"
         return
@@ -120,11 +167,11 @@ def libero_drop_gate(ctx, **payload) -> None:
     )
 
     # Surface the number into the PostprocessReport regardless of pass/fail.
-    report = payload.get("report")
     if report is not None:
         report.libero_drop_pp = drop_pp
 
     if drop_pp > threshold:
+        _set_status("failed")
         ctx.extra["force_abort"] = True
         ctx.extra["abort_reason"] = (
             f"LIBERO drop {drop_pp:.2f}pp exceeds gate threshold {threshold:.2f}pp. "
@@ -134,6 +181,7 @@ def libero_drop_gate(ctx, **payload) -> None:
             f"export artifact is NOT shipped."
         )
     else:
+        _set_status("passed")
         logger.info(
             "[libero_gate] PASS: drop %.2fpp <= threshold %.2fpp",
             drop_pp, threshold,
