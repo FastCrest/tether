@@ -3355,6 +3355,11 @@ def ros2_serve(
     ),
     rate_hz: float = typer.Option(20.0, help="Inference rate (Hz)"),
     safety_config: str = typer.Option("", help="Path to SafetyLimits JSON"),
+    require_task_before_action: bool = typer.Option(
+        True,
+        "--require-task-before-action",
+        help="Do not infer or publish actions until a non-empty task message arrives.",
+    ),
     node_name: str = typer.Option("tether_vla", help="ROS2 node name"),
     mcp: bool = typer.Option(
         False,
@@ -3425,6 +3430,7 @@ def ros2_serve(
             rate_hz=rate_hz,
             node_name=node_name,
             state_msg_type=state_msg_type,
+            require_task_before_action=require_task_before_action,
             mcp=mcp,
             mcp_transport=mcp_transport,
             mcp_port=mcp_port,

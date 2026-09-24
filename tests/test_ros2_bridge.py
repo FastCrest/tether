@@ -42,14 +42,32 @@ class TestServeRos2Flag:
         import tether.runtime.server as server_mod
         monkeypatch.setattr(server_mod, "create_app", boom_create_app)
 
-        from typer.testing import CliRunner
         from tether.cli import app as cli_app
+        from typer.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(cli_app, ["serve", str(tmp_path), "--ros2"])
         assert result.exit_code == 0, result.output
         assert calls["bridge"] == 1
         assert calls["app_created"] == 0
+
+    def test_ros2_serve_accepts_explicit_task_gate_flag(self, monkeypatch, tmp_path):
+        calls = []
+
+        def fake_run_bridge(*args, **kwargs):
+            calls.append((args, kwargs))
+
+        import tether.runtime.ros2_bridge as bridge_mod
+        monkeypatch.setattr(bridge_mod, "run_ros2_bridge", fake_run_bridge)
+        from tether.cli import app as cli_app
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(
+            cli_app,
+            ["ros2-serve", str(tmp_path), "--require-task-before-action"],
+        )
+        assert result.exit_code == 0, result.output
+        assert calls[0][1]["require_task_before_action"] is True
 
 
 def _install_fake_rclpy(monkeypatch):
@@ -244,6 +262,26 @@ def test_tick_skips_when_no_image(monkeypatch):
     server.predict.assert_not_called()
 
 
+def test_tick_skips_until_a_nonempty_task_arrives(monkeypatch):
+    _install_fake_rclpy(monkeypatch)
+    from tether.runtime.ros2_bridge import create_ros2_bridge_node
+
+    server = MagicMock()
+    node = create_ros2_bridge_node(server)
+    node._last_image = np.zeros((4, 4, 3), dtype=np.uint8)
+    node._last_state = [0.0]
+
+    node._tick()
+    node._last_task = "   "
+    node._tick()
+    server.predict.assert_not_called()
+    node._action_pub.publish.assert_not_called()
+
+    node._last_task = "move the block"
+    node._tick()
+    server.predict.assert_called_once()
+
+
 def test_tick_handles_server_error_gracefully(monkeypatch):
     _install_fake_rclpy(monkeypatch)
     from tether.runtime.ros2_bridge import create_ros2_bridge_node
@@ -253,6 +291,7 @@ def test_tick_handles_server_error_gracefully(monkeypatch):
     node = create_ros2_bridge_node(server)
     node._last_image = np.zeros((4, 4, 3), dtype=np.uint8)
     node._last_state = [0.0]
+    node._last_task = "test guard behavior"
 
     node._tick()
     # predict called but no publish happened

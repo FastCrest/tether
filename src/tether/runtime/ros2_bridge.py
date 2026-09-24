@@ -156,6 +156,7 @@ def create_ros2_bridge_node(
     rate_hz: float = 20.0,
     node_name: str = "tether_vla",
     state_msg_type: str = "joint_state",
+    require_task_before_action: bool = True,
 ) -> Any:
     """Build a ROS2 node that wraps ``server.predict()`` as pub/sub.
 
@@ -270,6 +271,11 @@ def create_ros2_bridge_node(
             self._last_task = str(msg.data)
 
         def _tick(self) -> None:
+            # Never run a policy with an implicit empty instruction. In a
+            # physical workcell, starting the bridge must not itself produce
+            # actions; an operator has to publish an explicit task first.
+            if require_task_before_action and not self._last_task.strip():
+                return
             if self._last_image is None or self._last_state is None:
                 return
             try:
@@ -364,6 +370,7 @@ def run_ros2_bridge(
     rate_hz: float = 20.0,
     node_name: str = "tether_vla",
     state_msg_type: str = "joint_state",
+    require_task_before_action: bool = True,
     mcp: bool = False,
     mcp_transport: str = "stdio",
     mcp_port: int = 8001,
@@ -413,6 +420,7 @@ def run_ros2_bridge(
             rate_hz=rate_hz,
             node_name=node_name,
             state_msg_type=state_msg_type,
+            require_task_before_action=require_task_before_action,
         )
 
         if not mcp:
