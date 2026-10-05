@@ -78,7 +78,14 @@ def _fetch_dataset_info(dataset_repo_id: str) -> dict[str, Any] | None:
 
 def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
     """Warn if episode count is below the stability floor for the base model."""
-    policy_type = _infer_policy_type(cfg.base)
+    if cfg.dataset_root is not None:
+        from tether.finetune.local_dataset import validate_local_config, verify_local_export
+        validate_local_config(cfg)
+        info = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)["info"]
+        policy_type = "smolvla"  # Mandatory schema check validates the actual base config.
+    else:
+        info = None
+        policy_type = _infer_policy_type(cfg.base)
     if policy_type is None:
         return PreflightCheck(
             name="dataset_size",
@@ -94,7 +101,8 @@ def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
             summary=f"no floor defined for policy_type={policy_type}",
         )
 
-    info = _fetch_dataset_info(cfg.dataset)
+    if cfg.dataset_root is None:
+        info = _fetch_dataset_info(cfg.dataset)
     if info is None:
         return PreflightCheck(
             name="dataset_size",
@@ -108,7 +116,7 @@ def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
         return PreflightCheck(
             name="dataset_size",
             severity="warn",
-            summary=f"dataset info has no episode count",
+            summary="dataset info has no episode count",
         )
 
     if num_episodes < floor:

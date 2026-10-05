@@ -19,7 +19,6 @@ import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 from tether.finetune.config import FinetuneConfig, FinetuneResult
 
@@ -34,6 +33,11 @@ def _validate_config(cfg: FinetuneConfig) -> list[str]:
     before we spin up any training process.
     """
     errs: list[str] = []
+    from tether.finetune.local_dataset import LocalDatasetError, validate_local_config
+    try:
+        validate_local_config(cfg)
+    except LocalDatasetError as exc:
+        errs.append(f"[{exc.code}] {exc}")
     is_distill = getattr(cfg, "phase", "train") == "distill"
     is_from_scratch = (
         getattr(cfg, "policy", "auto") != "auto"
@@ -139,6 +143,19 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     doesn't expose a top-level precision flag; it's baked into the
     policy config. v0.5 will add per-policy precision overrides.
     """
+    from tether.finetune.local_dataset import validate_local_config, verify_local_export
+    validate_local_config(cfg)
+    local_export = None
+    if cfg.dataset_root is not None:
+        # Recheck immediately before emission. Callers must still keep exports
+        # immutable: a path-based trainer is not a filesystem snapshot boundary.
+        local_export = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)
+        from tether.finetune.preflight.schema import check_schema
+        schema = check_schema(cfg)
+        if schema.severity != "ok":
+            from tether.finetune.local_dataset import LocalDatasetError
+            raise LocalDatasetError("base-compatibility", schema.summary)
+
     explicit_policy = getattr(cfg, "policy", "auto")
     is_from_scratch = (explicit_policy != "auto" and cfg.mode == "full")
 
@@ -176,7 +193,7 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     cmd = [
         "lerobot-train",
         f"--policy.repo_id={repo_id}",
-        f"--policy.push_to_hub=false",
+        "--policy.push_to_hub=false",
         f"--dataset.repo_id={cfg.dataset}",
         f"--output_dir={lerobot_output}",
         f"--steps={cfg.num_steps}",
@@ -194,6 +211,8 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         # derives camera, state, and action features from the selected dataset.
         cmd.append("--policy.input_features=null")
         cmd.append("--policy.output_features=null")
+    if local_export is not None:
+        cmd.append(f"--dataset.root={local_export['dataset_root']}")
     if cfg.dataset_revision:
         cmd.append(f"--dataset.revision={cfg.dataset_revision}")
     if is_from_scratch and cfg.chunk_size:
@@ -205,7 +224,7 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         cmd.append(f"--policy.n_action_steps={cfg.chunk_size}")
     if cfg.mode == "lora":
         cmd.extend([
-            f"--peft.method_type=lora",
+            "--peft.method_type=lora",
             f"--peft.r={cfg.lora_rank}",
         ])
     if cfg.resume:
@@ -228,7 +247,7 @@ def _run_lerobot_training(
     logger.info("[finetune] exec: %s", " ".join(cmd))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log:
-        log.write(f"# tether finetune — lerobot-train invocation\n")
+        log.write("# tether finetune — lerobot-train invocation\n")
         log.write(f"# cmd: {' '.join(cmd)}\n\n")
         log.flush()
         proc = subprocess.Popen(
@@ -397,9 +416,6 @@ def run_finetune(cfg: FinetuneConfig, *, hooks=None) -> FinetuneResult:
         created. The distill CLI attaches `libero_drop_gate` here
         before calling run_finetune.
     """
-    cfg.output.mkdir(parents=True, exist_ok=True)
-    training_log = cfg.output / "training_log.jsonl"
-
     errs = _validate_config(cfg)
     if errs:
         return FinetuneResult(
@@ -407,6 +423,9 @@ def run_finetune(cfg: FinetuneConfig, *, hooks=None) -> FinetuneResult:
             output_dir=cfg.output,
             error="config validation failed:\n  " + "\n  ".join(errs),
         )
+
+    cfg.output.mkdir(parents=True, exist_ok=True)
+    training_log = cfg.output / "training_log.jsonl"
 
     # Pre-flight validation (v0.5) — catches top customer pains before
     # any GPU time. Dry-run + skip flags supported.

@@ -476,6 +476,62 @@ thresholds:
   max_missed_control_budget: 0
 ```
 
+## Local Studio dataset admission (SmolVLA)
+
+A local dataset must be a completed Studio corrected export created with the
+`verified-moments-v1` statistics policy and `smolvla` normalization profile.
+Keep the entire export directory intact, including its sibling receipt and
+provenance. `--dataset-root` points to `EXPORT/dataset` itself.
+
+```bash
+tether finetune \
+  --base /path/to/your/smolvla-checkpoint \
+  --dataset studio-local/my-corrected-dataset \
+  --dataset-root /path/to/EXPORT/dataset \
+  --dataset-manifest-sha256 <export-receipt-sha256> \
+  --output ./local-admission-check \
+  --dry-run
+```
+
+The digest is `export-receipt.json`'s canonical `sha256` field (SHA-256 of the
+sorted, compact JSON receipt excluding that field), not the hash of the pretty
+printed file or `artifact_manifest_sha256`. Tether verifies that digest, every
+inventoried file's size/hash, the complete local inventory, retained source and
+split bindings, LeRobot 0.5.1 writer/source pins, and feature/statistics metadata.
+Only development rows exported to the `train` split are admitted. Missing files,
+symlinks, incomplete markers, unsupported profiles, and integrity failures block
+before training. Tether admission, preflight and command verification read only
+local dataset metadata and never substitute Hub metadata. The downstream
+LeRobot trainer has its own download fallback if files later disappear; this
+lane requires the verified export to remain complete and immutable.
+
+Preflight reads the actual base config and retains SmolVLA's declared state and
+action padding limits. A local base config makes this check offline; remote
+bases may require fetching their config. ACT and other policies, local resume,
+`--skip-preflight`, dataset revisions and conflicting Python extra arguments are
+unsupported for this lane. Output must be outside the export directory.
+
+`--dataset` remains the LeRobot repository label for local input. No dataset
+publication is performed. The existing Hub dataset workflow remains available
+when the two local options are omitted. Python callers can use
+`FinetuneConfig(dataset_root=..., dataset_manifest_sha256=..., ...)` and the
+stdlib-only shared `tether.finetune.local_dataset.verify_local_export` function;
+refusals raise `LocalDatasetError` with a stable `code`.
+
+The export processor check uses dataset statistics and records no ImageNet
+substitution. Training keeps LeRobot's existing `use_imagenet_stats=True`
+default (or an explicit `dataset.use_imagenet_stats` Python extra argument).
+Preflight records both facts. SmolVLA uses `VISUAL=IDENTITY`, so these image
+statistics are not consumed by that normalization mode. Tether never silently
+changes the training setting.
+
+Admission checks retained evidence and local bytes; it does not rerun the
+Parquet loader, instantiate a policy, or demonstrate training quality. Keep the
+export immutable during preflight and training. The command builder verifies
+again before emitting `dataset.root`, but path rechecks do not eliminate
+filesystem changes between verification and use. Studio's job-owned copy is a
+separate snapshot boundary.
+
 ## Evidence knobs, not extra products
 
 Advanced teams can enable more runtime evidence with `tether serve` flags:
