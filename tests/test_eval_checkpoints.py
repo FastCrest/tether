@@ -59,6 +59,7 @@ def test_local_runner_passes_exact_cases_and_preserves_real_outcomes():
     report = run_local_libero(config, checkpoint, loader=loader, rollout=rollout)
     assert captured["task_indices"] == [2]
     assert captured["seed"] == 41
+    assert captured["verification_device"] == "cuda"
     assert [episode.success for episode in report.results[0].episodes] == [True, False]
     assert report.results[0].episodes[1].n_steps == 220
 

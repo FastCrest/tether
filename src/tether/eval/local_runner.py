@@ -139,6 +139,7 @@ def run_local_libero(
             save_video_dir=config.output_dir + "/videos" if config.video else "",
             label=checkpoint.identity,
             use_native=True,
+            verification_device="cuda",
             evidence_dir=config.output_dir + "/evidence" if config.capture_evidence else "",
             evidence_limits=CaptureLimits(
                 max_bytes=config.evidence_max_bytes,
