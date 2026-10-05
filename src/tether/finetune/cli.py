@@ -51,6 +51,14 @@ def finetune_command(
         "", "--dataset-revision",
         help="Exact Hugging Face revision for the training dataset.",
     ),
+    dataset_root: str = typer.Option(
+        "", "--dataset-root",
+        help="Actual EXPORT/dataset directory from a qualified Studio SmolVLA export.",
+    ),
+    dataset_manifest_sha256: str = typer.Option(
+        "", "--dataset-manifest-sha256",
+        help="Canonical sibling export-receipt.json SHA-256 (excludes its sha256 field).",
+    ),
     output: str = typer.Option(
         ...,
         "--output",
@@ -103,8 +111,8 @@ def finetune_command(
     skip_preflight: bool = typer.Option(
         False,
         "--skip-preflight",
-        help="Skip preflight validation. Escape hatch for local-dataset "
-             "or gated-repo flows where preflight can't resolve schema. "
+        help="Skip preflight validation for remote/gated dataset flows. "
+             "Never permitted with --dataset-root. "
              "Only set if you know what you're doing.",
     ),
     resume: bool = typer.Option(
@@ -140,6 +148,8 @@ def finetune_command(
         base_revision=base_revision or None,
         dataset=dataset,
         dataset_revision=dataset_revision or None,
+        dataset_root=Path(dataset_root) if dataset_root else None,
+        dataset_manifest_sha256=dataset_manifest_sha256 or None,
         output=Path(output),
         num_steps=num_steps,
         batch_size=batch_size,
@@ -157,18 +167,18 @@ def finetune_command(
         resume=resume,
     )
 
-    console.print(f"[bold]tether finetune[/bold] — v0.3 MVP (SmolVLA LoRA)")
+    console.print("[bold]tether finetune[/bold] — v0.3 MVP (SmolVLA LoRA)")
     console.print(f"  base:    {cfg.base}")
     console.print(f"  dataset: {cfg.dataset}")
     console.print(f"  output:  {cfg.output}")
     console.print(f"  steps:   {cfg.num_steps}  batch={cfg.batch_size}  "
                   f"lr={cfg.learning_rate}  lora_r={cfg.lora_rank}")
-    console.print(f"  backend: lerobot  (openpi-JAX + hf_transformers in v0.5+)")
+    console.print("  backend: lerobot  (openpi-JAX + hf_transformers in v0.5+)")
     console.print()
 
     result = run_finetune(cfg)
 
-    console.print(f"\n[bold]Result[/bold]")
+    console.print("\n[bold]Result[/bold]")
     console.print(f"  status: {result.status}")
     if result.error:
         console.print(f"  [red]error:[/red] {result.error}")

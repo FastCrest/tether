@@ -14,6 +14,7 @@ is painful but at least obvious.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from tether.finetune.config import FinetuneConfig
@@ -52,14 +53,20 @@ def _fetch_dataset_features(dataset_repo_id: str) -> dict[str, Any] | None:
     return info.get("features") or info.get("feature") or {}
 
 
-def _fetch_base_config(base_id: str) -> dict[str, Any] | None:
+def _fetch_base_config(base_id: str, revision: str | None = None) -> dict[str, Any] | None:
     """Return the base checkpoint's config.json as a dict."""
+    local = Path(base_id).expanduser()
+    if local.is_dir():
+        import json
+        with (local / "config.json").open() as stream:
+            return json.load(stream)
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
         return None
     try:
-        cfg_path = hf_hub_download(repo_id=base_id, filename="config.json")
+        kwargs = {"revision": revision} if revision else {}
+        cfg_path = hf_hub_download(repo_id=base_id, filename="config.json", **kwargs)
     except Exception as e:
         logger.debug("[preflight] couldn't fetch config.json from %s: %s",
                      base_id, e)
@@ -115,8 +122,41 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
             failure — customers running against local datasets or
             gated models still need a path through.
     """
-    features = _fetch_dataset_features(cfg.dataset)
-    base_config = _fetch_base_config(cfg.base)
+    if cfg.dataset_root is not None:
+        from tether.finetune.local_dataset import validate_local_config, verify_local_export
+        validate_local_config(cfg)
+        features = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)["info"]["features"]
+    else:
+        features = _fetch_dataset_features(cfg.dataset)
+    base_config = (_fetch_base_config(cfg.base, cfg.base_revision) if cfg.base_revision
+                   else _fetch_base_config(cfg.base))
+    local_details = {}
+    if cfg.dataset_root is not None:
+        expected_modes = {"VISUAL": "IDENTITY", "STATE": "MEAN_STD", "ACTION": "MEAN_STD"}
+        if not isinstance(base_config, dict) or base_config.get("type") != "smolvla":
+            return PreflightCheck("schema", "fail", "Local admission requires a resolvable SmolVLA base config.")
+        # An omitted field uses only the exact LeRobot 0.5.1 class defaults
+        # qualified in the verified receipt. Explicit null/contradictory modes
+        # are not treated as omission.
+        resolved_modes = base_config.get("normalization_mapping", expected_modes)
+        if resolved_modes != expected_modes:
+            return PreflightCheck("schema", "fail", "Base normalization must match the qualified SmolVLA profile.")
+        local_details = {
+            "resolved_normalization_mapping": resolved_modes,
+            "normalization_mapping_source": (
+                "base config.json" if "normalization_mapping" in base_config
+                else "pinned LeRobot 0.5.1 SmolVLAConfig defaults"
+            ),
+        }
+        max_state = base_config.get("max_state_dim")
+        max_action = base_config.get("max_action_dim")
+        if (type(max_state) is not int or max_state <= 0 or type(max_action) is not int
+                or max_action <= 0):
+            return PreflightCheck("schema", "fail", "Base config must declare its real SmolVLA padding dimensions.")
+        if features["observation.state"]["shape"][0] > max_state:
+            return PreflightCheck("schema", "fail", "Dataset state exceeds the base max_state_dim.")
+        if features["action"]["shape"][0] > max_action:
+            return PreflightCheck("schema", "fail", "Dataset action exceeds the base max_action_dim.")
 
     if features is None:
         return PreflightCheck(
@@ -164,6 +204,7 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
                     "base_action_dim": base_dim,
                     "max_action_dim": max_action_dim,
                     "uses_action_padding": True,
+                    **local_details,
                 },
             )
         return PreflightCheck(
@@ -190,7 +231,7 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
         name="schema",
         severity="ok",
         summary=f"action dim matches: {ds_dim}-D on both sides",
-        detail={"action_dim": ds_dim},
+        detail={"action_dim": ds_dim, **local_details},
     )
 
 

@@ -24,7 +24,7 @@ class FinetuneConfig:
     """HF model id of the base checkpoint (e.g. lerobot/smolvla_base)."""
 
     dataset: str
-    """HF dataset id to fine-tune on (e.g. lerobot/libero)."""
+    """HF dataset id, or an explicit LeRobot repository label for dataset_root."""
 
     output: Path
     """Output directory. Will contain model.onnx + VERIFICATION.md after
@@ -92,8 +92,8 @@ class FinetuneConfig:
     Useful for validating config before committing to a multi-hour run."""
 
     skip_preflight: bool = False
-    """If True, skip preflight validation. Escape hatch for local-dataset
-    or gated-repo flows where preflight can't resolve the schema.
+    """If True, skip preflight validation. Escape hatch for remote gated-repo flows where preflight cannot resolve
+    the schema. Never permitted with dataset_root.
     Only set if you know what you're doing."""
 
     phase: str = "train"
@@ -178,8 +178,16 @@ class FinetuneConfig:
     contract yet and fail before starting work.
     """
 
+    dataset_root: Path | None = None
+    """Actual EXPORT/dataset directory of a qualified local Studio export."""
+
+    dataset_manifest_sha256: str | None = None
+    """Canonical sibling export-receipt.json digest, excluding its sha256 field."""
+
     def __post_init__(self) -> None:
         self.output = Path(self.output)
+        if self.dataset_root is not None:
+            self.dataset_root = Path(self.dataset_root)
         if not (0.0 <= self.mix_ratio <= 1.0):
             raise ValueError(
                 f"mix_ratio must be in [0, 1], got {self.mix_ratio}"
