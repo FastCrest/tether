@@ -1,6 +1,8 @@
 """Dataset-size floor check — catches pain #9 ("how much data is enough?").
 
-Uses empirical minimums from the SOTA research (finding 9):
+Uses episode-count guidance from research (finding 9):
+  - ACT: 50 demonstrations per task in the ACT paper; CITED, not measured
+    for Tether training
   - SmolVLA: 50-200 episodes is usually fine for LoRA (small LoRA bubble,
     vision+language already good, action head adapts quickly)
   - pi0: 200-500 episodes; PaliGemma backbone is bigger, needs more data
@@ -26,9 +28,14 @@ from tether.finetune.preflight.result import PreflightCheck
 logger = logging.getLogger(__name__)
 
 
-# Per-base-model episode-count minimums for stable LoRA fine-tune.
+# Per-policy episode-count guidance for training.
 # Sources: SOTA research finding 9 + openpi issues #635/672/711.
 EPISODE_FLOORS: dict[str, int] = {
+    # CITED: Zhao et al., "Learning Fine-Grained Bimanual Manipulation with
+    # Low-Cost Hardware" (ACT), 2023, section V-B: 50 demos per task,
+    # except Thread Velcro (100). https://arxiv.org/abs/2304.13705
+    # Advisory floor until measured for Tether; not a guaranteed minimum.
+    "act": 50,
     "smolvla": 50,
     "pi0": 200,
     "pi05": 1000,
@@ -77,7 +84,7 @@ def _fetch_dataset_info(dataset_repo_id: str) -> dict[str, Any] | None:
 
 
 def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
-    """Warn if episode count is below the stability floor for the base model."""
+    """Warn if episode count is below the guidance for the selected policy."""
     if cfg.dataset_root is not None:
         from tether.finetune.local_dataset import validate_local_config, verify_local_export
         validate_local_config(cfg)
@@ -86,6 +93,8 @@ def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
     else:
         info = None
         policy_type = _infer_policy_type(cfg.base)
+        if policy_type is None and cfg.policy != "auto":
+            policy_type = cfg.policy
     if policy_type is None:
         return PreflightCheck(
             name="dataset_size",
