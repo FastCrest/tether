@@ -55,6 +55,9 @@ def _fetch_dataset_features(dataset_repo_id: str) -> dict[str, Any] | None:
 
 def _fetch_base_config(base_id: str, revision: str | None = None) -> dict[str, Any] | None:
     """Return the base checkpoint's config.json as a dict."""
+    # From-scratch policies have no checkpoint. Path("") would read the cwd.
+    if not base_id:
+        return None
     local = Path(base_id).expanduser()
     if local.is_dir():
         import json

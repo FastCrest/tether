@@ -66,9 +66,9 @@ def run_preflight(cfg: FinetuneConfig) -> PreflightReport:
             result = check_fn(cfg)
             report.add(result)
         except Exception as exc:
-            # Remote checks retain warning behavior. Local admission is
-            # mandatory, including unexpected schema/count check failures.
-            severity = "fail" if cfg.dataset_root is not None else "warn"
+            # Remote pretrained checks retain warning behavior. Local admission
+            # and from-scratch checks block on unexpected failures.
+            severity = "fail" if cfg.dataset_root is not None or not cfg.base else "warn"
             logger.warning(
                 "[preflight] %s crashed: %s — treating as %s",
                 check_fn.__name__, exc, severity,

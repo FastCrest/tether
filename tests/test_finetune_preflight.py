@@ -1,6 +1,7 @@
 """Tests for tether.finetune.preflight — the v0.5 validator."""
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,7 @@ from tether.finetune.preflight.dataset_size import (
 from tether.finetune.preflight.schema import (
     _extract_base_action_dim,
     _extract_dataset_action_dim,
+    _fetch_base_config,
     check_schema,
 )
 
@@ -326,3 +328,136 @@ class TestIntegrationWithRunFinetune:
         mock_train.assert_not_called()
         assert result.status == "ok"
         assert result.error is None
+
+
+class TestFromScratchPreflight:
+    @pytest.mark.parametrize("stray_config", [None, '{"max_action_dim": 99}', "invalid JSON"])
+    def test_empty_base_never_reads_cwd_config(self, tmp_path, monkeypatch, stray_config):
+        monkeypatch.chdir(tmp_path)
+        if stray_config is not None:
+            (tmp_path / "config.json").write_text(stray_config)
+        with patch("huggingface_hub.hf_hub_download") as download:
+            assert _fetch_base_config("") is None
+            assert _fetch_base_config("", revision="pinned") is None
+        download.assert_not_called()
+
+    def test_explicit_local_base_still_loads_config(self, tmp_path):
+        config = {"output_features": {"action": {"shape": [7]}}}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        with patch("huggingface_hub.hf_hub_download") as download:
+            assert _fetch_base_config(str(tmp_path)) == config
+        download.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "policy,floor",
+        [("act", 50), ("smolvla", 50), ("pi0", 200), ("pi05", 1000), ("gr00t_n1_5", 500)],
+    )
+    @pytest.mark.parametrize("below_floor", [True, False])
+    def test_episode_floor_uses_explicit_policy(self, tmp_path, policy, floor, below_floor):
+        cfg = FinetuneConfig(
+            base="",
+            policy=policy,
+            mode="full",
+            dataset="test/data",
+            output=tmp_path,
+        )
+        episodes = floor - 1 if below_floor else floor
+        with patch(
+            "tether.finetune.preflight.dataset_size._fetch_dataset_info",
+            return_value={"total_episodes": episodes},
+        ) as fetch:
+            result = check_dataset_size(cfg)
+        fetch.assert_called_once_with(cfg.dataset)
+        assert result.severity == ("warn" if below_floor else "ok")
+        assert result.detail["recommended_floor" if below_floor else "floor"] == floor
+        assert policy in result.summary
+
+    def test_resolvable_base_type_takes_precedence(self, tmp_path):
+        cfg = FinetuneConfig(
+            base="lerobot/pi05_base",
+            policy="act",
+            dataset="test/data",
+            output=tmp_path,
+        )
+        with patch(
+            "tether.finetune.preflight.dataset_size._fetch_dataset_info",
+            return_value={"total_episodes": 50},
+        ):
+            result = check_dataset_size(cfg)
+        assert result.detail["policy_type"] == "pi05"
+        assert result.detail["recommended_floor"] == 1000
+
+    @pytest.mark.parametrize("policy", ["act", "diffusion"])
+    @pytest.mark.parametrize("check_name", ["schema", "dataset_size"])
+    def test_crashing_check_without_base_blocks_training(self, tmp_path, policy, check_name):
+        from tether.finetune.run import run_finetune
+
+        cfg = FinetuneConfig(
+            base="",
+            policy=policy,
+            mode="full",
+            dataset="test/data",
+            output=tmp_path,
+        )
+        other_check = "dataset_size" if check_name == "schema" else "schema"
+        with (
+            patch(
+                f"tether.finetune.preflight.runner.check_{check_name}",
+                autospec=True,
+                side_effect=RuntimeError("unexpected"),
+            ),
+            patch(
+                f"tether.finetune.preflight.runner.check_{other_check}",
+                return_value=PreflightCheck(other_check, "ok", "fine"),
+            ) as other,
+            patch("tether.finetune.run._run_lerobot_training") as train,
+        ):
+            result = run_finetune(cfg)
+        assert result.status == "aborted"
+        assert f"[{check_name}] check crashed: RuntimeError: unexpected" in result.error
+        assert f"✗ [{check_name}]" in (tmp_path / "preflight_report.txt").read_text()
+        other.assert_called_once_with(cfg)
+        train.assert_not_called()
+
+    @pytest.mark.parametrize("policy", ["act", "diffusion"])
+    @pytest.mark.parametrize("stray_config", [False, True])
+    def test_real_dry_run_without_base(self, tmp_path, monkeypatch, policy, stray_config):
+        from tether.finetune.run import run_finetune
+
+        monkeypatch.chdir(tmp_path)
+        if stray_config:
+            (tmp_path / "config.json").write_text(
+                '{"output_features": {"action": {"shape": [99]}}}',
+            )
+        cfg = FinetuneConfig(
+            base="",
+            policy=policy,
+            mode="full",
+            dataset="test/data",
+            output=tmp_path / "output",
+            dry_run=True,
+        )
+        with (
+            patch(
+                "tether.finetune.preflight.schema._fetch_dataset_features",
+                return_value={"action": {"shape": [7]}},
+            ),
+            patch(
+                "tether.finetune.preflight.dataset_size._fetch_dataset_info",
+                return_value={"total_episodes": 50},
+            ),
+            patch("huggingface_hub.hf_hub_download") as download,
+            patch(
+                "tether.finetune.run._run_lerobot_training",
+            ) as train,
+        ):
+            result = run_finetune(cfg)
+        assert result.status == "ok"
+        assert result.error is None
+        report = (cfg.output / "preflight_report.txt").read_text()
+        assert "check crashed" not in report
+        assert "action-dim mismatch" not in report
+        if policy == "act":
+            assert "50 episodes ≥ 50 floor for act" in report
+        download.assert_not_called()
+        train.assert_not_called()
