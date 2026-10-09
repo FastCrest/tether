@@ -1,4 +1,5 @@
 .venv/
+.sol-scratch/
 __pycache__/
 *.egg-info/
 *.pyc

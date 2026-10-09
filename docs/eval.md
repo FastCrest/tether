@@ -2,7 +2,52 @@
 
 `tether eval ./my-export/ --suite libero --num-episodes 3` — one command, ~30 minutes, LIBERO success rate + per-task numbers + optional MP4 clips + cost transparency. Wraps the existing Modal image + `osmesa`/MuJoCo recipe + the `vla-eval` adapter.
 
-Per ADR `2026-04-25-eval-as-a-service-architecture`. Phase 1 ships LIBERO only on Modal (with Linux x86_64 local fallback); Phase 2 adds SimplerEnv + `customer` suite + HF Hub video upload.
+Per ADR `2026-04-25-eval-as-a-service-architecture`. LIBERO runs on Modal or locally on Linux x86_64. ALOHA runs locally through LeRobot.
+
+## Local ACT ALOHA evaluation
+
+Use an existing Python environment with the pinned LeRobot 0.5.1 and gym-aloha
+runtime. `--eval-python` selects that environment without installing or modifying
+it. ALOHA defaults to local execution and uses batch size 1 with AMP disabled.
+
+```bash
+tether eval lerobot/act_aloha_sim_transfer_cube_human \
+    --suite aloha \
+    --checkpoint-revision ba73b2766f1371cdc133ca4efb97eb090d744625 \
+    --env-task AlohaTransferCube-v0 \
+    --device cpu --seed 1000 --num-episodes 2 \
+    --eval-python /path/to/eval-venv/bin/python \
+    --output ./aloha-eval
+```
+
+The wrapper downloads the exact Hub revision, checks for
+`policy_preprocessor.json`, and invokes LeRobot's
+`lerobot.processor.migrate_policy_normalization` when it is absent. Migration
+writes a separate `<output>/migrated-policy` directory and never pushes to the
+Hub. Local full checkpoints are also accepted and identified by the existing
+checkpoint file manifest. Use a new or empty output directory for each run.
+
+The evaluator runs through its `lerobot-eval` Python entry point. Its original
+`eval_info.json` and videos remain in the output directory. `report.json` contains
+per-episode boolean successes, seeds, totals, a success fraction and Wilson 95%
+confidence bounds as fractions. `case-identity.json` records the original policy
+repository and revision or local file identity, environment task, seed, episode
+count, observed LeRobot version, device, batch size, AMP and migration status.
+For LeRobot 0.5.1, seeds are reconstructed as start seed plus episode index because
+its per-task results omit them. A missing or incomplete result produces an error
+without a success receipt. An unavailable requested device also fails.
+
+Both `AlohaTransferCube-v0` and `AlohaInsertion-v0` are accepted. The default
+subprocess timeout is 3600 seconds; use `--eval-timeout` for longer runs. LIBERO
+task, adapter, processor, parallel, cost-preview and video flags are unsupported
+on this path. LeRobot itself renders its evaluation videos.
+
+The retained Studio reproduction measured 425/500, 85.0%, with Wilson 95% CI
+81.6%-87.9%, compared with the publisher's 415/500, 83.0%, CI 79.5%-86.0%.
+The two-episode integration test checks the wrapper's flow; it does not reproduce
+the 500-episode success estimate. It runs only when `TETHER_ALOHA_EVAL_VENV` names
+an existing evaluation venv, or the S-05 development venv exists. On macOS,
+evaluation needs a session with access to the graphics services used by GLFW.
 
 ## Quick start
 
@@ -39,10 +84,10 @@ Every research group evaluating a new VLA asks for the same thing: "give me task
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--suite` | `libero` | Phase 1 ships LIBERO only. Phase 2: `simpler`, `customer`. |
+| `--suite` | `libero` | `libero` or local `aloha`. |
 | `--num-episodes` | `3` | Per-task. 3 = smoke; 50-100 = published-paper grade. |
 | `--tasks` | `(all)` | Comma-separated. Empty = the 4 LIBERO families (spatial / object / goal / 10). |
-| `--runtime` | `modal` | `modal` = bundled image (turnkey). `local` = Linux x86_64 + `[eval-local]` extra. |
+| `--runtime` | suite-dependent | LIBERO defaults to `modal`; ALOHA defaults to `local`. Local LIBERO needs Linux x86_64 + `[eval-local]`. |
 | `--seed` | `0` | Matches `tether bench`. Pass `--seed 7` to reproduce prior `modal_libero_*.py` published runs. |
 | `--max-parallel` | `1` | Honored when the runtime supports it (Modal yes, local no). |
 | `--cost-preview` | `false` | Dry-run: estimate `$` without invoking. Useful before 100-ep × 90-task runs. |
