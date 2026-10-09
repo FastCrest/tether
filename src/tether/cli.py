@@ -90,6 +90,7 @@ def _skip_blocking_onboarding(ctx: typer.Context) -> bool:
     command = ctx.invoked_subcommand or (sys.argv[1] if len(sys.argv) > 1 else "")
     return command in {
         "serve",
+        "eval",
         "bench",
         "go",
         "ros2-serve",
@@ -1454,7 +1455,19 @@ def eval_cmd(
     ),
     suite: str = typer.Option(
         "libero", "--suite",
-        help="Eval suite. Phase 1 ships LIBERO only; SimplerEnv is Phase 2.",
+        help="libero | aloha. ALOHA wraps local lerobot-eval.",
+    ),
+    env_task: str = typer.Option(
+        "AlohaTransferCube-v0", "--env-task", help="ALOHA gym task.",
+    ),
+    device: str = typer.Option(
+        "cpu", "--device", help="ALOHA policy device: cpu | cuda | mps. AMP is disabled.",
+    ),
+    eval_python: str = typer.Option(
+        "", "--eval-python", help="ALOHA Python executable with LeRobot and gym-aloha. Defaults to this Python.",
+    ),
+    eval_timeout: float = typer.Option(
+        3600.0, "--eval-timeout", help="ALOHA subprocess timeout in seconds.",
     ),
     num_episodes: int = typer.Option(
         3, "--num-episodes",
@@ -1467,8 +1480,8 @@ def eval_cmd(
              "(LIBERO ships 4 task families: spatial / object / goal / 10).",
     ),
     runtime: str = typer.Option(
-        "modal", "--runtime",
-        help="modal | local. Modal uses the bundled debian_slim+osmesa "
+        "", "--runtime",
+        help="modal | local. Defaults to modal for LIBERO, local for ALOHA. Modal uses the bundled debian_slim+osmesa "
              "image (turnkey). local needs Linux x86_64 + the [eval-local] "
              "extra; NEVER silently falls back to Modal.",
     ),
@@ -1504,19 +1517,40 @@ def eval_cmd(
     ),
     verbose: bool = typer.Option(False, help="Verbose logging"),
 ):
-    """Run task-success eval (LIBERO success rate + per-task numbers + optional video).
+    """Run task-success eval with LIBERO or local LeRobot ALOHA.
 
-    Wraps the existing Modal image + osmesa/MuJoCo recipe + vla-eval adapter.
-    Pre-flight smoke test catches 4-of-5 documented LIBERO failure modes
-    before the expensive run starts.
+    LIBERO uses the existing Modal image or Linux local runtime and a
+    preflight smoke test. ALOHA runs locally, migrates legacy checkpoints,
+    and writes per-episode results, a Wilson interval and a case receipt.
 
     Examples:
         tether eval ./my-export --suite libero --num-episodes 3
         tether eval ./my-export --suite libero --num-episodes 50 --video
         tether eval ./my-export --runtime local --tasks libero_spatial
         tether eval ./my-export --cost-preview --num-episodes 100
+        tether eval ./act-checkpoint --suite aloha --device cpu --seed 1000 --num-episodes 2
     """
     _setup_logging(verbose)
+
+    runtime = runtime or ("local" if suite == "aloha" else "modal")
+    if suite == "aloha":
+        if runtime != "local":
+            err_console.print("[red]ALOHA evaluation requires --runtime local.[/red]")
+            raise typer.Exit(2)
+        if (checkpoint_kind not in {"auto", "full"} or adapter_base or adapter_base_revision
+                or processor_checkpoint or processor_revision or task_indices or tasks
+                or max_parallel != 1 or cost_preview or video):
+            err_console.print("[red]ALOHA accepts full checkpoints, --env-task and one local task. "
+                              "LIBERO adapter, processor, task, parallel, cost-preview and video options are unsupported.[/red]")
+            raise typer.Exit(2)
+        from tether.eval.cli import aloha_eval_command
+
+        aloha_eval_command(
+            policy=export_dir, revision=checkpoint_revision, task=env_task, device=device,
+            seed=seed, num_episodes=num_episodes, output=output,
+            python=eval_python, timeout_s=eval_timeout,
+        )
+        return
 
     from tether.eval.checkpoints import CheckpointError, resolve_checkpoint
     from tether.eval.cost_model import (
@@ -1550,7 +1584,7 @@ def eval_cmd(
 
     if suite != "libero":
         err_console.print(
-            f"[red]Unknown suite: {suite!r}. Phase 1 ships LIBERO only.[/red]\n"
+            f"[red]Unknown suite: {suite!r}. Choose libero or aloha.[/red]\n"
             f"  Phase 2 will add: simpler, customer."
         )
         raise typer.Exit(2)
