@@ -482,7 +482,6 @@ def apply_export_patches() -> None:
     # sample_actions(num_steps=10) at cos=1.0, max_abs ~2e-07 (float32
     # precision floor).
     try:
-        import torch.nn.functional as _F
         from transformers.cache_utils import DynamicLayer as _DL
         from lerobot.policies.pi0 import modeling_pi0 as _mp0
         from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks as _make_att_2d_masks
@@ -512,13 +511,15 @@ def apply_export_patches() -> None:
             pad_deficit = prefix_len - prefix_pad_masks.shape[1]
             prefix_pad_masks_extended = prefix_pad_masks
             if pad_deficit > 0:
-                prefix_pad_masks_extended = _F.pad(prefix_pad_masks, (0, pad_deficit), value=True)
+                prefix_pad_masks_extended = _pad_bool_true_last_dim(
+                    prefix_pad_masks, 0, pad_deficit
+                )
 
             prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(batch_size, suffix_len, prefix_len)
             suffix_att_2d_masks = _make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 
-            prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
-            suffix_allowed = _F.pad(suffix_att_2d_masks, (prefix_len, 0), value=True)
+            prefix_allowed = _pad_bool_true_last_dim(prefix_pad_2d_masks, 0, suffix_len)
+            suffix_allowed = _pad_bool_true_last_dim(suffix_att_2d_masks, prefix_len, 0)
             full_att_2d_masks = prefix_allowed & suffix_allowed
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
@@ -778,6 +779,11 @@ def export_pi0_monolithic(
     reflex_context/measured_numbers.md). Landing this module does not produce
     a receipt; see docs/pi0-export-parity.md.
 
+    Trace dummy shapes (lang length, state length) are read off the pinned
+    processor's real output on the canonical probe task — the receipt
+    harness feeds that same tokenization, so export and harness agree by
+    construction.
+
     Args, returns: same shape as ``export_smolvla_monolithic``.
     """
     _require_monolithic_deps()
@@ -808,6 +814,35 @@ def export_pi0_monolithic(
     _force_eager_attn(policy.model)
     logger.info("[pi0] Loaded in %.1fs", time.time() - t0)
 
+    # Size the trace dummies from the pinned processor's real output, not a
+    # hardcoded lang length. The receipt harness feeds the processor's
+    # tokenization of the canonical probe task (48 tokens at the pinned
+    # pi0_base revision + lerobot 0.5.1); the old (B, 16) dummy froze a
+    # graph whose lang_tokens dim the shared inputs cannot feed
+    # (first-hand: "Got 48 Expected 16" at session.run). Same model_id,
+    # same pipeline, same task as the harness, so the two agree by
+    # construction; values stay random, only shapes are read.
+    from lerobot.processor.converters import batch_to_transition, transition_to_batch
+    from lerobot.processor.pipeline import PolicyProcessorPipeline
+    _probe_pre = PolicyProcessorPipeline.from_pretrained(
+        pretrained_model_name_or_path=model_id,
+        config_filename="policy_preprocessor.json",
+        to_transition=batch_to_transition,
+        to_output=transition_to_batch,
+        overrides={"device_processor": {"device": "cpu"}},
+    )
+    _probe_img = torch.zeros(3, 224, 224)
+    _probe_batch = _probe_pre({
+        "observation.images.base_0_rgb": _probe_img.unsqueeze(0),
+        "observation.images.left_wrist_0_rgb": _probe_img.unsqueeze(0),
+        "observation.images.right_wrist_0_rgb": _probe_img.unsqueeze(0),
+        "observation.state": torch.zeros(1, 14),
+        "task": ["pick up the red bowl"],
+    })
+    _lang_len = int(_probe_batch["observation.language.tokens"].shape[1])
+    _state_len = int(policy.prepare_state(_probe_batch).shape[1])
+    logger.info("[pi0] probe shapes: lang_len=%d state_len=%d", _lang_len, _state_len)
+
     class Pi0MonolithicWrapper(nn.Module):
         def __init__(self, pi0_model, n_steps):
             super().__init__()
@@ -833,7 +868,6 @@ def export_pi0_monolithic(
     B = 1
     chunk = cfg.chunk_size
     action_dim = cfg.max_action_dim
-    state_dim = getattr(cfg, "max_state_dim", 32)
 
     dummy = dict(
         img_base=torch.randn(B, 3, 224, 224, dtype=torch.float32),
@@ -842,9 +876,9 @@ def export_pi0_monolithic(
         mask_base=torch.ones(B, dtype=torch.bool),
         mask_wrist_l=torch.ones(B, dtype=torch.bool),
         mask_wrist_r=torch.ones(B, dtype=torch.bool),
-        lang_tokens=torch.randint(0, 257152, (B, 16), dtype=torch.long),
-        lang_masks=torch.ones(B, 16, dtype=torch.bool),
-        state=torch.randn(B, state_dim, dtype=torch.float32),
+        lang_tokens=torch.randint(0, 257152, (B, _lang_len), dtype=torch.long),
+        lang_masks=torch.ones(B, _lang_len, dtype=torch.bool),
+        state=torch.randn(B, _state_len, dtype=torch.float32),
         noise=torch.randn(B, chunk, action_dim, dtype=torch.float32),
     )
 
@@ -1083,8 +1117,43 @@ def export_pi05_monolithic(
     }
 
 
+def _pad_bool_true_last_dim(masks: Any, pad_left: int, pad_right: int) -> Any:
+    """Pad a bool mask with True columns along the last dim WITHOUT F.pad.
+
+    ``F.pad(..., value=True)`` on a bool tensor lowers to ONNX Pad, for
+    which ORT's CUDA EP has no kernel: the pi0.5 monolithic export carried
+    exactly one such node (bool ``[1,50,784] -> [1,50,834]``) and the
+    no-CPU-fallback gate failed the session at creation (M4 #52). A Concat
+    with a True block lowers to ONNX Concat, which probes CUDA-clean, and
+    is bit-identical (True-pad + AND-mask = same allowed positions).
+
+    The True block is built as scalar-ones + expand (no factory call with
+    symbolic sizes) so it traces under torch.export exactly like the
+    pre-existing ``[:, None, :].expand(...)`` in this mask build.
+    """
+    import torch
+
+    parts = []
+    if pad_left:
+        parts.append(
+            torch.ones((), dtype=torch.bool, device=masks.device).expand(
+                *masks.shape[:-1], pad_left
+            )
+        )
+    parts.append(masks)
+    if pad_right:
+        parts.append(
+            torch.ones((), dtype=torch.bool, device=masks.device).expand(
+                *masks.shape[:-1], pad_right
+            )
+        )
+    if len(parts) == 1:
+        return masks
+    return torch.cat(parts, dim=-1)
+
+
 def _apply_pi05_denoise_step_patch() -> None:
-    """Patch PI05Pytorch.denoise_step with the F.pad mask + frozen-cache
+    """Patch PI05Pytorch.denoise_step with the Pad-free mask + frozen-cache
     flag. Called from export_pi05_monolithic after apply_export_patches(),
     which already installed the DynamicLayer.update freeze.
 
@@ -1099,7 +1168,6 @@ def _apply_pi05_denoise_step_patch() -> None:
     """
     try:
         import torch
-        import torch.nn.functional as _F
         from lerobot.policies.pi05 import modeling_pi05 as _mp05
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks as _make
 
@@ -1116,13 +1184,15 @@ def _apply_pi05_denoise_step_patch() -> None:
             pad_deficit = prefix_len - prefix_pad_masks.shape[1]
             prefix_pad_masks_extended = prefix_pad_masks
             if pad_deficit > 0:
-                prefix_pad_masks_extended = _F.pad(prefix_pad_masks, (0, pad_deficit), value=True)
+                prefix_pad_masks_extended = _pad_bool_true_last_dim(
+                    prefix_pad_masks, 0, pad_deficit
+                )
 
             prefix_pad_2d_masks = prefix_pad_masks_extended[:, None, :].expand(batch_size, suffix_len, prefix_len)
             suffix_att_2d_masks = _make(suffix_pad_masks, suffix_att_masks)
 
-            prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
-            suffix_allowed = _F.pad(suffix_att_2d_masks, (prefix_len, 0), value=True)
+            prefix_allowed = _pad_bool_true_last_dim(prefix_pad_2d_masks, 0, suffix_len)
+            suffix_allowed = _pad_bool_true_last_dim(suffix_att_2d_masks, prefix_len, 0)
             full_att_2d_masks = prefix_allowed & suffix_allowed
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
@@ -1347,7 +1417,6 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
     defensive copy that matters for multi-step inference isn't needed here.
     """
     import torch
-    import torch.nn.functional as _F
 
     if is_pi05:
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
@@ -1368,8 +1437,8 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
                 batch_size, suffix_len, prefix_len,
             )
             suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
-            prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
-            suffix_allowed = _F.pad(suffix_att_2d_masks, (prefix_len, 0), value=True)
+            prefix_allowed = _pad_bool_true_last_dim(prefix_pad_2d_masks, 0, suffix_len)
+            suffix_allowed = _pad_bool_true_last_dim(suffix_att_2d_masks, prefix_len, 0)
             full_att_2d_masks = prefix_allowed & suffix_allowed
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
@@ -1402,8 +1471,8 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
                 batch_size, suffix_len, prefix_len,
             )
             suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
-            prefix_allowed = _F.pad(prefix_pad_2d_masks, (0, suffix_len), value=True)
-            suffix_allowed = _F.pad(suffix_att_2d_masks, (prefix_len, 0), value=True)
+            prefix_allowed = _pad_bool_true_last_dim(prefix_pad_2d_masks, 0, suffix_len)
+            suffix_allowed = _pad_bool_true_last_dim(suffix_att_2d_masks, prefix_len, 0)
             full_att_2d_masks = prefix_allowed & suffix_allowed
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
