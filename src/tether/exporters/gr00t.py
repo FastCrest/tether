@@ -473,6 +473,12 @@ class GR00TExpertStack(nn.Module):
         # Position embedding as a lookup table
         self.register_buffer("pos_embed", pos_embed_weight.clone())
 
+        # Zero VLM-KV placeholder template for the vlm_kv=None export path
+        # (see forward). A [1,1,vlm_kv_dim] zeros buffer broadcast against a
+        # [b,1,1] slice yields [b,1,vlm_kv_dim] exact zeros with no
+        # dynamic-shape Concat — see the forward comment for why that matters.
+        self.register_buffer("vlm_kv_zeros", torch.zeros(1, 1, vlm_kv_dim))
+
         # Timestep MLP (256-dim sinusoidal → linear_1 → silu → linear_2)
         self.sinusoidal_dim = timestep_mlp_weights["in_dim"]
         self.timestep_linear_1 = nn.Linear(
@@ -526,8 +532,16 @@ class GR00TExpertStack(nn.Module):
         if vlm_kv is not None:
             vlm_kv_normed = self.vlln(vlm_kv)
         else:
-            # Use a length-1 zero placeholder (valid for export without VLM conditioning)
-            vlm_kv_normed = torch.zeros(b, 1, self.vlm_kv_dim, device=x.device, dtype=x.dtype)
+            # Use a length-1 zero placeholder (valid for export without VLM conditioning).
+            # Broadcast, NOT torch.zeros(b, 1, dim): the latter traces to
+            # Shape + INT64-Concat([b, 1, dim]) + Expand, and ORT's CUDA EP
+            # force-moves that tiny shape-Concat to CPU, which the
+            # no-CPU-fallback gate then fails at session creation (M4 #53:
+            # node_Concat_43 = Concat(Shape(batch), 1, 2048) -> Expand).
+            # A [1,1,dim] zeros buffer broadcast against a [b,1,1] slice is
+            # bit-exact zeros lowered as Slice/Mul/Add only — all float,
+            # all CUDA-resident, no Shape/Concat/Expand anywhere.
+            vlm_kv_normed = self.vlm_kv_zeros + x[:, :1, :1] * 0
 
         # 32 DiT blocks: alternating cross (even) / self (odd)
         for i, block in enumerate(self.blocks):
