@@ -7,6 +7,8 @@ module never guesses a model family, action width, or denoising step count.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -73,6 +75,25 @@ SMOLVLA_VLM_MODEL_PATHS = (
 SMOLVLA_FULL_BUNDLE_MODEL_PATHS = frozenset(
     ("expert_stack.onnx", *SMOLVLA_VLM_MODEL_PATHS)
 )
+
+
+ACTION_UNITS_FIELD = "action_units"
+
+# Set by the export command for the duration of one export; every producer
+# writes its config through write_tether_config, which stamps it.
+_EXPORT_ACTION_UNITS: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "tether_export_action_units", default=None
+)
+
+
+@contextlib.contextmanager
+def export_action_units(spec: Mapping[str, Any] | None):
+    """Record the policy's action units in every config written in this block."""
+    token = _EXPORT_ACTION_UNITS.set(dict(spec) if spec is not None else None)
+    try:
+        yield
+    finally:
+        _EXPORT_ACTION_UNITS.reset(token)
 
 
 class ExportConfigError(ValueError):
@@ -227,6 +248,15 @@ def validate_tether_config(
             if name in names:
                 raise ExportConfigError(f"{field}.name duplicates {name!r}")
             names.add(name)
+    if config.get(ACTION_UNITS_FIELD) is not None:
+        from tether.safety.guard import GuardUnitsError, validate_action_units
+
+        try:
+            config[ACTION_UNITS_FIELD] = validate_action_units(
+                config[ACTION_UNITS_FIELD], max_dim=config.get("action_dim")
+            )
+        except GuardUnitsError as exc:
+            raise ExportConfigError(str(exc)) from exc
     return config
 
 
@@ -621,6 +651,15 @@ def write_tether_config(output_dir: str | Path, payload: Mapping[str, Any]) -> P
     """Validate then atomically write a canonical config."""
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    payload = dict(payload)
+    stamped = _EXPORT_ACTION_UNITS.get()
+    if stamped is not None:
+        existing = payload.get(ACTION_UNITS_FIELD)
+        if existing is not None and existing != stamped:
+            raise ExportConfigError(
+                f"export already declares action_units {existing}, not {stamped}"
+            )
+        payload[ACTION_UNITS_FIELD] = stamped
     config = validate_tether_config(payload, root=root, inspect_artifacts=True)
     target = root / CONFIG_FILENAME
     fd, temporary_name = tempfile.mkstemp(prefix=f".{CONFIG_FILENAME}.", dir=root)
@@ -672,6 +711,7 @@ def require_supported_pipeline(
 
 
 __all__ = [
+    "ACTION_UNITS_FIELD",
     "ARTIFACT_ROLES",
     "CONFIG_FILENAME",
     "DTYPES",
@@ -686,6 +726,7 @@ __all__ = [
     "build_producer_config",
     "build_onnx_artifacts",
     "decomposed_layout",
+    "export_action_units",
     "load_tether_config",
     "normalize_legacy_tether_config",
     "require_supported_export_kind",

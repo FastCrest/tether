@@ -26,6 +26,168 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# What the action values physically are. Decides what "stop" means: in a
+# position space a stop is "hold the current target" (an all-zero target is a
+# move to the zero pose); in velocity/effort spaces zero IS a stop.
+ACTION_SPACES = ("position", "velocity", "effort")
+
+_GRIPPER_UNITS = {"normalized", "gripper_0_1", "gripper_0_100"}
+UNITS_BY_SPACE: dict[str, frozenset[str]] = {
+    "position": frozenset({"radians", "degrees", "meters"} | _GRIPPER_UNITS),
+    "velocity": frozenset(
+        {"radians_per_second", "degrees_per_second", "meters_per_second"} | _GRIPPER_UNITS
+    ),
+    "effort": frozenset({"newton_meters", "newtons"} | _GRIPPER_UNITS),
+}
+
+
+class GuardError(RuntimeError):
+    """Base class for ActionGuard refusals. Callers must not execute actions."""
+
+
+class GuardUnitsError(GuardError, ValueError):
+    """Limits or inputs have unknown/mismatched units; the guard refuses to clamp."""
+
+
+class GuardStop(GuardError):
+    """No safe target exists (e.g. NaN on the first chunk of a position space).
+
+    The caller must stop motion: send no new target to the robot.
+    """
+
+
+def check_safety_units_against_embodiment(limits: SafetyLimits, embodiment_config: Any) -> None:
+    """Raise GuardUnitsError when a safety config's units disagree with the
+    action units an embodiment config declares (no-op when either is absent)."""
+    if embodiment_config is None:
+        return
+    emb_units = list((getattr(embodiment_config, "action_space", None) or {}).get("units") or [])
+    n = min(len(emb_units), len(limits.units))
+    if n and list(limits.units)[:n] != emb_units[:n]:
+        raise GuardUnitsError(
+            f"safety-config units {list(limits.units)} do not match embodiment "
+            f"action units {emb_units}: refusing to clamp"
+        )
+
+
+def validate_action_units(spec: Any, *, max_dim: int | None = None) -> dict[str, Any]:
+    """Validate an ``action_units`` spec: ``{"kind": <space>, "units": [...]}``.
+
+    Returns a normalized copy; raises GuardUnitsError when it is malformed.
+    """
+    if not isinstance(spec, dict):
+        raise GuardUnitsError(f"action_units must be an object, got {spec!r}")
+    kind = spec.get("kind")
+    if kind not in ACTION_SPACES:
+        raise GuardUnitsError(f"action_units.kind must be one of {ACTION_SPACES}, got {kind!r}")
+    units = spec.get("units")
+    if not isinstance(units, list) or not units or not all(isinstance(u, str) for u in units):
+        raise GuardUnitsError("action_units.units must be a non-empty list of strings")
+    bad = sorted({u for u in units if u not in UNITS_BY_SPACE[kind]})
+    if bad:
+        raise GuardUnitsError(
+            f"action_units.units {bad} are not valid for a {kind} action space "
+            f"(allowed: {sorted(UNITS_BY_SPACE[kind])})"
+        )
+    if max_dim is not None and len(units) > max_dim:
+        raise GuardUnitsError(
+            f"action_units has {len(units)} entries but the export's action_dim is {max_dim}"
+        )
+    return {"kind": kind, "units": list(units)}
+
+
+def parse_action_units(text: str, kind: str = "position") -> dict[str, Any]:
+    """Parse a CLI units list: comma-separated, ``unit*N`` repeats.
+
+    Example: ``"radians*5,gripper_0_1"``.
+    """
+    units: list[str] = []
+    for token in text.split(","):
+        name, _, count = token.strip().partition("*")
+        if not name.strip():
+            raise GuardUnitsError(f"empty unit in {text!r}")
+        try:
+            repeat = int(count) if count else 1
+        except ValueError as exc:
+            raise GuardUnitsError(f"bad repeat count in {token!r}") from exc
+        units.extend([name.strip()] * repeat)
+    return validate_action_units({"kind": kind, "units": units})
+
+
+def _require_same_units(label: str, spec: dict[str, Any], kind: str, units: list[str]) -> None:
+    if spec["kind"] != kind:
+        raise GuardUnitsError(
+            f"policy action space {spec['kind']!r} does not match {label} action space {kind!r}"
+        )
+    n = min(len(spec["units"]), len(units))
+    if spec["units"][:n] != list(units)[:n]:
+        raise GuardUnitsError(
+            f"policy action units {spec['units']} do not match {label} units "
+            f"{list(units)}: refusing to serve"
+        )
+
+
+def resolve_serve_action_units(
+    *,
+    export_config: Any,
+    explicit: dict[str, Any] | None,
+    safety_limits: SafetyLimits | None,
+    embodiment_config: Any,
+) -> dict[str, Any] | None:
+    """Decide the policy's action units at serve time and check every guard.
+
+    - The export's ``action_units`` (written at export time) and an
+      operator-supplied ``explicit`` spec must agree when both exist.
+    - When a guard is configured (safety config or embodiment) and neither
+      source declares units (an export from before action_units existed),
+      raise: the operator must pass units explicitly. No default is assumed.
+    - The resolved units must match the safety config and embodiment units.
+    """
+    exported_raw = export_config.get("action_units") if export_config else None
+    exported = (
+        validate_action_units(exported_raw, max_dim=export_config.get("action_dim"))
+        if exported_raw is not None
+        else None
+    )
+    if explicit is not None:
+        explicit = validate_action_units(explicit)
+    if exported is not None and explicit is not None and exported != explicit:
+        raise GuardUnitsError(
+            f"--action-units {explicit} contradict the export's action_units {exported}"
+        )
+    resolved = exported or explicit
+    if safety_limits is None and embodiment_config is None:
+        return resolved
+    if resolved is None:
+        raise GuardUnitsError(
+            "this export has no action_units (exported before units were recorded); "
+            "pass --action-units (and --action-space if not position) so the guard "
+            "knows what the policy's actions are in"
+        )
+    if safety_limits is not None:
+        _require_same_units(
+            "safety-config", resolved, safety_limits.action_space, safety_limits.units
+        )
+    if embodiment_config is not None:
+        space = getattr(embodiment_config, "action_space", None) or {}
+        emb_units = list(space.get("units") or [])
+        if not emb_units:
+            raise GuardUnitsError("embodiment config has no action_space.units")
+        _require_same_units(
+            "embodiment", resolved, str(space.get("kind", "position")), emb_units
+        )
+    return resolved
+
+
+def guard_stop_response(exc: BaseException) -> dict[str, Any]:
+    """Standard serving envelope for a guard refusal: an error with no actions."""
+    return {
+        "error": "guard_stop",
+        "reason": f"{type(exc).__name__}: {exc}",
+        "hint": "No safe action was produced; do not move the robot. "
+                "Fix the upstream cause (model output, units, config).",
+    }
+
 
 @dataclass
 class SafetyLimits:
@@ -39,6 +201,12 @@ class SafetyLimits:
     workspace_min: list[float] = field(default_factory=lambda: [-1.0, -1.0, 0.0])
     workspace_max: list[float] = field(default_factory=lambda: [1.0, 1.0, 1.5])
     workspace_indices: list[int] = field(default_factory=list)
+    # What the action values are ("position" | "velocity" | "effort") and
+    # their per-axis units (see UNITS_BY_SPACE). ActionGuard refuses limits
+    # whose units are unknown, so a degree action is never "clamped" against
+    # radian limits.
+    action_space: str = "position"
+    units: list[str] = field(default_factory=list)
 
     @classmethod
     def from_urdf(cls, urdf_path: str | Path) -> SafetyLimits:
@@ -47,11 +215,12 @@ class SafetyLimits:
             import yourdfpy
 
             urdf = yourdfpy.URDF.load(str(urdf_path))
-            names, pos_min, pos_max, vel_max, eff_max = [], [], [], [], []
+            names, pos_min, pos_max, vel_max, eff_max, units = [], [], [], [], [], []
 
             for joint_name, joint in urdf.joint_map.items():
                 if joint.type in ("revolute", "prismatic"):
                     names.append(joint_name)
+                    units.append("radians" if joint.type == "revolute" else "meters")
                     if joint.limit is not None:
                         pos_min.append(joint.limit.lower)
                         pos_max.append(joint.limit.upper)
@@ -69,6 +238,7 @@ class SafetyLimits:
                 position_max=pos_max,
                 velocity_max=vel_max,
                 effort_max=eff_max,
+                units=units,
             )
         except ImportError:
             logger.warning("yourdfpy not installed. Install with: pip install 'fastcrest-tether[safety]'")
@@ -89,6 +259,7 @@ class SafetyLimits:
             position_max=[3.14] * num_joints,
             velocity_max=[2.0] * num_joints,
             effort_max=[50.0] * num_joints,
+            units=["radians"] * num_joints,
         )
 
     @classmethod
@@ -100,9 +271,20 @@ class SafetyLimits:
         (broadcast across joints; gripper dim gets the gripper velocity cap).
 
         Effort/torque limits aren't in the embodiment config schema yet —
-        defaulted to 50 N·m per joint pending B.6 v2.
+        defaulted to 50 N·m per joint pending B.6 v2 (never compared against
+        position actions; see ActionGuard).
+
+        `action_space.kind` (default "position") and `action_space.units`
+        (per-dim) carry over; missing units make ActionGuard refuse the config.
         """
         action_space = cfg.action_space
+        kind = str(action_space.get("kind", "position"))
+        if kind != "position":
+            raise ValueError(
+                f"embodiment action_space.kind={kind!r}: only 'position' embodiment "
+                "configs are supported; use an explicit SafetyLimits JSON for "
+                "velocity/effort action spaces"
+            )
         ranges = action_space["ranges"]
         action_dim = int(action_space["dim"])
         constraints = cfg.constraints
@@ -133,6 +315,8 @@ class SafetyLimits:
             position_max=position_max,
             velocity_max=velocity_max,
             effort_max=effort_max,
+            action_space=kind,
+            units=[str(u) for u in action_space.get("units", [])],
         )
 
     def save(self, path: str | Path) -> None:
@@ -149,6 +333,9 @@ class SafetyCheckResult:
     original_action: list[float]
     safe_action: list[float]
     check_time_ms: float
+    # True when safe_action is a hold/stop target rather than a clamped
+    # version of the input (reject mode or non-finite input).
+    hold: bool = False
 
 
 @dataclass
@@ -178,8 +365,17 @@ class ActionGuard:
     ):
         """
         Args:
-            limits: Safety limits for joints and workspace
-            mode: "clamp" (adjust to nearest safe value) or "reject" (return zeros)
+            limits: Safety limits for joints and workspace. ``limits.units``
+                must name a known unit for every axis of
+                ``limits.action_space``; otherwise GuardUnitsError is raised
+                here (the guard refuses to clamp values whose units it does
+                not know).
+            mode: "clamp" (adjust to nearest safe value) or "reject" (do not
+                execute the chunk; hold/stop instead). Reject and non-finite
+                inputs never synthesize a new target: position spaces hold the
+                observed position or the last emitted safe action (or raise
+                GuardStop when neither exists); velocity/effort spaces return
+                zeros, which is a stop there.
             log_dir: Directory for EU AI Act compliance logs (None = no logging)
             model_version: Model identifier for audit trail
             max_consecutive_clamps: staleness kill-switch. After N consecutive
@@ -191,8 +387,11 @@ class ActionGuard:
                 that's producing NaN due to numerical divergence, or a
                 degenerate output mode where every chunk hits clamp limits.
         """
+        if mode not in ("clamp", "reject"):
+            raise ValueError(f"mode must be 'clamp' or 'reject', got {mode!r}")
         self.limits = limits
         self.mode = mode
+        self._validate_space_and_units()
         self.model_version = model_version
         self._log_dir = Path(log_dir) if log_dir else None
         if self._log_dir:
@@ -202,6 +401,53 @@ class ActionGuard:
         self._consecutive_clamps = 0
         self._tripped = False
         self._trip_reason: str | None = None
+        # Last row this guard emitted: the hold target when no observation
+        # is supplied. Cleared by reset().
+        self._last_safe_action: np.ndarray | None = None
+
+    @property
+    def action_space(self) -> str:
+        return self.limits.action_space
+
+    def _validate_space_and_units(self) -> None:
+        space = self.limits.action_space
+        if space not in ACTION_SPACES:
+            raise ValueError(
+                f"SafetyLimits.action_space must be one of {ACTION_SPACES}, got {space!r}"
+            )
+        axes = {
+            "position": self.limits.position_max,
+            "velocity": self.limits.velocity_max,
+            "effort": self.limits.effort_max,
+        }[space]
+        units = list(self.limits.units or [])
+        if not units:
+            raise GuardUnitsError(
+                "SafetyLimits.units is missing: refusing to clamp actions whose "
+                f"units are unknown. Add a per-axis \"units\" list (allowed for "
+                f"{space}: {sorted(UNITS_BY_SPACE[space])})."
+            )
+        if len(units) != len(axes):
+            raise GuardUnitsError(
+                f"SafetyLimits.units has {len(units)} entries but the {space} "
+                f"limits cover {len(axes)} axes"
+            )
+        bad = sorted({u for u in units if u not in UNITS_BY_SPACE[space]})
+        if bad:
+            raise GuardUnitsError(
+                f"units {bad} are not valid for a {space} action space "
+                f"(allowed: {sorted(UNITS_BY_SPACE[space])})"
+            )
+
+    def _check_input_units(self, units: list[str] | tuple[str, ...] | None) -> None:
+        """Refuse inputs whose declared units differ from the limits' units."""
+        if units is None:
+            return
+        if list(units) != list(self.limits.units):
+            raise GuardUnitsError(
+                f"action units {list(units)} do not match safety-limit units "
+                f"{list(self.limits.units)}: refusing to clamp"
+            )
 
     @classmethod
     def from_urdf(cls, urdf_path: str | Path, **kwargs) -> ActionGuard:
@@ -243,14 +489,21 @@ class ActionGuard:
         distance = min(value - lower, upper - value)
         return float(min(max(distance / half_span, 0.0), 1.0))
 
+    @staticmethod
+    def _magnitude_margin(value: float, limit: float) -> float | None:
+        if limit <= 0:
+            return None
+        return float(min(max((limit - abs(value)) / limit, 0.0), 1.0))
+
     def safety_margin(self, actions: np.ndarray) -> float | None:
         """Return the closest normalized margin to any configured limit.
 
         The value is in [0, 1], where 0 means at/outside a configured safety
-        boundary and 1 means centered under every applicable bound. It covers
-        position, effort, velocity between consecutive chunk actions, and
-        explicit workspace-index bounds. Returns None when no comparable limits
-        apply.
+        boundary and 1 means centered under every applicable bound. Only the
+        limits that apply to ``limits.action_space`` count: position bounds,
+        per-step deltas against velocity_max and workspace bounds for position
+        spaces; |value| against velocity_max / effort_max for velocity / effort
+        spaces. Returns None when no comparable limits apply.
         """
         arr = np.asarray(actions, dtype=np.float32)
         if arr.size == 0:
@@ -260,81 +513,92 @@ class ActionGuard:
         if arr.ndim != 2 or not np.isfinite(arr).all():
             return 0.0
 
+        space = self.limits.action_space
         margins: list[float] = []
-        num_joints = min(arr.shape[1], len(self.limits.position_max))
         for row in arr:
-            for i in range(num_joints):
-                pos_margin = self._interval_margin(
-                    float(row[i]),
-                    float(self.limits.position_min[i]),
-                    float(self.limits.position_max[i]),
-                )
-                if pos_margin is not None:
-                    margins.append(pos_margin)
+            if space == "position":
+                num_joints = min(arr.shape[1], len(self.limits.position_max))
+                for i in range(num_joints):
+                    m = self._interval_margin(
+                        float(row[i]),
+                        float(self.limits.position_min[i]),
+                        float(self.limits.position_max[i]),
+                    )
+                    if m is not None:
+                        margins.append(m)
+                for workspace_axis, action_idx in enumerate(self.limits.workspace_indices):
+                    if action_idx < 0 or action_idx >= arr.shape[1]:
+                        continue
+                    if (
+                        workspace_axis >= len(self.limits.workspace_min)
+                        or workspace_axis >= len(self.limits.workspace_max)
+                    ):
+                        continue
+                    m = self._interval_margin(
+                        float(row[action_idx]),
+                        float(self.limits.workspace_min[workspace_axis]),
+                        float(self.limits.workspace_max[workspace_axis]),
+                    )
+                    if m is not None:
+                        margins.append(m)
+            else:
+                bound = self.limits.velocity_max if space == "velocity" else self.limits.effort_max
+                for i in range(min(arr.shape[1], len(bound))):
+                    m = self._magnitude_margin(float(row[i]), float(bound[i]))
+                    if m is not None:
+                        margins.append(m)
 
-                if i < len(self.limits.effort_max):
-                    effort_limit = float(self.limits.effort_max[i])
-                    if effort_limit > 0:
-                        effort_margin = (effort_limit - abs(float(row[i]))) / effort_limit
-                        margins.append(float(min(max(effort_margin, 0.0), 1.0)))
-
-            for workspace_axis, action_idx in enumerate(self.limits.workspace_indices):
-                if action_idx < 0 or action_idx >= arr.shape[1]:
-                    continue
-                if (
-                    workspace_axis >= len(self.limits.workspace_min)
-                    or workspace_axis >= len(self.limits.workspace_max)
-                ):
-                    continue
-                workspace_margin = self._interval_margin(
-                    float(row[action_idx]),
-                    float(self.limits.workspace_min[workspace_axis]),
-                    float(self.limits.workspace_max[workspace_axis]),
-                )
-                if workspace_margin is not None:
-                    margins.append(workspace_margin)
-
-        if arr.shape[0] >= 2:
+        if space == "position" and arr.shape[0] >= 2:
             num_velocity = min(arr.shape[1], len(self.limits.velocity_max))
             for prev, cur in zip(arr[:-1], arr[1:]):
                 for i in range(num_velocity):
-                    velocity_limit = float(self.limits.velocity_max[i])
-                    if velocity_limit <= 0:
-                        continue
-                    delta = abs(float(cur[i] - prev[i]))
-                    velocity_margin = (velocity_limit - delta) / velocity_limit
-                    margins.append(float(min(max(velocity_margin, 0.0), 1.0)))
+                    m = self._magnitude_margin(
+                        float(cur[i] - prev[i]), float(self.limits.velocity_max[i])
+                    )
+                    if m is not None:
+                        margins.append(m)
 
         if not margins:
             return None
         return min(margins)
 
-    def check_single(
+    def _evaluate(
         self,
         action: np.ndarray,
-        *,
-        previous_action: np.ndarray | None = None,
-    ) -> SafetyCheckResult:
-        """Check a single action vector against safety limits.
-
-        Position, effort, and explicit workspace bounds are single-action
-        checks. Velocity is a chunk-level delta check and only runs when the
-        caller provides ``previous_action``.
-        """
-        start = time.perf_counter()
-        violations = []
+        previous_action: np.ndarray | None,
+    ) -> tuple[list[str], bool, np.ndarray]:
+        """Find violations; in clamp mode also return the clamped action."""
+        violations: list[str] = []
         clamped = False
-        safe_action = action.copy()
-        num_joints = min(len(action), len(self.limits.position_max))
+        safe_action = np.array(action, copy=True)
+        clamp = self.mode == "clamp"
+        space = self.limits.action_space
 
+        if space != "position":
+            # Velocity/effort spaces: the values themselves are bounded.
+            name = "velocity" if space == "velocity" else "effort"
+            bound = self.limits.velocity_max if space == "velocity" else self.limits.effort_max
+            for i in range(min(len(safe_action), len(bound))):
+                limit = float(bound[i])
+                if limit > 0 and abs(float(safe_action[i])) > limit:
+                    violations.append(
+                        f"joint_{i} {name} limit: |{safe_action[i]:.3f}| > {limit:.3f}"
+                    )
+                    if clamp:
+                        safe_action[i] = self._clamp_value(float(safe_action[i]), -limit, limit)
+                        clamped = True
+            return violations, clamped, safe_action
+
+        # Position space. effort_max is NOT compared here: a joint position is
+        # not a torque.
+        num_joints = min(len(action), len(self.limits.position_max))
         for i in range(num_joints):
-            # Position bounds
             if safe_action[i] < self.limits.position_min[i]:
                 violations.append(
                     f"joint_{i} below min: "
                     f"{safe_action[i]:.3f} < {self.limits.position_min[i]:.3f}"
                 )
-                if self.mode == "clamp":
+                if clamp:
                     safe_action[i] = self.limits.position_min[i]
                     clamped = True
             elif safe_action[i] > self.limits.position_max[i]:
@@ -342,27 +606,14 @@ class ActionGuard:
                     f"joint_{i} above max: "
                     f"{safe_action[i]:.3f} > {self.limits.position_max[i]:.3f}"
                 )
-                if self.mode == "clamp":
+                if clamp:
                     safe_action[i] = self.limits.position_max[i]
                     clamped = True
 
-            if i < len(self.limits.effort_max):
-                effort_limit = self.limits.effort_max[i]
-                if effort_limit > 0 and abs(float(safe_action[i])) > effort_limit:
-                    violations.append(
-                        f"joint_{i} effort limit: "
-                        f"|{safe_action[i]:.3f}| > {effort_limit:.3f}"
-                    )
-                    if self.mode == "clamp":
-                        safe_action[i] = self._clamp_value(
-                            float(safe_action[i]), -effort_limit, effort_limit
-                        )
-                        clamped = True
-
-        # Compose the velocity constraint with the position and effort bounds.
-        # The caller executes ``safe_action``, so its delta from the previously
-        # emitted action must remain within the configured velocity limit even
-        # when this joint also needed a static clamp.
+        # Compose the velocity constraint with the position bounds. The caller
+        # executes ``safe_action``, so its delta from the previously emitted
+        # action must remain within the configured velocity limit even when
+        # this joint also needed a static clamp.
         if previous_action is not None:
             num_velocity = min(
                 len(safe_action),
@@ -377,7 +628,7 @@ class ActionGuard:
                         f"joint_{i} velocity limit: "
                         f"|delta {delta:.3f}| > {velocity_limit:.3f}"
                     )
-                    if self.mode == "clamp":
+                    if clamp:
                         safe_action[i] = float(previous_action[i]) + self._clamp_value(
                             delta, -velocity_limit, velocity_limit
                         )
@@ -398,7 +649,7 @@ class ActionGuard:
                     f"workspace_axis_{workspace_axis} below min: "
                     f"action[{action_idx}]={safe_action[action_idx]:.3f} < {lower:.3f}"
                 )
-                if self.mode == "clamp":
+                if clamp:
                     safe_action[action_idx] = lower
                     clamped = True
             elif safe_action[action_idx] > upper:
@@ -406,12 +657,58 @@ class ActionGuard:
                     f"workspace_axis_{workspace_axis} above max: "
                     f"action[{action_idx}]={safe_action[action_idx]:.3f} > {upper:.3f}"
                 )
-                if self.mode == "clamp":
+                if clamp:
                     safe_action[action_idx] = upper
                     clamped = True
 
+        return violations, clamped, safe_action
+
+    def _hold_target(self, like: np.ndarray, reference: np.ndarray | None) -> np.ndarray:
+        """The action that stops motion without synthesizing a new target.
+
+        Velocity/effort: zeros. Position: ``reference`` (an observed position
+        or the last emitted safe action). Raises GuardStop when a position
+        space has no reference: the caller must send no new target.
+        """
+        if self.limits.action_space != "position":
+            return np.zeros_like(like)
+        if reference is None:
+            raise GuardStop(
+                "position action space has no safe hold target (no observed "
+                "position and no previously emitted safe action)"
+            )
+        ref = np.asarray(reference, dtype=like.dtype).reshape(-1)
+        if ref.shape != like.shape or not np.isfinite(ref).all():
+            raise GuardStop(
+                f"hold reference shape {ref.shape} / finiteness does not match "
+                f"action shape {like.shape}"
+            )
+        return ref.copy()
+
+    def check_single(
+        self,
+        action: np.ndarray,
+        *,
+        previous_action: np.ndarray | None = None,
+        units: list[str] | None = None,
+    ) -> SafetyCheckResult:
+        """Check a single action vector against safety limits.
+
+        Position and workspace bounds are single-action checks. Velocity (in a
+        position space) is a delta check and only runs when the caller
+        provides ``previous_action``. In reject mode a violating action is
+        replaced by the hold target (``previous_action`` for position spaces,
+        zeros for velocity/effort); GuardStop is raised when a position space
+        has no previous action.
+        """
+        start = time.perf_counter()
+        self._check_input_units(units)
+        action = np.asarray(action)
+        violations, clamped, safe_action = self._evaluate(action, previous_action)
+        hold = False
         if self.mode == "reject" and violations:
-            safe_action = np.zeros_like(action)
+            safe_action = self._hold_target(action, previous_action)
+            hold = True
 
         elapsed = (time.perf_counter() - start) * 1000
 
@@ -422,82 +719,140 @@ class ActionGuard:
             original_action=action.tolist(),
             safe_action=safe_action.tolist(),
             check_time_ms=elapsed,
+            hold=hold,
         )
 
-    def check(self, actions: np.ndarray) -> tuple[np.ndarray, list[SafetyCheckResult]]:
+    def check(
+        self,
+        actions: np.ndarray,
+        *,
+        observed_position: np.ndarray | None = None,
+        units: list[str] | None = None,
+    ) -> tuple[np.ndarray, list[SafetyCheckResult]]:
         """Check a batch of actions (action chunk).
 
         Args:
             actions: [chunk_size, action_dim] array
+            observed_position: optional current measured position (position
+                spaces). Preferred hold target over the last emitted action.
+            units: optional per-axis units of ``actions``. When given and
+                different from ``limits.units`` the guard raises
+                GuardUnitsError instead of clamping.
 
         Returns:
-            (safe_actions, results) where safe_actions is the clamped/rejected array
+            (safe_actions, results). When the chunk is a hold/stop, every row
+            of safe_actions is the hold target and every result has
+            ``hold=True``.
 
-        Non-finite handling: any NaN or Inf (i.e. any nan/inf value) in the
-        input array is a hard reject — the whole chunk is replaced with zeros
-        and a single violation record is appended (not per-joint). This counts
-        as a "clamp event" for the staleness kill-switch.
+        Raises:
+            GuardStop: position space, the chunk must not run (NaN/Inf, or a
+                violation in reject mode) and no hold reference exists. The
+                caller must stop motion.
+            GuardUnitsError: declared input units differ from the limits'.
+
+        Non-finite handling: any NaN or Inf in the input is a hard reject of
+        the whole chunk (a single violation record, not per-joint) in both
+        modes. It counts as a "clamp event" for the staleness kill-switch.
         """
-        results = []
+        self._check_input_units(units)
+        actions = np.asarray(actions)
+        reference = (
+            np.asarray(observed_position).reshape(-1)
+            if observed_position is not None
+            else self._last_safe_action
+        )
+        results: list[SafetyCheckResult] = []
         non_finite_mask = ~np.isfinite(actions)
         had_non_finite = bool(non_finite_mask.any())
+        hold_reason: str | None = None
 
         if had_non_finite:
             num_bad = int(non_finite_mask.sum())
-            safe_actions = np.zeros_like(actions)
-            violation_msg = (
+            hold_reason = (
                 f"non_finite_action: {num_bad} NaN/Inf value(s) detected — "
-                f"entire chunk zeroed"
+                f"chunk not executed, holding"
             )
-            check_result = SafetyCheckResult(
-                safe=False,
-                violations=[violation_msg],
-                clamped=True,
-                original_action=actions[0].tolist() if len(actions) else [],
-                safe_action=safe_actions[0].tolist() if len(safe_actions) else [],
-                check_time_ms=0.0,
-            )
-            results.append(check_result)
-            all_violations = [violation_msg]
+            all_violations = [hold_reason]
             chunk_clamped = True
         else:
-            safe_actions = actions.copy()
+            safe_actions = np.array(actions, copy=True)
             previous_safe: np.ndarray | None = None
             for i in range(len(actions)):
-                result = self.check_single(
-                    actions[i],
-                    previous_action=previous_safe,
+                row_start = time.perf_counter()
+                violations, clamped, safe_row = self._evaluate(actions[i], previous_safe)
+                results.append(
+                    SafetyCheckResult(
+                        safe=not violations,
+                        violations=violations,
+                        clamped=clamped,
+                        original_action=actions[i].tolist(),
+                        safe_action=safe_row.tolist(),
+                        check_time_ms=(time.perf_counter() - row_start) * 1000,
+                    )
                 )
-                results.append(result)
-                safe_actions[i] = np.array(result.safe_action)
-                # The returned action is what the caller will execute. Preserve
-                # it as the next velocity reference in both clamp and reject
-                # modes, including rows that contained static violations.
+                safe_actions[i] = safe_row
+                # The returned action is what the caller will execute.
                 previous_safe = safe_actions[i]
             all_violations = [v for r in results for v in r.violations]
             chunk_clamped = any(r.clamped for r in results)
+            if self.mode == "reject" and all_violations:
+                hold_reason = "reject_mode: chunk had violations — not executed, holding"
+
+        if hold_reason is not None:
+            row_like = actions[0] if len(actions) else np.zeros(0, dtype=actions.dtype)
+            try:
+                target = self._hold_target(row_like, reference)
+            except GuardStop:
+                if self._log_dir:
+                    self._log_inference(actions, np.zeros((0,)), all_violations, True)
+                self._count_clamp_event(True)
+                self._inference_count += 1
+                raise
+            safe_actions = np.broadcast_to(target, actions.shape).astype(actions.dtype, copy=True)
+            if had_non_finite:
+                results = [
+                    SafetyCheckResult(
+                        safe=False,
+                        violations=[hold_reason],
+                        clamped=True,
+                        original_action=actions[0].tolist() if len(actions) else [],
+                        safe_action=target.tolist(),
+                        check_time_ms=0.0,
+                        hold=True,
+                    )
+                ]
+            else:
+                for r in results:
+                    r.safe_action = target.tolist()
+                    r.hold = True
+
+        if len(safe_actions):
+            self._last_safe_action = np.array(safe_actions[-1], copy=True)
 
         if self._log_dir:
             self._log_inference(actions, safe_actions, all_violations, chunk_clamped)
 
-        # Staleness kill-switch — trip after N consecutive clamp/NaN chunks.
-        if self.max_consecutive_clamps > 0:
-            if chunk_clamped:
-                self._consecutive_clamps += 1
-                if self._consecutive_clamps >= self.max_consecutive_clamps and not self._tripped:
-                    self._tripped = True
-                    self._trip_reason = (
-                        f"consecutive_clamp_limit_exceeded: "
-                        f"{self._consecutive_clamps} chunks in a row required "
-                        f"clamping or contained NaN/Inf (limit "
-                        f"{self.max_consecutive_clamps})"
-                    )
-                    logger.error(self._trip_reason)
-            else:
-                self._consecutive_clamps = 0
-
+        self._count_clamp_event(chunk_clamped or hold_reason is not None)
         self._inference_count += 1
         return safe_actions, results
+
+    def _count_clamp_event(self, clamped: bool) -> None:
+        """Staleness kill-switch — trip after N consecutive clamp/NaN chunks."""
+        if self.max_consecutive_clamps <= 0:
+            return
+        if not clamped:
+            self._consecutive_clamps = 0
+            return
+        self._consecutive_clamps += 1
+        if self._consecutive_clamps >= self.max_consecutive_clamps and not self._tripped:
+            self._tripped = True
+            self._trip_reason = (
+                f"consecutive_clamp_limit_exceeded: "
+                f"{self._consecutive_clamps} chunks in a row required "
+                f"clamping or contained NaN/Inf (limit "
+                f"{self.max_consecutive_clamps})"
+            )
+            logger.error(self._trip_reason)
 
     @property
     def tripped(self) -> bool:
@@ -527,6 +882,9 @@ class ActionGuard:
         self._tripped = False
         self._trip_reason = None
         self._consecutive_clamps = 0
+        # Forget the hold target: after an investigation the next NaN/reject
+        # must not hold a pose from before the reset.
+        self._last_safe_action = None
 
     def _log_inference(
         self,

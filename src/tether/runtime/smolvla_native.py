@@ -153,17 +153,16 @@ class SmolVLANativeServer:
         self.num_denoising_steps = int(self.policy.config.num_steps)
 
         # Safety guard (tether guard) composition — re-uses TetherServer logic
+        # Fail closed: a requested safety config that cannot be armed stops
+        # load instead of serving unguarded actions.
         if self._safety_config_path is not None:
-            try:
-                from tether.safety import ActionGuard, SafetyLimits
-                limits = SafetyLimits.from_json(self._safety_config_path)
-                self._action_guard = ActionGuard(limits=limits, mode="clamp")
-                logger.info(
-                    "tether guard loaded (native): %d joints",
-                    len(limits.joint_names),
-                )
-            except Exception as e:
-                logger.warning("Failed to load safety config: %s", e)
+            from tether.safety import ActionGuard, SafetyLimits
+            limits = SafetyLimits.from_json(self._safety_config_path)
+            self._action_guard = ActionGuard(limits=limits, mode="clamp")
+            logger.info(
+                "tether guard loaded (native): %d joints, space=%s, units=%s",
+                len(limits.joint_names), limits.action_space, limits.units,
+            )
 
         elapsed = time.perf_counter() - start
         self._ready = True
@@ -227,6 +226,13 @@ class SmolVLANativeServer:
 
         if not self._ready:
             return {"error": "Model not loaded. Call load() first."}
+        if self._action_guard is not None and self._action_guard.tripped:
+            return {
+                "error": "guard_tripped",
+                "reason": self._action_guard.trip_reason,
+                "hint": "Investigate upstream (inputs / sensors / model) and "
+                        "call POST /guard/reset to resume.",
+            }
 
         start = time.perf_counter()
 
@@ -366,18 +372,22 @@ class SmolVLANativeServer:
         # 5) Safety guard (optional) — same interface as TetherServer
         safety_violations = 0
         guard_detail: list[str] = []
+        guard_hold = False
         if self._action_guard is not None:
             try:
                 safe, guard_results = self._action_guard.check(actions_unnorm)
-                actions_unnorm = safe
-                safety_violations = sum(len(r.violations) for r in guard_results)
-                if safety_violations:
-                    guard_detail = [
-                        f"action {i}: {len(r.violations)} violations"
-                        for i, r in enumerate(guard_results[:3]) if r.violations
-                    ]
-            except Exception as e:
-                logger.warning("safety check failed: %s", e)
+            except Exception as e:  # noqa: BLE001 — GuardStop/GuardUnitsError/bug: fail closed
+                from tether.safety import guard_stop_response
+                logger.error("tether guard refused chunk, no actions returned: %s", e)
+                return guard_stop_response(e)
+            actions_unnorm = safe
+            guard_hold = any(r.hold for r in guard_results)
+            safety_violations = sum(len(r.violations) for r in guard_results)
+            if safety_violations:
+                guard_detail = [
+                    f"action {i}: {len(r.violations)} violations"
+                    for i, r in enumerate(guard_results[:3]) if r.violations
+                ]
 
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -393,7 +403,17 @@ class SmolVLANativeServer:
                     self._deadline_misses, elapsed_ms, self._deadline_ms,
                 )
             else:
-                actions_unnorm = np.zeros_like(actions_unnorm)
+                # Never synthesize zeros: on a position-controlled arm that
+                # commands the zero pose.
+                return {
+                    "error": "deadline_exceeded_no_safe_action",
+                    "reason": (
+                        f"inference took {elapsed_ms:.1f}ms > deadline "
+                        f"{self._deadline_ms:.1f}ms and no prior action exists"
+                    ),
+                    "hint": "No action was produced; do not move the robot.",
+                    "deadline_exceeded": True,
+                }
 
         if not deadline_exceeded:
             self._last_good_actions = actions_unnorm.copy()
@@ -410,6 +430,8 @@ class SmolVLANativeServer:
         }
         if self._action_guard is not None:
             result["safety_violations"] = safety_violations
+            if guard_hold:
+                result["guard_hold"] = True
             if guard_detail:
                 result["safety_detail"] = guard_detail
         if self._deadline_ms is not None:

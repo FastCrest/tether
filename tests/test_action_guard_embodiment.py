@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from tether.embodiments import EmbodimentConfig
-from tether.safety.guard import ActionGuard, SafetyLimits
+from tether.safety.guard import ActionGuard, GuardStop, GuardUnitsError, SafetyLimits
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +61,38 @@ class TestSafetyLimitsFromEmbodiment:
         assert all(v > 0 for v in limits.velocity_max)
         assert all(lo < hi for lo, hi in zip(limits.position_min, limits.position_max))
 
+    @pytest.mark.parametrize("name", ["franka", "so100", "ur5", "quadcopter"])
+    def test_all_presets_declare_position_space_and_units(self, name):
+        cfg = EmbodimentConfig.load_preset(name)
+        limits = SafetyLimits.from_embodiment_config(cfg)
+        assert limits.action_space == "position"
+        assert len(limits.units) == cfg.action_dim
+        ActionGuard(limits)  # arms without GuardUnitsError
+
+    def test_so100_preset_is_radians_with_gripper_fraction(self):
+        cfg = EmbodimentConfig.load_preset("so100")
+        assert cfg.action_space["units"] == ["radians"] * 5 + ["gripper_0_1"]
+
+    def test_config_without_units_is_refused(self):
+        d = EmbodimentConfig.load_preset("so100").to_dict()
+        d["action_space"] = {k: v for k, v in d["action_space"].items() if k != "units"}
+        cfg = EmbodimentConfig.from_dict(d)
+        with pytest.raises(GuardUnitsError):
+            ActionGuard.from_embodiment_config(cfg)
+
+    def test_non_position_kind_is_refused(self):
+        d = EmbodimentConfig.load_preset("so100").to_dict()
+        d["action_space"] = dict(d["action_space"], kind="velocity")
+        with pytest.raises(ValueError, match="kind"):
+            SafetyLimits.from_embodiment_config(EmbodimentConfig.from_dict(d))
+
+    def test_lerobot_degree_action_refused_not_clamped_to_pi(self):
+        """Studio finding: a LeRobot degree action of 45 was 'clamped' to 3.14."""
+        guard = ActionGuard.from_embodiment_config(EmbodimentConfig.load_preset("so100"))
+        chunk = np.array([[45.0, 0.0, 0.0, 0.0, 0.0, 0.5]], dtype=np.float32)
+        with pytest.raises(GuardUnitsError):
+            guard.check(chunk, units=["degrees"] * 5 + ["gripper_0_1"])
+
 
 # ---------------------------------------------------------------------------
 # ActionGuard.from_embodiment_config — clamp behavior on real configs
@@ -90,23 +122,26 @@ class TestActionGuardFromEmbodiment:
         assert safe[0, 0] == pytest.approx(2.8973)
         assert any("joint_0" in v for v in results[0].violations)
 
-    def test_nan_zeros_chunk(self):
+    def test_nan_chunk_holds_last_safe_action_never_zero_pose(self):
         cfg = EmbodimentConfig.load_preset("franka")
         guard = ActionGuard.from_embodiment_config(cfg)
+        mean = np.array(cfg.normalization["mean_action"], dtype=np.float32)
+        guard.check(np.tile(mean, (2, 1)))
         chunk = np.zeros((3, 7), dtype=np.float32)
         chunk[1, 4] = float("nan")
         safe, results = guard.check(chunk)
-        assert np.all(safe == 0.0)
-        assert results[0].clamped
+        np.testing.assert_allclose(safe, np.tile(mean, (3, 1)))
+        assert not np.any(np.all(safe == 0.0, axis=1))
+        assert results[0].clamped and results[0].hold
         assert any("non_finite" in v for v in results[0].violations)
 
-    def test_inf_zeros_chunk(self):
+    def test_inf_first_chunk_raises_stop(self):
         cfg = EmbodimentConfig.load_preset("franka")
         guard = ActionGuard.from_embodiment_config(cfg)
         chunk = np.zeros((1, 7), dtype=np.float32)
         chunk[0, 2] = float("inf")
-        safe, _ = guard.check(chunk)
-        assert np.all(safe == 0.0)
+        with pytest.raises(GuardStop):
+            guard.check(chunk)
 
     def test_partial_clamp_preserves_other_actions(self):
         """If only one action in a chunk needs clamping, the others pass through."""
@@ -175,7 +210,11 @@ def _build_test_app(server: _StubServer) -> FastAPI:
             and result["actions"]
         ):
             arr = np.asarray(result["actions"], dtype=np.float32)
-            safe, check_results = _eg.check(arr)
+            try:
+                safe, check_results = _eg.check(arr)
+            except Exception as e:  # fail closed, as server.py does
+                from tether.safety import guard_stop_response
+                return JSONResponse(content=guard_stop_response(e))
             if not np.array_equal(arr, safe):
                 result["actions"] = safe.tolist()
                 for cr in check_results:
@@ -228,6 +267,16 @@ class TestActHandlerHook:
         assert body["guard_clamped"] is True
         assert any("joint_0" in v for v in body["guard_violations"])
 
+    def test_nan_first_chunk_returns_guard_stop_without_actions(self):
+        cfg = EmbodimentConfig.load_preset("franka")
+        server = _StubServer(
+            response={"actions": [[0.0, float("nan")] + [0.0] * 5], "latency_ms": 50.0},
+            embodiment_cfg=cfg,
+        )
+        body = TestClient(_build_test_app(server)).post("/act", json={"image": "x"}).json()
+        assert body["error"] == "guard_stop"
+        assert "actions" not in body
+
     def test_nan_zeros_chunk_in_response(self):
         cfg = EmbodimentConfig.load_preset("franka")
         bad_chunk = [[0.0] * 7, [0.0, 0.0, float("nan"), 0.0, 0.0, 0.0, 0.0]]
@@ -264,3 +313,81 @@ class TestActHandlerHook:
         r = client.post("/act", json={"image": "x"})
         assert r.status_code == 200
         assert r.json()["actions"][0] == pytest.approx(mean)
+
+
+# ---------------------------------------------------------------------------
+# Real create_app /act path (not a mirror)
+# ---------------------------------------------------------------------------
+
+
+class _RealAppStub:
+    """Quacks like TetherServer for create_app; returns queued responses."""
+
+    responses: list[dict] = []
+
+    def __init__(self, export_dir, *args, **kwargs):
+        from pathlib import Path
+
+        self.export_dir = Path(export_dir)
+        self._ready = True
+        self.health_state = "ready"
+        self._inference_mode = "stub"
+        self._vlm_loaded = False
+        self.consecutive_crash_count = 0
+        self.max_consecutive_crashes = 0
+        self.robot_id = ""
+        self._action_guard = None
+
+    @property
+    def ready(self):
+        return self._ready
+
+    async def load(self):
+        self._ready = True
+
+    async def predict_from_base64_async(self, image_b64=None, instruction="", state=None):
+        return dict(type(self).responses.pop(0))
+
+
+@pytest.fixture
+def real_act_client(tmp_path, monkeypatch):
+    from tests.export_config_factory import write_test_export_config
+    from tether.runtime import server as runtime_server
+
+    monkeypatch.setattr(runtime_server, "TetherServer", _RealAppStub)
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    write_test_export_config(
+        export_dir, model_type="gr00t", action_dim=7,
+        action_units={"kind": "position", "units": ["radians"] * 6 + ["gripper_0_1"]},
+    )
+    app = runtime_server.create_app(
+        str(export_dir), device="cpu",
+        embodiment_config=EmbodimentConfig.load_preset("franka"),
+    )
+    with TestClient(app) as client:
+        yield client
+
+
+class TestRealActPath:
+    def test_nan_first_chunk_is_guard_stop_then_hold(self, real_act_client):
+        cfg = EmbodimentConfig.load_preset("franka")
+        mean = [float(v) for v in cfg.normalization["mean_action"]]
+        nan_row = list(mean)
+        nan_row[0] = float("nan")
+        _RealAppStub.responses = [
+            {"actions": [nan_row], "latency_ms": 1.0},
+            {"actions": [mean, mean], "latency_ms": 1.0},
+            {"actions": [nan_row, mean], "latency_ms": 1.0},
+        ]
+        first = real_act_client.post("/act", json={"image": None}).json()
+        assert first["error"] == "guard_stop"
+        assert "actions" not in first
+
+        ok = real_act_client.post("/act", json={"image": None}).json()
+        assert ok["actions"][0] == pytest.approx(mean)
+
+        held = real_act_client.post("/act", json={"image": None}).json()
+        assert held["guard_hold"] is True
+        assert held["actions"] == [pytest.approx(mean)] * 2
+        assert any("non_finite" in v for v in held["guard_violations"])

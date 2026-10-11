@@ -5,7 +5,12 @@ import json
 import numpy as np
 import pytest
 
-from tether.safety.guard import ActionGuard, SafetyLimits
+from tether.safety.guard import (
+    ActionGuard,
+    GuardStop,
+    GuardUnitsError,
+    SafetyLimits,
+)
 
 
 class TestSafetyLimits:
@@ -31,6 +36,7 @@ class TestSafetyLimits:
             velocity_max=[1.5, 1.5],
             effort_max=[50.0, 50.0],
             workspace_indices=[0, 1],
+            units=["radians"] * 2,
         )
         assert limits.position_min[0] == -1.0
         assert limits.position_max[1] == 2.0
@@ -53,6 +59,7 @@ class TestActionGuard:
             position_max=[1.0, 1.0],
             velocity_max=[2.0, 2.0],
             effort_max=[50.0, 50.0],
+            units=["radians"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
         action = np.array([5.0, -3.0])
@@ -62,27 +69,79 @@ class TestActionGuard:
         assert result.safe_action[0] == 1.0
         assert result.safe_action[1] == -1.0
 
-    def test_reject_mode_zeros(self):
+    def test_reject_mode_position_holds_previous_never_zeros(self):
         limits = SafetyLimits(
             joint_names=["j1"],
             position_min=[-1.0],
             position_max=[1.0],
             velocity_max=[2.0],
             effort_max=[50.0],
+            units=["radians"] * 1,
         )
         guard = ActionGuard(limits=limits, mode="reject")
-        action = np.array([5.0])
-        result = guard.check_single(action)
+        result = guard.check_single(np.array([5.0]), previous_action=np.array([0.7]))
         assert not result.safe
-        assert result.safe_action[0] == 0.0
+        assert result.hold
+        assert result.safe_action == [pytest.approx(0.7)]
 
-    def test_effort_limit_clamps_single_action(self):
+    def test_reject_mode_position_without_reference_raises_stop(self):
+        guard = ActionGuard.default(num_joints=1, mode="reject")
+        with pytest.raises(GuardStop):
+            guard.check_single(np.array([5.0]))
+
+    def test_reject_mode_velocity_space_stops_with_zeros(self):
+        limits = SafetyLimits(
+            joint_names=["j1"],
+            velocity_max=[1.0],
+            action_space="velocity",
+            units=["radians_per_second"],
+        )
+        guard = ActionGuard(limits=limits, mode="reject")
+        result = guard.check_single(np.array([5.0]))
+        assert result.hold
+        assert result.safe_action == [0.0]
+        safe, results = guard.check(np.array([[0.2], [5.0]]))
+        np.testing.assert_array_equal(safe, np.zeros((2, 1)))
+        assert all(r.hold for r in results)
+
+    def test_reject_mode_chunk_holds_last_emitted_action(self):
+        guard = ActionGuard.default(num_joints=2, mode="reject")
+        guard.check(np.array([[0.1, 0.2], [0.3, 0.4]]))
+        safe, results = guard.check(np.array([[0.5, 0.5], [9.0, 0.0]]))
+        np.testing.assert_allclose(safe, [[0.3, 0.4], [0.3, 0.4]])
+        assert not np.any(np.all(safe == 0.0, axis=1))
+        assert all(r.hold for r in results)
+
+    def test_reject_mode_chunk_prefers_observed_position(self):
+        guard = ActionGuard.default(num_joints=2, mode="reject")
+        safe, _ = guard.check(
+            np.array([[9.0, 0.0]]), observed_position=np.array([1.0, -1.0])
+        )
+        np.testing.assert_allclose(safe, [[1.0, -1.0]])
+
+    def test_position_space_ignores_effort_limit(self):
         limits = SafetyLimits(
             joint_names=["j1", "j2"],
             position_min=[-10.0, -10.0],
             position_max=[10.0, 10.0],
             velocity_max=[10.0, 10.0],
             effort_max=[2.0, 4.0],
+            units=["radians"] * 2,
+        )
+        guard = ActionGuard(limits=limits, mode="clamp")
+
+        result = guard.check_single(np.array([3.0, -6.0]))
+
+        assert result.safe
+        assert result.safe_action == [3.0, -6.0]
+        assert guard.safety_margin(np.array([[3.0, -6.0]])) > 0.0
+
+    def test_effort_limit_clamps_single_action(self):
+        limits = SafetyLimits(
+            joint_names=["j1", "j2"],
+            effort_max=[2.0, 4.0],
+            action_space="effort",
+            units=["newton_meters"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -92,6 +151,7 @@ class TestActionGuard:
         assert result.clamped
         assert result.safe_action == [2.0, -4.0]
         assert any("effort limit" in v for v in result.violations)
+        assert guard.safety_margin(np.array([[1.0, 0.0]])) == pytest.approx(0.5)
 
     def test_velocity_limit_clamps_between_chunk_actions(self):
         limits = SafetyLimits(
@@ -100,6 +160,7 @@ class TestActionGuard:
             position_max=[10.0, 10.0],
             velocity_max=[1.0, 0.5],
             effort_max=[50.0, 50.0],
+            units=["radians"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
         actions = np.array([
@@ -124,6 +185,7 @@ class TestActionGuard:
             position_max=[1.0] * 4,
             velocity_max=[10.0, 10.0, 10.0, 0.5],
             effort_max=[50.0] * 4,
+            units=["radians"] * 4,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -142,6 +204,7 @@ class TestActionGuard:
             position_max=[10.0, 10.0],
             velocity_max=[10.0, 0.5],
             effort_max=[2.0, 50.0],
+            units=["radians"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -149,9 +212,11 @@ class TestActionGuard:
             np.array([3.0, 0.9]), previous_action=np.zeros(2)
         )
 
-        assert result.safe_action[0] == 2.0
+        # Position space: effort_max is not compared against a position.
+        assert result.safe_action[0] == 3.0
         assert result.safe_action[1] == pytest.approx(0.5)
         assert any("joint_1 velocity limit" in v for v in result.violations)
+        assert not any("effort" in v for v in result.violations)
 
     def test_chunk_velocity_clamp_survives_position_violation_on_earlier_joint(self):
         limits = SafetyLimits(
@@ -160,6 +225,7 @@ class TestActionGuard:
             position_max=[1.0, 10.0],
             velocity_max=[10.0, 0.5],
             effort_max=[50.0, 50.0],
+            units=["radians"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
         actions = np.array([
@@ -180,6 +246,7 @@ class TestActionGuard:
             position_max=[1.0, 10.0],
             velocity_max=[0.1, 10.0],
             effort_max=[50.0, 50.0],
+            units=["radians"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -198,6 +265,7 @@ class TestActionGuard:
             position_max=[1.0],
             velocity_max=[0.5],
             effort_max=[50.0],
+            units=["radians"] * 1,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -208,21 +276,20 @@ class TestActionGuard:
         assert any("joint_0 velocity limit" in v for v in results[1].violations)
         assert any("joint_0 velocity limit" in v for v in results[2].violations)
 
-    def test_reject_mode_uses_emitted_zero_as_next_velocity_reference(self):
+    def test_reject_mode_chunk_without_reference_raises_stop(self):
         limits = SafetyLimits(
             joint_names=["j0"],
             position_min=[-1.0],
             position_max=[1.0],
             velocity_max=[0.5],
             effort_max=[50.0],
+            units=["radians"] * 1,
         )
         guard = ActionGuard(limits=limits, mode="reject")
 
-        safe_actions, results = guard.check(np.array([[0.0], [2.0], [1.0]]))
-
-        np.testing.assert_allclose(safe_actions[:, 0], [0.0, 0.0, 0.0])
-        assert any("joint_0 above max" in v for v in results[1].violations)
-        assert any("joint_0 velocity limit" in v for v in results[2].violations)
+        with pytest.raises(GuardStop):
+            guard.check(np.array([[0.0], [2.0], [1.0]]))
+        assert guard.consecutive_clamps == 1
 
     def test_velocity_check_skips_joints_without_a_configured_limit(self):
         limits = SafetyLimits(
@@ -231,6 +298,7 @@ class TestActionGuard:
             position_max=[1.0, 10.0],
             velocity_max=[0.5],
             effort_max=[50.0, 50.0],
+            units=["radians"] * 2,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -251,6 +319,7 @@ class TestActionGuard:
             workspace_min=[-1.0, 0.0],
             workspace_max=[1.0, 2.0],
             workspace_indices=[0, 2],
+            units=["radians"] * 3,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -272,6 +341,7 @@ class TestActionGuard:
             workspace_min=[-1.0, -1.0, 0.0],
             workspace_max=[1.0, 1.0, 1.5],
             workspace_indices=[],
+            units=["radians"] * 3,
         )
         guard = ActionGuard(limits=limits, mode="clamp")
 
@@ -301,6 +371,7 @@ class TestActionGuard:
             position_max=[10.0],
             velocity_max=[1.0],
             effort_max=[50.0],
+            units=["radians"] * 1,
         )
         guard = ActionGuard(limits=limits)
 
@@ -355,30 +426,71 @@ class TestActionGuard:
 
 
 class TestNanGuard:
-    """NaN/Inf rejection tests — any non-finite value → whole chunk zeroed."""
+    """NaN/Inf: the chunk never runs and no new target is synthesized."""
 
-    def test_nan_action_is_zeroed(self):
+    def test_nan_action_holds_last_safe_action(self):
         guard = ActionGuard.default(num_joints=3)
-        actions = np.array([[0.1, np.nan, 0.3]])
-        safe, results = guard.check(actions)
-        assert np.all(safe == 0.0)
+        guard.check(np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]))
+        safe, results = guard.check(np.array([[0.1, np.nan, 0.3], [0.0, 0.0, 0.0]]))
+        np.testing.assert_allclose(safe, [[0.4, 0.5, 0.6]] * 2)
+        assert not np.all(safe == 0.0)
         assert not results[0].safe
+        assert results[0].hold
         assert any("non_finite" in v for v in results[0].violations)
         assert results[0].clamped
 
-    def test_inf_action_is_zeroed(self):
+    def test_nan_action_without_reference_raises_stop(self):
         guard = ActionGuard.default(num_joints=3)
-        actions = np.array([[0.1, 0.2, np.inf]])
-        safe, results = guard.check(actions)
-        assert np.all(safe == 0.0)
-        assert not results[0].safe
+        with pytest.raises(GuardStop):
+            guard.check(np.array([[0.1, np.nan, 0.3]]))
 
-    def test_neg_inf_action_is_zeroed(self):
+    def test_inf_action_holds_observed_position(self):
+        guard = ActionGuard.default(num_joints=3)
+        safe, results = guard.check(
+            np.array([[0.1, 0.2, np.inf]]), observed_position=np.array([0.3, -0.2, 1.0])
+        )
+        np.testing.assert_allclose(safe, [[0.3, -0.2, 1.0]])
+        assert results[0].hold
+
+    def test_neg_inf_holds_entire_chunk(self):
         guard = ActionGuard.default(num_joints=2)
-        actions = np.array([[-np.inf, 0.0], [0.1, 0.2]])
-        safe, _ = guard.check(actions)
-        # ENTIRE chunk zeroed when any element non-finite
-        assert np.all(safe == 0.0)
+        guard.check(np.array([[0.5, -0.5]]))
+        safe, _ = guard.check(np.array([[-np.inf, 0.0], [0.1, 0.2]]))
+        np.testing.assert_allclose(safe, [[0.5, -0.5], [0.5, -0.5]])
+
+    def test_velocity_space_nan_stops_with_zeros(self):
+        limits = SafetyLimits(
+            joint_names=["j0", "j1"],
+            velocity_max=[1.0, 1.0],
+            action_space="velocity",
+            units=["radians_per_second"] * 2,
+        )
+        guard = ActionGuard(limits=limits)
+        safe, results = guard.check(np.array([[np.nan, 0.5]]))
+        np.testing.assert_array_equal(safe, [[0.0, 0.0]])
+        assert results[0].hold
+
+    def test_velocity_space_bounds_values_not_deltas(self):
+        limits = SafetyLimits(
+            joint_names=["j0"],
+            position_min=[-0.1],
+            position_max=[0.1],
+            velocity_max=[1.0],
+            action_space="velocity",
+            units=["radians_per_second"],
+        )
+        guard = ActionGuard(limits=limits)
+        safe, results = guard.check(np.array([[0.5], [-0.9], [3.0]]))
+        np.testing.assert_allclose(safe[:, 0], [0.5, -0.9, 1.0])
+        assert results[0].safe and results[1].safe
+        assert any("velocity limit" in v for v in results[2].violations)
+
+    def test_reset_forgets_hold_reference(self):
+        guard = ActionGuard.default(num_joints=2)
+        guard.check(np.array([[0.5, -0.5]]))
+        guard.reset()
+        with pytest.raises(GuardStop):
+            guard.check(np.array([[np.nan, 0.0]]))
 
     def test_clean_action_passes_through(self):
         guard = ActionGuard.default(num_joints=3)
@@ -418,6 +530,10 @@ class TestKillSwitch:
 
     def test_nan_chunk_counts_toward_kill_switch(self):
         guard = ActionGuard.default(num_joints=2, max_consecutive_clamps=2)
+        with pytest.raises(GuardStop):
+            guard.check(np.array([[np.nan, 0.1]]))
+        guard.check(np.array([[0.1, 0.1]]), observed_position=None)
+        assert guard.consecutive_clamps == 0
         guard.check(np.array([[np.nan, 0.1]]))
         guard.check(np.array([[np.inf, 0.1]]))
         assert guard.tripped
@@ -436,3 +552,67 @@ class TestKillSwitch:
         for _ in range(100):
             guard.check(np.array([[10.0, 10.0]]))
         assert not guard.tripped
+
+
+class TestUnits:
+    """The guard refuses to clamp when units are unknown or mismatched."""
+
+    def _limits(self, **kw):
+        base = dict(
+            joint_names=["j0", "j1"],
+            position_min=[-3.14, -3.14],
+            position_max=[3.14, 3.14],
+            velocity_max=[2.0, 2.0],
+            effort_max=[50.0, 50.0],
+        )
+        base.update(kw)
+        return SafetyLimits(**base)
+
+    def test_missing_units_refused(self):
+        with pytest.raises(GuardUnitsError, match="units"):
+            ActionGuard(self._limits())
+
+    def test_unit_count_mismatch_refused(self):
+        with pytest.raises(GuardUnitsError):
+            ActionGuard(self._limits(units=["radians"]))
+
+    def test_unit_not_valid_for_space_refused(self):
+        with pytest.raises(GuardUnitsError):
+            ActionGuard(self._limits(units=["newton_meters"] * 2))
+
+    def test_unknown_action_space_refused(self):
+        with pytest.raises(ValueError):
+            ActionGuard(self._limits(units=["radians"] * 2, action_space="torque"))
+
+    def test_degree_input_against_radian_limits_refused_not_clamped(self):
+        guard = ActionGuard(self._limits(units=["radians"] * 2))
+        with pytest.raises(GuardUnitsError):
+            guard.check(np.array([[45.0, 0.0]]), units=["degrees", "degrees"])
+        with pytest.raises(GuardUnitsError):
+            guard.check_single(np.array([45.0, 0.0]), units=["degrees", "degrees"])
+        assert guard.inference_count == 0
+
+    def test_matching_input_units_accepted(self):
+        guard = ActionGuard(self._limits(units=["radians"] * 2))
+        safe, _ = guard.check(np.array([[0.5, 0.0]]), units=["radians", "radians"])
+        np.testing.assert_allclose(safe, [[0.5, 0.0]])
+
+    def test_units_round_trip_json(self, tmp_path):
+        limits = self._limits(units=["radians", "gripper_0_1"])
+        limits.save(tmp_path / "l.json")
+        loaded = SafetyLimits.from_json(tmp_path / "l.json")
+        assert loaded.units == ["radians", "gripper_0_1"]
+        assert loaded.action_space == "position"
+
+    def test_legacy_json_without_units_refused(self, tmp_path):
+        path = tmp_path / "legacy.json"
+        path.write_text(json.dumps({
+            "joint_names": ["j0"], "position_min": [-1.0], "position_max": [1.0],
+            "velocity_max": [1.0], "effort_max": [1.0],
+        }))
+        with pytest.raises(GuardUnitsError):
+            ActionGuard(SafetyLimits.from_json(path))
+
+    def test_bad_mode_refused(self):
+        with pytest.raises(ValueError):
+            ActionGuard.default(num_joints=2, mode="zero")

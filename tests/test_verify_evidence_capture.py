@@ -450,6 +450,7 @@ def test_action_guard_returns_the_exact_clamped_action_and_count():
         position_max=[1.0, 1.0],
         velocity_max=[10.0, 10.0],
         effort_max=[0.0, 0.0],
+        units=["radians"] * 2,
     )
     guard = ActionGuard(limits=limits, mode="clamp", max_consecutive_clamps=0)
     executed, clamps = apply_action_guard(np.array([5.0, 0.5]), guard)
@@ -459,8 +460,29 @@ def test_action_guard_returns_the_exact_clamped_action_and_count():
     rejected, nonfinite_clamps = apply_action_guard(
         np.array([np.nan, 0.5]), guard, previous_action=executed
     )
-    assert rejected.tolist() == [0.0, 0.0]
+    # Position space: NaN holds the previously executed action, never zeros.
+    assert rejected.tolist() == [1.0, 0.5]
     assert nonfinite_clamps == 1
+
+    from tether.safety import GuardStop
+
+    with pytest.raises(GuardStop):
+        apply_action_guard(np.array([np.nan, 0.5]), guard)
+
+
+def test_action_guard_velocity_space_nan_stops_with_zeros():
+    limits = SafetyLimits(
+        joint_names=["j0", "j1"],
+        velocity_max=[1.0, 1.0],
+        action_space="velocity",
+        units=["normalized"] * 2,
+    )
+    guard = ActionGuard(limits=limits, mode="clamp", max_consecutive_clamps=0)
+    stopped, clamps = apply_action_guard(
+        np.array([np.nan, 0.5]), guard, previous_action=np.array([0.3, 0.3])
+    )
+    assert stopped.tolist() == [0.0, 0.0]
+    assert clamps == 1
 
 
 def test_safety_limits_must_cover_exact_seven_dimensional_action():

@@ -271,17 +271,17 @@ class Pi05DecomposedServer:
         self._load_normalizer_stats()
 
         # Apply ActionGuard if a safety config was provided.
+        # Fail closed: a requested safety config that cannot be armed stops
+        # load instead of serving unguarded actions.
         if self._safety_config_path is not None:
-            try:
-                from tether.safety import ActionGuard, SafetyLimits
-                limits = SafetyLimits.from_json(self._safety_config_path)
-                self._action_guard = ActionGuard(limits=limits, mode="clamp")
-                logger.info(
-                    "Pi05DecomposedServer ActionGuard loaded: %d joints, mode=clamp",
-                    len(limits.joint_names),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Pi05DecomposedServer safety load failed: %s", exc)
+            from tether.safety import ActionGuard, SafetyLimits
+            limits = SafetyLimits.from_json(self._safety_config_path)
+            self._action_guard = ActionGuard(limits=limits, mode="clamp")
+            logger.info(
+                "Pi05DecomposedServer ActionGuard loaded: %d joints, mode=clamp, "
+                "space=%s, units=%s",
+                len(limits.joint_names), limits.action_space, limits.units,
+            )
 
         self._ready = True
         logger.info("Pi05DecomposedServer ready")
@@ -561,6 +561,13 @@ class Pi05DecomposedServer:
         import time
         if not self._ready or self._inference is None:
             return {"error": "server not ready -- load() not called"}
+        if self._action_guard is not None and self._action_guard.tripped:
+            return {
+                "error": "guard_tripped",
+                "reason": self._action_guard.trip_reason,
+                "hint": "Investigate upstream (inputs / sensors / model) and "
+                        "call POST /guard/reset to resume.",
+            }
 
         t0 = time.perf_counter()
         try:
@@ -672,6 +679,21 @@ class Pi05DecomposedServer:
                 actions_padded = actions_padded * a_std + a_mean
             actions_out = actions_padded[:, : self.action_dim].astype(np.float32)
 
+            # 7. Safety guard. Previously loaded but never applied here.
+            guard_meta: dict[str, Any] = {}
+            if self._action_guard is not None:
+                try:
+                    actions_out, guard_results = self._action_guard.check(actions_out)
+                except Exception as exc:  # noqa: BLE001 — fail closed: no actions
+                    from tether.safety import guard_stop_response
+                    logger.error("Pi05DecomposedServer guard refused chunk: %s", exc)
+                    return guard_stop_response(exc)
+                guard_meta["safety_violations"] = sum(
+                    len(r.violations) for r in guard_results
+                )
+                if any(r.hold for r in guard_results):
+                    guard_meta["guard_hold"] = True
+
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             self._latency_history.append(elapsed_ms)
 
@@ -681,6 +703,7 @@ class Pi05DecomposedServer:
                 "action_dim": self.action_dim,
                 "latency_ms": elapsed_ms,
                 "inference_mode": self._inference_mode,
+                **guard_meta,
             }
             # Per-request cache decision (hit/miss/off + which key component
             # invalidated). `/act` forwards this into the JSONL record's

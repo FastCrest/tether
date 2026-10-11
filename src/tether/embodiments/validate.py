@@ -90,6 +90,21 @@ def validate_cross_field(cfg: EmbodimentConfig) -> list[ValidationError]:
             }
         )
 
+    # action_space.units (when present) must cover every dim
+    units = cfg.action_space.get("units")
+    if units is not None and len(units) != action_dim:
+        errors.append(
+            {
+                "slug": "action-units-length-mismatch",
+                "severity": "error",
+                "field": "action_space.units",
+                "message": (
+                    f"action_space.units has {len(units)} entries but "
+                    f"action_space.dim is {action_dim}; lengths must match"
+                ),
+            }
+        )
+
     # Per-dim range must be (lo, hi) with lo < hi
     for i, r in enumerate(ranges):
         if len(r) == 2 and r[0] >= r[1]:
