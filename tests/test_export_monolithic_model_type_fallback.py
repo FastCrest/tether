@@ -188,3 +188,79 @@ def test_export_monolithic_substring_match_takes_precedence(tmp_path, monkeypatc
         output_dir=tmp_path / "out",
     )
     assert captured.get("smolvla_called")
+
+
+# ---------------------------------------------------------------------------
+# Post-fusion VERIFICATION.md refresh (bug fix: hash-after-fusion)
+# ---------------------------------------------------------------------------
+
+
+def test_export_monolithic_calls_write_verification_after_fusion(tmp_path, monkeypatch):
+    """export_monolithic must call write_verification_report AFTER fuse_weights
+    so the VERIFICATION.md hashes the post-fusion file, not the pre-fusion one.
+
+    We monkeypatch the family exporter (returns a fake onnx_path so fusion
+    can fire) and both fuse_weights and write_verification_report to track
+    call order. No model download, no torch, no lerobot required.
+    """
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    # Create a fake model.onnx so fuse_weights has a valid path
+    fake_onnx = output_dir / "model.onnx"
+    fake_onnx.write_bytes(b"pre-fusion fake onnx")
+
+    call_order: list[str] = []
+
+    def _fake_export_smolvla(model_id, output_dir, *, num_steps=10, target="desktop"):
+        call_order.append("family_export")
+        return {"status": "ok", "onnx_path": str(fake_onnx)}
+
+    def _fake_fuse_weights(onnx_path, num_steps=10):
+        call_order.append("fuse_weights")
+        # Simulate weight fusion rewriting the file
+        Path(onnx_path).write_bytes(b"post-fusion fake onnx -- different bytes")
+        return onnx_path
+
+    write_verification_calls: list[str] = []
+
+    def _fake_write_verification(export_dir, parity=None, **kwargs):
+        call_order.append("write_verification_report")
+        write_verification_calls.append(str(export_dir))
+        # Return a dummy path so callers don't break
+        return Path(export_dir) / "VERIFICATION.md"
+
+    monkeypatch.setattr(
+        "tether.exporters.monolithic.export_smolvla_monolithic", _fake_export_smolvla,
+    )
+    # Patch fuse_weights at the module level that export_monolithic imports it from
+    import tether.exporters.weight_fusion as _wf
+    monkeypatch.setattr(_wf, "fuse_weights", _fake_fuse_weights)
+    # Patch write_verification_report via its import site in monolithic
+    import tether.verification_report as _vr
+    monkeypatch.setattr(_vr, "write_verification_report", _fake_write_verification)
+
+    export_monolithic(
+        model_id="HuggingFaceVLA/smolvla_libero",
+        output_dir=output_dir,
+    )
+
+    # fuse_weights must appear in the call order
+    assert "fuse_weights" in call_order, (
+        "fuse_weights was never called — test setup may be wrong"
+    )
+
+    # write_verification_report must be called AFTER fuse_weights at least once
+    try:
+        fuse_idx = call_order.index("fuse_weights")
+    except ValueError:
+        pytest.fail("fuse_weights not in call_order")
+
+    post_fusion_verification_calls = [
+        i for i, name in enumerate(call_order)
+        if name == "write_verification_report" and i > fuse_idx
+    ]
+    assert post_fusion_verification_calls, (
+        f"write_verification_report was never called after fuse_weights. "
+        f"Call order: {call_order}"
+    )
