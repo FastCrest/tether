@@ -2,9 +2,10 @@
 # Sanity check for per-embodiment configs (B.1).
 #
 # Verifies:
-#   - 3 preset JSON files exist at configs/embodiments/{franka,so100,ur5}.json
+#   - the arm preset JSON files exist at configs/embodiments/{franka,so100,ur5}.json
 #   - each parses as valid JSON
-#   - the embodiments package imports + load_preset works for all 3
+#   - the embodiments package imports and every shipped package preset
+#     (whatever list_presets() returns — not a hard-coded list) loads + validates
 #
 # Run from repo root:
 #   bash scripts/verify_embodiment_structure.sh
@@ -41,9 +42,16 @@ from tether.embodiments import EmbodimentConfig, list_presets
 from tether.embodiments.validate import validate_embodiment_config
 
 presets = list_presets()
-expected = ["franka", "so100", "ur5"]
-if presets != expected:
-    print(f"  ✗ list_presets() returned {presets}, expected {expected}")
+# Two checks, not one: a required-minimum SUBSET (catches an accidentally
+# dropped preset file — an equality check broke when quadcopter shipped,
+# but no check at all lets packaging omissions pass silently) plus dynamic
+# validation of everything else that ships. New presets validate
+# automatically in the loop below; add them to REQUIRED when they should
+# be omission-protected too.
+REQUIRED = {"franka", "so100", "ur5", "quadcopter"}
+missing = REQUIRED - set(presets)
+if missing:
+    print(f"  ✗ required package presets missing: {sorted(missing)}")
     sys.exit(1)
 
 for name in presets:

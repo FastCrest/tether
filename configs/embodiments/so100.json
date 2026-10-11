@@ -76,7 +76,7 @@
   "control": {
     "frequency_hz": 15.0,
     "chunk_size": 30,
-    "rtc_execution_horizon": 0.4
+    "rtc_execution_horizon": 12
   },
   "constraints": {
     "max_ee_velocity": 0.5,
