@@ -34,6 +34,11 @@
           "type": "string",
           "enum": ["continuous", "discrete"]
         },
+        "kind": {
+          "type": "string",
+          "enum": ["position"],
+          "description": "What the action values are. Only position targets are supported on the embodiment ActionGuard path; a guard stop holds the current target, never a zero target. Defaults to position when omitted."
+        },
         "dim": {
           "type": "integer",
           "minimum": 1,
@@ -50,6 +55,15 @@
             "items": { "type": "number" }
           },
           "description": "Per-dim [min, max] hard limits. Length must equal action_space.dim."
+        },
+        "units": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": ["radians", "degrees", "meters", "normalized", "gripper_0_1", "gripper_0_100"]
+          },
+          "description": "Per-dim units of the action values; length must equal action_space.dim. Required by ActionGuard, which refuses to clamp values whose units are unknown."
         }
       }
     },

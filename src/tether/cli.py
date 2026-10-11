@@ -281,369 +281,400 @@ def export(
              "If omitted, the bundle ships with the factory-default config "
              "(safe but unaware of your physical arm's homing offsets).",
     ),
+    action_units: str = typer.Option(
+        "",
+        "--action-units",
+        help="Per-axis units of the policy's actions, recorded as action_units in "
+             "tether_config.json, e.g. 'radians*5,gripper_0_1' or 'degrees*5,gripper_0_100'. "
+             "`tether serve` checks them against --safety-config / --embodiment; exports "
+             "without them require --action-units at serve time.",
+    ),
+    action_space: str = typer.Option(
+        "position",
+        "--action-space",
+        help="What the policy's actions are: position, velocity or effort "
+             "(used with --action-units).",
+    ),
 ):
     """Export a VLA model to ONNX + TensorRT for edge deployment."""
     _setup_logging(verbose)
-    hardware = get_hardware_profile(target)
-    try:
-        requested_export_mode = ExportMode(export_mode)
-    except ValueError:
-        valid = ", ".join(mode.value for mode in ExportMode)
-        err_console.print(f"[red]Invalid --export-mode {export_mode!r}. Valid: {valid}[/red]")
-        raise typer.Exit(2)
+    from tether.export_config import export_action_units as _export_action_units
+    from tether.safety.guard import GuardUnitsError, parse_action_units
 
-    if monolithic:
-        if requested_export_mode != ExportMode.AUTO:
-            err_console.print(
-                "[red]--export-mode only applies to --decomposed pi0.5 exports; "
-                "monolithic export has no parallel prefix/expert split.[/red]"
-            )
+    action_units_spec = None
+    if action_units:
+        try:
+            action_units_spec = parse_action_units(action_units, action_space)
+        except GuardUnitsError as exc:
+            err_console.print(f"[red]Invalid --action-units: {exc}[/red]")
             raise typer.Exit(2)
-        label = "SnapFlow student (1-NFE)" if from_distilled else "monolithic, cos=1.0 verified path"
-        console.print(f"\n[bold]Tether Export ({label})[/bold]")
-        console.print(f"  Model:      {model}")
-        console.print(f"  Output:     {output}")
-        if not from_distilled:
-            console.print(f"  num_steps:  {num_steps}")
+    else:
+        err_console.print(
+            "[yellow]No --action-units given: tether_config.json will not record the "
+            "policy's action units, and `tether serve` with a safety guard will "
+            "require --action-units.[/yellow]"
+        )
+    with _export_action_units(action_units_spec):
+        hardware = get_hardware_profile(target)
+        try:
+            requested_export_mode = ExportMode(export_mode)
+        except ValueError:
+            valid = ", ".join(mode.value for mode in ExportMode)
+            err_console.print(f"[red]Invalid --export-mode {export_mode!r}. Valid: {valid}[/red]")
+            raise typer.Exit(2)
+
+        if monolithic:
+            if requested_export_mode != ExportMode.AUTO:
+                err_console.print(
+                    "[red]--export-mode only applies to --decomposed pi0.5 exports; "
+                    "monolithic export has no parallel prefix/expert split.[/red]"
+                )
+                raise typer.Exit(2)
+            label = "SnapFlow student (1-NFE)" if from_distilled else "monolithic, cos=1.0 verified path"
+            console.print(f"\n[bold]Tether Export ({label})[/bold]")
+            console.print(f"  Model:      {model}")
+            console.print(f"  Output:     {output}")
+            if not from_distilled:
+                console.print(f"  num_steps:  {num_steps}")
+            console.print()
+
+            if dry_run:
+                console.print("[yellow]--dry-run not supported with --monolithic yet (v0.3 item). "
+                              "Re-run without --dry-run to export.[/yellow]")
+                raise typer.Exit()
+
+            try:
+                if from_distilled:
+                    from tether.exporters.monolithic import export_snapflow_student_monolithic
+                else:
+                    from tether.exporters.monolithic import export_monolithic
+            except ImportError as exc:
+                err_console.print(f"[red]{exc}[/red]", markup=False)
+                err_console.print(
+                    "\nFix: pip install 'fastcrest-tether[monolithic]' "
+                    "(pins transformers==5.3.0; use a clean venv to avoid "
+                    "the base transformers<5.0 conflict)",
+                    style="cyan", markup=False,
+                )
+                raise typer.Exit(2)
+
+            import time
+            start = time.perf_counter()
+            try:
+                if from_distilled:
+                    result = export_snapflow_student_monolithic(model, output, target=target)
+                else:
+                    result = export_monolithic(model, output, num_steps=num_steps, target=target)
+            except ImportError as exc:
+                err_console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
+                err_console.print(
+                    "\nFix: pip install 'fastcrest-tether[monolithic]'",
+                    style="cyan", markup=False,
+                )
+                raise typer.Exit(2)
+            elapsed = time.perf_counter() - start
+            console.print(f"\n[bold green]Monolithic export complete in {elapsed:.1f}s[/bold green]")
+            console.print(f"  ONNX: {result['onnx_path']}")
+            console.print(f"  Size: {result['size_mb']:.1f} MB")
+
+            try:
+                from tether.verification_report import write_verification_report
+                report_path = write_verification_report(output, parity=None)
+                console.print(f"  Verification manifest: {report_path}")
+            except Exception as exc:
+                console.print(f"[yellow]Verification manifest skipped: {exc}[/yellow]")
+
+            _maybe_write_embodiment_bundle(output, embodiment, calibration)
+
+            console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
+            raise typer.Exit(0)
+
+        console.print(f"\n[bold]Tether Export[/bold]")
+        console.print(f"  Model:     {model}")
+        console.print(f"  Target:    {hardware.name} ({hardware.memory_gb}GB, {hardware.trt_precision})")
+        console.print(f"  Precision: {precision}")
+        console.print(f"  Output:    {output}")
         console.print()
 
         if dry_run:
-            console.print("[yellow]--dry-run not supported with --monolithic yet (v0.3 item). "
-                          "Re-run without --dry-run to export.[/yellow]")
+            console.print("[dim]Checking exportability...[/dim]")
+            from tether.checkpoint import load_checkpoint, detect_model_type, validate_checkpoint
+
+            state_dict, config = load_checkpoint(model)
+            model_type = detect_model_type(state_dict)
+            console.print(f"  Detected: {model_type or 'unknown'}")
+            total_params = sum(v.numel() for v in state_dict.values())
+            console.print(f"  Params:   {total_params / 1e6:.1f}M")
+
+            warnings = validate_checkpoint(state_dict, model_type or "unknown")
+            for w in warnings:
+                console.print(f"  [yellow]Warning: {w}[/yellow]")
+
+            # Check memory fit
+            weight_gb = total_params * 2 / 1e9  # FP16
+            if weight_gb > hardware.memory_gb * 0.7:
+                err_console.print(f"  [red]Model ({weight_gb:.1f}GB) may not fit on {hardware.name} ({hardware.memory_gb}GB)[/red]")
+            else:
+                console.print(f"  [green]Model ({weight_gb:.1f}GB) fits on {hardware.name} ({hardware.memory_gb}GB)[/green]")
+
+            if model_type is None:
+                console.print("\n[yellow]Unknown model type — export may fail. Supported: smolvla, pi0, pi05.[/yellow]")
+            else:
+                console.print("\n[green]Dry run complete. Export should work.[/green]")
             raise typer.Exit()
 
-        try:
-            if from_distilled:
-                from tether.exporters.monolithic import export_snapflow_student_monolithic
-            else:
-                from tether.exporters.monolithic import export_monolithic
-        except ImportError as exc:
-            err_console.print(f"[red]{exc}[/red]", markup=False)
+        if _looks_like_pi05_model_ref(model):
+            console.print("\n[bold]Tether Export (pi0.5 decomposed)[/bold]")
+            console.print(f"  Model:       {model}")
+            console.print(f"  Target:      {hardware.name} ({hardware.memory_gb}GB, {hardware.trt_precision})")
+            console.print(f"  Output:      {output}")
+            console.print(f"  Export mode: {requested_export_mode.value}")
+            console.print()
+
+            try:
+                from tether.exporters.decomposed import export_pi05_decomposed
+            except ImportError as exc:
+                err_console.print(f"[red]{exc}[/red]", markup=False)
+                err_console.print(
+                    "\nFix: pip install 'fastcrest-tether[monolithic]' "
+                    "(pins transformers==5.3.0; use a clean venv to avoid "
+                    "the base transformers<5.0 conflict)",
+                    style="cyan", markup=False,
+                )
+                raise typer.Exit(2)
+
+            import time
+            start = time.perf_counter()
+            decomposed_steps = 1 if from_distilled else num_steps
+            try:
+                result = export_pi05_decomposed(
+                    model_id=model,
+                    output_dir=output,
+                    num_steps=decomposed_steps,
+                    target=target,
+                    student_checkpoint=model if from_distilled else None,
+                    export_mode=requested_export_mode,
+                )
+            except InsufficientVRAMError as exc:
+                console.print(f"{exc}", style="red", markup=False)
+                raise typer.Exit(2)
+            except ImportError as exc:
+                console.print(f"Missing decomposed export dep: {exc}", style="red", markup=False)
+                raise typer.Exit(2)
+            except Exception as exc:  # noqa: BLE001
+                console.print(
+                    f"Decomposed export failed: {type(exc).__name__}: {exc}",
+                    style="red",
+                    markup=False,
+                )
+                raise typer.Exit(1)
+
+            elapsed = time.perf_counter() - start
+            console.print(f"\n[bold green]Decomposed export complete in {elapsed:.1f}s[/bold green]")
+            console.print(f"  Mode:   {result.get('export_mode', requested_export_mode.value)}")
+            console.print(f"  Prefix: {result['vlm_prefix_onnx']} ({result['vlm_prefix_mb']:.1f} MB)")
+            console.print(f"  Expert: {result['expert_denoise_onnx']} ({result['expert_denoise_mb']:.1f} MB)")
+            _maybe_write_embodiment_bundle(output, embodiment, calibration)
+            console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
+            raise typer.Exit(0)
+
+        if requested_export_mode != ExportMode.AUTO:
             err_console.print(
-                "\nFix: pip install 'fastcrest-tether[monolithic]' "
-                "(pins transformers==5.3.0; use a clean venv to avoid "
-                "the base transformers<5.0 conflict)",
-                style="cyan", markup=False,
+                "[red]--export-mode is only implemented for pi0.5 decomposed exports "
+                "handled by the vlm_prefix/expert_denoise exporter. Re-run with "
+                "--export-mode auto, or use a pi0.5 model ref.[/red]"
             )
             raise typer.Exit(2)
+
+        # Full export — auto-dispatch to the right exporter based on model type
+        from tether.checkpoint import load_checkpoint, detect_model_type
+        # Spine-based exporters (lift #1 Days 6 + 7) for smolvla + groot.
+        # pi0/pi05 still use the legacy pi0_exporter direct-build until their
+        # spine exporters land (Day 11 sunset rewrites this dispatch).
+        from tether.exporters.smolvla import export_smolvla
+        from tether.exporters.pi0 import export_pi0, export_pi05
+        from tether.exporters.gr00t import export_gr00t
+
+        # Load once, detect, then pass state_dict to the exporter (avoids double-load)
+        console.print("[dim]Loading checkpoint...[/dim]")
+        state_dict, _ = load_checkpoint(model)
+        model_type = detect_model_type(state_dict) or "smolvla"
+        console.print(f"  Detected: [bold]{model_type}[/bold]")
+
+        export_config = ExportConfig(
+            model_id=model,
+            target=target,
+            output_dir=output,
+            precision=precision,
+            opset=opset,
+            action_chunk_size=chunk_size,
+            validate=not no_validate,
+        )
 
         import time
         start = time.perf_counter()
-        try:
-            if from_distilled:
-                result = export_snapflow_student_monolithic(model, output, target=target)
-            else:
-                result = export_monolithic(model, output, num_steps=num_steps, target=target)
-        except ImportError as exc:
-            err_console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
-            err_console.print(
-                "\nFix: pip install 'fastcrest-tether[monolithic]'",
-                style="cyan", markup=False,
-            )
-            raise typer.Exit(2)
-        elapsed = time.perf_counter() - start
-        console.print(f"\n[bold green]Monolithic export complete in {elapsed:.1f}s[/bold green]")
-        console.print(f"  ONNX: {result['onnx_path']}")
-        console.print(f"  Size: {result['size_mb']:.1f} MB")
+        if model_type == "gr00t":
+            # Use the full-stack exporter (wraps action_encoder + DiT + action_decoder)
+            # so `tether serve` can run the standard denoising loop. Spine-based
+            # version from lift #1 Day 7 (src/tether/exporters/gr00t.py).
+            from tether.exporters.gr00t import export_gr00t_full
+            result = export_gr00t_full(export_config, state_dict=state_dict)
+        elif model_type == "openvla":
+            from tether.exporters.openvla import export_openvla
+            result = export_openvla(export_config, state_dict=state_dict)
+        elif model_type == "pi05":
+            result = export_pi05(export_config, state_dict=state_dict)
+        elif model_type == "pi0":
+            result = export_pi0(export_config, state_dict=state_dict)
+        else:
+            result = export_smolvla(export_config, state_dict=state_dict)
+        elapsed_expert = time.perf_counter() - start
+
+        # Print expert results
+        console.print(f"\n[bold green]Expert export complete in {elapsed_expert:.1f}s[/bold green]")
+
+        if "files" in result:
+            for name, path in result["files"].items():
+                size = os.path.getsize(path) / 1e6 if os.path.exists(path) else 0
+                console.print(f"  {name}: {path} ({size:.1f}MB)")
+
+        if "metadata" in result and "onnx_validation" in result["metadata"]:
+            val = result["metadata"]["onnx_validation"]
+            status = "[green]PASS[/green]" if val["passed"] else "[red]FAIL[/red]"
+            console.print(f"  Validation: {status} (max_diff={val['max_diff']:.2e})")
+
+        if "metadata" in result and "expert" in result["metadata"]:
+            meta = result["metadata"]["expert"]
+            console.print(f"  Expert: {meta['num_layers']} layers, {meta['total_params_m']:.1f}M params")
+
+        # For SmolVLA: also export the VLM pipeline (vision_encoder + text_embedder + decoder_prefill)
+        # so `tether serve` can run with real task-conditioned actions instead of noise.
+        # Note: VLM weights come from the base SmolVLM2-500M (not the SmolVLA checkpoint's
+        # fine-tuned VLM). Fine-tuned VLM weight transfer is tracked as a v0.3 item.
+        if model_type == "smolvla":
+            console.print("\n[dim]Exporting VLM pipeline (vision + text + decoder)...[/dim]")
+            from tether.exporters.vlm_prefix_exporter import export_vlm_prefix
+            vlm_start = time.perf_counter()
+            try:
+                # Pass the loaded state_dict so the VLM exporter can overlay the
+                # fine-tuned vision/text weights instead of using BASE SmolVLM2.
+                vlm_path = export_vlm_prefix(
+                    output_dir=output, opset=opset, state_dict=state_dict
+                )
+                elapsed_vlm = time.perf_counter() - vlm_start
+                console.print(f"[bold green]VLM export complete in {elapsed_vlm:.1f}s[/bold green]")
+                # Show VLM output files
+                for fname in ("vision_encoder.onnx", "text_embedder.onnx", "decoder_prefill.onnx"):
+                    fpath = Path(output) / fname
+                    if fpath.exists():
+                        data_path = fpath.with_suffix(".onnx.data")
+                        size = fpath.stat().st_size / 1e6
+                        if data_path.exists():
+                            size += data_path.stat().st_size / 1e6
+                        console.print(f"  {fname}: {size:.1f}MB")
+                console.print(
+                    "  [dim]Note: VLM uses base SmolVLM2-500M weights. "
+                    "Fine-tuned SmolVLA VLM layers not yet preserved (v0.3 item).[/dim]"
+                )
+            except Exception as exc:
+                console.print(f"[yellow]VLM export skipped: {exc}[/yellow]")
+                console.print(
+                    "[yellow]Server will use dummy VLM conditioning (v0.1 fallback).[/yellow]"
+                )
+
+            # Save state_proj weights from checkpoint so the VLM orchestrator can
+            # project robot state through the REAL trained matrix instead of the
+            # random init we were falling back to (that was silently destroying
+            # state information in every prefix — the ONE bug hiding behind all
+            # the others, found by the PyTorch-vs-ONNX diff on 2026-04-17).
+            try:
+                import numpy as np
+                sp_w_keys = [k for k in state_dict if k.endswith("state_proj.weight")]
+                sp_b_keys = [k for k in state_dict if k.endswith("state_proj.bias")]
+                if sp_w_keys:
+                    sp_w = state_dict[sp_w_keys[0]].detach().cpu().numpy().astype(
+                        np.float32
+                    )
+                    np.save(Path(output) / "state_proj_weight.npy", sp_w)
+                    console.print(
+                        f"  state_proj weight: {sp_w.shape} → state_proj_weight.npy"
+                    )
+                if sp_b_keys:
+                    sp_b = state_dict[sp_b_keys[0]].detach().cpu().numpy().astype(
+                        np.float32
+                    )
+                    np.save(Path(output) / "state_proj_bias.npy", sp_b)
+                    console.print(
+                        f"  state_proj bias: {sp_b.shape} → state_proj_bias.npy"
+                    )
+                if not sp_w_keys:
+                    console.print(
+                        "  [yellow]WARNING: no state_proj weight in checkpoint — "
+                        "orchestrator will fall back to random init and state "
+                        "conditioning will be garbage.[/yellow]"
+                    )
+            except Exception as exc:
+                console.print(f"[yellow]state_proj save failed: {exc}[/yellow]")
+
+            # Copy LeRobot policy normalizer/unnormalizer from the HF repo into the
+            # export dir. Without these, the model receives un-normalized state and
+            # returns actions in normalized space — producing garbage trajectories
+            # in sim. Critical for LIBERO / real-robot eval success.
+            if "/" in model and not Path(model).exists():
+                try:
+                    from huggingface_hub import hf_hub_download
+
+                    console.print(
+                        "\n[dim]Copying policy preprocessor/postprocessor stats...[/dim]"
+                    )
+                    import shutil
+
+                    stats_files = [
+                        "policy_preprocessor.json",
+                        "policy_postprocessor.json",
+                        "policy_preprocessor_step_5_normalizer_processor.safetensors",
+                        "policy_postprocessor_step_0_unnormalizer_processor.safetensors",
+                    ]
+                    copied = 0
+                    for fname in stats_files:
+                        try:
+                            src = hf_hub_download(repo_id=model, filename=fname)
+                            shutil.copy(src, Path(output) / fname)
+                            copied += 1
+                        except Exception:
+                            # Not all SmolVLA checkpoints ship these (e.g. base)
+                            pass
+                    if copied:
+                        console.print(
+                            f"  Copied {copied}/{len(stats_files)} normalizer files "
+                            f"→ {output}"
+                        )
+                    else:
+                        console.print(
+                            "  [dim]No normalizer files found in checkpoint "
+                            "(base model or older format) — adapter will skip "
+                            "normalization.[/dim]"
+                        )
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Normalizer copy skipped: {exc}[/yellow]"
+                    )
+
+        total_elapsed = time.perf_counter() - start
+        console.print(f"\n[bold]Total export: {total_elapsed:.1f}s[/bold]")
+        console.print(f"  Output: {output}")
 
         try:
             from tether.verification_report import write_verification_report
             report_path = write_verification_report(output, parity=None)
-            console.print(f"  Verification manifest: {report_path}")
+            console.print(f"  [dim]Verification manifest: {report_path}[/dim]")
         except Exception as exc:
             console.print(f"[yellow]Verification manifest skipped: {exc}[/yellow]")
 
         _maybe_write_embodiment_bundle(output, embodiment, calibration)
 
-        console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
-        raise typer.Exit(0)
-
-    console.print(f"\n[bold]Tether Export[/bold]")
-    console.print(f"  Model:     {model}")
-    console.print(f"  Target:    {hardware.name} ({hardware.memory_gb}GB, {hardware.trt_precision})")
-    console.print(f"  Precision: {precision}")
-    console.print(f"  Output:    {output}")
-    console.print()
-
-    if dry_run:
-        console.print("[dim]Checking exportability...[/dim]")
-        from tether.checkpoint import load_checkpoint, detect_model_type, validate_checkpoint
-
-        state_dict, config = load_checkpoint(model)
-        model_type = detect_model_type(state_dict)
-        console.print(f"  Detected: {model_type or 'unknown'}")
-        total_params = sum(v.numel() for v in state_dict.values())
-        console.print(f"  Params:   {total_params / 1e6:.1f}M")
-
-        warnings = validate_checkpoint(state_dict, model_type or "unknown")
-        for w in warnings:
-            console.print(f"  [yellow]Warning: {w}[/yellow]")
-
-        # Check memory fit
-        weight_gb = total_params * 2 / 1e9  # FP16
-        if weight_gb > hardware.memory_gb * 0.7:
-            err_console.print(f"  [red]Model ({weight_gb:.1f}GB) may not fit on {hardware.name} ({hardware.memory_gb}GB)[/red]")
-        else:
-            console.print(f"  [green]Model ({weight_gb:.1f}GB) fits on {hardware.name} ({hardware.memory_gb}GB)[/green]")
-
-        if model_type is None:
-            console.print("\n[yellow]Unknown model type — export may fail. Supported: smolvla, pi0, pi05.[/yellow]")
-        else:
-            console.print("\n[green]Dry run complete. Export should work.[/green]")
-        raise typer.Exit()
-
-    if _looks_like_pi05_model_ref(model):
-        console.print("\n[bold]Tether Export (pi0.5 decomposed)[/bold]")
-        console.print(f"  Model:       {model}")
-        console.print(f"  Target:      {hardware.name} ({hardware.memory_gb}GB, {hardware.trt_precision})")
-        console.print(f"  Output:      {output}")
-        console.print(f"  Export mode: {requested_export_mode.value}")
-        console.print()
-
-        try:
-            from tether.exporters.decomposed import export_pi05_decomposed
-        except ImportError as exc:
-            err_console.print(f"[red]{exc}[/red]", markup=False)
-            err_console.print(
-                "\nFix: pip install 'fastcrest-tether[monolithic]' "
-                "(pins transformers==5.3.0; use a clean venv to avoid "
-                "the base transformers<5.0 conflict)",
-                style="cyan", markup=False,
-            )
-            raise typer.Exit(2)
-
-        import time
-        start = time.perf_counter()
-        decomposed_steps = 1 if from_distilled else num_steps
-        try:
-            result = export_pi05_decomposed(
-                model_id=model,
-                output_dir=output,
-                num_steps=decomposed_steps,
-                target=target,
-                student_checkpoint=model if from_distilled else None,
-                export_mode=requested_export_mode,
-            )
-        except InsufficientVRAMError as exc:
-            console.print(f"{exc}", style="red", markup=False)
-            raise typer.Exit(2)
-        except ImportError as exc:
-            console.print(f"Missing decomposed export dep: {exc}", style="red", markup=False)
-            raise typer.Exit(2)
-        except Exception as exc:  # noqa: BLE001
-            console.print(
-                f"Decomposed export failed: {type(exc).__name__}: {exc}",
-                style="red",
-                markup=False,
-            )
-            raise typer.Exit(1)
-
-        elapsed = time.perf_counter() - start
-        console.print(f"\n[bold green]Decomposed export complete in {elapsed:.1f}s[/bold green]")
-        console.print(f"  Mode:   {result.get('export_mode', requested_export_mode.value)}")
-        console.print(f"  Prefix: {result['vlm_prefix_onnx']} ({result['vlm_prefix_mb']:.1f} MB)")
-        console.print(f"  Expert: {result['expert_denoise_onnx']} ({result['expert_denoise_mb']:.1f} MB)")
-        _maybe_write_embodiment_bundle(output, embodiment, calibration)
-        console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
-        raise typer.Exit(0)
-
-    if requested_export_mode != ExportMode.AUTO:
-        err_console.print(
-            "[red]--export-mode is only implemented for pi0.5 decomposed exports "
-            "handled by the vlm_prefix/expert_denoise exporter. Re-run with "
-            "--export-mode auto, or use a pi0.5 model ref.[/red]"
-        )
-        raise typer.Exit(2)
-
-    # Full export — auto-dispatch to the right exporter based on model type
-    from tether.checkpoint import load_checkpoint, detect_model_type
-    # Spine-based exporters (lift #1 Days 6 + 7) for smolvla + groot.
-    # pi0/pi05 still use the legacy pi0_exporter direct-build until their
-    # spine exporters land (Day 11 sunset rewrites this dispatch).
-    from tether.exporters.smolvla import export_smolvla
-    from tether.exporters.pi0 import export_pi0, export_pi05
-    from tether.exporters.gr00t import export_gr00t
-
-    # Load once, detect, then pass state_dict to the exporter (avoids double-load)
-    console.print("[dim]Loading checkpoint...[/dim]")
-    state_dict, _ = load_checkpoint(model)
-    model_type = detect_model_type(state_dict) or "smolvla"
-    console.print(f"  Detected: [bold]{model_type}[/bold]")
-
-    export_config = ExportConfig(
-        model_id=model,
-        target=target,
-        output_dir=output,
-        precision=precision,
-        opset=opset,
-        action_chunk_size=chunk_size,
-        validate=not no_validate,
-    )
-
-    import time
-    start = time.perf_counter()
-    if model_type == "gr00t":
-        # Use the full-stack exporter (wraps action_encoder + DiT + action_decoder)
-        # so `tether serve` can run the standard denoising loop. Spine-based
-        # version from lift #1 Day 7 (src/tether/exporters/gr00t.py).
-        from tether.exporters.gr00t import export_gr00t_full
-        result = export_gr00t_full(export_config, state_dict=state_dict)
-    elif model_type == "openvla":
-        from tether.exporters.openvla import export_openvla
-        result = export_openvla(export_config, state_dict=state_dict)
-    elif model_type == "pi05":
-        result = export_pi05(export_config, state_dict=state_dict)
-    elif model_type == "pi0":
-        result = export_pi0(export_config, state_dict=state_dict)
-    else:
-        result = export_smolvla(export_config, state_dict=state_dict)
-    elapsed_expert = time.perf_counter() - start
-
-    # Print expert results
-    console.print(f"\n[bold green]Expert export complete in {elapsed_expert:.1f}s[/bold green]")
-
-    if "files" in result:
-        for name, path in result["files"].items():
-            size = os.path.getsize(path) / 1e6 if os.path.exists(path) else 0
-            console.print(f"  {name}: {path} ({size:.1f}MB)")
-
-    if "metadata" in result and "onnx_validation" in result["metadata"]:
-        val = result["metadata"]["onnx_validation"]
-        status = "[green]PASS[/green]" if val["passed"] else "[red]FAIL[/red]"
-        console.print(f"  Validation: {status} (max_diff={val['max_diff']:.2e})")
-
-    if "metadata" in result and "expert" in result["metadata"]:
-        meta = result["metadata"]["expert"]
-        console.print(f"  Expert: {meta['num_layers']} layers, {meta['total_params_m']:.1f}M params")
-
-    # For SmolVLA: also export the VLM pipeline (vision_encoder + text_embedder + decoder_prefill)
-    # so `tether serve` can run with real task-conditioned actions instead of noise.
-    # Note: VLM weights come from the base SmolVLM2-500M (not the SmolVLA checkpoint's
-    # fine-tuned VLM). Fine-tuned VLM weight transfer is tracked as a v0.3 item.
-    if model_type == "smolvla":
-        console.print("\n[dim]Exporting VLM pipeline (vision + text + decoder)...[/dim]")
-        from tether.exporters.vlm_prefix_exporter import export_vlm_prefix
-        vlm_start = time.perf_counter()
-        try:
-            # Pass the loaded state_dict so the VLM exporter can overlay the
-            # fine-tuned vision/text weights instead of using BASE SmolVLM2.
-            vlm_path = export_vlm_prefix(
-                output_dir=output, opset=opset, state_dict=state_dict
-            )
-            elapsed_vlm = time.perf_counter() - vlm_start
-            console.print(f"[bold green]VLM export complete in {elapsed_vlm:.1f}s[/bold green]")
-            # Show VLM output files
-            for fname in ("vision_encoder.onnx", "text_embedder.onnx", "decoder_prefill.onnx"):
-                fpath = Path(output) / fname
-                if fpath.exists():
-                    data_path = fpath.with_suffix(".onnx.data")
-                    size = fpath.stat().st_size / 1e6
-                    if data_path.exists():
-                        size += data_path.stat().st_size / 1e6
-                    console.print(f"  {fname}: {size:.1f}MB")
-            console.print(
-                "  [dim]Note: VLM uses base SmolVLM2-500M weights. "
-                "Fine-tuned SmolVLA VLM layers not yet preserved (v0.3 item).[/dim]"
-            )
-        except Exception as exc:
-            console.print(f"[yellow]VLM export skipped: {exc}[/yellow]")
-            console.print(
-                "[yellow]Server will use dummy VLM conditioning (v0.1 fallback).[/yellow]"
-            )
-
-        # Save state_proj weights from checkpoint so the VLM orchestrator can
-        # project robot state through the REAL trained matrix instead of the
-        # random init we were falling back to (that was silently destroying
-        # state information in every prefix — the ONE bug hiding behind all
-        # the others, found by the PyTorch-vs-ONNX diff on 2026-04-17).
-        try:
-            import numpy as np
-            sp_w_keys = [k for k in state_dict if k.endswith("state_proj.weight")]
-            sp_b_keys = [k for k in state_dict if k.endswith("state_proj.bias")]
-            if sp_w_keys:
-                sp_w = state_dict[sp_w_keys[0]].detach().cpu().numpy().astype(
-                    np.float32
-                )
-                np.save(Path(output) / "state_proj_weight.npy", sp_w)
-                console.print(
-                    f"  state_proj weight: {sp_w.shape} → state_proj_weight.npy"
-                )
-            if sp_b_keys:
-                sp_b = state_dict[sp_b_keys[0]].detach().cpu().numpy().astype(
-                    np.float32
-                )
-                np.save(Path(output) / "state_proj_bias.npy", sp_b)
-                console.print(
-                    f"  state_proj bias: {sp_b.shape} → state_proj_bias.npy"
-                )
-            if not sp_w_keys:
-                console.print(
-                    "  [yellow]WARNING: no state_proj weight in checkpoint — "
-                    "orchestrator will fall back to random init and state "
-                    "conditioning will be garbage.[/yellow]"
-                )
-        except Exception as exc:
-            console.print(f"[yellow]state_proj save failed: {exc}[/yellow]")
-
-        # Copy LeRobot policy normalizer/unnormalizer from the HF repo into the
-        # export dir. Without these, the model receives un-normalized state and
-        # returns actions in normalized space — producing garbage trajectories
-        # in sim. Critical for LIBERO / real-robot eval success.
-        if "/" in model and not Path(model).exists():
-            try:
-                from huggingface_hub import hf_hub_download
-
-                console.print(
-                    "\n[dim]Copying policy preprocessor/postprocessor stats...[/dim]"
-                )
-                import shutil
-
-                stats_files = [
-                    "policy_preprocessor.json",
-                    "policy_postprocessor.json",
-                    "policy_preprocessor_step_5_normalizer_processor.safetensors",
-                    "policy_postprocessor_step_0_unnormalizer_processor.safetensors",
-                ]
-                copied = 0
-                for fname in stats_files:
-                    try:
-                        src = hf_hub_download(repo_id=model, filename=fname)
-                        shutil.copy(src, Path(output) / fname)
-                        copied += 1
-                    except Exception:
-                        # Not all SmolVLA checkpoints ship these (e.g. base)
-                        pass
-                if copied:
-                    console.print(
-                        f"  Copied {copied}/{len(stats_files)} normalizer files "
-                        f"→ {output}"
-                    )
-                else:
-                    console.print(
-                        "  [dim]No normalizer files found in checkpoint "
-                        "(base model or older format) — adapter will skip "
-                        "normalization.[/dim]"
-                    )
-            except Exception as exc:
-                console.print(
-                    f"[yellow]Normalizer copy skipped: {exc}[/yellow]"
-                )
-
-    total_elapsed = time.perf_counter() - start
-    console.print(f"\n[bold]Total export: {total_elapsed:.1f}s[/bold]")
-    console.print(f"  Output: {output}")
-
-    try:
-        from tether.verification_report import write_verification_report
-        report_path = write_verification_report(output, parity=None)
-        console.print(f"  [dim]Verification manifest: {report_path}[/dim]")
-    except Exception as exc:
-        console.print(f"[yellow]Verification manifest skipped: {exc}[/yellow]")
-
-    _maybe_write_embodiment_bundle(output, embodiment, calibration)
-
-    console.print(f"\n  [dim]Run on target hardware:[/dim]")
-    console.print(f"  [cyan]tether bench {output}[/cyan]")
+        console.print(f"\n  [dim]Run on target hardware:[/dim]")
+        console.print(f"  [cyan]tether bench {output}[/cyan]")
 
 
 @app.command(name="validate-legacy", hidden=True)
@@ -2143,7 +2174,7 @@ def guard(
         for i, name in enumerate(limits.joint_names):
             console.print(
                 f"    {name}: pos=[{limits.position_min[i]:.2f}, {limits.position_max[i]:.2f}], "
-                f"vel_max={limits.velocity_max[i]:.2f}"
+                f"vel_max={limits.velocity_max[i]:.2f}, units={limits.units[i] if i < len(limits.units) else 'unknown'}"
             )
 
         limits.save(output)
@@ -2158,7 +2189,13 @@ def guard(
         else:
             limits = SafetyLimits.default(num_joints)
 
-        guard_instance = ActionGuard(limits=limits, mode="clamp")
+        from tether.safety import GuardUnitsError
+
+        try:
+            guard_instance = ActionGuard(limits=limits, mode="clamp")
+        except GuardUnitsError as exc:
+            err_console.print(f"[red]Refusing to check: {exc}[/red]")
+            raise typer.Exit(1)
         import numpy as np
 
         test_actions = np.random.randn(5, num_joints).astype(np.float32) * 5
@@ -2235,6 +2272,16 @@ def serve(
         help="Path to a SafetyLimits JSON (from `tether guard init`). When set, "
              "every returned action is clamped to the configured joint limits "
              "and violation counts are logged.",
+    ),
+    action_units: str = typer.Option(
+        "",
+        "--action-units",
+        help="Per-axis units of the policy's actions (e.g. 'radians*5,gripper_0_1'). "
+             "Must match the export's recorded action_units; required with "
+             "--safety-config/--embodiment when the export predates action_units.",
+    ),
+    action_space: str = typer.Option(
+        "position", "--action-space", help="position, velocity or effort (with --action-units).",
     ),
     adaptive_steps: bool = typer.Option(
         False,
@@ -3158,12 +3205,21 @@ def serve(
     else:
         _slo_mode_validated = "degrade"  # ignored when slo_tracker is None
 
+    from tether.safety.guard import GuardUnitsError as _GUE, parse_action_units as _pau
+
+    try:
+        _serve_units = _pau(action_units, action_space) if action_units else None
+    except _GUE as exc:
+        err_console.print(f"[red]Invalid --action-units: {exc}[/red]")
+        raise typer.Exit(2)
+
     app_instance = create_app(
         export_dir,
         device=device,
         providers=provider_list,
         strict_providers=not no_strict_providers,
         safety_config=safety_config or None,
+        action_units=_serve_units,
         adaptive_steps=adaptive_steps,
         cloud_fallback_url=cloud_fallback,
         deadline_ms=deadline_ms if deadline_ms > 0 else None,
@@ -3385,6 +3441,16 @@ def ros2_serve(
     ),
     rate_hz: float = typer.Option(20.0, help="Inference rate (Hz)"),
     safety_config: str = typer.Option("", help="Path to SafetyLimits JSON"),
+    action_units: str = typer.Option(
+        "",
+        "--action-units",
+        help="Per-axis units of the policy's actions (e.g. 'radians*5,gripper_0_1'). "
+             "Must match the export's recorded action_units; required with "
+             "--safety-config/--embodiment when the export predates action_units.",
+    ),
+    action_space: str = typer.Option(
+        "position", "--action-space", help="position, velocity or effort (with --action-units).",
+    ),
     node_name: str = typer.Option("tether_vla", help="ROS2 node name"),
     mcp: bool = typer.Option(
         False,
@@ -3444,10 +3510,13 @@ def ros2_serve(
     if mcp:
         console.print(f"  mcp:  {mcp_transport}" + (f" (port {mcp_port})" if mcp_transport == "http" else ""))
     try:
+        from tether.safety.guard import parse_action_units as _pau
+
         run_ros2_bridge(
             export_dir,
             device=device,
             safety_config=safety_config or None,
+            action_units=_pau(action_units, action_space) if action_units else None,
             image_topic=image_topic,
             state_topic=state_topic,
             task_topic=task_topic,
@@ -5277,6 +5346,16 @@ def go(
         "--dry-run",
         help="Probe + resolve + print plan; do not pull or serve.",
     ),
+    action_units: str = typer.Option(
+        "",
+        "--action-units",
+        help="Per-axis units of the policy's actions (e.g. 'radians*5,gripper_0_1'). "
+             "Recorded in the export and checked against --embodiment; required "
+             "with --embodiment when the export does not record them.",
+    ),
+    action_space: str = typer.Option(
+        "position", "--action-space", help="position, velocity or effort.",
+    ),
 ):
     """One-command deploy: probe hardware → pick model → pull → export → serve.
 
@@ -5305,6 +5384,16 @@ def go(
         ModelResolverError,
         resolve_model,
     )
+
+    from tether.safety.guard import GuardUnitsError as _GUE, parse_action_units as _pau
+
+    _go_units = None
+    if action_units:
+        try:
+            _go_units = _pau(action_units, action_space)
+        except _GUE as exc:
+            err_console.print(f"[red]Invalid --action-units: {exc}[/red]")
+            raise typer.Exit(2)
 
     if not model:
         err_console.print("[red]--model is required (e.g. --model pi05-libero).[/red]")
@@ -5478,10 +5567,13 @@ def go(
             import time as _time
             _t0 = _time.perf_counter()
             try:
-                result = export_monolithic(
-                    str(target), str(export_dir),
-                    num_steps=10, target=export_target,
-                )
+                from tether.export_config import export_action_units as _eau
+
+                with _eau(_go_units):
+                    result = export_monolithic(
+                        str(target), str(export_dir),
+                        num_steps=10, target=export_target,
+                    )
             except ImportError as exc:
                 # export_monolithic does its own runtime dep check (lerobot, onnx-diagnostic, scipy);
                 # these aren't in the base install. Surface the same hint tether export uses.
@@ -5561,6 +5653,7 @@ def go(
         device="cuda" if probe.device_class != "cpu" else "cpu",
         embodiment_config=embodiment_cfg,
         api_key=api_key or None,
+        action_units=_go_units,
     )
     import uvicorn
     uvicorn.run(app_instance, host=host, port=port, log_level="info")

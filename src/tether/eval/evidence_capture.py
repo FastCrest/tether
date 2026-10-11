@@ -59,8 +59,10 @@ class CanonicalSafetyLimits:
     workspace_indices: tuple[int, ...]
     workspace_min: tuple[float, ...]
     workspace_max: tuple[float, ...]
+    action_space: str = "position"
+    units: tuple[str, ...] = ()
 
-    def to_dict(self) -> dict[str, list[str] | list[float] | list[int]]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "joint_names": list(self.joint_names),
             "position_min": list(self.position_min),
@@ -70,6 +72,8 @@ class CanonicalSafetyLimits:
             "workspace_indices": list(self.workspace_indices),
             "workspace_min": list(self.workspace_min),
             "workspace_max": list(self.workspace_max),
+            "action_space": self.action_space,
+            "units": list(self.units),
         }
 
     @property
@@ -91,6 +95,8 @@ class CanonicalSafetyLimits:
             workspace_indices=list(self.workspace_indices),
             workspace_min=list(self.workspace_min),
             workspace_max=list(self.workspace_max),
+            action_space=self.action_space,
+            units=list(self.units),
         )
 
 
@@ -114,6 +120,8 @@ def canonicalize_safety_limits(limits: Any) -> CanonicalSafetyLimits:
         workspace_indices=workspace_indices,
         workspace_min=workspace_min,
         workspace_max=workspace_max,
+        action_space=str(getattr(limits, "action_space", "position")),
+        units=tuple(str(value) for value in (getattr(limits, "units", None) or [])),
     )
 
 
@@ -432,7 +440,25 @@ def apply_action_guard(
     if guard is None:
         return action_array, 0
     if not np.isfinite(action_array).all():
-        guarded, results = guard.check(action_array.reshape(1, -1))
+        # Never synthesize a target: the guard holds the previously executed
+        # action (position spaces), returns zeros (velocity/effort spaces), or
+        # raises GuardStop when no hold reference exists. The guard's own
+        # memory may span episodes, so only this episode's executed action
+        # counts as a reference here.
+        if previous_action is None and getattr(guard, "action_space", "position") == "position":
+            from tether.safety import GuardStop
+
+            raise GuardStop(
+                "non-finite action with no previously executed action to hold"
+            )
+        guarded, results = guard.check(
+            action_array.reshape(1, -1),
+            observed_position=(
+                np.asarray(previous_action, dtype=np.float32).reshape(-1)
+                if previous_action is not None
+                else None
+            ),
+        )
         safe_action = np.asarray(guarded[0], dtype=np.float32).reshape(-1)
         return safe_action, sum(1 for result in results if result.clamped)
     if hasattr(guard, "check_single"):

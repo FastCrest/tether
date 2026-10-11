@@ -3,6 +3,7 @@
   "embodiment": "ur5",
   "action_space": {
     "type": "continuous",
+    "kind": "position",
     "dim": 7,
     "ranges": [
       [
@@ -33,6 +34,15 @@
         0.0,
         1.0
       ]
+    ],
+    "units": [
+      "radians",
+      "radians",
+      "radians",
+      "radians",
+      "radians",
+      "radians",
+      "gripper_0_1"
     ]
   },
   "normalization": {

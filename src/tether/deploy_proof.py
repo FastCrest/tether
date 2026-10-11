@@ -649,17 +649,39 @@ def _run_guard_stress(
         actual={"clamped": [r.clamped for r in results], "violations": [v for r in results for v in r.violations][:5]},
     )
 
-    finite = np.zeros((1, dim), dtype=np.float32)
+    # NaN/Inf must never synthesize a new target. After the clamped chunk
+    # above, a position space holds that last emitted safe action; a
+    # velocity/effort space stops with zeros. A zero target in a position
+    # space would command the zero pose.
+    from tether.safety.guard import GuardStop
+
+    finite = np.asarray(safe, dtype=np.float32).copy()
     finite[0, 0] = np.nan
-    safe_nan, results_nan = guard.check(finite)
-    non_finite_ok = bool(results_nan and not results_nan[0].safe and np.allclose(safe_nan, 0.0))
+    try:
+        safe_nan, results_nan = guard.check(finite)
+        if guard.action_space == "position":
+            expected_hold = np.asarray(safe[-1], dtype=np.float32)
+            held = bool(np.allclose(safe_nan, expected_hold))
+        else:
+            held = bool(np.allclose(safe_nan, 0.0))
+        non_finite_ok = bool(
+            results_nan and not results_nan[0].safe and results_nan[0].hold and held
+        )
+        nan_detail: Any = [v for r in results_nan for v in r.violations][:5]
+    except GuardStop as exc:
+        non_finite_ok = False
+        nan_detail = f"GuardStop despite a prior safe action: {exc}"
     _add_check(
         checks,
         "guard_rejects_non_finite",
         non_finite_ok,
         category="safety",
-        expected="NaN/Inf chunk zeroed",
-        actual={"violations": [v for r in results_nan for v in r.violations][:5]},
+        expected=(
+            "NaN/Inf chunk holds the last safe action"
+            if guard.action_space == "position"
+            else "NaN/Inf chunk stops with zeros"
+        ),
+        actual={"violations": nan_detail},
     )
 
     guard.check(bad)

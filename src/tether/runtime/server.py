@@ -997,16 +997,22 @@ class TetherServer:
         # ---- Wedge composition (Phase I.2) ----
         # tether guard: safety limits
         if self._safety_config_path is not None:
-            try:
-                from tether.safety import ActionGuard, SafetyLimits
-                limits = SafetyLimits.from_json(self._safety_config_path)
-                self._action_guard = ActionGuard(limits=limits, mode="clamp")
-                logger.info(
-                    "tether guard loaded: %d joints, mode=clamp",
-                    len(limits.joint_names),
-                )
-            except Exception as e:
-                logger.warning("Failed to load safety config: %s", e)
+            # Fail closed: a requested safety config that cannot be armed
+            # (unreadable, unknown units) must stop startup, not serve
+            # unguarded actions.
+            from tether.safety import ActionGuard, SafetyLimits
+            from tether.safety.guard import check_safety_units_against_embodiment
+            limits = SafetyLimits.from_json(self._safety_config_path)
+            self._action_guard = ActionGuard(limits=limits, mode="clamp")
+            # The embodiment config declares the units the policy's actions
+            # are in; the safety config must use the same units.
+            check_safety_units_against_embodiment(
+                limits, getattr(self, "embodiment_config", None)
+            )
+            logger.info(
+                "tether guard loaded: %d joints, mode=clamp, space=%s, units=%s",
+                len(limits.joint_names), limits.action_space, limits.units,
+            )
 
         # tether split: cloud-edge orchestrator
         if self._cloud_fallback_url:
@@ -1428,10 +1434,17 @@ class TetherServer:
         safety_violations = 0
         guard_detail: list[str] = []
         guard_summary: dict[str, Any] | None = None
+        guard_hold = False
         if self._action_guard is not None:
             try:
                 safe_actions, guard_results = self._action_guard.check(actions_np)
+            except Exception as e:  # noqa: BLE001 — GuardStop/GuardUnitsError/bug: fail closed
+                from tether.safety import guard_stop_response
+                logger.error("tether guard refused chunk, no actions returned: %s", e)
+                return guard_stop_response(e)
+            try:
                 actions_np = safe_actions
+                guard_hold = any(r.hold for r in guard_results)
                 safety_violations = sum(len(r.violations) for r in guard_results)
                 if safety_violations > 0:
                     guard_detail = [
@@ -1449,9 +1462,10 @@ class TetherServer:
                     ],
                     "clamped": any(r.clamped for r in guard_results),
                     "clamp_count": sum(1 for r in guard_results if r.clamped),
+                    "hold": guard_hold,
                 }
             except Exception as e:
-                logger.warning("safety check failed: %s", e)
+                logger.warning("safety summary failed: %s", e)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -1467,12 +1481,21 @@ class TetherServer:
                     self._deadline_misses, elapsed_ms, self._deadline_ms,
                 )
             else:
-                # No prior good action; return zeros
-                actions_np = np.zeros_like(actions_np)
+                # No prior good action. Never synthesize zeros: on a
+                # position-controlled arm that commands the zero pose.
                 logger.warning(
-                    "deadline miss (%d): %.1fms > %.1fms — no prior action, returning zeros",
+                    "deadline miss (%d): %.1fms > %.1fms — no prior action, returning no actions",
                     self._deadline_misses, elapsed_ms, self._deadline_ms,
                 )
+                return {
+                    "error": "deadline_exceeded_no_safe_action",
+                    "reason": (
+                        f"inference took {elapsed_ms:.1f}ms > deadline "
+                        f"{self._deadline_ms:.1f}ms and no prior action exists"
+                    ),
+                    "hint": "No action was produced; do not move the robot.",
+                    "deadline_exceeded": True,
+                }
 
         # Cache for next deadline miss
         if not deadline_exceeded:
@@ -1504,6 +1527,8 @@ class TetherServer:
             result["adaptive_enabled"] = True
         if self._action_guard is not None:
             result["safety_violations"] = safety_violations
+            if guard_hold:
+                result["guard_hold"] = True
             if guard_detail:
                 result["safety_detail"] = guard_detail
             # Recorder consumes guard_summary to populate write_request(guard=...)
@@ -1760,13 +1785,18 @@ class TetherServer:
 
             # Apply guard per-item (each request gets its own clamping)
             safety_violations = 0
+            guard_hold = False
             if self._action_guard is not None:
                 try:
                     safe_actions, guard_results = self._action_guard.check(actions_np)
-                    actions_np = safe_actions
-                    safety_violations = sum(len(r.violations) for r in guard_results)
-                except Exception as e:
-                    logger.warning("safety check failed in batch: %s", e)
+                except Exception as e:  # noqa: BLE001 — fail closed per request
+                    from tether.safety import guard_stop_response
+                    logger.error("tether guard refused batch item %d: %s", i, e)
+                    results.append(guard_stop_response(e))
+                    continue
+                actions_np = safe_actions
+                guard_hold = any(r.hold for r in guard_results)
+                safety_violations = sum(len(r.violations) for r in guard_results)
 
             result = {
                 "actions": actions_np.tolist(),
@@ -1784,6 +1814,8 @@ class TetherServer:
             }
             if self._action_guard is not None:
                 result["safety_violations"] = safety_violations
+                if guard_hold:
+                    result["guard_hold"] = True
             results.append(result)
 
         return results
@@ -1851,6 +1883,22 @@ try:
 except ImportError:
     PredictRequest = None  # type: ignore
     HealthResponse = None  # type: ignore
+
+
+def _all_guards(server: Any) -> list[tuple[str, Any]]:
+    """Both ActionGuards a server may carry: --safety-config and embodiment."""
+    out = []
+    for name, attr in (("safety_config", "_action_guard"), ("embodiment", "embodiment_guard")):
+        g = getattr(server, attr, None)
+        if g is not None:
+            out.append((name, g))
+    return out
+
+
+def _tripped_guards(server: Any) -> list[tuple[str, str]]:
+    return [
+        (name, str(g.trip_reason)) for name, g in _all_guards(server) if bool(g.tripped)
+    ]
 
 
 def create_app(
@@ -1929,6 +1977,10 @@ def create_app(
     shadow_queue_size: int = 32,  # bounded pending shadow requests; 0 disables queueing
     pro: bool = False,
     pro_license: str | Path | None = None,
+    # Per-axis units of the policy's actions, supplied by the operator for
+    # exports that predate the `action_units` field (see
+    # tether.safety.guard.resolve_serve_action_units).
+    action_units: dict | None = None,
 ) -> Any:
     """Create a FastAPI app for serving VLA predictions.
 
@@ -2020,6 +2072,18 @@ def create_app(
     from tether.export_config import decomposed_layout, load_tether_config
 
     _monolithic_cfg = load_tether_config(_config_path)
+
+    # Serve-time unit gate: the policy's action units (recorded at export
+    # time, or passed explicitly for older exports) must match every guard.
+    # Refuse to serve on mismatch or when a guard has nothing to compare to.
+    from tether.safety.guard import SafetyLimits as _SL, resolve_serve_action_units
+
+    _resolved_action_units = resolve_serve_action_units(
+        export_config=_monolithic_cfg,
+        explicit=action_units,
+        safety_limits=_SL.from_json(safety_config) if safety_config else None,
+        embodiment_config=embodiment_config,
+    )
 
     def _decomposed_layout(config: dict[str, Any]) -> str:
         return decomposed_layout(config)
@@ -2291,6 +2355,7 @@ def create_app(
     # (RTC adapter, action denormalization, tether doctor) read via
     # getattr(server, 'embodiment_config', None).
     server.embodiment_config = embodiment_config
+    server.action_units = _resolved_action_units  # type: ignore[attr-defined]
     server._shadow_server = None  # type: ignore[attr-defined]
     server._shadow_policy_export_dir = (  # type: ignore[attr-defined]
         str(Path(shadow_policy).expanduser()) if shadow_policy else ""
@@ -2321,20 +2386,18 @@ def create_app(
     # the URDF guard is opt-in for deeper physics checks.
     server.embodiment_guard = None  # type: ignore[attr-defined]
     if embodiment_config is not None:
-        try:
-            from tether.safety.guard import ActionGuard
-            server.embodiment_guard = ActionGuard.from_embodiment_config(  # type: ignore[attr-defined]
-                embodiment_config, mode="clamp"
-            )
-            logger.info(
-                "Embodiment ActionGuard armed — %d joints, mode=clamp",
-                embodiment_config.action_dim,
-            )
-        except Exception as e:  # noqa: BLE001 — guard must never crash startup
-            logger.error(
-                "Embodiment ActionGuard init failed (continuing without): %s", e
-            )
-            server.embodiment_guard = None  # type: ignore[attr-defined]
+        # Fail closed: an embodiment guard that cannot be armed (e.g. the
+        # config has no action_space.units) stops startup instead of serving
+        # unguarded actions.
+        from tether.safety.guard import ActionGuard
+        server.embodiment_guard = ActionGuard.from_embodiment_config(  # type: ignore[attr-defined]
+            embodiment_config, mode="clamp"
+        )
+        logger.info(
+            "Embodiment ActionGuard armed — %d joints, mode=clamp, units=%s",
+            embodiment_config.action_dim,
+            server.embodiment_guard.limits.units,  # type: ignore[attr-defined]
+        )
 
     # Attach RTC adapter (B.3) if --rtc was passed. Day-1 scope: construct
     # the processor + latency tracker; body methods land Day 2-3 of the B.3
@@ -3456,6 +3519,20 @@ def create_app(
                 },
                 headers={"Retry-After": "60"},
             )
+        # Guard latch: once either ActionGuard (safety-config or embodiment)
+        # trips, /act serves no actions until POST /guard/reset.
+        _tripped = _tripped_guards(server)
+        if _tripped:
+            from tether.safety import GuardStop, guard_stop_response
+
+            _stop = guard_stop_response(
+                GuardStop("; ".join(f"{name}: {reason}" for name, reason in _tripped))
+            )
+            _stop["hint"] = (
+                "ActionGuard tripped; investigate upstream (inputs / sensors / "
+                "model) and call POST /guard/reset to resume."
+            )
+            return JSONResponse(status_code=503, content=_stop)
         # Determine embodiment label for metrics. Bounded enum (per
         # ORGANIZATION.md/cardinality budget): preset name OR 'custom'.
         _ec = getattr(server, "embodiment_config", None)
@@ -3672,8 +3749,10 @@ def create_app(
                     server.consecutive_crash_count = 0
 
             # Embodiment ActionGuard (B.6) — clamp actions against per-axis
-            # ranges + velocity caps from embodiment config. NaN/Inf zeroes
-            # the chunk + reports a violation. No-op when guard absent.
+            # ranges + velocity caps from embodiment config. NaN/Inf holds
+            # the last safe action (never a zero target); with no safe hold
+            # target, or any guard failure, the response carries no actions.
+            # No-op when guard absent.
             _eg = getattr(server, "embodiment_guard", None)
             _guard_violations: list[str] = []
             _guard_margin: float | None = None
@@ -3687,38 +3766,47 @@ def create_app(
                 try:
                     _arr = np.asarray(result["actions"], dtype=np.float32)
                     _safe, _check_results = _eg.check(_arr)
-                    _guard_margin = _eg.safety_margin(_safe)
-                    if _guard_margin is not None:
-                        result["guard_margin"] = round(_guard_margin, 6)
-                    _was_modified = not np.array_equal(_arr, _safe)
-                    if _was_modified:
+                    if not np.array_equal(_arr, _safe):
                         if _raw_actions_for_record is None:
                             _raw_actions_for_record = _arr.tolist()
                         result["actions"] = _safe.tolist()
+                except Exception as e:  # noqa: BLE001 — fail closed: no actions
+                    from tether.safety import guard_stop_response
+                    logger.error("Embodiment ActionGuard refused chunk: %s", e)
+                    result = guard_stop_response(e)
+                    _check_results = []
+                    _raw_actions_for_record = None
+                if _check_results:
+                    try:
+                        if any(_cr.hold for _cr in _check_results):
+                            result["guard_hold"] = True
+                        _guard_margin = _eg.safety_margin(_safe)
+                        if _guard_margin is not None:
+                            result["guard_margin"] = round(_guard_margin, 6)
                         for _cr in _check_results:
                             _guard_violations.extend(_cr.violations)
-                        # Prometheus counter — bucket by first-violation kind
-                        try:
-                            from tether.observability import inc_safety_violation
-                            _kind = (
-                                "non_finite"
-                                if any("non_finite" in v for v in _guard_violations)
-                                else "joint_clamp"
+                        if _guard_violations:
+                            # Prometheus counter — bucket by first-violation kind
+                            try:
+                                from tether.observability import inc_safety_violation
+                                _kind = (
+                                    "non_finite"
+                                    if any("non_finite" in v for v in _guard_violations)
+                                    else "joint_clamp"
+                                )
+                                inc_safety_violation(
+                                    embodiment=_emb_label, kind=_kind
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                            result["guard_violations"] = _guard_violations[:20]  # cap log
+                            result["guard_clamped"] = True
+                            span.set_attribute(
+                                "tether.guard.violation_count",
+                                len(_guard_violations),
                             )
-                            inc_safety_violation(
-                                embodiment=_emb_label, kind=_kind
-                            )
-                        except Exception:  # noqa: BLE001
-                            pass
-                    if _guard_violations:
-                        result["guard_violations"] = _guard_violations[:20]  # cap log
-                        result["guard_clamped"] = True
-                        span.set_attribute(
-                            "tether.guard.violation_count",
-                            len(_guard_violations),
-                        )
-                except Exception as e:  # noqa: BLE001 — guard must never break /act
-                    logger.warning("Embodiment ActionGuard failed: %s", e)
+                    except Exception as e:  # noqa: BLE001 — telemetry only; safe actions already set
+                        logger.warning("Embodiment ActionGuard telemetry failed: %s", e)
 
             if isinstance(result, dict):
                 if "latency_ms" in result:
@@ -4078,29 +4166,43 @@ def create_app(
 
     @app.get("/guard/status")
     async def guard_status(_auth: None = Depends(_require_api_key)):
-        g = getattr(server, "_action_guard", None)
-        if g is None:
+        guards = _all_guards(server)
+        if not guards:
             return JSONResponse(content={"enabled": False})
-        return JSONResponse(content={
-            "enabled": True,
-            "tripped": bool(g.tripped),
-            "trip_reason": g.trip_reason,
-            "consecutive_clamps": int(g.consecutive_clamps),
-            "max_consecutive_clamps": int(g.max_consecutive_clamps),
-            "inference_count": int(g.inference_count),
-        })
+
+        def _state(g: Any) -> dict[str, Any]:
+            return {
+                "tripped": bool(g.tripped),
+                "trip_reason": g.trip_reason,
+                "consecutive_clamps": int(g.consecutive_clamps),
+                "max_consecutive_clamps": int(g.max_consecutive_clamps),
+                "inference_count": int(g.inference_count),
+            }
+
+        # Top-level fields describe the first guard (safety-config when
+        # present) for backwards compatibility; `tripped` is true when ANY
+        # guard tripped, matching the /act latch.
+        body = {"enabled": True, **_state(guards[0][1])}
+        body["tripped"] = any(bool(g.tripped) for _, g in guards)
+        body["guards"] = {name: _state(g) for name, g in guards}
+        return JSONResponse(content=body)
 
     @app.post("/guard/reset")
     async def guard_reset(_auth: None = Depends(_require_api_key)):
-        g = getattr(server, "_action_guard", None)
-        if g is None:
+        guards = _all_guards(server)
+        if not guards:
             return JSONResponse(
                 status_code=400,
                 content={"error": "guard_not_enabled"},
             )
-        was_tripped = bool(g.tripped)
-        g.reset()
-        return JSONResponse(content={"reset": True, "was_tripped": was_tripped})
+        was_tripped = any(bool(g.tripped) for _, g in guards)
+        for _, g in guards:
+            g.reset()
+        return JSONResponse(content={
+            "reset": True,
+            "was_tripped": was_tripped,
+            "guards_reset": [name for name, _ in guards],
+        })
 
     # Attach the live TetherServer to app.state so downstream integrations
     # (MCP server, future dashboards, test harnesses) can access the same

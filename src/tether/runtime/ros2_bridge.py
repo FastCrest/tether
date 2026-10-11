@@ -357,6 +357,7 @@ def run_ros2_bridge(
     providers: list[str] | None = None,
     strict_providers: bool = True,
     safety_config: str | Path | None = None,
+    action_units: dict | None = None,
     image_topic: str = "/camera/image_raw",
     state_topic: str = "/joint_states",
     task_topic: str = "/tether/task",
@@ -389,6 +390,20 @@ def run_ros2_bridge(
     if mcp and mcp_transport not in ("stdio", "http"):
         raise ValueError(
             f"mcp_transport must be 'stdio' or 'http', got {mcp_transport!r}"
+        )
+
+    if safety_config is not None:
+        # Same serve-time unit gate as create_app: the export's action_units
+        # (or the operator's explicit ones) must match the safety config.
+        from tether.export_config import load_tether_config
+        from tether.safety import SafetyLimits
+        from tether.safety.guard import resolve_serve_action_units
+
+        resolve_serve_action_units(
+            export_config=load_tether_config(export_dir, inspect_artifacts=False),
+            explicit=action_units,
+            safety_limits=SafetyLimits.from_json(safety_config),
+            embodiment_config=None,
         )
 
     server = TetherServer(
