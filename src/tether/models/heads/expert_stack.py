@@ -204,12 +204,12 @@ class ExpertGQALayer(nn.Module):
         x = res + self.o_proj(torch.matmul(attn, v).transpose(1, 2).contiguous().view(b, s, -1))
         res = x
         x = self.post_attention_layernorm(x)
-        # MLP: GeMM uses `gelu_pytorch_tanh` (Gemma's default hidden_act per
-        # transformers/models/gemma/configuration_gemma.py:119). SmolVLA / SmolLM2
-        # uses silu but that's a different family. Verified via parity diff:
-        # gate_proj, up_proj outputs match lerobot bit-identically; the composition
-        # step (gate's activation * up) was the divergence.
-        return res + self.down_proj(F.gelu(self.gate_proj(x), approximate="tanh") * self.up_proj(x))
+        # MLP: SmolVLA / SmolLM2 expert is built from `config.text_config` (a
+        # LlamaConfig / SmolLM2Config) whose `hidden_act` defaults to "silu".
+        # Using gelu-tanh here (Gemma's activation) corrupts parity on the
+        # decomposed SmolVLA export path. Pi05ExpertGQALayer (Gemma-based) keeps
+        # gelu-tanh — only this SmolVLA-family layer uses silu.
+        return res + self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
 class ExpertStack(nn.Module):
