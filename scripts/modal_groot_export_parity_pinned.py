@@ -63,8 +63,8 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "torch==2.7.1",
-        "torchvision==0.22.1",
+        # torch>=2.8: onnx-diagnostic 0.9.x torch_export_patches needs it (see pi0 vehicle).
+        "torch>=2.8,<2.12",
         "safetensors>=0.4.0",
         "huggingface_hub",
         # transformers==5.3.0 EXACTLY: the monolithic exporter refuses

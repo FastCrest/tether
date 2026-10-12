@@ -80,7 +80,8 @@ def _config(monkeypatch, tmp_path, rank, dataset="remote", resume=False):
         def verified_export(actual_root, actual_digest):
             assert actual_root == root
             assert actual_digest == cfg.dataset_manifest_sha256
-            return snapshot
+            # Real verify_local_export shape (lerobot_v3.verify_local_dataset reads the receipt).
+            return {**snapshot, "receipt": {"artifacts": []}, "info": {}}
 
         monkeypatch.setattr(admission, "verify_local_export", verified_export)
         monkeypatch.setattr(schema, "check_schema", lambda cfg: SimpleNamespace(severity="ok"))

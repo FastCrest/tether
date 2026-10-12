@@ -61,9 +61,11 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        # Qualify the same torch/vision runtime as the CPU probes.
-        "torch==2.7.1",
-        "torchvision==0.22.1",
+        # torch>=2.8: every onnx-diagnostic 0.9.x patches
+        # torch._export.non_strict_utils._constrain_user_specified_dimhint_range,
+        # which torch 2.7.1 lacks, so torch_export_patches() raises before export.
+        # lerobot 0.6.1 caps torch <2.12. (Studio's 2.7.1 pin is an MPS eval pin.)
+        "torch>=2.8,<2.12",
         "lerobot==0.6.1",
         "num2words",
         "diffusers==0.39.0",
