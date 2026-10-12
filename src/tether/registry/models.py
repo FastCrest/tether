@@ -17,12 +17,14 @@ Each entry carries:
 - `requires_export`: True if customer must run `tether export` after pull (raw weights);
                      False if the repo already contains a Tether-ready export (vlm_prefix.onnx etc.).
 - `description`: one-sentence pitch.
-- `license`: SPDX identifier.
+- `license`: upstream weight licence identifier or an explicit unknown/derived label.
+- `commercial_use`: allowed, conditional, prohibited or unknown. This describes
+  weight terms; it is not a legal clearance for a deployment.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -57,8 +59,11 @@ class ModelEntry:
     # (the BaseVLA registry name is the source of truth). OpenVLA sets
     # "_openvla_shim" to mark it as the optimum-cli shim path.
     vla_type: str | None = None
+    commercial_use: Literal["allowed", "conditional", "prohibited", "unknown"] = "unknown"
 
     def __post_init__(self):
+        if self.commercial_use not in ("allowed", "conditional", "prohibited", "unknown"):
+            raise ValueError(f"Invalid commercial_use: {self.commercial_use!r}")
         if not self.model_id:
             raise ValueError("model_id required")
         if "/" in self.model_id:
@@ -120,6 +125,14 @@ def by_id(model_id: str) -> ModelEntry | None:
         if entry.model_id == model_id:
             return entry
     return None
+
+
+def hub_reference(model_ref: str) -> tuple[str, str | None]:
+    """Resolve a registry alias or repository to its licence-reviewed revision."""
+    for entry in REGISTRY:
+        if model_ref in (entry.model_id, entry.hf_repo):
+            return entry.hf_repo, entry.hf_revision
+    return model_ref, None
 
 
 def filter_models(

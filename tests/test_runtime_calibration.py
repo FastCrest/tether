@@ -863,7 +863,7 @@ def test_cli_serve_help_advertises_auto_calibrate_flags():
     from tether.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["serve", "--help"])
+    result = runner.invoke(app, ["serve", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     for flag in ("--auto-calibrate", "--calibration-cache", "--calibrate-force"):
         assert flag in result.output, f"missing {flag} on serve --help"
@@ -874,7 +874,7 @@ def test_cli_doctor_help_advertises_show_calibration():
     from tether.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["doctor", "--help"])
+    result = runner.invoke(app, ["doctor", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "--show-calibration" in result.output
 

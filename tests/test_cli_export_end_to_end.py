@@ -34,10 +34,11 @@ def test_monolithic_module_importable():
     assert hasattr(monolithic, "apply_export_patches")
 
 
-def test_dispatch_by_model_id():
+def test_dispatch_by_model_id(monkeypatch):
     """`export_monolithic` picks the right backend from the model_id."""
     from tether.exporters import monolithic
 
+    monkeypatch.setattr(monolithic, "_model_type_from_hub_config", lambda _: None)
     with pytest.raises(ImportError, match="Missing dependencies|monolithic"):
         # Wrong transformers version or missing deps -> ImportError
         monolithic.export_monolithic(
@@ -45,13 +46,14 @@ def test_dispatch_by_model_id():
         )
 
 
-def test_unsupported_model_type_raises():
+def test_unsupported_model_type_raises(monkeypatch):
     """A model id that doesn't match any family substring AND has no
     readable local config.json must raise a clean ValueError. (GR00T,
     pi0.5, smolvla all hit the substring matcher now — pick a name
     that doesn't.)"""
     from tether.exporters import monolithic
 
+    monkeypatch.setattr(monolithic, "_model_type_from_hub_config", lambda _: None)
     with pytest.raises(ValueError, match="Cannot infer model_type"):
         monolithic.export_monolithic(
             "some-org/totally-unknown-architecture", "/tmp/out",

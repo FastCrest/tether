@@ -32,11 +32,11 @@ class TestVisibleTopLevel:
 
     @pytest.mark.parametrize("cmd", ["serve", "doctor", "models", "train", "validate", "inspect"])
     def test_visible_top_level_command_exists(self, runner, cli_app, cmd):
-        result = runner.invoke(cli_app, [cmd, "--help"])
+        result = runner.invoke(cli_app, [cmd, "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0, f"{cmd} --help failed: {result.output}"
 
     def test_help_lists_six_visible_commands(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["--help"])
+        result = runner.invoke(cli_app, ["--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
         for cmd in ("serve", "doctor", "models", "train", "validate", "inspect"):
             assert cmd in result.output
@@ -50,7 +50,7 @@ class TestVisibleTopLevel:
         # This avoids false positives where "export" / "bench" / "guard" etc.
         # appear as natural-language words inside subgroup descriptions.
         import re
-        result = runner.invoke(cli_app, ["--help"])
+        result = runner.invoke(cli_app, ["--help"], terminal_width=300, env={"COLUMNS": "300"})
         if "Commands" in result.output:
             commands_section = result.output.split("Commands")[1].split("╰")[0]
             row_pattern = re.compile(rf"│\s+{re.escape(hidden_cmd)}\s")
@@ -62,28 +62,28 @@ class TestVisibleTopLevel:
 class TestModelsSubgroup:
     @pytest.mark.parametrize("sub", ["list", "pull", "info", "export"])
     def test_models_subcommand_exists(self, runner, cli_app, sub):
-        result = runner.invoke(cli_app, ["models", sub, "--help"])
+        result = runner.invoke(cli_app, ["models", sub, "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0, result.output
 
 
 class TestTrainSubgroup:
     @pytest.mark.parametrize("sub", ["finetune", "distill"])
     def test_train_subcommand_exists(self, runner, cli_app, sub):
-        result = runner.invoke(cli_app, ["train", sub, "--help"])
+        result = runner.invoke(cli_app, ["train", sub, "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0, result.output
 
 
 class TestValidateSubgroup:
     @pytest.mark.parametrize("sub", ["dataset", "export"])
     def test_validate_subcommand_exists(self, runner, cli_app, sub):
-        result = runner.invoke(cli_app, ["validate", sub, "--help"])
+        result = runner.invoke(cli_app, ["validate", sub, "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0, result.output
 
 
 class TestInspectSubgroup:
     @pytest.mark.parametrize("sub", ["bench", "replay", "targets", "guard", "doctor"])
     def test_inspect_subcommand_exists(self, runner, cli_app, sub):
-        result = runner.invoke(cli_app, ["inspect", sub, "--help"])
+        result = runner.invoke(cli_app, ["inspect", sub, "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0, result.output
 
 
@@ -92,15 +92,15 @@ class TestBackwardCompatAliases:
 
     def test_old_validate_dataset_still_callable(self, runner, cli_app):
         # Just `--help` to confirm the alias still routes correctly
-        result = runner.invoke(cli_app, ["validate-dataset", "--help"])
+        result = runner.invoke(cli_app, ["validate-dataset", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0, result.output
 
     def test_old_bench_still_callable(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["bench", "--help"])
+        result = runner.invoke(cli_app, ["bench", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
 
     def test_old_replay_still_callable(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["replay", "--help"])
+        result = runner.invoke(cli_app, ["replay", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
 
     def test_old_targets_still_callable(self, runner, cli_app):
@@ -109,10 +109,10 @@ class TestBackwardCompatAliases:
         assert result.exit_code == 0
 
     def test_old_export_still_callable(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["export", "--help"])
+        result = runner.invoke(cli_app, ["export", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
 
     def test_old_validate_legacy_still_callable(self, runner, cli_app):
         # Renamed from `validate` to avoid collision with the new validate subgroup
-        result = runner.invoke(cli_app, ["validate-legacy", "--help"])
+        result = runner.invoke(cli_app, ["validate-legacy", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0

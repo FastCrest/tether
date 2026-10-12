@@ -337,7 +337,7 @@ def verify_policy_environment(value: object) -> None:
 def parse_ruff_check(output: str, *, checkout: Path) -> list[Finding]:
     """Parse ``ruff check --output-format=json`` output."""
     try:
-        values = json.loads(output or "[]")
+        values = json.loads(output)
     except json.JSONDecodeError as exc:
         raise RatchetError(f"Ruff check emitted invalid JSON: {exc}") from exc
     if not isinstance(values, list):
@@ -620,6 +620,12 @@ def collect_findings(
     protected_pyproject: str,
 ) -> tuple[list[Finding], dict[str, str]]:
     """Run all three tools in one checkout and parse nonzero finding exits."""
+    # An absent module also exits 1, just like findings, but only writes stderr.
+    # Require operational tools before treating their later nonzero exits as debt.
+    versions = {
+        "ruff": _tool_version("ruff", cwd=checkout),
+        "mypy": _tool_version("mypy", cwd=checkout),
+    }
     # Both snapshots must use the protected base policy. These worktrees are
     # disposable, so replacing a PR-controlled pyproject cannot mutate a commit.
     policy_path = checkout / "pyproject.toml"
@@ -688,10 +694,7 @@ def collect_findings(
 
     return (
         ruff_check_findings + ruff_format_findings + mypy_findings,
-        {
-            "ruff": _tool_version("ruff", cwd=checkout),
-            "mypy": _tool_version("mypy", cwd=checkout),
-        },
+        versions,
     )
 
 

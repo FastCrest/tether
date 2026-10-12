@@ -33,7 +33,10 @@ REGISTRY: tuple[ModelEntry, ...] = (
         requires_export=True,
         description="pi0 base from Physical Intelligence (LeRobot mirror). 7B params, BF16. "
                     "Run `tether export pi0-base` after pull to produce ONNX.",
-        license="apache-2.0",
+        # Licence source: https://huggingface.co/lerobot/pi0_base/blob/main/README.md
+        # Licence source: https://ai.google.dev/gemma/terms
+        license="gemma",
+        commercial_use="conditional",
         hf_revision=None,  # use HEAD until we pin
     ),
     ModelEntry(
@@ -51,7 +54,10 @@ REGISTRY: tuple[ModelEntry, ...] = (
         requires_export=True,
         description="pi0.5 base — Physical Intelligence's improved pi0 (state-out variant). "
                     "Use this as the teacher for SnapFlow distillation.",
-        license="apache-2.0",
+        # Licence source: https://huggingface.co/lerobot/pi05_base/blob/main/README.md
+        # Licence source: https://ai.google.dev/gemma/terms
+        license="gemma",
+        commercial_use="conditional",
         hf_revision=None,
     ),
     ModelEntry(
@@ -69,7 +75,10 @@ REGISTRY: tuple[ModelEntry, ...] = (
         requires_export=True,
         description="pi0.5 finetuned on LIBERO benchmark (Franka 7-DoF). "
                     "Tether's reference SnapFlow teacher — 28/30 task-success at 10 NFE.",
-        license="apache-2.0",
+        # Licence source: https://huggingface.co/lerobot/pi05_libero_finetuned_v044/blob/main/README.md
+        # Licence source: https://ai.google.dev/gemma/terms
+        license="gemma",
+        commercial_use="conditional",
         hf_revision=None,
     ),
     ModelEntry(
@@ -129,9 +138,12 @@ REGISTRY: tuple[ModelEntry, ...] = (
         requires_export=True,
         description="NVIDIA GR00T N1.6 — humanoid-focused VLA with DiT action expert + "
                     "Eagle (SigLIP+Llama) VLM backbone. Validated max_diff=8.34e-07 vs "
-                    "PyTorch reference. Run `tether export gr00t-n1.6` after pull.",
-        license="nvidia-source-code-license",  # NVIDIA's bespoke OSS-adjacent license
-        hf_revision=None,
+                    "PyTorch reference. Weights for research/evaluation only. "
+                    "Run `tether export gr00t-n1.6` after pull.",
+        # Licence source: https://huggingface.co/nvidia/GR00T-N1.6-3B/blob/d0814e7ecb19202e7c8468b46098b0b7ef3a6d61/LICENSE
+        license="nvidia-oneway-noncommercial",
+        commercial_use="prohibited",
+        hf_revision="d0814e7ecb19202e7c8468b46098b0b7ef3a6d61",
     ),
     ModelEntry(
         model_id="openvla-7b",
@@ -157,7 +169,7 @@ REGISTRY: tuple[ModelEntry, ...] = (
         vla_type="_openvla_shim",
     ),
     # ──────────────────────────────────────────────────────────────────────
-    # Lift #4: FluxVLA pi0.5 LIBERO-10 fine-tuned checkpoint (Apache-2.0).
+    # Lift #4: FluxVLA pi0.5 LIBERO-10 fine-tuned checkpoint (inherited Gemma terms).
     # Published 97.85% on LIBERO-10 across 4 subsuites (FluxVLA paper).
     # Converted from limxdynamics/FluxVLAEngine to lerobot format.
     # ──────────────────────────────────────────────────────────────────────
@@ -172,9 +184,13 @@ REGISTRY: tuple[ModelEntry, ...] = (
         benchmarks=(),
         requires_export=True,
         description="FluxVLA's pi0.5 finetuned on LIBERO-10 (BS=64, 24 epochs). "
-                    "Published 97.85% average success. Apache-2.0 from LimX Dynamics. "
+                    "Published 97.85% average success. Inherited Gemma weight terms. "
                     "Republished with attribution from limxdynamics/FluxVLAEngine.",
-        license="apache-2.0",
+        # Licence source: https://huggingface.co/Rylinjames/pi05-libero10-finetune-v1/blob/main/README.md
+        # Licence source: https://huggingface.co/lerobot/pi05_base/blob/main/README.md
+        # Re-upload claims Apache, but inherited Gemma weight terms still apply.
+        license="gemma",
+        commercial_use="conditional",
         hf_revision=None,
     ),
     # ──────────────────────────────────────────────────────────────────────
@@ -193,9 +209,14 @@ REGISTRY: tuple[ModelEntry, ...] = (
         benchmarks=(),
         requires_export=True,
         description="DreamZero — NVIDIA Research World-Action Model. Joint video + action "
-                    "diffusion on Wan 2.1 DiT backbone. 94.65% LIBERO average. Apache-2.0 "
-                    "via FluxVLA. Use `tether export dreamzero-libero10` after pull.",
-        license="apache-2.0",
+                    "diffusion on Wan 2.1 DiT backbone. 94.65% LIBERO average. Checkpoints retain "
+                    "upstream licences, including CC-BY-NC-4.0; commercial use prohibited. "
+                    "Use `tether export dreamzero-libero10` after pull.",
+        # Licence source: https://huggingface.co/limxdynamics/FluxVLAEngine/blob/main/README.md
+        # Licence source: https://huggingface.co/GEAR-Dreams/DreamZero-DROID/blob/main/README.md
+        # FluxVLA code licence does not relicense checkpoints; upstream is NC.
+        license="unknown (derived; upstream cc-by-nc-4.0)",
+        commercial_use="prohibited",
         hf_revision=None,
     ),
     # ──────────────────────────────────────────────────────────────────────
@@ -213,8 +234,11 @@ REGISTRY: tuple[ModelEntry, ...] = (
         benchmarks=(),
         requires_export=False,
         description="MolmoAct2 base — Allen AI's VLA. SigLIP2 + Molmo2-ER (Qwen3) "
-                    "+ flow-matching action expert. 5B params. Apache-2.0.",
-        license="apache-2.0",
+                    "+ flow-matching action expert. 5B params. Weight licence unknown.",
+        # Licence source: https://huggingface.co/allenai/MolmoAct2/blob/main/README.md
+        # No weight licence declared in the upstream card or repository.
+        license="unknown",
+        commercial_use="unknown",
         hf_revision=None,
     ),
     ModelEntry(
@@ -228,8 +252,11 @@ REGISTRY: tuple[ModelEntry, ...] = (
         benchmarks=(),
         requires_export=False,
         description="MolmoAct2 LIBERO fine-tune — Allen AI's VLA on LIBERO benchmark. "
-                    "Franka 7-DoF. Apache-2.0.",
-        license="apache-2.0",
+                    "Franka 7-DoF. Weight licence unknown.",
+        # Licence source: https://huggingface.co/allenai/MolmoAct2-LIBERO/blob/main/README.md
+        # No weight licence declared in the upstream card or repository.
+        license="unknown",
+        commercial_use="unknown",
         hf_revision=None,
     ),
     ModelEntry(
@@ -242,8 +269,11 @@ REGISTRY: tuple[ModelEntry, ...] = (
         supported_devices=("a10g", "a100", "h100", "h200"),
         benchmarks=(),
         requires_export=False,
-        description="MolmoAct2 DROID fine-tune — Franka DROID embodiment. Apache-2.0.",
-        license="apache-2.0",
+        description="MolmoAct2 DROID fine-tune — Franka DROID embodiment. Weight licence unknown.",
+        # Licence source: https://huggingface.co/allenai/MolmoAct2-DROID/blob/main/README.md
+        # No weight licence declared in the upstream card or repository.
+        license="unknown",
+        commercial_use="unknown",
         hf_revision=None,
     ),
 )

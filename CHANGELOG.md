@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Export dispatch, precision and registry licences
+
+- Monolithic family detection reads config metadata first, with exact aliases and repository family tokens. Dotted `pi0.5` selects pi05; pi0_fast/pi0fast are refused because no FAST exporter exists. Invalid or unsupported metadata fails explicitly.
+- Monolithic ONNX exports support FP32 only. The CLI now defaults to FP32 for monolithic exports and refuses explicit FP16, FP8 or INT8 requests, including distilled students. Decomposed exports retain their FP16 default. The standalone TensorRT builder refuses INT8 without calibration and FP8 on unsupported hardware. Decomposed exports also refuse `--precision int8` (previously recorded int8 over FP32 ONNX and FP16/FP8 engines), and the chat `export_model` tool offers fp32/fp16/fp8.
+- Corrected Gemma terms for pi0/pi0.5 weights and LIBERO fine-tunes, NVIDIA non-commercial terms for GR00T, inherited upstream terms for DreamZero, and unknown licences for MolmoAct2. Added `commercial_use` to registry entries, CLI JSON/info and MCP output, with source URLs beside corrected entries.
+- Decomposed TensorRT exports pass the requested precision to every engine build, including FP16 on Thor. Both standalone builders validate explicit precision before work; unsupported precision and FP8 on non-FP8 profiles are refused. GR00T N1.6 downloads and family metadata use the licence-reviewed revision `d0814e7ecb19202e7c8468b46098b0b7ef3a6d61`.
+- CLI help tests set an explicit terminal width. Export help also includes model guidance in the command description for Click versions that discard Typer argument help. The CI quality checker reports missing Ruff/mypy as tool failures and rejects empty Ruff JSON; integration tests skip with named reasons only when tools are absent from the active interpreter.
+
 ### ActionGuard: hold/stop instead of zero targets (safety fix, behaviour change)
 
 - **Reject mode and NaN/Inf inputs no longer return zeros.** On position-controlled arms (SO-100/101, Koch, ALOHA, Franka, UR5) an all-zero target is a sudden move to the zero pose, not a stop. `ActionGuard` now holds instead: it returns the caller's `observed_position=` if given, else the last action it emitted, with `SafetyCheckResult.hold=True`. When neither exists it raises `GuardStop`. In reject mode the whole chunk is held rather than zeroing individual rows. Zeros are still returned for `action_space="velocity"` and `"effort"`, where zero is a real stop. `reset()` also clears the hold reference.
