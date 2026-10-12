@@ -568,6 +568,7 @@ def test_local_escape_hatches_block_before_training(local_cfg, field, value):
         "dataset.image_transforms",
         "policy.max_action_dim",
         "policy.max_state_dim",
+        "tolerance_s",
         "--dataset.root",
         "dataset.root=evil",
     ],

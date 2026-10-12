@@ -13,6 +13,8 @@ registry. See architecture doc Section D for the full target shape.
 """
 from __future__ import annotations
 
+from tether.finetune.lerobot_v3 import verify_local_dataset
+
 import logging
 import json
 import subprocess
@@ -143,13 +145,13 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     doesn't expose a top-level precision flag; it's baked into the
     policy config. v0.5 will add per-policy precision overrides.
     """
-    from tether.finetune.local_dataset import validate_local_config, verify_local_export
+    from tether.finetune.local_dataset import validate_local_config
     validate_local_config(cfg)
     local_export = None
     if cfg.dataset_root is not None:
         # Recheck immediately before emission. Callers must still keep exports
         # immutable: a path-based trainer is not a filesystem snapshot boundary.
-        local_export = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)
+        local_export = verify_local_dataset(cfg)
         from tether.finetune.preflight.schema import check_schema
         schema = check_schema(cfg)
         if schema.severity != "ok":
@@ -245,6 +247,12 @@ def _run_lerobot_training(
     """
     cmd = _build_lerobot_command(cfg)
     logger.info("[finetune] exec: %s", " ".join(cmd))
+    if cfg.dataset_root is not None:
+        import os
+        env = dict(os.environ if env is None else env)
+        # LeRobot must never recover missing local data by downloading it. Base
+        # weights are resolved above; offline mode also refuses uncached weights.
+        env.update(HF_HUB_OFFLINE="1", HF_DATASETS_OFFLINE="1")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as log:
         log.write("# tether finetune — lerobot-train invocation\n")
@@ -425,6 +433,16 @@ def run_finetune(cfg: FinetuneConfig, *, hooks=None) -> FinetuneResult:
         )
 
     cfg.output.mkdir(parents=True, exist_ok=True)
+    if cfg.dataset_root is not None:
+        try:
+            identity = verify_local_dataset(cfg)
+        except Exception as exc:
+            return FinetuneResult(status="aborted", output_dir=cfg.output, error=f"Local dataset verification failed: {exc}")
+        identity["dataset_repository"] = cfg.dataset
+        identity["expected_features"] = cfg.dataset_features
+        if not cfg.dataset_manifest_sha256:
+            cfg = replace(cfg, dataset_content_sha256=identity["content_sha256"])
+        (cfg.output / "training-dataset.json").write_text(json.dumps(identity, indent=2) + "\n")
     training_log = cfg.output / "training_log.jsonl"
 
     # Pre-flight validation (v0.5) — catches top customer pains before
@@ -503,6 +521,9 @@ def run_finetune(cfg: FinetuneConfig, *, hooks=None) -> FinetuneResult:
             training_log_path=training_log,
             error=ckpt_result.error,
         )
+
+    if cfg.dataset_root is not None:
+        (ckpt_result.final_checkpoint_path / "training-dataset.json").write_text((cfg.output / "training-dataset.json").read_text())
 
     if cfg.skip_export:
         logger.info("[finetune] skip_export=True; done (no ONNX)")

@@ -8,6 +8,7 @@ independently.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -53,12 +54,14 @@ def finetune_command(
     ),
     dataset_root: str = typer.Option(
         "", "--dataset-root",
-        help="Actual EXPORT/dataset directory from a qualified Studio SmolVLA export.",
+        help="Local LeRobot v3 dataset directory; validated offline before training.",
     ),
     dataset_manifest_sha256: str = typer.Option(
         "", "--dataset-manifest-sha256",
         help="Canonical sibling export-receipt.json SHA-256 (excludes its sha256 field).",
     ),
+    dataset_content_sha256: str = typer.Option("", "--dataset-content-sha256", help="Expected local content manifest SHA-256."),
+    dataset_features: str = typer.Option("{}", "--dataset-features", help="Recipe expected LeRobot feature shapes as JSON."),
     output: str = typer.Option(
         ...,
         "--output",
@@ -143,6 +146,13 @@ def finetune_command(
     from tether.finetune.config import FinetuneConfig
     from tether.finetune.run import run_finetune
 
+    try:
+        expected_features = json.loads(dataset_features)
+    except ValueError as exc:
+        raise typer.BadParameter("dataset_features must be a JSON feature object", param_hint="--dataset-features") from exc
+    if not isinstance(expected_features, dict):
+        raise typer.BadParameter("dataset_features must be a JSON feature object", param_hint="--dataset-features")
+
     cfg = FinetuneConfig(
         base=base,
         base_revision=base_revision or None,
@@ -150,6 +160,8 @@ def finetune_command(
         dataset_revision=dataset_revision or None,
         dataset_root=Path(dataset_root) if dataset_root else None,
         dataset_manifest_sha256=dataset_manifest_sha256 or None,
+        dataset_content_sha256=dataset_content_sha256 or None,
+        dataset_features=expected_features,
         output=Path(output),
         num_steps=num_steps,
         batch_size=batch_size,

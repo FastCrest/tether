@@ -10,6 +10,8 @@ picture in one shot instead of fix-one-then-retry.
 """
 from __future__ import annotations
 
+from tether.finetune.lerobot_v3 import verify_local_dataset
+
 import logging
 
 from tether.finetune.config import FinetuneConfig
@@ -36,15 +38,18 @@ def run_preflight(cfg: FinetuneConfig) -> PreflightReport:
     """
     report = PreflightReport()
     from tether.finetune.local_dataset import (
-        effective_imagenet_stats, validate_local_config, verify_local_export,
+        effective_imagenet_stats, validate_local_config,
     )
     # Local integrity is mandatory. Even an unexpected verifier exception blocks
     # before any remote metadata lookup or later checks.
     if cfg.dataset_root is not None or cfg.dataset_manifest_sha256 is not None:
         try:
             validate_local_config(cfg)
-            verified = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)
-            report.add(PreflightCheck(
+            verified = verify_local_dataset(cfg)
+            if not cfg.dataset_manifest_sha256:
+                report.add(PreflightCheck("local_dataset", "ok", "Local LeRobot v3 schema and indexes verified.", {"content_sha256": verified["content_sha256"], "info": verified["info"]}))
+            else:
+                report.add(PreflightCheck(
                 "local_dataset", "ok", "Local export bytes and retained admission evidence verified.",
                 {"dataset_root": verified["dataset_root"],
                  "manifest_sha256": verified["manifest_sha256"],

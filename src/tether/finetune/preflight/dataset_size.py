@@ -19,6 +19,8 @@ vision encoder).
 """
 from __future__ import annotations
 
+from tether.finetune.lerobot_v3 import verify_local_dataset
+
 import logging
 from typing import Any
 
@@ -86,10 +88,10 @@ def _fetch_dataset_info(dataset_repo_id: str) -> dict[str, Any] | None:
 def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
     """Warn if episode count is below the guidance for the selected policy."""
     if cfg.dataset_root is not None:
-        from tether.finetune.local_dataset import validate_local_config, verify_local_export
+        from tether.finetune.local_dataset import validate_local_config
         validate_local_config(cfg)
-        info = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)["info"]
-        policy_type = "smolvla"  # Mandatory schema check validates the actual base config.
+        info = verify_local_dataset(cfg)["info"]
+        policy_type = cfg.policy if cfg.policy != "auto" else "smolvla"
     else:
         info = None
         policy_type = _infer_policy_type(cfg.base)
