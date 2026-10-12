@@ -167,6 +167,9 @@ monolithic = [
     "lerobot==0.6.1; python_version >= '3.12'",
     "draccus==0.11.6; python_version >= '3.12'",
     "transformers==5.3.0",
+    # onnx-diagnostic's export patches reference a torch 2.8+ symbol;
+    # _require_monolithic_deps refuses older torch with the same floor.
+    "torch>=2.8",
     "onnx-diagnostic>=0.9",
     "onnxscript>=0.1",
     "optree",

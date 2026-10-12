@@ -31,6 +31,8 @@ from importlib.metadata import PackageNotFoundError, version as _dist_version
 from pathlib import Path
 from typing import Any
 
+MIN_EXPORT_TORCH = (2, 8)
+
 logger = logging.getLogger(__name__)
 
 
@@ -167,6 +169,22 @@ def _require_monolithic_deps() -> None:
             )
     except ImportError as e:
         missing.append(f"transformers==5.3.0 ({e})")
+
+    # onnx-diagnostic 0.8.11 and 0.9.0-0.9.3 unconditionally patch
+    # torch._export.non_strict_utils._constrain_user_specified_dimhint_range,
+    # which first exists in torch 2.8.0. On older torch every pi0/pi0.5/
+    # SmolVLA/GR00T export dies with an AttributeError on entering
+    # torch_export_patches(); refuse here instead.
+    try:
+        import torch
+        major_minor = tuple(int(part) for part in str(torch.__version__).split(".")[:2])
+        if major_minor < MIN_EXPORT_TORCH:
+            raise ImportError(
+                f"torch {torch.__version__} detected; onnx-diagnostic's export "
+                "patches need torch>=2.8"
+            )
+    except (ImportError, ValueError) as e:
+        missing.append(f"torch>=2.8 ({e})")
 
     try:
         __import__("lerobot")

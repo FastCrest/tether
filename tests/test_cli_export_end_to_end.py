@@ -34,16 +34,40 @@ def test_monolithic_module_importable():
     assert hasattr(monolithic, "apply_export_patches")
 
 
-def test_dispatch_by_model_id(monkeypatch):
-    """`export_monolithic` picks the right backend from the model_id."""
+@pytest.mark.parametrize("model_id,family", [
+    ("lerobot/smolvla_base", "smolvla"),
+    ("lerobot/pi0_base", "pi0"),
+    ("lerobot/pi05_base", "pi05"),
+])
+def test_dispatch_by_model_id(monkeypatch, model_id, family):
+    """`export_monolithic` picks the right backend from the model_id.
+
+    The family exporters are stubbed: calling the real one starts a full
+    export whenever the [monolithic] extras happen to be installed, which
+    made this test pass or fail depending on the interpreter.
+    """
     from tether.exporters import monolithic
 
     monkeypatch.setattr(monolithic, "_model_type_from_hub_config", lambda _: None)
-    with pytest.raises(ImportError, match="Missing dependencies|monolithic"):
-        # Wrong transformers version or missing deps -> ImportError
-        monolithic.export_monolithic(
-            "lerobot/smolvla_base", "/tmp/should_not_run",
+    called = []
+    for name in ("smolvla", "pi0", "pi05", "gr00t"):
+        monkeypatch.setattr(
+            monolithic, f"export_{name}_monolithic",
+            lambda *a, _n=name, **k: called.append(_n) or {},
         )
+    monolithic.export_monolithic(model_id, "/tmp/should_not_run")
+    assert called == [family]
+
+
+def test_dep_check_refuses_torch_without_export_patch_symbol(monkeypatch):
+    """onnx-diagnostic 0.9.x patches a torch 2.8+ symbol on entry, so the
+    gate must refuse torch<2.8 instead of crashing mid-export."""
+    from tether.exporters import monolithic
+    import torch
+
+    monkeypatch.setattr(torch, "__version__", "2.7.1")
+    with pytest.raises(ImportError, match=r"torch>=2\.8 \(torch 2\.7\.1 detected"):
+        monolithic._require_monolithic_deps()
 
 
 def test_unsupported_model_type_raises(monkeypatch):
