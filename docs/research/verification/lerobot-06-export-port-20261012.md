@@ -173,3 +173,25 @@ and all edited Python files pass Ruff's undefined-name check. `git diff
   actions max abs 0.118 at line 249). M2 make the pi0.5 patch ignore the prefix pad mask: pi05
   and decomposed fail (velocity max abs 0.012 at line 244). Both mutations killed. VERIFIED.
 - Re-run after review: 48 passed in 77.7 s (`venv-061t`). VERIFIED.
+
+## Correction 2026-10-12 (Claude, after the GPU re-run): native 0.6.1 is mis-scaled on transformers 5.3
+
+The claim above that dropping the `embed_image` sqrt(hidden_size) shim is correct holds only
+for transformers >=5.4. It is **wrong for the pinned transformers 5.3.0**. Evidence:
+
+- LeRobot 0.6.1 declares `transformers>=5.4.0,<5.6.0` (`lerobot-0.6.1.dist-info/METADATA:79`).
+- transformers 5.3.0 `PaliGemmaModel.get_image_features` divides by sqrt(hidden_size)
+  (`modeling_paligemma.py:273`); 5.5.4 does not. LeRobot 0.5.1 multiplied back
+  (`modeling_pi0.py:446`), 0.6.1 does not (`modeling_pi0.py:287-296`).
+- Language embeddings likewise: 0.5.1 `lang_emb * sqrt(dim)` (`modeling_pi0.py:669`); 0.6.1
+  relies on 5.4+'s `GemmaTextScaledWordEmbedding` (5.5.4 `modeling_gemma.py:50-61`), which 5.3.0
+  lacks, and `PiGemmaModel.forward` (`pi_gemma.py:250-290`) has no normalizer.
+- GPU re-run at `5fb92df` (Studio `docs/research/verification/lerobot-06-parity-rerun-20261012.md`):
+  pi0 export vs the receipt harness reference, cosine 0.465, max_abs 0.403, **failed**. The
+  harness (`scripts/local_pi0_monolithic_parity.py:39-56`, `local_pi05_...:48`) still applies the
+  sqrt shim to the reference, the exporter no longer does.
+
+The CPU tests compare against native 0.6.1 under 5.3, which is itself mis-scaled, so they
+passed. The mask port itself stands (review above). Not merged. Fix requires an owner
+decision: move transformers to 5.4/5.5 as LeRobot 0.6.1 requires (re-qualify the exporters), or
+keep 5.3 and restore both openpi scalings for transformers <5.4.
