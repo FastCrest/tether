@@ -8,6 +8,8 @@ Exports must remain immutable after verification, including during training.
 
 from __future__ import annotations
 
+from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
+
 import hashlib
 import json
 import math
@@ -18,25 +20,25 @@ import stat
 from typing import Any, NoReturn
 
 
-ADAPTER_SOURCE = "11c0a0cc0d5f4cd81de9904ec0d08f0305ba9ecec6e5952c25fe435c857afdf3"
-WRITER_SOURCE = "1396b9fab7aecddd10006c33c47a487ffdcb54b4"
-WRITER_WHEEL = "bbd11021023fde0947b6d1ff1c52fe91c86a28ab09a96359892f3ef7e8866862"
+ADAPTER_SOURCE = "af6969a6663d0b288db781ad46736eb62d33a361dbe75cd578da6c163b075307"
+WRITER_SOURCE = "7e241bd630a3719a56157a497ce5d08f244784f1"
+WRITER_WHEEL = "1894516040c65f80a45bd9741f8174aae90ed5d93da0627ab4f1a85fd8d75e90"
 WRITER_FILES = {
-    "lerobot/datasets/lerobot_dataset.py": "03207172bbc82d541f93168017b11e2b3807cf719126bf47d04873257a4cbbd8",
-    "lerobot/datasets/utils.py": "1dd05df5f1d12721f227fb3601d99c22cd845cb59627b68004d3184c9e8e1486",
-    "lerobot/datasets/compute_stats.py": "7b0621bbdd36987939742a1803b3491b794db7b0e6393677e9b1a3e1d86aeafc",
-    "lerobot/datasets/dataset_writer.py": "f377ab064840d45f2dab98da27f5c71b5dfb64f70789fec5c82935eecc925207",
-    "lerobot/datasets/dataset_reader.py": "c5893ecb6406a6852f01dcc4d6662f6ca2320cd931bc9e4d1cd7dc83dfaa9d6c",
-    "lerobot/datasets/dataset_metadata.py": "df392d4c0b584177735550251c45877ba7b644377003e3fa08b71536c9969b59",
-    "lerobot/datasets/io_utils.py": "1b557bab9f1f1445602dfd5dc5bca69a3fe2c34c400ae36d3c69b5c7d4d1120a",
-    "lerobot/datasets/feature_utils.py": "1477145c9f27051511e661f5189f838d8fdfacdb0c7c8424a64d4c181027ce7a",
-    "lerobot/datasets/image_writer.py": "99ce7371c50b7fb0931b49228fa5e3ae30302e5559efd7f64dead6334aa9e088",
+    "lerobot/datasets/lerobot_dataset.py": "07523e2a4f9c53b6a96df9255ad131ee30e707fd8610ec9d2178d3741023ae3a",
+    "lerobot/datasets/utils.py": "1fd3eddf70baf1c5c7f4e745c78338c580385283fad00e853d49cd0f34dd57e3",
+    "lerobot/datasets/compute_stats.py": "d546a5c690eff716a10e9b13d70cd5d1ef7fed88f2f9c40c99f2f7f50845cf45",
+    "lerobot/datasets/dataset_writer.py": "319f4efb53e892ceeb439aae6d25209d14564e3dc91134c7cc2c6c0b5e71ebc5",
+    "lerobot/datasets/dataset_reader.py": "3a477dae6aa887449f09be25b385485b065861d13c5448b9369a0ba09f01bb5d",
+    "lerobot/datasets/dataset_metadata.py": "23c927553a53e320161f35f9b36e8b61a446833ca17a4287b9ef5cdc8d19c50f",
+    "lerobot/datasets/io_utils.py": "af08c7875f34f8469f80c4fd903af12971d6fa96c179be984887b93ef2f6f91c",
+    "lerobot/datasets/feature_utils.py": "928369cff50f0d663a125abfc67683ccbae0e552ed2eb22edde9e6bcff2aef81",
+    "lerobot/datasets/image_writer.py": "54cad218c99caad105ea8738507ee87fc8c2858832d31aa5b21d324c97360631",
 }
 NORMALIZATION_FILES = {
-    "lerobot/processor/normalize_processor.py": "faedf40f64e1fcc6aeb287ff757abe6e85983560d82fcde060252d8f75e277d6",
-    "lerobot/policies/act/configuration_act.py": "11aa9037f981a957d63632561c795fac243e7898ee9302f7afac2f5d45920f7b",
-    "lerobot/policies/smolvla/configuration_smolvla.py": "6c1f371ccb7ed073774c459387f85626edcf568edbbaa64b4cea1bf70a80feca",
-    "lerobot/configs/default.py": "e077db856b4ecad9476bdf12fb2e72a0294ae3a302413afa21774a8788ab0d20",
+    "lerobot/processor/normalize_processor.py": "f0cd88bec4c954a93ba1cc90300473b96eb177762789c1780cf07801fc1af9d6",
+    "lerobot/policies/act/configuration_act.py": "35a60c0dd3c811b137b5eb035bdbd40d40e2c24ba0cda61756052e6e1c829282",
+    "lerobot/policies/smolvla/configuration_smolvla.py": "2fb637cb428fa2fdf1d114646dcffaf4728216bfe5b7039d5d0cac4857ffc4e0",
+    "lerobot/configs/default.py": "e8307a48aa97c1b3fd0722e9a849deb1bc1bb48b63e3109b63683eb7ffe08105",
 }
 IDENTITY_FIELDS = ["task", "seed", "episode", "initial_state", "embodiment"]
 PARTITIONS = ("development", "holdout", "test")
@@ -605,13 +607,13 @@ def _verify(dataset_root: Path, expected_manifest_sha256: str, expected_profile:
     inventory = _inventory(export, receipt)
     writer = _object(receipt.get("writer"), "writer")
     _require(
-        writer.get("version") == "0.5.1"
+        writer.get("version") == QUALIFIED_LEROBOT_VERSION
         and writer.get("source_commit") == WRITER_SOURCE
         and writer.get("wheel_sha256") == WRITER_WHEEL
         and writer.get("source_files") == WRITER_FILES
-        and _object(writer.get("runtime_versions"), "writer runtime").get("lerobot") == "0.5.1",
+        and _object(writer.get("runtime_versions"), "writer runtime").get("lerobot") == QUALIFIED_LEROBOT_VERSION,
         "writer-pin",
-        "Export writer/source pins must match qualified LeRobot 0.5.1.",
+        f"Export writer/source pins must match qualified LeRobot {QUALIFIED_LEROBOT_VERSION}.",
     )
     info = _object(_json(root / "meta/info.json"), "dataset info")
     stats = _object(_json(root / "meta/stats.json"), "dataset statistics")

@@ -2370,7 +2370,7 @@ def serve(
              "lerobot's RTCProcessor so the robot keeps executing the tail "
              "of one chunk while the next chunk is being computed. 2-3× "
              "effective throughput on Jetson-class latency. Requires "
-             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.5.1).",
+             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.6.1).",
     ),
     rtc_execution_horizon: int = typer.Option(
         10,

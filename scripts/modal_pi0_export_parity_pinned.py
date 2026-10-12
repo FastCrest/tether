@@ -39,7 +39,7 @@ _parity_out_volume = modal.Volume.from_name(
 )
 
 HF_CACHE_PATH = "/root/.cache/huggingface"
-PARITY_OUT_PATH = "/parity_out"
+PARITY_OUT_PATH = "/parity_out/lerobot-061-20261011"
 
 
 def _hf_secret():
@@ -53,9 +53,12 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        # Install lerobot first — it pins torch>=2.7 and hub>=1.0
-        "lerobot==0.5.1",
+        # Qualify the same torch/vision runtime as the CPU probes.
+        "torch==2.7.1",
+        "torchvision==0.22.1",
+        "lerobot==0.6.1",
         "num2words",
+        "diffusers==0.39.0",
         "safetensors>=0.4.0",
         "onnx>=1.16",
         "onnxruntime>=1.20",
@@ -63,9 +66,9 @@ image = (
         "onnx-diagnostic>=0.9",
         "optree",  # onnx-diagnostic soft-dep
         "scipy",  # onnx-diagnostic patches_transformers_qwen2_5 transitively
-        "numpy",
+        "numpy==2.2.6",
         "accelerate",
-        "draccus",
+        "draccus==0.11.6",
     )
     # transformers==5.3.0 EXACTLY: the monolithic exporter refuses anything
     # else (5.4+ has a q_length regression in masking_utils.sdpa_mask).
@@ -111,7 +114,7 @@ gpu_image = (
     timeout=3600,
     volumes={
         HF_CACHE_PATH: _hf_cache_volume,
-        PARITY_OUT_PATH: _parity_out_volume,
+        "/parity_out": _parity_out_volume,
     },
     secrets=[_hf_secret()],
 )
@@ -320,11 +323,13 @@ def main(
     tether_revision: str = TETHER_REVISION,
     reuse_export: bool = False,
     num_steps: int = 10,
+    watchdog_seconds: float = 1800,
 ) -> None:
     result = run_export_parity.remote(
         tether_revision=tether_revision,
         reuse_export=reuse_export,
         num_steps=num_steps,
+        watchdog_seconds=watchdog_seconds,
     )
     print("\n=== RESULT ===")
     for key, value in result.items():

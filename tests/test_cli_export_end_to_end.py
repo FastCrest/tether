@@ -69,7 +69,8 @@ def test_dep_check_catches_wrong_transformers(monkeypatch):
         monolithic._require_monolithic_deps()
 
 
-def test_dep_check_catches_wrong_lerobot(monkeypatch):
+@pytest.mark.parametrize("lerobot_version", ["0.4.4", "0.5.1"])
+def test_dep_check_catches_wrong_lerobot(monkeypatch, lerobot_version):
     """_require_monolithic_deps() must fail early on the known-bad
     lerobot 0.4.x stack instead of letting torch.export fail downstream."""
     from tether.exporters import monolithic
@@ -81,12 +82,12 @@ def test_dep_check_catches_wrong_lerobot(monkeypatch):
 
     def _fake_dist_version(dist_name: str) -> str:
         if dist_name == "lerobot":
-            return "0.4.4"
+            return lerobot_version
         raise monolithic.PackageNotFoundError(dist_name)
 
     monkeypatch.setattr(monolithic, "_dist_version", _fake_dist_version)
 
-    with pytest.raises(ImportError, match=r"lerobot 0\.4\.4.*lerobot==0\.5\.1"):
+    with pytest.raises(ImportError, match=r"lerobot " + lerobot_version.replace(".", r"\.") + r".*lerobot==0\.6\.1"):
         monolithic._require_monolithic_deps()
 
 

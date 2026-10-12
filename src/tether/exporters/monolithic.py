@@ -10,7 +10,7 @@ Usage (local):
     tether export lerobot/smolvla_base --monolithic --output ./smol
 
 Requires (pinned in the ``monolithic`` extra):
-    lerobot==0.5.1
+    lerobot==0.6.1
     transformers==5.3.0   (5.4+ has a q_length scalar regression)
     onnx-diagnostic>=0.9
     onnxscript>=0.1
@@ -22,6 +22,8 @@ https://github.com/FastCrest/reflex-vault/blob/main/reflex_vla/measured_numbers.
 for the parity rows this export is responsible for.
 """
 from __future__ import annotations
+
+from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
 
 import logging
 import time
@@ -175,14 +177,14 @@ def _require_monolithic_deps() -> None:
                 "lerobot imports but package metadata is missing; install with: "
                 "pip install 'fastcrest-tether[monolithic]'"
             ) from exc
-        if lerobot_version != "0.5.1":
+        if lerobot_version != QUALIFIED_LEROBOT_VERSION:
             raise ImportError(
                 f"lerobot {lerobot_version} detected; monolithic export requires "
-                "exactly lerobot==0.5.1. Install with: "
+                f"exactly lerobot=={QUALIFIED_LEROBOT_VERSION}. Install with: "
                 "pip install 'fastcrest-tether[monolithic]'"
             )
     except ImportError as e:
-        missing.append(f"lerobot==0.5.1 ({e})")
+        missing.append(f"lerobot=={QUALIFIED_LEROBOT_VERSION} ({e})")
 
     for mod_name, pip_name in [
         ("onnx_diagnostic", "onnx-diagnostic>=0.9"),

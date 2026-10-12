@@ -172,7 +172,7 @@ _REMEDIATION_BY_MODE: dict[str, str] = {
     ),
     "dep-version-conflict": (
         "Dependency version mismatch detected. Pin: robosuite==1.4.1, "
-        "bddl==1.0.1, mujoco==3.3.2, lerobot==0.5.1. Use the bundled "
+        "bddl==1.0.1, mujoco==3.3.2, lerobot==0.6.1. Use the bundled "
         "Modal image (--runtime modal) for known-good pins."
     ),
     "osmesa-compile-hang": (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 import subprocess
@@ -8,7 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class ResumeConfigurationError(ValueError):
-    pass
+    def __init__(self, message: str, *, code: str = "resume-configuration-invalid"):
+        self.code = code
+        super().__init__(message)
 
 
 def resolve_resume_checkpoint(output_dir: Path) -> tuple[Path, Path]:
@@ -39,11 +42,20 @@ def resolve_resume_checkpoint(output_dir: Path) -> tuple[Path, Path]:
         raise ResumeConfigurationError(
             f"resume checkpoint is missing pretrained_model/train_config.json: {checkpoint}"
         )
+    saved = json.loads(config.read_text())
+    if isinstance(saved, dict) and any(
+        key in saved for key in ("eval_freq", "use_rabc", "rabc_progress_path", "rabc_kappa", "rabc_epsilon", "rabc_head_mode")
+    ):
+        raise ResumeConfigurationError(
+            "cross-version-resume-unsupported: LeRobot 0.5.x training configs "
+            "cannot resume in the qualified 0.6.1 runtime; start a new run.",
+            code="cross-version-resume-unsupported",
+        )
     return checkpoint, config
 
 
 def build_resume_command(output_dir: Path) -> tuple[list[str], Path]:
-    """Build the LeRobot v0.5.1 resume command from the checkpoint's own config.
+    """Build the LeRobot v0.6.1 resume command from the checkpoint's own config.
 
     Do not repeat `--policy.path`, dataset, optimizer, scheduler, seed or other
     training settings. LeRobot's resume contract loads those values from the

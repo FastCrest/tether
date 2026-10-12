@@ -32,7 +32,7 @@ def _register_step() -> type:
     import (matching the pattern in snapflow_pi0_model.py).
     """
     from lerobot.processor.pipeline import ProcessorStep, ProcessorStepRegistry
-    from lerobot.types import EnvTransition, TransitionKey
+    from lerobot.lerobot_types import EnvTransition, TransitionKey
 
     @ProcessorStepRegistry.register(name="pi05_prepare_tokenizer_state_out")
     @dataclass

@@ -1,7 +1,7 @@
-"""Parse the real LoRA argv with LeRobot 0.5.1, offline and without weights.
+"""Parse the real LoRA argv with LeRobot 0.6.1, offline and without weights.
 
 Mirrors Studio's backend/tests/test_lora_argv_parser.py at the Tether boundary.
-Requires LeRobot 0.5.1 and PEFT. Inline resume only parses its flag; saved-config
+Requires LeRobot 0.6.1 and PEFT. Inline resume only parses its flag; saved-config
 resume restores the checkpoint path. Neither case runs training or qualifies
 dataset admission or interrupted-training recovery.
 """
@@ -29,7 +29,7 @@ def runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(socket.socket, "connect_ex", no_network)
     pytest.importorskip("lerobot")
     pytest.importorskip("peft")
-    assert version("lerobot") == "0.5.1"
+    assert version("lerobot") == "0.6.1"
 
     import draccus
     from lerobot.configs import parser, policies
@@ -41,7 +41,7 @@ def runtime(monkeypatch, tmp_path):
     assert Path(run.__file__).resolve().is_relative_to(source)
     # Keep the real config loader and policy decoding; stub only hub lookup.
     policy_file = tmp_path / "config.json"
-    policy_file.write_text(json.dumps(draccus.encode(SmolVLAConfig(device="cpu"))))
+    policy_file.write_text(json.dumps({**draccus.encode(SmolVLAConfig(device="cpu")), "type": "smolvla"}))
 
     def hub_config(*args, **kwargs):
         assert kwargs["repo_id"] == "lerobot/smolvla_base"
