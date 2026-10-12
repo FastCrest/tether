@@ -197,11 +197,11 @@ def cli_app():
 
 class TestTetherGoCli:
     def test_visible_in_top_level_help(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["--help"])
+        result = runner.invoke(cli_app, ["--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert "go" in result.output
 
     def test_help_describes_pipeline(self, runner, cli_app):
-        result = runner.invoke(cli_app, ["go", "--help"])
+        result = runner.invoke(cli_app, ["go", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
         assert "probe" in result.output.lower() or "Probe" in result.output
         assert "--model" in result.output

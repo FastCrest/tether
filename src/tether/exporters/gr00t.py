@@ -30,7 +30,7 @@ from tether.checkpoint import load_checkpoint
 from tether.config import ExportConfig, get_hardware_profile
 from tether.decompose import DecomposedRMSNorm, DecomposedRotaryEmbedding  # noqa: F401  (used by classes below)
 from tether.exporters.onnx_export import export_module_to_onnx, optimize_onnx
-from tether.exporters.trt_build import build_engine, check_trtexec
+from tether.exporters.trt_build import build_engine, check_trtexec, validate_precision
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +59,10 @@ def export_gr00t(
     """
     from tether.models.vlas.gr00t import GR00TVLA
 
+    hardware = get_hardware_profile(config.target)
+    validate_precision(hardware, config.precision)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    hardware = get_hardware_profile(config.target)
     result: dict[str, Any] = {"status": "ok", "files": {}, "metadata": {}}
 
     if state_dict is None:
@@ -122,7 +123,7 @@ def export_gr00t(
     if check_trtexec():
         expert_trt = output_dir / "expert_stack.trt"
         try:
-            build_engine(expert_onnx, expert_trt, hardware)
+            build_engine(expert_onnx, expert_trt, hardware, precision=config.precision)
             result["files"]["expert_trt"] = str(expert_trt)
         except RuntimeError as e:
             logger.warning("TRT build failed: %s", e)
@@ -149,7 +150,7 @@ def export_gr00t(
             "name": hardware.name,
             "memory_gb": hardware.memory_gb,
             "fp8": hardware.fp8_support,
-            "precision": hardware.trt_precision,
+            "precision": config.precision,
         },
         "expert": meta_with_action_dim,
         "spine_path": True,
@@ -193,9 +194,10 @@ def export_gr00t_full(
     """
     from tether.models.vlas.gr00t import GR00TVLA
 
+    hardware = get_hardware_profile(config.target)
+    validate_precision(hardware, config.precision)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    hardware = get_hardware_profile(config.target)
     result: dict[str, Any] = {"status": "ok", "files": {}, "metadata": {}}
 
     if state_dict is None:
@@ -253,7 +255,7 @@ def export_gr00t_full(
     if check_trtexec():
         expert_trt = output_dir / "expert_stack.trt"
         try:
-            build_engine(expert_onnx, expert_trt, hardware)
+            build_engine(expert_onnx, expert_trt, hardware, precision=config.precision)
             result["files"]["expert_trt"] = str(expert_trt)
         except RuntimeError as e:
             logger.warning("TRT build failed: %s", e)
@@ -278,7 +280,7 @@ def export_gr00t_full(
             "name": hardware.name,
             "memory_gb": hardware.memory_gb,
             "fp8": hardware.fp8_support,
-            "precision": hardware.trt_precision,
+            "precision": config.precision,
         },
         "expert": meta_with_action_dim,
         "spine_path": True,

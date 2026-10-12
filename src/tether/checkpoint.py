@@ -142,8 +142,10 @@ def load_checkpoint(
     logger.info("Downloading from HuggingFace Hub: %s", path_or_id)
     try:
         from huggingface_hub import snapshot_download
+        from tether.registry.models import hub_reference
 
-        local_dir = snapshot_download(path_or_id)
+        repo_id, revision = hub_reference(path_or_id)
+        local_dir = snapshot_download(repo_id, **({"revision": revision} if revision else {}))
         return load_checkpoint(local_dir, device=device)
     except ImportError:
         raise ImportError("Install huggingface_hub: pip install huggingface_hub")

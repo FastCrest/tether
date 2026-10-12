@@ -412,7 +412,7 @@ class TestCliWiring:
         from typer.testing import CliRunner
         from tether.cli import app as cli_app
         runner = CliRunner()
-        result = runner.invoke(cli_app, ["finetune", "--help"])
+        result = runner.invoke(cli_app, ["finetune", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
         assert "base" in result.output.lower()
         assert "dataset" in result.output.lower()

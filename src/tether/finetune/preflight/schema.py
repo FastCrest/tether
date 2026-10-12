@@ -14,6 +14,7 @@ is painful but at least obvious.
 from __future__ import annotations
 
 from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
+from tether.finetune.lerobot_v3 import verify_local_dataset
 
 import logging
 from pathlib import Path
@@ -128,14 +129,29 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
             gated models still need a path through.
     """
     if cfg.dataset_root is not None:
-        from tether.finetune.local_dataset import validate_local_config, verify_local_export
+        from tether.finetune.local_dataset import validate_local_config
         validate_local_config(cfg)
-        features = verify_local_export(cfg.dataset_root, cfg.dataset_manifest_sha256)["info"]["features"]
+        features = verify_local_dataset(cfg)["info"]["features"]
     else:
         features = _fetch_dataset_features(cfg.dataset)
     base_config = (_fetch_base_config(cfg.base, cfg.base_revision) if cfg.base_revision
                    else _fetch_base_config(cfg.base))
     local_details = {}
+    if cfg.dataset_root is not None and not cfg.dataset_manifest_sha256:
+        # Recipe features (cfg.dataset_features) were already enforced by
+        # verify_local_dataset. The base checkpoint's input/output_features are
+        # its pretraining embodiment; the command clears them
+        # (--policy.input_features=null) so LeRobot derives them from this
+        # dataset. Only the padding bounds bind, as on the export path.
+        if cfg.policy == "act" and cfg.mode == "full":
+            return PreflightCheck("schema", "ok", "Local features match the ACT recipe.", {"features": features})
+        if not isinstance(base_config, dict) or base_config.get("type") != "smolvla":
+            return PreflightCheck("schema", "fail", "base.config.type: requires a resolvable supported SmolVLA checkpoint")
+        for key, maximum in (("action", "max_action_dim"), ("observation.state", "max_state_dim")):
+            limit = base_config.get(maximum)
+            if type(limit) is not int or features[key]["shape"][0] > limit:
+                return PreflightCheck("schema", "fail", f"features.{key}.shape: exceeds or cannot resolve base {maximum}")
+        return PreflightCheck("schema", "ok", "Local features match the SmolVLA checkpoint.")
     if cfg.dataset_root is not None:
         expected_modes = {"VISUAL": "IDENTITY", "STATE": "MEAN_STD", "ACTION": "MEAN_STD"}
         if not isinstance(base_config, dict) or base_config.get("type") != "smolvla":

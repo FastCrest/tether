@@ -179,10 +179,16 @@ class FinetuneConfig:
     """
 
     dataset_root: Path | None = None
-    """Actual EXPORT/dataset directory of a qualified local Studio export."""
+    """Local LeRobot v3 directory, or a qualified Studio export dataset directory."""
 
     dataset_manifest_sha256: str | None = None
     """Canonical sibling export-receipt.json digest, excluding its sha256 field."""
+
+    dataset_content_sha256: str | None = None
+    """Optional expected SHA-256 of the local content manifest, checked before launch."""
+
+    dataset_features: dict[str, Any] = field(default_factory=dict)
+    """Recipe expected features, keyed by LeRobot names with shapes."""
 
     def __post_init__(self) -> None:
         self.output = Path(self.output)

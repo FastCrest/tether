@@ -1235,6 +1235,7 @@ def export_snapflow_student_monolithic(
     output_dir: str | Path,
     *,
     target: str = "desktop",
+    precision: str = "fp32",
 ) -> dict[str, Any]:
     """Export a SnapFlow-distilled student as monolithic ONNX at 1-NFE.
 
@@ -1256,6 +1257,7 @@ def export_snapflow_student_monolithic(
     task-success separately measured at 29/30 on LIBERO (vs teacher
     28/30) — see the 2026-04-21 session log.
     """
+    validate_monolithic_precision(precision)
     _require_monolithic_deps()
 
     import torch
@@ -1597,59 +1599,87 @@ def export_gr00t_monolithic(
     }
 
 
-def _model_type_from_local_config(model_id: str) -> str | None:
-    """When model_id is a local path, try to read config.json's
-    `model_type` (HF) or `policy_type` (lerobot) field. Returns None
-    when the path doesn't exist OR config.json is absent OR neither
-    field is present.
+# Config values are exact aliases. ID matching uses the same aliases as a
+# complete leading token of the repository name, never the namespace/path.
+_FAMILY_ALIASES = {
+    "smolvla": "smolvla",
+    "pi0": "pi0", "pi_0": "pi0",
+    "pi05": "pi05", "pi_05": "pi05", "pi0_5": "pi05", "pi0.5": "pi05",
+    "gr00t": "gr00t", "groot": "gr00t", "gr00tn1d6": "gr00t",
+    "pi0_fast": "pi0_fast", "pi0fast": "pi0_fast", "pi0-fast": "pi0_fast",
+}
 
-    Used by export_monolithic as a fallback when the model_id substring
-    doesn't carry the family name (e.g., distill output checkpoint
-    paths). Per 2026-04-25 self-distilling-serve distill smoke
-    (reflex_context/03_experiments/...-distill-smoke.md): the SnapFlow
-    distill output dir was rejected because the substring match failed
-    on the path, even though the checkpoint's config.json had the
-    correct model_type field.
-    """
+
+def validate_monolithic_precision(precision: str) -> None:
+    """Reject precision requests the FP32 ONNX exporters cannot implement."""
+    if precision != "fp32":
+        raise ValueError(
+            f"Monolithic export does not support precision={precision!r}. "
+            "Supported precisions: fp32. No precision conversion is implemented."
+        )
+
+
+def _family_from_config(config_path: Path) -> str | None:
     import json
-    from pathlib import Path
-
-    p = Path(model_id)
-    if not p.exists():
-        return None
-
-    config_path = p / "config.json"
-    if not config_path.exists():
-        return None
 
     try:
-        with config_path.open() as f:
-            cfg = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+        cfg = json.loads(config_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read model family from {config_path}: {exc}") from exc
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Model config must be an object: {config_path}")
+    # LeRobot's policy type is authoritative; model_type may name a backbone.
+    for field in ("type", "policy_type", "model_type"):
+        if field not in cfg:
+            continue
+        raw = cfg[field]
+        if not isinstance(raw, str):
+            raise ValueError(f"Invalid model family {field}={raw!r} in {config_path}")
+        family = _FAMILY_ALIASES.get(raw.lower())
+        if family is None:
+            raise ValueError(f"Unsupported model family {field}={raw!r} in {config_path}")
+        return family
+    return None
 
-    # HF transformers convention: 'model_type' field.
-    # lerobot policy convention: 'policy_type' field.
-    # SnapFlow checkpoint convention: 'type' field
-    # (e.g., 'pi05', 'smolvla'). Caught by 2026-04-25 distill smoke v2.
-    raw = (
-        cfg.get("model_type")
-        or cfg.get("policy_type")
-        or cfg.get("type")
-    )
-    if not isinstance(raw, str):
-        return None
-    raw = raw.lower()
 
-    # Map raw value to our 4-family bounded enum.
-    if "smolvla" in raw:
-        return "smolvla"
-    if "pi05" in raw or "pi_05" in raw or "pi0_5" in raw:
-        return "pi05"
-    if "pi0" in raw or "pi_0" in raw:
-        return "pi0"
-    if "gr00t" in raw or "groot" in raw:
-        return "gr00t"
+def _model_type_from_local_config(model_id: str) -> str | None:
+    """Read local family metadata first; absent metadata permits ID matching."""
+    path = Path(model_id)
+    if not path.exists():
+        return None
+    config_path = (path if path.is_dir() else path.parent) / "config.json"
+    return _family_from_config(config_path) if config_path.exists() else None
+
+
+def _model_type_from_hub_config(model_id: str) -> str | None:
+    """Read HF metadata before ID matching; only a missing config is optional."""
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.utils import EntryNotFoundError, HfHubHTTPError
+    from tether.registry.models import hub_reference
+
+    repo_id, revision = hub_reference(model_id)
+    try:
+        config_path = hf_hub_download(
+            repo_id=repo_id, filename="config.json",
+            **({"revision": revision} if revision else {}),
+        )
+    except EntryNotFoundError as exc:
+        # Local cache misses / offline errors do not prove config is absent.
+        if getattr(exc, "response", None) is not None and exc.response.status_code == 404:
+            logger.info("No config.json in %s; matching repository family token", model_id)
+            return None
+        raise ValueError(f"Cannot read config.json for {model_id}: {exc}") from exc
+    except (HfHubHTTPError, OSError) as exc:
+        raise ValueError(f"Cannot read config.json for {model_id}: {exc}") from exc
+    return _family_from_config(Path(config_path))
+
+
+def _family_from_model_id(model_id: str) -> str | None:
+    name = Path(model_id).name.lower()
+    # Longest aliases first: pi0_fast must never match the shorter pi0 token.
+    for alias in sorted(_FAMILY_ALIASES, key=len, reverse=True):
+        if name == alias or name.startswith((alias + "_", alias + "-")):
+            return _FAMILY_ALIASES[alias]
     return None
 
 
@@ -1660,40 +1690,33 @@ def export_monolithic(
     num_steps: int = 10,
     model_type: str | None = None,
     target: str = "desktop",
+    precision: str = "fp32",
 ) -> dict[str, Any]:
-    """Dispatch to the right model-specific exporter.
+    """Dispatch using exact config aliases first, then repository family tokens.
 
-    If ``model_type`` is None, infer from ``model_id`` (substring match).
-    Currently supported: smolvla, pi0, pi05, gr00t.
+    The monolithic ONNX path currently supports FP32 only.
     """
+    validate_monolithic_precision(precision)
     if model_type is None:
-        # Substring match on model_id first (works for HF ids like
-        # 'lerobot/pi05_libero_finetuned_v044'). Per CLAUDE.md no-band-aid
-        # principle: when the substring path fails for local-checkpoint
-        # paths (e.g., distill output dirs that don't carry the family
-        # name), fall back to reading the checkpoint's config.json.
-        # Caught by 2026-04-25 self-distilling-serve distill smoke
-        # (reflex_context/03_experiments/2026-04-25-self-distilling-serve-distill-smoke.md).
-        mid = model_id.lower()
-        if "smolvla" in mid:
-            model_type = "smolvla"
-        elif "pi05" in mid or "pi_05" in mid or "pi0_5" in mid:
-            model_type = "pi05"
-        elif "pi0" in mid or "pi_0" in mid:
-            model_type = "pi0"
-        elif "gr00t" in mid or "groot" in mid:
-            model_type = "gr00t"
-        else:
-            # Fallback: read config.json from local path if it exists
+        if Path(model_id).exists():
             model_type = _model_type_from_local_config(model_id)
-            if model_type is None:
-                raise ValueError(
-                    f"Cannot infer model_type from '{model_id}' "
-                    f"(no family substring matched + no readable "
-                    f"config.json with policy_type). Pass "
-                    f"model_type='smolvla', 'pi0', 'pi05', or 'gr00t' "
-                    f"explicitly."
-                )
+        elif not Path(model_id).is_absolute() and len(model_id.split("/")) == 2:
+            model_type = _model_type_from_hub_config(model_id)
+        if model_type is None:
+            model_type = _family_from_model_id(model_id)
+        if model_type is None:
+            raise ValueError(
+                f"Cannot infer model_type from '{model_id}'. No family metadata or "
+                "exact repository family token. Pass model_type='smolvla', 'pi0', "
+                "'pi05', or 'gr00t' explicitly."
+            )
+    else:
+        model_type = _FAMILY_ALIASES.get(model_type.lower(), model_type)
+    if model_type == "pi0_fast":
+        raise ValueError(
+            "pi0_fast (pi0-FAST) has no monolithic exporter. "
+            "Supported families: smolvla, pi0, pi05, gr00t."
+        )
 
     if model_type == "smolvla":
         result = export_smolvla_monolithic(model_id, output_dir, num_steps=num_steps, target=target)

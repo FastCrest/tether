@@ -223,6 +223,11 @@ async def test_models_list_tool_returns_registry_entries():
         assert "hf_repo" in e0
         assert "family" in e0
         assert "action_dim" in e0
+        assert "license" in e0
+        assert "commercial_use" in e0
+        gr00t = next(e for e in entries if e["model_id"] == "gr00t-n1.6")
+        assert gr00t["license"] == "nvidia-oneway-noncommercial"
+        assert gr00t["commercial_use"] == "prohibited"
 
 
 # ---------------------------------------------------------------------------
