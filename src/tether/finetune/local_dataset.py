@@ -734,12 +734,14 @@ def verify_local_export(
 def validate_local_config(cfg: Any) -> None:
     """Reject local escape hatches before any preflight or command is built."""
     root, digest = cfg.dataset_root, cfg.dataset_manifest_sha256
-    if root is None and digest is None:
+    content = getattr(cfg, "dataset_content_sha256", None)
+    raw = root is not None and digest is None
+    if root is None and digest is None and content is None:
         return
     _require(
-        root is not None and digest is not None and _digest(digest),
+        root is not None and (digest is None or _digest(digest)) and (content is None or _digest(content)) and not (digest and content),
         "local-config",
-        "dataset_root and dataset_manifest_sha256 must be supplied together.",
+        "dataset_root is required with a valid optional dataset_manifest_sha256 or dataset_content_sha256.",
     )
     _require(
         not cfg.skip_preflight and not cfg.resume,
@@ -749,15 +751,17 @@ def validate_local_config(cfg: Any) -> None:
     _require(
         cfg.phase == "train"
         and cfg.backend == "lerobot"
-        and cfg.policy == "auto"
-        and cfg.mode == "lora"
-        and bool(cfg.base)
+        and ((cfg.policy == "act" and cfg.mode == "full") or (cfg.policy == "auto" and cfg.mode == "lora" and bool(cfg.base)))
+        and (raw or cfg.policy == "auto")
         and bool(cfg.dataset)
         and not cfg.base_dataset,
         "unsupported-profile",
-        "Local datasets require pretrained SmolVLA LoRA (policy=auto, phase=train).",
+        "Local datasets require ACT from scratch (policy=act, mode=full) or pretrained SmolVLA LoRA (policy=auto, mode=lora), phase=train.",
     )
-    export = Path(root).expanduser().resolve().parent
+    _require(not raw or not (Path(root).expanduser().resolve().parent / "export-receipt.json").exists(), "local-config", "dataset_manifest_sha256: a Studio export receipt requires its explicit digest; it cannot be downgraded to raw admission.")
+    export = Path(root).expanduser().resolve()
+    if not raw:
+        export = export.parent
     _require(
         not Path(cfg.output).expanduser().resolve().is_relative_to(export),
         "local-config",
@@ -788,6 +792,8 @@ def validate_local_config(cfg: Any) -> None:
                 "rename_map",
                 "peft",
                 "peft.method_type",
+                # Raw v3 admission checks video frames at LeRobot's default.
+                "tolerance_s",
             }
             and (
                 not normalized.startswith("dataset.") or normalized == "dataset.use_imagenet_stats"
@@ -800,7 +806,7 @@ def validate_local_config(cfg: Any) -> None:
                     "peft.method_type.",
                 )
             )
-            and "normaliz" not in normalized.lower()
+            and ((raw and normalized == "policy.normalization_mapping") or "normaliz" not in normalized.lower())
             and "processor" not in normalized.lower()
             and normalized
             not in {
