@@ -195,3 +195,66 @@ The CPU tests compare against native 0.6.1 under 5.3, which is itself mis-scaled
 passed. The mask port itself stands (review above). Not merged. Fix requires an owner
 decision: move transformers to 5.4/5.5 as LeRobot 0.6.1 requires (re-qualify the exporters), or
 keep 5.3 and restore both openpi scalings for transformers <5.4.
+
+## Resolution 2026-10-12 (Claude): transformers 5.5.4, independent golden reference
+
+Owner decision: move to the transformers release LeRobot 0.6.1 supports. Latest 5.5.x on PyPI
+is 5.5.4 (5.6.x is outside `<5.6.0`). Changes on this branch:
+
+- Pins: `[monolithic]`, `[native]`, `[eval-local]`, `[jetson]` -> `transformers==5.5.4`; base
+  `transformers>=4.40,<5.6`; the `[tool.uv]` 5.3.0 override is removed (LeRobot's own range now
+  holds). `QUALIFIED_TRANSFORMERS_VERSION` (`src/tether/_lerobot_version.py`) drives the exporter
+  gate, which now refuses 5.3.0 by name (`tests/test_cli_export_end_to_end.py`). Every extra
+  resolves with `uv pip compile` for linux x86_64 and darwin arm64 without an override; the
+  dragged pins are tokenizers 0.22.2, huggingface-hub 1.33.0, safetensors 0.8.0, accelerate 1.15.0
+  (within transformers 5.5.4's `tokenizers>=0.22,<=0.23`, `huggingface-hub>=1.5,<2.0`). VERIFIED.
+- Receipt harnesses (`scripts/local_pi0_monolithic_parity.py`, `local_pi05_...`) drop the
+  `embed_image` sqrt shim and the `create_causal_mask` kwarg shim: the reference is native
+  LeRobot 0.6.1 under 5.5.4.
+- Tether's own PaliGemma text embedding (`PaliGemmaBackbone.embed_text_openpi`, used by
+  `models/vlas/pi0.py`, `pi05.py`, `runtime/fast_inference/pi05.py`) now looks the table up
+  directly. 5.5.4's `GemmaTextScaledWordEmbedding` already multiplies by sqrt(hidden)
+  (`modeling_gemma.py:50-61,381-382`), so calling the module and scaling again would have
+  scaled text by `hidden` in the Triton fast path on 5.5.4. VERIFIED by source; regression test
+  `tests/test_paligemma_backbone.py::test_embed_text_openpi_is_independent_of_embedding_module_scaling`.
+- Parity vehicles: `transformers==5.5.4`, `retries=0`, phase subprocess timeouts instead of the
+  SIGKILL watchdog, restart guard, provenance-checked `--reuse-export`, pi0.5 on A100-40GB.
+
+### Independent reference (golden)
+
+`tests/_lerobot_pi_golden.py` + `tests/fixtures/lerobot_pi_golden/{pi0,pi05}.pt`: tiny random
+pi0/pi0.5 (fixed seed, weights stored in the fixture), captured on the qualified OLD stack
+(LeRobot 0.5.1 + transformers 5.3.0 + torch 2.7.1 + Tether `cdb94dc`). The new stack is compared
+to it, not to itself. Results, float32, B=2 with masked cameras and padded language:
+
+| Stack | prefix_embs max_abs | actions (10 steps) max_abs | patched export forward | verdict |
+|---|---|---|---|---|
+| 0.6.1 + 5.5.4 (venv-061) pi0 | 2.98e-08 | 1.79e-07 | 1.79e-07 | pass |
+| 0.6.1 + 5.5.4 pi0.5 | 2.98e-08 | 2.38e-07 | 2.38e-07 | pass |
+| 0.6.1 + 5.3.0 (venv-061t) pi0, negative control | 0.318, norm ratio 0.176777 = 1/sqrt(32) | 0.396 | 0.396 | fail |
+| 0.6.1 + 5.3.0 pi0.5, negative control | same | 0.0175 (cosine 0.99998) | same | fail |
+
+Expected difference: a few float32 ulps, not bit identity. The old stack divides image features
+by sqrt(hidden) inside transformers 5.3 and LeRobot 0.5.1 multiplies back (`modeling_pi0.py:446`);
+5.4+ does neither, and language scaling moved from LeRobot (`modeling_pi0.py:669`, 0.5.1) into
+`GemmaTextScaledWordEmbedding`. Tolerance `rtol=atol=1e-5`. Note the pi0.5 negative control has
+action cosine 0.99998, which a cosine >= 0.999 gate would pass: the prefix-embedding check
+and the absolute tolerance are what catch the bug at tiny width.
+
+The same fixture drives the real monolithic toolchain (`apply_export_patches`,
+`torch_export_patches(patch_transformers=True)`, `torch.export`, `torch.onnx.export` opset 19,
+Where-dtype fix, ONNX Runtime CPU) on torch 2.11.0 + transformers 5.5.4 + onnx-diagnostic 0.9.3:
+pi0 max_abs 1.25e-06, pi0.5 1.19e-07 against the OLD-stack golden at num_steps=10. The ADR-era
+"5.4+ q_length regression" did not reproduce on this toolchain. VERIFIED (CPU, tiny model);
+GPU receipts on the real checkpoints decide.
+
+### Suites
+
+- S11 interpreter, full suite: 4204 passed, 138 skipped, 0 failed.
+- LeRobot 0.6.1 + transformers 5.5.4 + torch 2.7.1 (Studio eval runtime, `venv-061`), full suite:
+  4262 passed, 80 skipped, 0 failed.
+- torch 2.11.0 + transformers 5.5.4 export venv, LeRobot/export subset (golden, patched-forward,
+  CLI export, causal-mask shim, SnapFlow backend, Pad-free mask): 73 passed, 0 failed.
+
+Raw logs: Studio `.sol-scratch/lerobot06/tf55/`; probes and record: Studio
+`docs/research/verification/lerobot-06-transformers55-20261012/`.

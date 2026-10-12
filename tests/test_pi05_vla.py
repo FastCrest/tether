@@ -22,6 +22,7 @@ import torch.nn as nn
 from tether.models.base_vla import BaseVLA
 from tether.models.heads import VLAHead
 from tether.models.llm import LLMBackbone
+from tether.models.llm.paligemma_backbone import PaliGemmaBackbone
 from tether.models.vision import VisionBackbone
 from tether.models.vlas.pi05 import Pi05VLA
 from tether.registry.components import VLAS
@@ -230,6 +231,8 @@ class _StubVisionForPi05(VisionBackbone, nn.Module):
 
 class _StubPaliGemmaForPi05(LLMBackbone, nn.Module):
     """Stub PaliGemma — exposes the attrs Pi05VLA.predict_action uses."""
+
+    embed_text_openpi = PaliGemmaBackbone.embed_text_openpi
 
     def __init__(
         self,

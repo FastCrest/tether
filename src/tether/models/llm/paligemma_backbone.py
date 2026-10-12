@@ -110,6 +110,18 @@ class PaliGemmaBackbone(LLMBackbone, nn.Module):
         before merging in the projected image embeds."""
         return self.language_model.embed_tokens
 
+    def embed_text_openpi(self, token_ids: torch.Tensor) -> torch.Tensor:
+        """openpi text embedding: raw table lookup times sqrt(hidden).
+
+        Looks up the weight directly because the module's own scaling moved
+        between transformers releases: 5.3 Gemma uses a plain nn.Embedding
+        (scaled later in GemmaModel.forward), 5.4+ uses
+        GemmaTextScaledWordEmbedding, which already multiplies by sqrt(hidden).
+        Calling the module and scaling again double-scales on 5.4+.
+        """
+        weight = self.embed_tokens.weight
+        return torch.nn.functional.embedding(token_ids, weight) * self.text_hidden_size**0.5
+
     @property
     def text_hidden_size(self) -> int:
         """Hidden dim of the language tower (1152 for PaliGemma-3B-pt-224)."""

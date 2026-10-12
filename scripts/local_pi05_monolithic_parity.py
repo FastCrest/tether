@@ -34,36 +34,6 @@ for _mod in ("lerobot.policies.groot.groot_n1", "lerobot.policies.groot.modeling
     sys.modules[_mod] = _stub
 
 
-def _patch_pi05_for_transformers() -> None:
-    from lerobot.policies.pi05 import modeling_pi05
-    from lerobot.policies import pi_gemma
-    from transformers import masking_utils
-
-    def patched_embed_image(self, image):
-        out_dtype = image.dtype
-        if image.dtype != torch.float32:
-            image = image.to(torch.float32)
-        output = self.paligemma.model.get_image_features(image)
-        features = output.pooler_output if hasattr(output, "pooler_output") else output
-        features = features * self.paligemma.config.text_config.hidden_size**0.5
-        if features.dtype != out_dtype:
-            features = features.to(out_dtype)
-        return features
-
-    modeling_pi05.PaliGemmaWithExpertModel.embed_image = patched_embed_image
-
-    original = masking_utils.create_causal_mask
-
-    def causal_mask_shim(*args, **kwargs):
-        if "inputs_embeds" in kwargs and "input_embeds" not in kwargs:
-            kwargs["input_embeds"] = kwargs.pop("inputs_embeds")
-        return original(*args, **kwargs)
-
-    masking_utils.create_causal_mask = causal_mask_shim
-    if hasattr(pi_gemma, "create_causal_mask"):
-        pi_gemma.create_causal_mask = causal_mask_shim
-
-
 def _repo_commit() -> str:
     root = Path(__file__).resolve().parents[1]
     try:
@@ -160,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.num_steps <= 0:
         raise ValueError("--num-steps must be positive.")
 
-    _patch_pi05_for_transformers()
+    # Reference is native LeRobot 0.6.1 under the qualified transformers
+    # (5.5.4): no embedding or mask shims (Studio ADR 0003 correction 2026-10-12).
 
     import onnxruntime as ort
     from huggingface_hub import snapshot_download

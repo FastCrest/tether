@@ -67,9 +67,9 @@ image = (
         "torch>=2.8,<2.12",
         "safetensors>=0.4.0",
         "huggingface_hub",
-        # transformers==5.3.0 EXACTLY: the monolithic exporter refuses
+        # transformers==5.5.4 EXACTLY: the monolithic exporter refuses
         # anything else.
-        "transformers==5.3.0",
+        "transformers==5.5.4",
         "onnx>=1.16",
         "onnxruntime>=1.20",
         "onnxscript>=0.1",

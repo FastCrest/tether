@@ -66,7 +66,7 @@ image = (
     .apt_install("git")
     .pip_install(
         "lerobot==0.6.1",
-        "transformers==5.3.0",
+        "transformers==5.5.4",
         "num2words",
         "safetensors>=0.4.0",
         "scipy",

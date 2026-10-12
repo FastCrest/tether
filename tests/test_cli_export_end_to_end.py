@@ -18,10 +18,13 @@ releasing.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import types
 
 import pytest
+
+from tether._lerobot_version import QUALIFIED_TRANSFORMERS_VERSION
 
 
 def test_monolithic_module_importable():
@@ -91,7 +94,18 @@ def test_dep_check_catches_wrong_transformers(monkeypatch):
     import transformers
 
     monkeypatch.setattr(transformers, "__version__", "4.99.0")
-    with pytest.raises(ImportError, match="5.3.0"):
+    with pytest.raises(ImportError, match=re.escape(QUALIFIED_TRANSFORMERS_VERSION)):
+        monolithic._require_monolithic_deps()
+
+
+def test_dep_check_refuses_transformers_53(monkeypatch):
+    """5.3.0 + LeRobot 0.6.1 mis-scales pi0/pi0.5 embeddings ~45x (GPU parity
+    cosine 0.47, Studio ADR 0003 correction 2026-10-12); the gate must refuse it."""
+    from tether.exporters import monolithic
+    import transformers
+
+    monkeypatch.setattr(transformers, "__version__", "5.3.0")
+    with pytest.raises(ImportError, match="mis-scaled"):
         monolithic._require_monolithic_deps()
 
 
@@ -102,7 +116,7 @@ def test_dep_check_catches_wrong_lerobot(monkeypatch, lerobot_version):
     from tether.exporters import monolithic
     import transformers
 
-    monkeypatch.setattr(transformers, "__version__", "5.3.0")
+    monkeypatch.setattr(transformers, "__version__", QUALIFIED_TRANSFORMERS_VERSION)
     for mod_name in ("lerobot", "onnx_diagnostic", "onnxscript", "optree", "scipy"):
         monkeypatch.setitem(sys.modules, mod_name, types.ModuleType(mod_name))
 

@@ -215,3 +215,25 @@ def _make_stub_paligemma_with_vision_tower(text_hidden: int = 8):
             )
 
     return _Stub()
+
+
+@pytest.mark.parametrize("module_scale", [1.0, 8.0**0.5])
+def test_embed_text_openpi_is_independent_of_embedding_module_scaling(module_scale):
+    """transformers 5.3 Gemma embeds unscaled; 5.4+ GemmaTextScaledWordEmbedding
+    already multiplies by sqrt(hidden). openpi text = table lookup * sqrt(hidden)
+    either way, never sqrt(hidden) twice."""
+    stub = _make_stub_paligemma(text_hidden=8, vocab_size=16)
+    table = stub.model.language_model.embed_tokens
+
+    class Scaled(nn.Embedding):
+        def forward(self, ids):
+            return super().forward(ids) * module_scale
+
+    scaled = Scaled(16, 8)
+    scaled.weight = table.weight
+    stub.model.language_model.embed_tokens = scaled
+    ids = torch.tensor([[1, 5, 15]])
+    expected = table.weight[ids] * 8.0**0.5
+    torch.testing.assert_close(
+        PaliGemmaBackbone(model=stub).embed_text_openpi(ids), expected, rtol=0, atol=0
+    )

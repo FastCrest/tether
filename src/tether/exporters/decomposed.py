@@ -38,7 +38,7 @@ described in the design doc.
 
 ## Dependencies
 
-Same as ``monolithic`` extra: transformers==5.3.0, lerobot==0.6.1,
+Same as ``monolithic`` extra: transformers==5.5.4, lerobot==0.6.1,
 onnx-diagnostic>=0.9. ``apply_export_patches`` from ``monolithic.py``
 is invoked here to get the shared denoise-step + cache-freeze patches.
 

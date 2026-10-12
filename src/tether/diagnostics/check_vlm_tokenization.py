@@ -123,8 +123,8 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             actual=f"AutoTokenizer raised {type(e).__name__}: {e}",
             remediation=(
                 f"Export has tokenizer files but they are malformed. Check the "
-                f"export step's logs OR pin transformers==5.3.0 per ADR "
-                f"2026-04-17 onnx-export-gotchas. See {GH_ISSUE}."
+                f"export step's logs OR install the qualified transformers "
+                f"(pip install 'fastcrest-tether[monolithic]'). See {GH_ISSUE}."
             ),
             duration_ms=0.0,
             github_issue=GH_ISSUE,
@@ -150,7 +150,7 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             remediation=(
                 f"Tokenizer/model vocab_size mismatch — tokens > {vocab_size} will "
                 f"crash the ONNX path. Likely cause: transformers version drift. "
-                f"Pin transformers==5.3.0 per ADR 2026-04-17."
+                f"Install the qualified transformers: pip install 'fastcrest-tether[monolithic]'."
             ),
             duration_ms=0.0,
             github_issue=GH_ISSUE,

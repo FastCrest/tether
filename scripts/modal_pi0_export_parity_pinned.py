@@ -11,7 +11,8 @@ receipt `parity-gpu-receipts:/pi05/pi05-export-parity-receipt.json`):
 - A100-40GB: the fp32 reference + ~13 GB session cannot co-reside on A10G
   (pi0.5 refix OOM'd allocating a 128 MB arena there); this is a tier
   change only, gates unmodified.
-- In-function self-kill watchdog bounds GPU burn.
+- GPU burn is bounded by per-phase subprocess timeouts, the Modal function
+  timeout and retries=0, plus a restart guard (see EXPORT_TIMEOUT_SECONDS).
 
 Usage:
     modal run scripts/modal_pi0_export_parity_pinned.py
@@ -39,7 +40,7 @@ _parity_out_volume = modal.Volume.from_name(
 )
 
 HF_CACHE_PATH = "/root/.cache/huggingface"
-PARITY_OUT_PATH = "/parity_out/lerobot-061-20261011"
+PARITY_OUT_PATH = "/parity_out/lerobot-061-tf554-20261012"
 
 
 def _hf_secret():
@@ -72,9 +73,9 @@ image = (
         "accelerate",
         "draccus==0.11.6",
     )
-    # transformers==5.3.0 EXACTLY: the monolithic exporter refuses anything
-    # else (5.4+ has a q_length regression in masking_utils.sdpa_mask).
-    .pip_install("transformers==5.3.0")
+    # transformers==5.5.4 EXACTLY: LeRobot 0.6.1 needs >=5.4,<5.6 and the
+    # monolithic exporter gate refuses anything but the qualified release.
+    .pip_install("transformers==5.5.4")
     .env({
         "HF_HOME": HF_CACHE_PATH,
         "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers",
@@ -110,10 +111,25 @@ gpu_image = (
 )
 
 
+# Phase budgets from measured runs: pi0 fresh export 1776.5 s and harness
+# incl. setup 274.9 s on A100-40GB (Studio
+# docs/research/verification/lerobot-06-parity-rerun-20261012.md); pi0.5
+# fresh export plus failed session about 2190 s on A10G
+# (docs/parity/parity-pi05-refix-report.md). About 1.5x and 3x margin. Each phase runs in a subprocess with this timeout, so an
+# overrun ends the input as an ordinary failure. The previous in-container
+# SIGKILL watchdog surfaced as a runner crash, which Modal treats as an
+# internal failure and re-schedules regardless of the retry policy.
+EXPORT_TIMEOUT_SECONDS = 2700
+PARITY_TIMEOUT_SECONDS = 900
+SETUP_MARGIN_SECONDS = 600
+MODAL_TIMEOUT_SECONDS = EXPORT_TIMEOUT_SECONDS + PARITY_TIMEOUT_SECONDS + SETUP_MARGIN_SECONDS
+
+
 @app.function(
     image=gpu_image,
     gpu="A100-40GB",
-    timeout=3600,
+    timeout=MODAL_TIMEOUT_SECONDS,
+    retries=0,
     volumes={
         HF_CACHE_PATH: _hf_cache_volume,
         "/parity_out": _parity_out_volume,
@@ -125,39 +141,24 @@ def run_export_parity(
     tether_revision: str = TETHER_REVISION,
     num_steps: int = 10,
     reuse_export: bool = False,
-    watchdog_seconds: float = 3300,
+    export_timeout_seconds: float = EXPORT_TIMEOUT_SECONDS,
+    parity_timeout_seconds: float = PARITY_TIMEOUT_SECONDS,
+    run_id: str = "",
 ) -> dict:
     import subprocess
     import sys
     import time
     from pathlib import Path
 
+    import json as _json
     import os as _os
-    import signal as _signal
-    import threading as _threading
-
-    _WATCHDOG_SECONDS = float(
-        _os.environ.get("PARITY_WATCHDOG_SECONDS", str(watchdog_seconds))
-    )
-
-    def _self_kill() -> None:
-        print(
-            f"[watchdog] deadline of {_WATCHDOG_SECONDS:.0f}s reached; killing this "
-            "container rather than burning GPU time on a hung step.",
-            flush=True,
-        )
-        _os.kill(_os.getpid(), _signal.SIGKILL)
-
-    _watchdog = _threading.Timer(_WATCHDOG_SECONDS, _self_kill)
-    _watchdog.daemon = True
-    _watchdog.start()
 
     _started_at = time.monotonic()
 
     def _progress(stage: str) -> None:
         print(f"[progress] {time.monotonic() - _started_at:7.1f}s  {stage}", flush=True)
 
-    _progress("container up, watchdog armed")
+    _progress("container up")
     summary: dict = {
         "model_source": "lerobot/pi0_base",
         "model_revision": model_revision,
@@ -165,6 +166,20 @@ def run_export_parity(
         "provider": "CUDAExecutionProvider",
         "num_steps": num_steps,
     }
+
+    # Restart guard: if Modal re-schedules this input after a container
+    # crash, the second attempt finds its own marker and exits at once
+    # instead of starting another GPU export.
+    if run_id:
+        marker = Path(PARITY_OUT_PATH) / "pi0" / "attempts" / run_id
+        _parity_out_volume.reload()
+        if marker.exists():
+            _progress("restarted attempt detected; refusing to run again")
+            summary["verdict"] = "aborted-restarted-attempt"
+            return summary
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(time.time()))
+        _parity_out_volume.commit()
 
     # Fail fast if the CUDA EP cannot be created (a broken CUDA/cuDNN
     # image otherwise surfaces much later as a no-fallback gate failure
@@ -233,46 +248,58 @@ def run_export_parity(
     snap = snapshot_download("lerobot/pi0_base", revision=model_revision)
     summary["snapshot_dir"] = snap
 
-    from tether.exporters.monolithic import export_pi0_monolithic
-
     export_dir = Path(PARITY_OUT_PATH) / "pi0" / "export"
-    existing = export_dir / "model.onnx"
-    # model.onnx may be graph-only with weights in model.onnx.data: count
-    # the whole artifact dir, which is also what the receipt hashes.
-    existing_bytes = (
-        sum(f.stat().st_size for f in export_dir.glob("*") if f.is_file())
-        if existing.is_file()
-        else 0
+    provenance_path = export_dir / "tether-export-provenance.json"
+    harness_env = dict(_os.environ)
+    harness_env["PYTHONPATH"] = str(pin_dir / "src") + _os.pathsep + harness_env.get(
+        "PYTHONPATH", ""
     )
-    if reuse_export and existing_bytes > 10**9:
-        export_result = {
-            "status": "reused",
-            "onnx_path": str(existing),
-            "size_mb": existing_bytes / 1e6,
-            "num_steps": num_steps,
-        }
-        _progress(f"reusing retained export ({export_result['size_mb']:.1f}MB)")
+    from importlib.metadata import version as _v
+
+    provenance = {
+        "tether_revision": tether_revision,
+        "model_revision": model_revision,
+        "num_steps": num_steps,
+        **{p: _v(p) for p in ("lerobot", "transformers", "torch", "onnx-diagnostic", "onnxscript")},
+    }
+    summary["export_provenance"] = provenance
+    retained = (
+        _json.loads(provenance_path.read_text()) if provenance_path.is_file() else None
+    )
+    if reuse_export and retained == provenance:
+        export_result = {"status": "reused", "onnx_path": str(export_dir / "model.onnx")}
+        _progress("reusing retained export (provenance matches)")
     else:
-        _progress("export_pi0_monolithic from pinned snapshot")
-        export_result = export_pi0_monolithic(snap, export_dir, num_steps=num_steps)
+        if reuse_export:
+            _progress(f"not reusing: retained provenance {retained} != {provenance}")
+        _progress("export_pi0_monolithic from pinned snapshot (subprocess)")
+        code = (
+            "import json, sys; from tether.exporters.monolithic import export_pi0_monolithic; "
+            "r = export_pi0_monolithic(sys.argv[1], sys.argv[2], num_steps=int(sys.argv[3])); "
+            "print('EXPORT_RESULT ' + json.dumps(r), flush=True)"
+        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", code, snap, str(export_dir), str(num_steps)],
+                cwd=str(pin_dir), env=harness_env, capture_output=True, text=True,
+                timeout=export_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _parity_out_volume.commit()
+            raise RuntimeError(
+                f"export exceeded {export_timeout_seconds:.0f}s; stopped"
+            ) from exc
+        print(proc.stdout[-4000:], flush=True)
+        print(proc.stderr[-4000:], flush=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"export failed with return code {proc.returncode}")
+        line = next(x for x in proc.stdout.splitlines() if x.startswith("EXPORT_RESULT "))
+        export_result = _json.loads(line.split(" ", 1)[1])
+        provenance_path.write_text(_json.dumps(provenance, sort_keys=True) + "\n")
+        _parity_out_volume.commit()
         _progress(f"export ok: {export_result.get('size_mb', 0):.1f}MB")
     summary["export"] = export_result
 
-    # Release the export phase's cached GPU blocks before the parity
-    # subprocess: the harness places the reference on CUDA, and the
-    # parent's caching-allocator reservation would otherwise OOM it
-    # (observed on pi0.5: parent held 22.03/22.06 GiB, child got 16 MiB).
-    import gc as _gc
-
-    _gc.collect()
-    try:
-        import torch as _torch
-
-        if _torch.cuda.is_available():
-            _torch.cuda.empty_cache()
-    except Exception as exc:  # noqa: BLE001 -- diagnostic only
-        print(f"[warn] cuda cache release failed: {exc!r}", flush=True)
-    _progress("parent GPU cache released")
 
     # 3. Receipt-grade parity with CUDA, CPU fallback disabled.
     receipt_path = Path(PARITY_OUT_PATH) / "pi0" / "pi0-export-parity-receipt.json"
@@ -287,18 +314,17 @@ def run_export_parity(
         "--receipt", str(receipt_path),
     ]
     _progress("running receipt-grade parity (CUDA, no CPU fallback)")
-    harness_env = dict(_os.environ)
-    harness_env["PYTHONPATH"] = str(pin_dir / "src") + _os.pathsep + harness_env.get(
-        "PYTHONPATH", ""
-    )
-    proc = subprocess.run(
-        cmd, cwd=str(pin_dir), capture_output=True, text=True, env=harness_env
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(pin_dir), capture_output=True, text=True, env=harness_env,
+            timeout=parity_timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _parity_out_volume.commit()
+        raise RuntimeError(f"parity harness exceeded {parity_timeout_seconds:.0f}s; stopped") from exc
     print(proc.stdout[-6000:], flush=True)
     print(proc.stderr[-3000:], flush=True)
     summary["harness_returncode"] = proc.returncode
-
-    import json as _json
 
     if receipt_path.is_file():
         receipt = _json.loads(receipt_path.read_text())
@@ -315,7 +341,6 @@ def run_export_parity(
         summary["verdict"] = "no-receipt"
 
     _parity_out_volume.commit()
-    _watchdog.cancel()
     _progress("done")
     return summary
 
@@ -325,13 +350,19 @@ def main(
     tether_revision: str = TETHER_REVISION,
     reuse_export: bool = False,
     num_steps: int = 10,
-    watchdog_seconds: float = 1800,
+    export_timeout_seconds: float = EXPORT_TIMEOUT_SECONDS,
+    parity_timeout_seconds: float = PARITY_TIMEOUT_SECONDS,
+    run_id: str = "",
 ) -> None:
+    import uuid
+
     result = run_export_parity.remote(
         tether_revision=tether_revision,
         reuse_export=reuse_export,
         num_steps=num_steps,
-        watchdog_seconds=watchdog_seconds,
+        export_timeout_seconds=export_timeout_seconds,
+        parity_timeout_seconds=parity_timeout_seconds,
+        run_id=run_id or uuid.uuid4().hex,
     )
     print("\n=== RESULT ===")
     for key, value in result.items():

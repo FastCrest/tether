@@ -11,7 +11,7 @@ Usage (local):
 
 Requires (pinned in the ``monolithic`` extra):
     lerobot==0.6.1
-    transformers==5.3.0   (5.4+ has a q_length scalar regression)
+    transformers==5.5.4   (LeRobot 0.6.1 requires >=5.4,<5.6)
     onnx-diagnostic>=0.9
     onnxscript>=0.1
     optree, scipy, num2words
@@ -23,7 +23,7 @@ for the parity rows this export is responsible for.
 """
 from __future__ import annotations
 
-from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
+from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION, QUALIFIED_TRANSFORMERS_VERSION
 
 import logging
 import time
@@ -160,15 +160,16 @@ def _require_monolithic_deps() -> None:
     missing = []
     try:
         import transformers
-        if transformers.__version__ != "5.3.0":
+        if transformers.__version__ != QUALIFIED_TRANSFORMERS_VERSION:
             raise ImportError(
                 f"transformers {transformers.__version__} detected; the "
-                f"monolithic export requires exactly 5.3.0 (5.4+ has a "
-                f"q_length regression in masking_utils.sdpa_mask). Install "
-                f"with: pip install transformers==5.3.0"
+                f"monolithic export requires exactly {QUALIFIED_TRANSFORMERS_VERSION} "
+                f"(LeRobot {QUALIFIED_LEROBOT_VERSION} needs >=5.4: on 5.3 its "
+                f"pi0/pi0.5 embeddings are mis-scaled). Install with: "
+                f"pip install transformers=={QUALIFIED_TRANSFORMERS_VERSION}"
             )
     except ImportError as e:
-        missing.append(f"transformers==5.3.0 ({e})")
+        missing.append(f"transformers=={QUALIFIED_TRANSFORMERS_VERSION} ({e})")
 
     # onnx-diagnostic 0.8.11 and 0.9.0-0.9.3 unconditionally patch
     # torch._export.non_strict_utils._constrain_user_specified_dimhint_range,
