@@ -768,3 +768,21 @@ def test_existing_positional_config_arguments_stay_compatible(tmp_path):
     assert cfg.num_steps == 123
     assert cfg.dataset_root is None
     assert cfg.dataset_manifest_sha256 is None
+
+
+def test_pinned_lerobot_sources_match_installed_qualified_runtime():
+    """The pins are reviewed upstream bytes; check them against a real 0.6.1 install when present."""
+    from importlib import metadata
+
+    from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
+    from tether.finetune import local_dataset
+
+    try:
+        dist = metadata.distribution("lerobot")
+    except metadata.PackageNotFoundError:
+        pytest.skip("lerobot is not installed")
+    if dist.version != QUALIFIED_LEROBOT_VERSION:
+        pytest.skip(f"lerobot {dist.version} is not the qualified {QUALIFIED_LEROBOT_VERSION}")
+    pins = {**local_dataset.WRITER_FILES, **local_dataset.NORMALIZATION_FILES}
+    actual = {name: hashlib.sha256(Path(dist.locate_file(name)).read_bytes()).hexdigest() for name in pins}
+    assert actual == pins

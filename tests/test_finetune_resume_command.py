@@ -56,3 +56,11 @@ def test_resume_refuses_legacy_lerobot_config(tmp_path):
     with pytest.raises(ResumeConfigurationError, match="cross-version-resume-unsupported") as error:
         build_resume_command(tmp_path)
     assert error.value.code == "cross-version-resume-unsupported"
+
+
+def test_resume_refuses_unreadable_train_config(tmp_path):
+    model = tmp_path / "checkpoints" / "000003" / "pretrained_model"
+    model.mkdir(parents=True)
+    (model / "train_config.json").write_text("{not json")
+    with pytest.raises(ResumeConfigurationError, match="unreadable"):
+        build_resume_command(tmp_path)

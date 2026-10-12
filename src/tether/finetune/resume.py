@@ -42,7 +42,10 @@ def resolve_resume_checkpoint(output_dir: Path) -> tuple[Path, Path]:
         raise ResumeConfigurationError(
             f"resume checkpoint is missing pretrained_model/train_config.json: {checkpoint}"
         )
-    saved = json.loads(config.read_text())
+    try:
+        saved = json.loads(config.read_text())
+    except (OSError, ValueError) as exc:
+        raise ResumeConfigurationError(f"resume train_config.json is unreadable: {config}") from exc
     if isinstance(saved, dict) and any(
         key in saved for key in ("eval_freq", "use_rabc", "rabc_progress_path", "rabc_kappa", "rabc_epsilon", "rabc_head_mode")
     ):
