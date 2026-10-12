@@ -110,7 +110,7 @@ def test_cli_fast_kernels_flag_exists():
     from tether.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["serve", "--help"])
+    result = runner.invoke(app, ["serve", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert "--fast-kernels" in result.output
 
 

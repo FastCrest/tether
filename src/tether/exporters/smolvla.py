@@ -25,7 +25,7 @@ import torch
 from tether.checkpoint import load_checkpoint
 from tether.config import ExportConfig, get_hardware_profile
 from tether.exporters.onnx_export import export_module_to_onnx, optimize_onnx
-from tether.exporters.trt_build import build_engine, check_trtexec
+from tether.exporters.trt_build import build_engine, check_trtexec, validate_precision
 
 # Re-exports — moved here from the deleted ``smolvla_exporter.py`` at Day 11
 # sunset. External callers still doing ``from tether.exporters.smolvla import
@@ -182,9 +182,10 @@ def export_smolvla(
     """
     from tether.models.vlas.smolvla import SmolVLA
 
+    hardware = get_hardware_profile(config.target)
+    validate_precision(hardware, config.precision)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    hardware = get_hardware_profile(config.target)
     result: dict[str, Any] = {"status": "ok", "files": {}, "metadata": {}}
 
     # 1. Load checkpoint (if not provided)
@@ -284,7 +285,7 @@ def export_smolvla(
     if check_trtexec():
         expert_trt = output_dir / "expert_stack.trt"
         try:
-            build_engine(expert_onnx, expert_trt, hardware)
+            build_engine(expert_onnx, expert_trt, hardware, precision=config.precision)
             result["files"]["expert_trt"] = str(expert_trt)
         except RuntimeError as e:
             logger.warning("TRT build failed: %s", e)
@@ -304,7 +305,7 @@ def export_smolvla(
             "name": hardware.name,
             "memory_gb": hardware.memory_gb,
             "fp8": hardware.fp8_support,
-            "precision": hardware.trt_precision,
+            "precision": config.precision,
         },
         "expert": expert_meta,
         "vlm_kv_input": True,

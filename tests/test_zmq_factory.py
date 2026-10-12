@@ -132,7 +132,7 @@ def test_cli_transport_flag_exists():
     from tether.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["serve", "--help"])
+    result = runner.invoke(app, ["serve", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert "--transport" in result.output
     assert "zmq" in result.output
     assert "--zmq-insecure-ok" in result.output

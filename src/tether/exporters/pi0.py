@@ -32,7 +32,7 @@ from tether.models.heads.expert_stack import (
     Pi05ExpertGQALayer,
     _sinusoidal_pos_embedding,
 )
-from tether.exporters.trt_build import build_engine, check_trtexec
+from tether.exporters.trt_build import build_engine, check_trtexec, validate_precision
 from tether.decompose import DecomposedAdaRMSNorm
 
 logger = logging.getLogger(__name__)
@@ -212,9 +212,10 @@ def export_pi0(
         config: export config
         state_dict: optionally pre-loaded state dict (avoids re-downloading 3.5GB)
     """
+    hardware = get_hardware_profile(config.target)
+    validate_precision(hardware, config.precision)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    hardware = get_hardware_profile(config.target)
     result = {"status": "ok", "files": {}, "metadata": {}}
 
     # 1. Load checkpoint (if not provided)
@@ -276,7 +277,7 @@ def export_pi0(
         logger.info("Building TensorRT engine...")
         expert_trt = output_dir / "expert_stack.trt"
         try:
-            build_engine(expert_onnx, expert_trt, hardware)
+            build_engine(expert_onnx, expert_trt, hardware, precision=config.precision)
             result["files"]["expert_trt"] = str(expert_trt)
         except RuntimeError as e:
             logger.warning("TRT build failed: %s", e)
@@ -296,7 +297,7 @@ def export_pi0(
             "name": hardware.name,
             "memory_gb": hardware.memory_gb,
             "fp8": hardware.fp8_support,
-            "precision": hardware.trt_precision,
+            "precision": config.precision,
         },
         "expert": expert_meta,
     }
@@ -501,9 +502,10 @@ def export_pi05(
     state_dict: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, Any]:
     """Full pi0.5 export pipeline (AdaRMSNorm variant)."""
+    hardware = get_hardware_profile(config.target)
+    validate_precision(hardware, config.precision)
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    hardware = get_hardware_profile(config.target)
     result = {"status": "ok", "files": {}, "metadata": {}}
 
     if state_dict is None:
@@ -555,7 +557,7 @@ def export_pi05(
     if check_trtexec():
         expert_trt = output_dir / "expert_stack.trt"
         try:
-            build_engine(expert_onnx, expert_trt, hardware)
+            build_engine(expert_onnx, expert_trt, hardware, precision=config.precision)
             result["files"]["expert_trt"] = str(expert_trt)
         except RuntimeError as e:
             logger.warning("TRT build failed: %s", e)
@@ -574,7 +576,7 @@ def export_pi05(
             "name": hardware.name,
             "memory_gb": hardware.memory_gb,
             "fp8": hardware.fp8_support,
-            "precision": hardware.trt_precision,
+            "precision": config.precision,
         },
         "expert": expert_meta,
     }

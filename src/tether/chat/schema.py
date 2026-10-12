@@ -11,7 +11,8 @@ from typing import Any
 
 # Hardware target choices reused across multiple tools.
 _TARGETS = ["orin-nano", "orin", "orin-64", "thor", "desktop"]
-_PRECISIONS = ["fp16", "fp8", "int8"]
+# Monolithic export (the default) supports fp32 only; int8 has no calibrated path.
+_PRECISIONS = ["fp32", "fp16", "fp8"]
 
 
 def _tool(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -54,7 +55,7 @@ TOOLS: list[dict[str, Any]] = [
                 "model": {"type": "string", "description": "HF model ID or local checkpoint path, e.g. 'lerobot/smolvla_base'"},
                 "target": {"type": "string", "enum": _TARGETS, "description": "Hardware tier"},
                 "output": {"type": "string", "description": "Output directory (default ./tether_export)"},
-                "precision": {"type": "string", "enum": _PRECISIONS, "description": "Numeric precision"},
+                "precision": {"type": "string", "enum": _PRECISIONS, "description": "Numeric precision. Monolithic (default) supports fp32 only; fp16/fp8 need decomposed=true."},
                 "decomposed": {"type": "boolean", "description": "Use 5-stage decomposed export instead of monolithic. Default false."},
             },
             "required": ["model", "target"],

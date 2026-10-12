@@ -213,6 +213,7 @@ def create_mcp_server(
                 "supported_embodiments": list(e.supported_embodiments),
                 "supported_devices": list(e.supported_devices),
                 "license": e.license,
+                "commercial_use": e.commercial_use,
                 "description": e.description,
             }
             for e in entries
