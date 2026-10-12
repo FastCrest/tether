@@ -224,7 +224,7 @@ def export(
     model: str = typer.Argument(help="HuggingFace model ID or local checkpoint path"),
     target: str = typer.Option("desktop", help="Target hardware: orin-nano, orin, orin-64, thor, desktop"),
     output: str = typer.Option("./tether_export", help="Output directory"),
-    precision: str = typer.Option("fp16", help="Precision: fp16, fp8, int8"),
+    precision: str = typer.Option("", help="Precision: monolithic supports fp32 only (default); decomposed defaults to fp16."),
     opset: int = typer.Option(19, help="ONNX opset version"),
     chunk_size: int = typer.Option(50, help="Action chunk size"),
     no_validate: bool = typer.Option(False, help="Skip ONNX validation"),
@@ -296,7 +296,10 @@ def export(
              "(used with --action-units).",
     ),
 ):
-    """Export a VLA model to ONNX + TensorRT for edge deployment."""
+    """Export a VLA model to ONNX + TensorRT for edge deployment.
+
+    MODEL is a HuggingFace model ID or local checkpoint path.
+    """
     _setup_logging(verbose)
     from tether.export_config import export_action_units as _export_action_units
     from tether.safety.guard import GuardUnitsError, parse_action_units
@@ -330,6 +333,14 @@ def export(
                     "monolithic export has no parallel prefix/expert split.[/red]"
                 )
                 raise typer.Exit(2)
+            from tether.exporters.monolithic import validate_monolithic_precision
+
+            precision = precision or "fp32"
+            try:
+                validate_monolithic_precision(precision)
+            except ValueError as exc:
+                err_console.print(str(exc), style="red", markup=False)
+                raise typer.Exit(2)
             label = "SnapFlow student (1-NFE)" if from_distilled else "monolithic, cos=1.0 verified path"
             console.print(f"\n[bold]Tether Export ({label})[/bold]")
             console.print(f"  Model:      {model}")
@@ -362,9 +373,12 @@ def export(
             start = time.perf_counter()
             try:
                 if from_distilled:
-                    result = export_snapflow_student_monolithic(model, output, target=target)
+                    result = export_snapflow_student_monolithic(model, output, target=target, precision=precision)
                 else:
-                    result = export_monolithic(model, output, num_steps=num_steps, target=target)
+                    result = export_monolithic(model, output, num_steps=num_steps, target=target, precision=precision)
+            except ValueError as exc:
+                err_console.print(str(exc), style="red", markup=False)
+                raise typer.Exit(2)
             except ImportError as exc:
                 err_console.print(f"Missing monolithic dep: {exc}", style="red", markup=False)
                 err_console.print(
@@ -389,6 +403,14 @@ def export(
             console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
             raise typer.Exit(0)
 
+        precision = precision or "fp16"
+        from tether.exporters.trt_build import validate_precision
+
+        try:
+            validate_precision(hardware, precision)
+        except ValueError as exc:
+            err_console.print(f"Decomposed export: {exc}", style="red", markup=False)
+            raise typer.Exit(2)
         console.print(f"\n[bold]Tether Export[/bold]")
         console.print(f"  Model:     {model}")
         console.print(f"  Target:    {hardware.name} ({hardware.memory_gb}GB, {hardware.trt_precision})")
@@ -5124,6 +5146,7 @@ def models_list(
                 "supported_devices": list(e.supported_devices),
                 "requires_export": e.requires_export,
                 "license": e.license,
+                "commercial_use": e.commercial_use,
                 "description": e.description,
             }
             for e in entries
@@ -5276,6 +5299,7 @@ def models_info(
             "supported_devices": list(entry.supported_devices),
             "requires_export": entry.requires_export,
             "license": entry.license,
+            "commercial_use": entry.commercial_use,
             "description": entry.description,
             "benchmarks": [
                 {"device": b.device, "p50_ms": b.p50_ms, "p99_ms": b.p99_ms,
@@ -5292,6 +5316,7 @@ def models_info(
     console.print(f"  action_dim:    {entry.action_dim}")
     console.print(f"  size:          {entry.size_mb}MB")
     console.print(f"  license:       {entry.license}")
+    console.print(f"  commercial use: {entry.commercial_use}")
     console.print(f"  embodiments:   {', '.join(entry.supported_embodiments) or '(none)'}")
     console.print(f"  devices:       {', '.join(entry.supported_devices) or '(none)'}")
     console.print(f"  needs export:  {'YES — run tether export after pull' if entry.requires_export else 'NO — Tether-ready'}")

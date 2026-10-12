@@ -14,6 +14,7 @@ from scripts.ci_quality_ratchet import (
     Finding,
     RatchetError,
     changed_authorization_inputs,
+    collect_findings,
     compare_findings,
     is_baseline_artifact,
     main,
@@ -32,6 +33,30 @@ from scripts.ci_quality_ratchet import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ci_quality_ratchet"
+
+
+def _require_tools(*modules: str) -> None:
+    """Resolve tools in the same isolated interpreter used by the ratchet."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import importlib.util, json, sys; "
+            "print(json.dumps([name for name in sys.argv[1:] "
+            "if importlib.util.find_spec(name) is None]))",
+            *modules,
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    missing = json.loads(result.stdout)
+    if missing:
+        pytest.skip(
+            f"quality-ratchet integration requires {', '.join(missing)} "
+            f"installed in active interpreter {sys.executable}"
+        )
 
 
 def _finding(*, rule: str = "F401", line: int = 10, message: str = "unused") -> Finding:
@@ -78,6 +103,38 @@ def test_tool_specific_parsers_produce_stable_fingerprints(tmp_path: Path) -> No
         "Incompatible return value type",
     )
     assert len(mypy) == 1
+
+
+def test_ruff_parser_rejects_missing_json_instead_of_assuming_no_debt(tmp_path: Path) -> None:
+    with pytest.raises(RatchetError, match="Ruff check emitted invalid JSON"):
+        parse_ruff_check("", checkout=tmp_path)
+
+
+@pytest.mark.parametrize("missing_tool", ["ruff", "mypy"])
+def test_missing_tool_is_an_operational_error_with_interpreter_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_tool: str,
+) -> None:
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        assert command[:3] == [sys.executable, "-I", "-m"]
+        assert command[-1] == "--version"
+        module = command[3]
+        if module == missing_tool:
+            return subprocess.CompletedProcess(
+                command, 1, "", f"{sys.executable}: No module named {module}\n"
+            )
+        return subprocess.CompletedProcess(command, 0, f"{module} 1.0\n", "")
+
+    monkeypatch.setattr("scripts.ci_quality_ratchet.subprocess.run", run)
+    with pytest.raises(RatchetError, match=f"No module named {missing_tool}"):
+        collect_findings(tmp_path, cache_dir=tmp_path / "cache", protected_pyproject="")
+    assert [command[3] for command in commands] == (
+        ["ruff"] if missing_tool == "ruff" else ["ruff", "mypy"]
+    )
 
 
 def test_diff_relocation_handles_large_unrelated_insertions() -> None:
@@ -436,6 +493,7 @@ def test_candidate_policy_rejects_mypy_plugin_without_executing_or_tampering(
     assert evidence.read_text() == '{"sealed": true}\n'
 
     # Control: the same config really does execute the plugin when mypy loads it.
+    _require_tools("mypy")
     control = subprocess.run(
         [
             sys.executable,
@@ -529,6 +587,7 @@ def test_authorization_inputs_distinguish_dependency_and_tool_policy_changes(
 
 
 def test_adversarial_head_cannot_hide_new_debt_or_replace_judge(tmp_path: Path) -> None:
+    _require_tools("ruff", "mypy")
     repo = tmp_path / "adversarial"
     repo.mkdir()
     _git(repo, "init", "-b", "main")

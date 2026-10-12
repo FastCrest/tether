@@ -72,7 +72,7 @@ def _invoke_go_with_export_cache(tmp_path, monkeypatch, export_mock):
 
 
 def test_help():
-    result = runner.invoke(app, ["--help"])
+    result = runner.invoke(app, ["--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "Deploy any VLA" in result.output
 
@@ -91,7 +91,7 @@ def test_targets():
 
 
 def test_export_help():
-    result = runner.invoke(app, ["export", "--help"])
+    result = runner.invoke(app, ["export", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "HuggingFace model ID" in result.output
     assert "--export-mode" in result.output
@@ -172,19 +172,19 @@ def test_pi05_parallel_insufficient_vram_is_usage_error(monkeypatch):
 
 
 def test_serve_help():
-    result = runner.invoke(app, ["serve", "--help"])
+    result = runner.invoke(app, ["serve", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "inference server" in result.output.lower() or "POST /act" in result.output
 
 
 def test_smoke_help():
-    result = runner.invoke(app, ["smoke", "--help"])
+    result = runner.invoke(app, ["smoke", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "/act" in result.output
 
 
 def test_deploy_proof_help():
-    result = runner.invoke(app, ["deploy-proof", "--help"])
+    result = runner.invoke(app, ["deploy-proof", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "deployment proof" in result.output.lower()
     assert "--profile" in result.output
@@ -300,21 +300,21 @@ def test_bench_realtime_execution_cert_json_from_proof_packet(tmp_path):
 
 
 def test_prove_help_alias():
-    result = runner.invoke(app, ["prove", "--help"])
+    result = runner.invoke(app, ["prove", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "ready to deploy" in result.output.lower()
     assert "--profile" in result.output
 
 
 def test_policy_diff_help():
-    result = runner.invoke(app, ["policy", "diff", "--help"])
+    result = runner.invoke(app, ["policy", "diff", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "shadow" in result.output.lower()
     assert "--fail-on" in result.output
 
 
 def test_policy_shadow_gate_help():
-    result = runner.invoke(app, ["policy", "shadow-gate", "--help"])
+    result = runner.invoke(app, ["policy", "shadow-gate", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "PROMOTE, HOLD, or ROLLBACK" in result.output
     assert "--packet-dir" in result.output
@@ -322,7 +322,7 @@ def test_policy_shadow_gate_help():
 
 
 def test_rollout_gate_help():
-    result = runner.invoke(app, ["rollout", "gate", "--help"])
+    result = runner.invoke(app, ["rollout", "gate", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "self-serve rollout decision" in result.output
     assert "--packet-dir" in result.output
@@ -414,7 +414,7 @@ def _write_cli_release_proof(tmp_path):
 
 
 def test_release_assure_help():
-    result = runner.invoke(app, ["release", "assure", "--help"])
+    result = runner.invoke(app, ["release", "assure", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "release assurance" in result.output.lower()
     assert "--execution-cert" in result.output
@@ -488,7 +488,7 @@ def test_policy_diff_fail_on_any_exits_three(monkeypatch):
 
 
 def test_promote_help():
-    result = runner.invoke(app, ["promote", "--help"])
+    result = runner.invoke(app, ["promote", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "PROMOTE" in result.output
     assert "--candidate-active" in result.output

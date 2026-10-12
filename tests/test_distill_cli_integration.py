@@ -45,7 +45,7 @@ class TestDistillCLI:
 
     def test_distill_help_renders(self):
         app = self._get_app()
-        result = runner.invoke(app, ["distill", "--help"])
+        result = runner.invoke(app, ["distill", "--help"], terminal_width=300, env={"COLUMNS": "300"})
         assert result.exit_code == 0
         assert "--teacher-export" in result.output
         assert "--libero-gate-pp" in result.output

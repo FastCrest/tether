@@ -38,7 +38,7 @@ def test_cli_serve_help_advertises_cuda_graphs_flag():
     from tether.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["serve", "--help"])
+    result = runner.invoke(app, ["serve", "--help"], terminal_width=300, env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "--cuda-graphs" in result.output
 
