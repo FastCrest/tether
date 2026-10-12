@@ -7,11 +7,11 @@ Replaces three v0.3 monkey-patches with proper method overrides:
      to a correction vector added to the time channel before the
      action_time MLP. When ``target_time`` is None, behaves exactly like
      the parent (teacher inference path is unaffected).
-  2. ``denoise_step`` does NOT ``copy.deepcopy(past_key_values)`` — the
-     downstream ``paligemma_with_expert.forward`` is called with
-     ``use_cache=False`` so past_kv is read-only; deepcopy is strictly
-     defensive overhead (and breaks on graph-attached tensors during
-     training — pytorch#103001).
+  2. pi0 ``denoise_step`` clones the prefix cache with LeRobot 0.6.1's
+     tensor-clone helper. DynamicCache updates occur even with
+     ``use_cache=False``; cloning preserves the prefix and VLM gradients
+     without ``copy.deepcopy`` on graph-attached tensors. pi0.5 retains
+     its detached cache copy for the existing expert-only training path.
   3. ``denoise_step`` does NOT force-cast ``suffix_out`` to fp32 — uses
      ``self.action_out_proj.weight.dtype`` instead, so bf16 training
      stays bf16 end-to-end.
@@ -150,10 +150,12 @@ def _resolve_snapflow_pi0_class() -> type:
         return _SNAPFLOW_PI0_CLASS
 
     import torch
-    from lerobot.policies.pi0.modeling_pi0 import (
-        PI0Pytorch,
+    from lerobot.policies.pi0.modeling_pi0 import PI0Pytorch
+    from lerobot.policies.common.vla_utils import (
+        clone_past_key_values,
         create_sinusoidal_pos_embedding,
         make_att_2d_masks,
+        prepare_attention_masks_4d,
     )
 
     class SnapFlowPI0Pytorch(PI0Pytorch):
@@ -263,8 +265,9 @@ def _resolve_snapflow_pi0_class() -> type:
         ):
             """Parent denoise_step minus the deepcopy and minus the fp32 cast.
 
-            - Skips ``copy.deepcopy(past_key_values)``: safe because the
-              downstream forward uses ``use_cache=False`` (read-only pass).
+            - Clones the prefix cache using LeRobot's tensor clone helper.
+              This preserves VLM gradients and prevents DynamicCache updates
+              from changing the shared prefix between velocity evaluations.
             - Skips the hardcoded ``suffix_out.to(fp32)``: casts to
               ``self.action_out_proj.weight.dtype`` instead, so bf16 training
               stays bf16.
@@ -289,9 +292,10 @@ def _resolve_snapflow_pi0_class() -> type:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
+            past_key_values = clone_past_key_values(past_key_values)
             outputs_embeds, _ = self.paligemma_with_expert.forward(
                 attention_mask=full_att_2d_masks_4d,
                 position_ids=position_ids,
@@ -343,7 +347,7 @@ def _resolve_snapflow_pi0_class() -> type:
             )
             prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
             prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-            prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d)
+            prefix_att_2d_masks_4d = prepare_attention_masks_4d(prefix_att_2d)
             self.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
             _, past_key_values = self.paligemma_with_expert.forward(
@@ -392,10 +396,11 @@ def _resolve_snapflow_pi05_class() -> type:
         return _SNAPFLOW_PI05_CLASS
 
     import torch
-    from lerobot.policies.pi05.modeling_pi05 import (
-        PI05Pytorch,
+    from lerobot.policies.pi05.modeling_pi05 import PI05Pytorch
+    from lerobot.policies.common.vla_utils import (
         create_sinusoidal_pos_embedding,
         make_att_2d_masks,
+        prepare_attention_masks_4d,
     )
 
     class SnapFlowPI05Pytorch(PI05Pytorch):
@@ -533,7 +538,7 @@ def _resolve_snapflow_pi05_class() -> type:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
             # Detach past_kv tensors so deepcopy succeeds on graph-attached
@@ -583,7 +588,7 @@ def _resolve_snapflow_pi05_class() -> type:
             )
             prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
             prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-            prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d)
+            prefix_att_2d_masks_4d = prepare_attention_masks_4d(prefix_att_2d)
             self.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
             _, past_key_values = self.paligemma_with_expert.forward(
@@ -641,11 +646,7 @@ def _resolve_snapflow_pi05_state_out_class() -> type:
         return _SNAPFLOW_PI05_STATE_OUT_CLASS
 
     import torch
-    import torch.nn.functional as F
-    from lerobot.policies.pi05.modeling_pi05 import (
-        create_sinusoidal_pos_embedding,
-        make_att_2d_masks,
-    )
+    from lerobot.policies.common.vla_utils import make_att_2d_masks, prepare_attention_masks_4d
 
     parent = _resolve_snapflow_pi05_class()
 
@@ -745,7 +746,7 @@ def _resolve_snapflow_pi05_state_out_class() -> type:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
             past_key_values = _detach_kv_cache_deep(past_key_values)
@@ -794,7 +795,7 @@ def _resolve_snapflow_pi05_state_out_class() -> type:
             )
             prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
             prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-            prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d)
+            prefix_att_2d_masks_4d = prepare_attention_masks_4d(prefix_att_2d)
             self.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
             _, past_key_values = self.paligemma_with_expert.forward(

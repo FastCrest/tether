@@ -65,7 +65,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "lerobot==0.5.1",
+        "lerobot==0.6.1",
         "transformers==5.3.0",
         "num2words",
         "safetensors>=0.4.0",
@@ -164,6 +164,7 @@ def profile_modal(
                 images = [img, img, img]
                 img_masks = [mask, mask, mask]
                 from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
+                from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
                 prefix_embs, prefix_pad_masks, prefix_att_masks = (
                     policy.model.embed_prefix(
                         images, img_masks, lang_tokens, lang_masks,
@@ -172,7 +173,7 @@ def profile_modal(
                 prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
                 prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
                 prefix_att_2d_4d = (
-                    policy.model._prepare_attention_masks_4d(prefix_att_2d)
+                    prepare_attention_masks_4d(prefix_att_2d)
                 )
                 language_model.config._attn_implementation = "eager"
                 _ = policy.model.paligemma_with_expert.forward(

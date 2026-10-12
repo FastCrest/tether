@@ -48,7 +48,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
         # Install lerobot first — it pins torch>=2.7 and hub>=1.0
-        "lerobot==0.5.1",
+        "lerobot==0.6.1",
         "num2words",
         "safetensors>=0.4.0",
         "onnx>=1.16",
@@ -175,7 +175,6 @@ def export_pi0_monolithic_modal(
             features = out.pooler_output
         else:
             features = out
-        features = features * self.paligemma.config.text_config.hidden_size ** 0.5
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
         return features
@@ -213,6 +212,7 @@ def export_pi0_monolithic_modal(
     import torch.nn.functional as _F
     from lerobot.policies.pi0 import modeling_pi0 as _mp0
     from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks as _make_att_2d_masks
+    from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
     _patched_called = [0]
 
@@ -256,7 +256,7 @@ def export_pi0_monolithic_modal(
         prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
         position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-        full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+        full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
         outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -519,7 +519,6 @@ def parity_test_monolithic(model_id: str = "lerobot/pi0_base", num_steps: int = 
             image = image.to(torch.float32)
         out = self.paligemma.model.get_image_features(image)
         features = out.pooler_output if hasattr(out, "pooler_output") else out
-        features = features * self.paligemma.config.text_config.hidden_size ** 0.5
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
         return features
@@ -750,7 +749,6 @@ def quality_num_steps_pi0(model_id: str = "lerobot/pi0_base"):
             image = image.to(torch.float32)
         out = self.paligemma.model.get_image_features(image)
         features = out.pooler_output if hasattr(out, "pooler_output") else out
-        features = features * self.paligemma.config.text_config.hidden_size ** 0.5
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
         return features

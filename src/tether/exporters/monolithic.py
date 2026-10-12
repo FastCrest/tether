@@ -453,24 +453,9 @@ def apply_export_patches() -> None:
         return _orig_where(condition, x, y, *args, **kwargs)
     torch.where = _safe_where
 
-    # pi0-specific: PaliGemmaWithExpertModel.embed_image image_outputs extraction
-    try:
-        from lerobot.policies.pi0 import modeling_pi0
-        import torch as _t
-
-        def _patched_embed_image(self, image):
-            out_dtype = image.dtype
-            if image.dtype != _t.float32:
-                image = image.to(_t.float32)
-            out = self.paligemma.model.get_image_features(image)
-            features = out.pooler_output if hasattr(out, "pooler_output") else out
-            features = features * self.paligemma.config.text_config.hidden_size ** 0.5
-            if features.dtype != out_dtype:
-                features = features.to(out_dtype)
-            return features
-        modeling_pi0.PaliGemmaWithExpertModel.embed_image = _patched_embed_image
-    except ImportError:
-        pass
+    # LeRobot 0.6.1 returns image features in its native embedding scale.
+    # Keep embed_image unchanged: multiplying by sqrt(hidden_size), as the
+    # old 0.5.1 shim did, changes every prefix cache and exported action.
 
     # ===============================================================
     # pi0 cos=1.0 at num_steps=10 — the full fix stack (2026-04-19)
@@ -505,6 +490,7 @@ def apply_export_patches() -> None:
         from transformers.cache_utils import DynamicLayer as _DL
         from lerobot.policies.pi0 import modeling_pi0 as _mp0
         from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks as _make_att_2d_masks
+        from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
         _orig_layer_update = _DL.update
 
@@ -545,7 +531,7 @@ def apply_export_patches() -> None:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1190,6 +1176,7 @@ def _apply_pi05_denoise_step_patch() -> None:
         import torch
         from lerobot.policies.pi05 import modeling_pi05 as _mp05
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks as _make
+        from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
         def _patched(self, prefix_pad_masks, past_key_values, x_t, timestep):
             # pi0.5: NO state arg (tokenized into language upstream).
@@ -1218,7 +1205,7 @@ def _apply_pi05_denoise_step_patch() -> None:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1434,11 +1421,13 @@ def export_snapflow_student_monolithic(
 def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
     """Replace SnapFlowPI*Pytorch.denoise_step with an export-friendly variant
     that drops the training-only detach+deepcopy (which doesn't trace
-    through torch.export.export). The 1-step export path calls denoise_step
-    exactly once per forward, so past_kv isn't reused across calls — the
-    defensive copy that matters for multi-step inference isn't needed here.
+    through torch.export.export). Freeze cache updates during the expert
+    pass, as for teacher export: tracing can evaluate even a single-step
+    forward repeatedly, and must preserve the prefix cache each time.
     """
     import torch
+
+    from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
     if is_pi05:
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
@@ -1450,6 +1439,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
                                  timestep, target_time=None, state=None):
             suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
                 x_t, timestep, target_time=target_time,
+                **({"state": state} if hasattr(self, "state_proj") else {}),
             )
             suffix_len = suffix_pad_masks.shape[1]
             batch_size = prefix_pad_masks.shape[0]
@@ -1465,7 +1455,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1499,7 +1489,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1517,7 +1507,15 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
     # Bind onto the class (the SnapFlow subclass) so the instance picks
     # it up. This overrides the training-time detach+deepcopy variant
     # for the duration of the export process.
-    type(model).denoise_step = _export_denoise_step
+    def _denoise_step_with_flag(self, *args, **kwargs):
+        previous_phase = _denoise_phase[0]
+        _denoise_phase[0] = True
+        try:
+            return _export_denoise_step(self, *args, **kwargs)
+        finally:
+            _denoise_phase[0] = previous_phase
+
+    type(model).denoise_step = _denoise_step_with_flag
 
 
 def export_gr00t_monolithic(

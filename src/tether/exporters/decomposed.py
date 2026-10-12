@@ -359,6 +359,7 @@ def _load_pi05_policy(
         apply_export_patches,
         _force_eager_attn,
         _apply_pi05_denoise_step_patch,
+        _install_snapflow_export_denoise_step,
     )
 
     apply_export_patches()
@@ -406,6 +407,8 @@ def _load_pi05_policy(
         _gc_disable()
     _force_eager_attn(policy.model)
     _apply_pi05_denoise_step_patch()  # reuses monolithic's F.pad mask fix
+    if student_checkpoint is not None:
+        _install_snapflow_export_denoise_step(policy.model, is_pi05=True)
     logger.info("[decomposed] Loaded in %.1fs", time.time() - t0)
     return policy
 
@@ -789,6 +792,7 @@ def _build_prefix_class():
     import torch
     import torch.nn as nn
     from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
+    from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
     class _Pi05PrefixWrapper(nn.Module):
         def __init__(self, pi05_model):
@@ -817,7 +821,7 @@ def _build_prefix_class():
             )
             prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
             prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-            prefix_att_2d_masks_4d = self.model._prepare_attention_masks_4d(prefix_att_2d)
+            prefix_att_2d_masks_4d = prepare_attention_masks_4d(prefix_att_2d)
             self.model.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
             _, past_key_values = self.model.paligemma_with_expert.forward(
