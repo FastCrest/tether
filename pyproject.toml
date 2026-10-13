@@ -201,7 +201,7 @@ eval-local = [
     "opencv-python-headless; sys_platform == 'linux'",
     "h5py; sys_platform == 'linux'",
 ]
-dev = ["pytest>=8.0", "ruff>=0.4.0", "mypy>=1.10", "httpx>=0.24.0", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8.0", "ruff>=0.4.0", "mypy>=1.10", "httpx>=0.24.0", "pytest-asyncio>=0.23", "pyarrow>=15"]
 # MCP server — exposes Tether as a Model Context Protocol tool surface so
 # agents (Claude Desktop, Cursor, custom) can call /act as a tool. Additive
 # to the REST API; both transports share the same inference engine.
