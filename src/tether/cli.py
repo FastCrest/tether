@@ -341,7 +341,7 @@ def export(
             except ValueError as exc:
                 err_console.print(str(exc), style="red", markup=False)
                 raise typer.Exit(2)
-            label = "SnapFlow student (1-NFE)" if from_distilled else "monolithic, cos=1.0 verified path"
+            label = "SnapFlow student (1-NFE)" if from_distilled else "monolithic"
             console.print(f"\n[bold]Tether Export ({label})[/bold]")
             console.print(f"  Model:      {model}")
             console.print(f"  Output:     {output}")
@@ -400,7 +400,8 @@ def export(
 
             _maybe_write_embodiment_bundle(output, embodiment, calibration)
 
-            console.print(f"\n  [dim]Next:[/dim] [cyan]tether serve {output}[/cyan]")
+            console.print(f"\n  [dim]Parity not yet measured for this artifact.[/dim]")
+            console.print(f"  [dim]Next:[/dim] [cyan]tether validate export {output}[/cyan] (SmolVLA), then [cyan]tether serve {output}[/cyan]")
             raise typer.Exit(0)
 
         precision = precision or "fp16"
@@ -882,6 +883,10 @@ def validate(
         per_table.add_column("fixture_idx", justify="right")
         per_table.add_column("max_abs_diff", justify="right")
         per_table.add_column("mean_abs_diff", justify="right")
+        has_cos = any("cosine" in r for r in result.get("results", []))
+        if has_cos:
+            per_table.add_column("cosine", justify="right")
+            console.print(f"  Min cosine: {result.get('min_cosine')}")
         per_table.add_column("passed", justify="center")
         for r in result.get("results", []):
             ok = bool(r.get("passed"))
@@ -889,6 +894,7 @@ def validate(
                 str(r.get("fixture_idx", "")),
                 f"{float(r.get('max_abs_diff', 0)):.2e}",
                 f"{float(r.get('mean_abs_diff', 0)):.2e}",
+                *([f"{float(r['cosine']):.9f}"] if has_cos else []),
                 "[green]PASS[/green]" if ok else "[red]FAIL[/red]",
             )
         console.print(per_table)

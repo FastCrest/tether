@@ -215,7 +215,6 @@ def export(family, path, out_dir):
     import numpy as np
     import onnxruntime as ort
     import torch
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
 
     from tether.exporters import monolithic
 
@@ -245,7 +244,7 @@ def export(family, path, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = out_dir / "model.onnx"
     wrapper = Wrapper().eval()
-    with torch_export_patches(patch_transformers=True):
+    with monolithic.export_patches():
         ep = torch.export.export(wrapper, tuple(feed.values()), dynamic_shapes=None, strict=False)
     torch.onnx.export(
         ep,

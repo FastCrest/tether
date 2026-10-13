@@ -77,6 +77,12 @@ def _format_parity(parity: dict[str, Any] | None) -> str:
         f"**Fixtures:** {parity.get('num_test_cases')}",
         f"**Seed:** {parity.get('seed')}",
         f"**max_abs_diff across all fixtures:** {max_abs:.3e}",
+        *(
+            [f"**min cosine across all fixtures:** {summary['min_cosine_across_all']:.9f} "
+             f"(required >= {parity.get('min_cosine')})"]
+            if "min_cosine_across_all" in summary
+            else []
+        ),
         "",
         "| Fixture | max_abs_diff | mean_abs_diff | Passed |",
         "|---|---|---|---|",
