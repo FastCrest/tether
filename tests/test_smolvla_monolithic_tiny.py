@@ -23,7 +23,11 @@ HELPER = Path(__file__).resolve().parent / "_smolvla_monolithic_tiny.py"
 def _run(*args, timeout=900):
     env = {**os.environ, "HF_HUB_OFFLINE": "1"}
     result = subprocess.run(
-        [sys.executable, str(HELPER), *args], capture_output=True, text=True, timeout=timeout, env=env
+        [sys.executable, str(HELPER), *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
     )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-8000:]
     return result.stdout

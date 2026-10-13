@@ -27,7 +27,9 @@ def _graph(path, nodes, inits, out_shape=(2, 3)):
         [helper.make_tensor_value_info("y", TensorProto.FLOAT, list(out_shape))],
         [numpy_helper.from_array(v.astype(np.float32), name=k) for k, v in inits.items()],
     )
-    onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=8), path)
+    onnx.save(
+        helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=8), path
+    )
 
 
 def _run(path, x):

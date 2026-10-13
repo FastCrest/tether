@@ -400,7 +400,7 @@ def export(
 
             _maybe_write_embodiment_bundle(output, embodiment, calibration)
 
-            console.print(f"\n  [dim]Parity not yet measured for this artifact.[/dim]")
+            console.print("\n  [dim]Parity not yet measured for this artifact.[/dim]")
             console.print(f"  [dim]Next:[/dim] [cyan]tether validate export {output}[/cyan] (SmolVLA), then [cyan]tether serve {output}[/cyan]")
             raise typer.Exit(0)
 

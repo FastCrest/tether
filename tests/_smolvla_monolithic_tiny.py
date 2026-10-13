@@ -30,13 +30,23 @@ def tiny_vlm():
     config = SmolVLMConfig(
         # Vocabulary >= 49152: the exporter's trace feeds token ids up to that.
         text_config=dict(
-            model_type="llama", vocab_size=49280, hidden_size=64, intermediate_size=128,
-            num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2, head_dim=16,
+            model_type="llama",
+            vocab_size=49280,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=16,
         ),
         # 512 px like the exporter's trace; patch 64 -> 8x8 patches -> 16 tokens.
         vision_config=dict(
-            hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-            num_attention_heads=2, image_size=512, patch_size=64,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            image_size=512,
+            patch_size=64,
         ),
         scale_factor=2,
     )
