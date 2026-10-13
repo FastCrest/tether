@@ -1,6 +1,6 @@
-"""Quick probe — what does lerobot 0.5.1 actually expose for GR00T?
+"""Quick probe — what does lerobot 0.6.1 actually expose for GR00T?
 
-lerobot-0.5.1 on Modal may or may not have GR00T support. The cloned
+lerobot-0.6.1 on Modal may or may not have GR00T support. The cloned
 local lerobot is `main` (newer). Need to reconcile.
 
 Prints the actual module contents of lerobot's groot subpackage.
@@ -23,7 +23,7 @@ image = (
         "numpy",
         "safetensors>=0.4.0",
         "huggingface_hub",
-        "lerobot==0.5.1",
+        "lerobot==0.6.1",
         "num2words",
     )
 )
@@ -52,7 +52,7 @@ def probe():
 
     # Attempt to import groot_n1 + list symbols
     try:
-        from lerobot.policies.groot import groot_n1
+        from lerobot.policies.groot import groot_n1_7 as groot_n1
         print(f"\ngroot_n1 symbols (top-level, non-dunder):")
         for name in sorted(dir(groot_n1)):
             if not name.startswith("_"):
@@ -64,7 +64,7 @@ def probe():
 
     # Attempt action_head
     try:
-        from lerobot.policies.groot.action_head import flow_matching_action_head as fma
+        from lerobot.policies.groot.action_head import cross_attention_dit as fma
         print(f"\nflow_matching_action_head symbols:")
         for name in sorted(dir(fma)):
             if not name.startswith("_"):

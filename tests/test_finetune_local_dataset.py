@@ -169,7 +169,7 @@ def local_export(tmp_path):
     ]
     adapter = {
         "policy": "verified-moments-v1",
-        "adapter_source_sha256": "11c0a0cc0d5f4cd81de9904ec0d08f0305ba9ecec6e5952c25fe435c857afdf3",
+        "adapter_source_sha256": "af6969a6663d0b288db781ad46736eb62d33a361dbe75cd578da6c163b075307",
         "statistics_sha256": canonical(stats),
         "source_dataset_sha256": identity["sha256"],
         "split_sha256": split["sha256"],
@@ -220,11 +220,11 @@ def local_export(tmp_path):
             "fps": 10,
         },
         "writer": {
-            "version": "0.5.1",
+            "version": "0.6.1",
             "source_commit": WRITER_SOURCE,
             "wheel_sha256": WRITER_WHEEL,
             "source_files": dict(WRITER_FILES),
-            "runtime_versions": {"lerobot": "0.5.1"},
+            "runtime_versions": {"lerobot": "0.6.1"},
         },
         "statistics_policy": "verified-moments-v1",
         "statistics_adapter": adapter,
@@ -718,7 +718,7 @@ def test_omitted_base_modes_use_only_pinned_defaults(local_cfg):
     assert result.severity == "ok"
     assert (
         result.detail["normalization_mapping_source"]
-        == "pinned LeRobot 0.5.1 SmolVLAConfig defaults"
+        == "pinned LeRobot 0.6.1 SmolVLAConfig defaults"
     )
     config["normalization_mapping"] = None
     write_json(path, config)
@@ -768,3 +768,23 @@ def test_existing_positional_config_arguments_stay_compatible(tmp_path):
     assert cfg.num_steps == 123
     assert cfg.dataset_root is None
     assert cfg.dataset_manifest_sha256 is None
+
+
+def test_pinned_lerobot_sources_match_installed_qualified_runtime():
+    """The pins are reviewed upstream bytes; check them against a real 0.6.1 install when present."""
+    from importlib import metadata
+
+    from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
+    from tether.finetune import local_dataset
+
+    try:
+        dist = metadata.distribution("lerobot")
+    except metadata.PackageNotFoundError:
+        pytest.skip("lerobot is not installed")
+    if dist.version != QUALIFIED_LEROBOT_VERSION:
+        pytest.skip(f"lerobot {dist.version} is not the qualified {QUALIFIED_LEROBOT_VERSION}")
+    pins = {**local_dataset.WRITER_FILES, **local_dataset.NORMALIZATION_FILES}
+    actual = {
+        name: hashlib.sha256(Path(dist.locate_file(name)).read_bytes()).hexdigest() for name in pins
+    }
+    assert actual == pins

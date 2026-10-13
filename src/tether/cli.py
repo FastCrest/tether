@@ -237,7 +237,7 @@ def export(
              "path, one ONNX file). Opt into --decomposed only if you specifically need "
              "the 5-stage export for debugging; --decomposed is the older path with "
              "known correctness gaps. Monolithic requires `pip install "
-             "'fastcrest-tether[monolithic]'` (pins transformers==5.3.0).",
+             "'fastcrest-tether[monolithic]'` (pins transformers==5.5.4).",
     ),
     export_mode: str = typer.Option(
         "auto",
@@ -363,7 +363,7 @@ def export(
                 err_console.print(f"[red]{exc}[/red]", markup=False)
                 err_console.print(
                     "\nFix: pip install 'fastcrest-tether[monolithic]' "
-                    "(pins transformers==5.3.0; use a clean venv to avoid "
+                    "(pins transformers==5.5.4; use a clean venv to avoid "
                     "the base transformers<5.0 conflict)",
                     style="cyan", markup=False,
                 )
@@ -459,7 +459,7 @@ def export(
                 err_console.print(f"[red]{exc}[/red]", markup=False)
                 err_console.print(
                     "\nFix: pip install 'fastcrest-tether[monolithic]' "
-                    "(pins transformers==5.3.0; use a clean venv to avoid "
+                    "(pins transformers==5.5.4; use a clean venv to avoid "
                     "the base transformers<5.0 conflict)",
                     style="cyan", markup=False,
                 )
@@ -2392,7 +2392,7 @@ def serve(
              "lerobot's RTCProcessor so the robot keeps executing the tail "
              "of one chunk while the next chunk is being computed. 2-3× "
              "effective throughput on Jetson-class latency. Requires "
-             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.5.1).",
+             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.6.1).",
     ),
     rtc_execution_horizon: int = typer.Option(
         10,
@@ -5606,7 +5606,7 @@ def go(
                 console.print(
                     "\n`tether go` needs the monolithic export extras to deploy this model.\n"
                     "Fix: pip install 'fastcrest-tether[monolithic]'\n"
-                    "(pins transformers==5.3.0; use a clean venv to avoid the "
+                    "(pins transformers==5.5.4; use a clean venv to avoid the "
                     "base transformers<5.0 conflict)",
                     style="cyan", markup=False,
                 )

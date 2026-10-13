@@ -46,7 +46,7 @@ _parity_out_volume = modal.Volume.from_name(
 )
 
 HF_CACHE_PATH = "/root/.cache/huggingface"
-PARITY_OUT_PATH = "/parity_out"
+PARITY_OUT_PATH = "/parity_out/lerobot-061-20261011"
 
 
 def _hf_secret():
@@ -63,24 +63,26 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "torch",
+        # torch>=2.8: onnx-diagnostic 0.9.x torch_export_patches needs it (see pi0 vehicle).
+        "torch>=2.8,<2.12",
         "safetensors>=0.4.0",
         "huggingface_hub",
-        # transformers==5.3.0 EXACTLY: the monolithic exporter refuses
+        # transformers==5.5.4 EXACTLY: the monolithic exporter refuses
         # anything else.
-        "transformers==5.3.0",
+        "transformers==5.5.4",
         "onnx>=1.16",
         "onnxruntime>=1.20",
         "onnxscript>=0.1",
         # monolithic dep group (export_gr00t_monolithic gates on these):
-        "lerobot==0.5.1",
+        "lerobot==0.6.1",
         "num2words",
+        "diffusers==0.39.0",
         "onnx-diagnostic>=0.9",
         "optree",
         "scipy",
         "accelerate",
-        "draccus",
-        "numpy",
+        "draccus==0.11.6",
+        "numpy==2.2.6",
         "Pillow",
         "typer",
         "rich",
@@ -122,7 +124,7 @@ image = (
     timeout=3600,
     volumes={
         HF_CACHE_PATH: _hf_cache_volume,
-        PARITY_OUT_PATH: _parity_out_volume,
+        "/parity_out": _parity_out_volume,
     },
     secrets=[_hf_secret()],
 )
@@ -130,7 +132,7 @@ def run_export_parity(
     model_revision: str = GROOT_REVISION,
     tether_revision: str = TETHER_REVISION,
     embodiment_id: int = 0,
-    reuse_export: bool = True,
+    reuse_export: bool = False,
     watchdog_seconds: float = 3300,
 ) -> dict:
     import subprocess
@@ -322,8 +324,13 @@ def run_export_parity(
 
 
 @app.local_entrypoint()
-def main() -> None:
-    result = run_export_parity.remote()
+def main(
+    tether_revision: str = TETHER_REVISION,
+    watchdog_seconds: float = 1800,
+) -> None:
+    result = run_export_parity.remote(
+        tether_revision=tether_revision, watchdog_seconds=watchdog_seconds
+    )
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")

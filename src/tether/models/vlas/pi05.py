@@ -304,14 +304,12 @@ class Pi05VLA(BaseVLA):
         # Same scaling protocol as Pi0VLA: PiGemma omits internal sqrt(h)
         # scaling, so text needs explicit pre-scale; image stays raw
         # (lerobot patched_embed_image net = ×1).
-        text_hidden = self.llm_backbone.text_hidden_size
-        sqrt_h = text_hidden ** 0.5
         image_embeds_list: list[torch.Tensor] = []
         for img in images:
             img_emb = self.vision_backbone(img)
             img_emb = self.llm_backbone.multi_modal_projector(img_emb)
             image_embeds_list.append(img_emb)
-        text_embs = self.llm_backbone.embed_tokens(lang_tokens) * sqrt_h
+        text_embs = self.llm_backbone.embed_text_openpi(lang_tokens)
 
         # ─── 4. Concat into prefix (NO state token — state is in lang_tokens) ──
         prefix_embs = torch.cat([*image_embeds_list, text_embs], dim=1)

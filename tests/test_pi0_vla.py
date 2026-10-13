@@ -23,6 +23,7 @@ import torch.nn as nn
 from tether.models.base_vla import BaseVLA
 from tether.models.heads import VLAHead
 from tether.models.llm import LLMBackbone
+from tether.models.llm.paligemma_backbone import PaliGemmaBackbone
 from tether.models.projectors import Projector
 from tether.models.vision import VisionBackbone
 from tether.models.vlas.pi0 import Pi0VLA
@@ -270,6 +271,8 @@ class _StubVisionForPi0(VisionBackbone, nn.Module):
 class _StubPaliGemmaForPi0(LLMBackbone, nn.Module):
     """Stub PaliGemma exposing the property accessors Pi0VLA.predict_action
     relies on. Returns past_key_values that look like a transformers Cache."""
+
+    embed_text_openpi = PaliGemmaBackbone.embed_text_openpi
 
     def __init__(
         self,

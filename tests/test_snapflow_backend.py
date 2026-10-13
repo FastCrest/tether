@@ -284,7 +284,6 @@ class TestBuildVelocityAdapters:
                 torch.zeros(1, 8, 256), canned_prefix_masks,
                 torch.ones(1, 8, dtype=torch.long),
             )
-            p_mock.model._prepare_attention_masks_4d.return_value = torch.ones(1, 1, 8, 8)
             p_mock.model.paligemma_with_expert.forward.return_value = (None, canned_past_kv)
             # state_proj.weight.dtype is read for the state-dtype cast; set it
             # to match canned_state so the cast is a no-op under mocks.
@@ -347,7 +346,6 @@ class TestBuildVelocityAdapters:
             torch.ones(1, 8, dtype=torch.bool),
             torch.ones(1, 8, dtype=torch.long),
         )
-        student_mock.model._prepare_attention_masks_4d.return_value = torch.ones(1, 1, 8, 8)
         student_mock.model.paligemma_with_expert.forward.return_value = (None, [("fake_cache",)])
         student_mock.model.paligemma_with_expert.paligemma.model.language_model.config = MagicMock()
         student_mock.model.paligemma_with_expert.gemma_expert.model.config = MagicMock()

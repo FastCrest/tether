@@ -44,6 +44,6 @@ def test_aloha_two_episode_customer_flow(tmp_path):
     assert all(type(row["success"]) is bool for row in report["episodes"])
     assert report["confidence_interval"]["method"] == "wilson-score"
     assert receipt["policy"]["revision"] == REVISION
-    assert receipt["lerobot_version"] == "0.5.1" and receipt["device"] == "cpu"
+    assert receipt["lerobot_version"] == "0.6.1" and receipt["device"] == "cpu"
     assert receipt["migrated"] is True
     assert (output / "eval_info.json").is_file()

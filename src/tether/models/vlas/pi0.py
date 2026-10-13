@@ -398,8 +398,6 @@ class Pi0VLA(BaseVLA):
         # protocol: pre-scale text externally; image is raw multi_modal_projector
         # output (no additional scaling needed because the get_image_features
         # path isn't used — we call multi_modal_projector directly).
-        text_hidden = self.llm_backbone.text_hidden_size
-        sqrt_h = text_hidden ** 0.5
         image_embeds_list: list[torch.Tensor] = []
         for img in images:
             # SigLIP: [B, 3, 224, 224] → [B, 256, vision_hidden=1152]
@@ -410,7 +408,7 @@ class Pi0VLA(BaseVLA):
             image_embeds_list.append(img_emb)
 
         # Pre-scale text per lerobot embed_prefix at modeling_pi0.py:669.
-        text_embs = self.llm_backbone.embed_tokens(lang_tokens) * sqrt_h
+        text_embs = self.llm_backbone.embed_text_openpi(lang_tokens)
 
         # ─── 4. Concat into prefix ──────────────────────────────────────
         prefix_embs = torch.cat([*image_embeds_list, text_embs], dim=1)

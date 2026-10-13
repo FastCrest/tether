@@ -282,7 +282,7 @@ Advanced/SO-100/internal commands stay callable directly (`config`, `calibrate`,
 
 ### Install notes
 
-- `[monolithic]` extra is required for the cos=+1.000000 verified export path (pins transformers==5.3.0)
+- `[monolithic]` extra is required for the cos=+1.000000 verified export path (pins transformers==5.5.4, the release LeRobot 0.6.1 supports)
 - CPU-only: `pip install 'fastcrest-tether[serve,onnx,monolithic]'`
 - GPU install needs the FULL cuDNN 9 system library (not just the pip wheel). Easiest path: NVIDIA's container `docker run --gpus all -it nvcr.io/nvidia/tensorrt:24.10-py3`, then `apt-get install -y clang` (for lerobot→evdev), then the pip install
 - `tether serve` errors loudly if cuDNN can't load — no silent CPU fallback

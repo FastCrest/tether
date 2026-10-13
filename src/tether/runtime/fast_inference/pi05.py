@@ -799,9 +799,8 @@ class Pi05FastKernelsInference:
         )
         # Embed via the paligemma text model's embed_tokens.
         # Pi0.5 scales the embedding by sqrt(hidden_dim) — matches the FluxVLA reference.
-        text_model = self._vla.llm_backbone.model.model.language_model
-        lang_emb = text_model.embed_tokens(lang_tokens[0, :prompt_len])
-        lang_emb = (lang_emb * math.sqrt(lang_emb.shape[-1])).bfloat16()
+        lang_emb = self._vla.llm_backbone.embed_text_openpi(lang_tokens[0, :prompt_len])
+        lang_emb = lang_emb.bfloat16()
 
         chunk_size = self.n_action_steps
         if noise is None:

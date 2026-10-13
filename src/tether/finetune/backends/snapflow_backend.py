@@ -560,6 +560,7 @@ def _build_pi05_adapters(teacher: Any, student: Any):
     """
     import torch
     from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
+    from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
     from lerobot.utils.constants import (
         OBS_LANGUAGE_ATTENTION_MASK,
@@ -577,7 +578,7 @@ def _build_pi05_adapters(teacher: Any, student: Any):
         )
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_pos = torch.cumsum(prefix_pad_masks, dim=1) - 1
-        prefix_att_4d = m._prepare_attention_masks_4d(prefix_att_2d)
+        prefix_att_4d = prepare_attention_masks_4d(prefix_att_2d)
         m.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"
         m.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
         _, past_kv = m.paligemma_with_expert.forward(
@@ -681,6 +682,7 @@ def _build_pi_family_adapters(
     import torch
     import torch.nn.functional as F
     from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks
+    from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
     from lerobot.utils.constants import (
         OBS_LANGUAGE_ATTENTION_MASK,
         OBS_LANGUAGE_TOKENS,
@@ -718,7 +720,7 @@ def _build_pi_family_adapters(
         )
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_pos = torch.cumsum(prefix_pad_masks, dim=1) - 1
-        prefix_att_4d = m._prepare_attention_masks_4d(prefix_att_2d)
+        prefix_att_4d = prepare_attention_masks_4d(prefix_att_2d)
         # Mirror lerobot's sample_actions trick: force eager attention
         # before the prefix forward so bf16 models don't hit the SDPA
         # dtype-mismatch-on-bias error (modeling_pi0.py:844).
@@ -731,10 +733,8 @@ def _build_pi_family_adapters(
             inputs_embeds=[prefix_embs, None],
             use_cache=True,
         )
-        # SnapFlowPI0Pytorch.denoise_step skips the `copy.deepcopy(past_kv)`
-        # that the stock lerobot path does (modeling_pi0.py:918), so we no
-        # longer need to detach past_kv tensors. Student path now keeps
-        # past_kv graph-attached → VLM receives gradients.
+        # SnapFlow pi0 uses LeRobot's tensor clone helper, so the student
+        # cache remains graph-attached and VLM gradients can flow.
         return past_kv, prefix_pad_masks, state
 
     def _run_denoise_step(policy, x, t, obs_kwargs, target_time=None):

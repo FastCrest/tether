@@ -338,7 +338,7 @@ class TestTetherGoCli:
 
         with patch(
             "tether.exporters.monolithic.export_monolithic",
-            side_effect=ImportError("Missing dependencies: lerobot==0.5.1, onnx-diagnostic"),
+            side_effect=ImportError("Missing dependencies: lerobot==0.6.1, onnx-diagnostic"),
         ):
             result = runner.invoke(cli_app, [
                 "go",

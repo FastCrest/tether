@@ -58,8 +58,8 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git")
     .pip_install(
-        "lerobot==0.5.1",
-        "transformers==5.3.0",
+        "lerobot==0.6.1",
+        "transformers==5.5.4",
         "num2words",
         "safetensors>=0.4.0",
         "numpy",
@@ -167,9 +167,10 @@ def smoke(
             images, img_masks, lang_tokens, lang_masks,
         )
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
+        from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-        prefix_att_2d_masks_4d = policy.model._prepare_attention_masks_4d(prefix_att_2d)
+        prefix_att_2d_masks_4d = prepare_attention_masks_4d(prefix_att_2d)
         policy.model.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"
 
         _, past_key_values = policy.model.paligemma_with_expert.forward(

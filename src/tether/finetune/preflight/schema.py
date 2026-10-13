@@ -13,6 +13,7 @@ is painful but at least obvious.
 """
 from __future__ import annotations
 
+from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION
 from tether.finetune.lerobot_v3 import verify_local_dataset
 
 import logging
@@ -155,7 +156,7 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
         expected_modes = {"VISUAL": "IDENTITY", "STATE": "MEAN_STD", "ACTION": "MEAN_STD"}
         if not isinstance(base_config, dict) or base_config.get("type") != "smolvla":
             return PreflightCheck("schema", "fail", "Local admission requires a resolvable SmolVLA base config.")
-        # An omitted field uses only the exact LeRobot 0.5.1 class defaults
+        # An omitted field uses only the exact LeRobot 0.6.1 class defaults
         # qualified in the verified receipt. Explicit null/contradictory modes
         # are not treated as omission.
         resolved_modes = base_config.get("normalization_mapping", expected_modes)
@@ -165,7 +166,7 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
             "resolved_normalization_mapping": resolved_modes,
             "normalization_mapping_source": (
                 "base config.json" if "normalization_mapping" in base_config
-                else "pinned LeRobot 0.5.1 SmolVLAConfig defaults"
+                else f"pinned LeRobot {QUALIFIED_LEROBOT_VERSION} SmolVLAConfig defaults"
             ),
         }
         max_state = base_config.get("max_state_dim")

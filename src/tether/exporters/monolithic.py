@@ -10,8 +10,8 @@ Usage (local):
     tether export lerobot/smolvla_base --monolithic --output ./smol
 
 Requires (pinned in the ``monolithic`` extra):
-    lerobot==0.5.1
-    transformers==5.3.0   (5.4+ has a q_length scalar regression)
+    lerobot==0.6.1
+    transformers==5.5.4   (LeRobot 0.6.1 requires >=5.4,<5.6)
     onnx-diagnostic>=0.9
     onnxscript>=0.1
     optree, scipy, num2words
@@ -23,11 +23,15 @@ for the parity rows this export is responsible for.
 """
 from __future__ import annotations
 
+from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION, QUALIFIED_TRANSFORMERS_VERSION
+
 import logging
 import time
 from importlib.metadata import PackageNotFoundError, version as _dist_version
 from pathlib import Path
 from typing import Any
+
+MIN_EXPORT_TORCH = (2, 8)
 
 logger = logging.getLogger(__name__)
 
@@ -156,15 +160,32 @@ def _require_monolithic_deps() -> None:
     missing = []
     try:
         import transformers
-        if transformers.__version__ != "5.3.0":
+        if transformers.__version__ != QUALIFIED_TRANSFORMERS_VERSION:
             raise ImportError(
                 f"transformers {transformers.__version__} detected; the "
-                f"monolithic export requires exactly 5.3.0 (5.4+ has a "
-                f"q_length regression in masking_utils.sdpa_mask). Install "
-                f"with: pip install transformers==5.3.0"
+                f"monolithic export requires exactly {QUALIFIED_TRANSFORMERS_VERSION} "
+                f"(LeRobot {QUALIFIED_LEROBOT_VERSION} needs >=5.4: on 5.3 its "
+                f"pi0/pi0.5 embeddings are mis-scaled). Install with: "
+                f"pip install transformers=={QUALIFIED_TRANSFORMERS_VERSION}"
             )
     except ImportError as e:
-        missing.append(f"transformers==5.3.0 ({e})")
+        missing.append(f"transformers=={QUALIFIED_TRANSFORMERS_VERSION} ({e})")
+
+    # onnx-diagnostic 0.8.11 and 0.9.0-0.9.3 unconditionally patch
+    # torch._export.non_strict_utils._constrain_user_specified_dimhint_range,
+    # which first exists in torch 2.8.0. On older torch every pi0/pi0.5/
+    # SmolVLA/GR00T export dies with an AttributeError on entering
+    # torch_export_patches(); refuse here instead.
+    try:
+        import torch
+        major_minor = tuple(int(part) for part in str(torch.__version__).split(".")[:2])
+        if major_minor < MIN_EXPORT_TORCH:
+            raise ImportError(
+                f"torch {torch.__version__} detected; onnx-diagnostic's export "
+                "patches need torch>=2.8"
+            )
+    except (ImportError, ValueError) as e:
+        missing.append(f"torch>=2.8 ({e})")
 
     try:
         __import__("lerobot")
@@ -175,14 +196,14 @@ def _require_monolithic_deps() -> None:
                 "lerobot imports but package metadata is missing; install with: "
                 "pip install 'fastcrest-tether[monolithic]'"
             ) from exc
-        if lerobot_version != "0.5.1":
+        if lerobot_version != QUALIFIED_LEROBOT_VERSION:
             raise ImportError(
                 f"lerobot {lerobot_version} detected; monolithic export requires "
-                "exactly lerobot==0.5.1. Install with: "
+                f"exactly lerobot=={QUALIFIED_LEROBOT_VERSION}. Install with: "
                 "pip install 'fastcrest-tether[monolithic]'"
             )
     except ImportError as e:
-        missing.append(f"lerobot==0.5.1 ({e})")
+        missing.append(f"lerobot=={QUALIFIED_LEROBOT_VERSION} ({e})")
 
     for mod_name, pip_name in [
         ("onnx_diagnostic", "onnx-diagnostic>=0.9"),
@@ -433,24 +454,9 @@ def apply_export_patches() -> None:
         return _orig_where(condition, x, y, *args, **kwargs)
     torch.where = _safe_where
 
-    # pi0-specific: PaliGemmaWithExpertModel.embed_image image_outputs extraction
-    try:
-        from lerobot.policies.pi0 import modeling_pi0
-        import torch as _t
-
-        def _patched_embed_image(self, image):
-            out_dtype = image.dtype
-            if image.dtype != _t.float32:
-                image = image.to(_t.float32)
-            out = self.paligemma.model.get_image_features(image)
-            features = out.pooler_output if hasattr(out, "pooler_output") else out
-            features = features * self.paligemma.config.text_config.hidden_size ** 0.5
-            if features.dtype != out_dtype:
-                features = features.to(out_dtype)
-            return features
-        modeling_pi0.PaliGemmaWithExpertModel.embed_image = _patched_embed_image
-    except ImportError:
-        pass
+    # LeRobot 0.6.1 returns image features in its native embedding scale.
+    # Keep embed_image unchanged: multiplying by sqrt(hidden_size), as the
+    # old 0.5.1 shim did, changes every prefix cache and exported action.
 
     # ===============================================================
     # pi0 cos=1.0 at num_steps=10 — the full fix stack (2026-04-19)
@@ -485,6 +491,7 @@ def apply_export_patches() -> None:
         from transformers.cache_utils import DynamicLayer as _DL
         from lerobot.policies.pi0 import modeling_pi0 as _mp0
         from lerobot.policies.pi0.modeling_pi0 import make_att_2d_masks as _make_att_2d_masks
+        from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
         _orig_layer_update = _DL.update
 
@@ -525,7 +532,7 @@ def apply_export_patches() -> None:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1170,6 +1177,7 @@ def _apply_pi05_denoise_step_patch() -> None:
         import torch
         from lerobot.policies.pi05 import modeling_pi05 as _mp05
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks as _make
+        from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
         def _patched(self, prefix_pad_masks, past_key_values, x_t, timestep):
             # pi0.5: NO state arg (tokenized into language upstream).
@@ -1198,7 +1206,7 @@ def _apply_pi05_denoise_step_patch() -> None:
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1414,11 +1422,13 @@ def export_snapflow_student_monolithic(
 def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
     """Replace SnapFlowPI*Pytorch.denoise_step with an export-friendly variant
     that drops the training-only detach+deepcopy (which doesn't trace
-    through torch.export.export). The 1-step export path calls denoise_step
-    exactly once per forward, so past_kv isn't reused across calls — the
-    defensive copy that matters for multi-step inference isn't needed here.
+    through torch.export.export). Freeze cache updates during the expert
+    pass, as for teacher export: tracing can evaluate even a single-step
+    forward repeatedly, and must preserve the prefix cache each time.
     """
     import torch
+
+    from lerobot.policies.common.vla_utils import prepare_attention_masks_4d
 
     if is_pi05:
         from lerobot.policies.pi05.modeling_pi05 import make_att_2d_masks
@@ -1430,6 +1440,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
                                  timestep, target_time=None, state=None):
             suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
                 x_t, timestep, target_time=target_time,
+                **({"state": state} if hasattr(self, "state_proj") else {}),
             )
             suffix_len = suffix_pad_masks.shape[1]
             batch_size = prefix_pad_masks.shape[0]
@@ -1445,7 +1456,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1479,7 +1490,7 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
 
             prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
             position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
-            full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+            full_att_2d_masks_4d = prepare_attention_masks_4d(full_att_2d_masks)
             self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
 
             outputs_embeds, _ = self.paligemma_with_expert.forward(
@@ -1497,7 +1508,15 @@ def _install_snapflow_export_denoise_step(model: Any, *, is_pi05: bool) -> None:
     # Bind onto the class (the SnapFlow subclass) so the instance picks
     # it up. This overrides the training-time detach+deepcopy variant
     # for the duration of the export process.
-    type(model).denoise_step = _export_denoise_step
+    def _denoise_step_with_flag(self, *args, **kwargs):
+        previous_phase = _denoise_phase[0]
+        _denoise_phase[0] = True
+        try:
+            return _export_denoise_step(self, *args, **kwargs)
+        finally:
+            _denoise_phase[0] = previous_phase
+
+    type(model).denoise_step = _denoise_step_with_flag
 
 
 def export_gr00t_monolithic(
