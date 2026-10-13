@@ -419,7 +419,7 @@ def _export_pi05_prefix_pass(
     past_kv_names: list[str],
 ) -> dict[str, Any]:
     import torch
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
+    from tether.exporters.monolithic import export_patches
 
     from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
 
@@ -449,7 +449,7 @@ def _export_pi05_prefix_pass(
     prefix_path = output_dir / "vlm_prefix.onnx"
     logger.info("[decomposed] Exporting prefix → %s", prefix_path)
     t0 = time.time()
-    with torch_export_patches(patch_transformers=True):
+    with export_patches():
         ep_prefix = torch.export.export(
             prefix_wrapper,
             tuple(prefix_dummy.values()),
@@ -503,7 +503,7 @@ def _export_pi05_expert_pass(
       ``reflex_context/features/03_export/per-step-expert-export.md``.
     """
     import torch
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
+    from tether.exporters.monolithic import export_patches
 
     from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
 
@@ -560,7 +560,7 @@ def _export_pi05_expert_pass(
         expert_path,
     )
     t0 = time.time()
-    with torch_export_patches(patch_transformers=True):
+    with export_patches():
         ep_expert = torch.export.export(
             expert_wrapper,
             tuple(expert_dummy.values()),

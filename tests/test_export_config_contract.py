@@ -450,6 +450,7 @@ def test_gr00t_token_expert_is_not_routed_as_raw_action_reader(tmp_path):
         ("expert_stack", "pi0"),
         ("expert_stack", "smolvla"),
         ("expert_stack", "gr00t"),
+        ("monolithic", "smolvla"),
     ],
 )
 def test_declared_round_trip_reader_pairs_load_config(tmp_path, producer_and_model):

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from tether._lerobot_version import QUALIFIED_LEROBOT_VERSION, QUALIFIED_TRANSFORMERS_VERSION
 
+import contextlib
 import logging
 import time
 from importlib.metadata import PackageNotFoundError, version as _dist_version
@@ -85,6 +86,120 @@ def _causal_mask_export_shim(*args, **kwargs):
     if attn is not None and getattr(attn, "ndim", None) == 4:
         return attn
     return None
+
+
+# transformers>=5.4 ``masking_utils.eager_mask`` signature (verified on 5.5.4).
+# onnx-diagnostic <=0.9.3 (latest as of 2026-10-13, identical on its GitHub
+# main) replaces it during ``torch_export_patches`` with a function written
+# for the pre-5.4 signature ``(batch_size, cache_position, kv_length, ...)``,
+# so every eager-attention mask built through ``create_bidirectional_mask`` or
+# ``create_causal_mask`` dies with "missing 1 required positional argument:
+# 'cache_position'". SmolVLA reaches it through the SmolVLM vision tower;
+# pi0/pi0.5 never do (SigLIP's vision tower builds no mask and Gemma's
+# create_causal_mask is replaced by _causal_mask_export_shim above).
+_EAGER_MASK_PARAMS_TF54 = (
+    "batch_size", "q_length", "kv_length", "q_offset", "kv_offset",
+    "mask_function", "attention_mask", "dtype", "allow_is_bidirectional_skip",
+    "use_vmap", "device", "kwargs",
+)
+
+
+def _eager_mask_tf54(
+    batch_size,
+    q_length,
+    kv_length,
+    q_offset=0,
+    kv_offset=0,
+    mask_function=None,
+    attention_mask=None,
+    dtype=None,
+    allow_is_bidirectional_skip=False,
+    use_vmap=False,
+    device="cpu",
+    **kwargs,
+):
+    """transformers 5.5.4 ``eager_mask`` semantics, built on onnx-diagnostic's
+    export-safe ``patched_sdpa_mask_recent_torch`` (which already accepts the
+    5.4+ ``q_length``/``q_offset`` arguments) and its ``where``-free bool->float
+    conversion."""
+    import torch
+    from onnx_diagnostic.torch_export_patches.patches import (
+        _patch_transformers_masking_utils as od_masking,
+    )
+    from transformers import masking_utils
+
+    kwargs.pop("allow_is_causal_skip", None)
+    kwargs.pop("allow_torch_fix", None)
+    mask = od_masking.patched_sdpa_mask_recent_torch(
+        batch_size=batch_size,
+        q_length=q_length,
+        kv_length=kv_length,
+        q_offset=q_offset,
+        kv_offset=kv_offset,
+        mask_function=mask_function or masking_utils.causal_mask_function,
+        attention_mask=attention_mask,
+        allow_is_causal_skip=False,
+        allow_is_bidirectional_skip=allow_is_bidirectional_skip,
+        use_vmap=use_vmap,
+        device=device,
+        **kwargs,
+    )
+    if mask is None:  # only a skippable bidirectional mask returns None
+        return None
+    dtype = dtype or torch.float32
+    return (~mask).to(dtype) * torch.finfo(dtype).min
+
+
+@contextlib.contextmanager
+def export_patches():
+    """``onnx_diagnostic``'s ``torch_export_patches(patch_transformers=True)``
+    with its ``eager_mask`` patch replaced when it does not match the installed
+    transformers. Every Tether ``torch.export`` call goes through here.
+
+    Refuses (RuntimeError) on any transformers ``eager_mask`` signature other
+    than the qualified 5.4+ one, rather than guessing at an unknown API.
+    """
+    import inspect
+
+    import transformers
+    from onnx_diagnostic.torch_export_patches import torch_export_patches
+    from onnx_diagnostic.torch_export_patches.patches import (
+        _patch_transformers_masking_utils as od_masking,
+    )
+    from transformers import masking_utils
+
+    tf_params = tuple(inspect.signature(masking_utils.eager_mask).parameters)
+    od_params = tuple(inspect.signature(od_masking.patched_eager_mask).parameters)
+    if tf_params != _EAGER_MASK_PARAMS_TF54:
+        raise RuntimeError(
+            f"transformers {transformers.__version__} eager_mask signature {tf_params} "
+            f"is not the qualified 5.4+ signature {_EAGER_MASK_PARAMS_TF54}; Tether "
+            "cannot vouch for onnx-diagnostic's mask patches on it. Install "
+            f"transformers=={QUALIFIED_TRANSFORMERS_VERSION}."
+        )
+    repair = "cache_position" in od_params
+    if not repair and od_params != tf_params:
+        raise RuntimeError(
+            f"onnx-diagnostic's patched_eager_mask signature {od_params} matches "
+            f"neither the pre-5.4 form nor transformers {transformers.__version__} "
+            f"{tf_params}; refusing to export with an unknown mask patch."
+        )
+
+    with torch_export_patches(patch_transformers=True):
+        if not repair:
+            yield
+            return
+        registry = masking_utils.ALL_MASK_ATTENTION_FUNCTIONS
+        saved_module, saved_registry = masking_utils.eager_mask, registry["eager"]
+        masking_utils.eager_mask = _eager_mask_tf54
+        registry["eager"] = _eager_mask_tf54
+        try:
+            yield
+        finally:
+            # Hand back exactly what onnx-diagnostic installed so its own
+            # restore logic sees the state it expects.
+            masking_utils.eager_mask = saved_module
+            registry["eager"] = saved_registry
 
 _TOKENIZER_REFS = {
     "pi0": "google/paligemma-3b-pt-224",
@@ -674,7 +789,6 @@ def export_smolvla_monolithic(
 
     import torch
     import torch.nn as nn
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
 
     apply_export_patches()
     _raise_if_smolvla_export_patches_failed()
@@ -732,7 +846,7 @@ def export_smolvla_monolithic(
 
     logger.info("[smolvla] torch.export.export ...")
     t0 = time.time()
-    with torch_export_patches(patch_transformers=True):
+    with export_patches():
         ep = torch.export.export(
             wrapper, tuple(dummy.values()),
             dynamic_shapes=None, strict=False,
@@ -797,7 +911,6 @@ def export_pi0_monolithic(
 
     import torch
     import torch.nn as nn
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
 
     apply_export_patches()
 
@@ -895,7 +1008,7 @@ def export_pi0_monolithic(
 
     logger.info("[pi0] torch.export.export ...")
     t0 = time.time()
-    with torch_export_patches(patch_transformers=True):
+    with export_patches():
         ep = torch.export.export(
             wrapper, tuple(dummy.values()),
             dynamic_shapes=None, strict=False,
@@ -1008,7 +1121,6 @@ def export_pi05_monolithic(
 
     import torch
     import torch.nn as nn
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
 
     apply_export_patches()
 
@@ -1089,7 +1201,7 @@ def export_pi05_monolithic(
 
     logger.info("[pi05] torch.export.export ...")
     t0 = time.time()
-    with torch_export_patches(patch_transformers=True):
+    with export_patches():
         ep = torch.export.export(
             wrapper, tuple(dummy.values()),
             dynamic_shapes=None, strict=False,
@@ -1268,7 +1380,6 @@ def export_snapflow_student_monolithic(
 
     import torch
     import torch.nn as nn
-    from onnx_diagnostic.torch_export_patches import torch_export_patches
 
     from tether.distill.snapflow_pi0_model import load_snapflow_student
 
@@ -1381,7 +1492,7 @@ def export_snapflow_student_monolithic(
 
     logger.info("[snapflow-export] torch.export.export ...")
     t0 = time.time()
-    with torch_export_patches(patch_transformers=True):
+    with export_patches():
         ep = torch.export.export(
             wrapper, tuple(dummy.values()),
             dynamic_shapes=None, strict=False,

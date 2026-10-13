@@ -194,6 +194,14 @@ def _onnx_dtype_to_numpy(dt: int):
     return _MAP.get(dt, np.float32)
 
 
+def _consumers(model) -> dict[str, list]:
+    consumers: dict[str, list] = {}
+    for node in model.graph.node:
+        for inp in node.input:
+            consumers.setdefault(inp, []).append(node)
+    return consumers
+
+
 def fuse_rmsnorm_into_matmul(model, dry_run: bool = False) -> int:
     """Fuse RMSNorm scale weights into adjacent MatMul/Gemm weights.
 
@@ -218,12 +226,8 @@ def fuse_rmsnorm_into_matmul(model, dry_run: bool = False) -> int:
         for output in node.output:
             node_output_map[output] = node
 
-    node_input_consumers = {}
-    for node in model.graph.node:
-        for inp in node.input:
-            if inp not in node_input_consumers:
-                node_input_consumers[inp] = []
-            node_input_consumers[inp].append(node)
+    node_input_consumers = _consumers(model)
+    graph_outputs = {o.name for o in model.graph.output}
 
     for node in model.graph.node:
         if node.op_type != "Mul":
@@ -249,14 +253,21 @@ def fuse_rmsnorm_into_matmul(model, dry_run: bool = False) -> int:
         if scale_data is None or other_input is None:
             continue
 
-        weight_name = None
-        for inp in consumer.input:
-            w = _get_initializer(model, inp)
-            if w is not None and w.ndim == 2:
-                weight_name = inp
-                break
-
-        if weight_name is None:
+        # (x * s) @ W == x @ (diag(s) W): s scales the rows of the weight that
+        # sits in input slot 1 (MatMul, or Gemm with transA=0; transB=1 stores
+        # W transposed, so s scales its columns). The weight must have no
+        # other reader: an unrolled denoise loop shares one projection across
+        # every step, and fusing each step's Mul would compound s**num_steps.
+        if len(consumer.input) < 2 or consumer.input[0] != mul_output:
+            continue
+        weight_name = consumer.input[1]
+        attrs = {a.name: a.i for a in consumer.attribute}
+        if attrs.get("transA", 0):
+            continue
+        if len(node_input_consumers.get(weight_name, [])) != 1 or weight_name in graph_outputs:
+            continue
+        w = _get_initializer(model, weight_name)
+        if w is None or w.ndim != 2:
             continue
 
         if dry_run:
@@ -269,13 +280,14 @@ def fuse_rmsnorm_into_matmul(model, dry_run: bool = False) -> int:
             continue
 
         try:
-            if scale_data.shape[0] == weight_data.shape[0]:
-                fused_weight = weight_data * scale_data[:, np.newaxis]
-            elif scale_data.shape[0] == weight_data.shape[1]:
-                fused_weight = weight_data * scale_data[np.newaxis, :]
-            else:
+            scale_data = scale_data.reshape(-1)
+            in_axis = 1 if attrs.get("transB", 0) else 0
+            if scale_data.shape[0] != weight_data.shape[in_axis]:
                 logger.debug("Shape mismatch: scale %s vs weight %s, skipping", scale_data.shape, weight_data.shape)
                 continue
+            fused_weight = weight_data * (
+                scale_data[np.newaxis, :] if in_axis else scale_data[:, np.newaxis]
+            )
 
             _set_initializer(model, weight_name, fused_weight.astype(weight_data.dtype))
 
@@ -312,6 +324,8 @@ def fold_euler_dt_into_output_proj(
     """
     dt = dt_override or (-1.0 / num_steps)
     fused = 0
+    consumers = _consumers(model)
+    graph_outputs = {o.name for o in model.graph.output}
 
     for node in model.graph.node:
         if node.op_type != "Mul":
@@ -328,6 +342,9 @@ def fold_euler_dt_into_output_proj(
                     weight_name = inp
 
         if scalar_val is None or weight_name is None:
+            continue
+        # The weight is rescaled in place, so no other node may read it.
+        if len(consumers.get(weight_name, [])) != 1 or weight_name in graph_outputs:
             continue
 
         if not (abs(scalar_val - dt) < 1e-6 or abs(scalar_val - (-dt)) < 1e-6):

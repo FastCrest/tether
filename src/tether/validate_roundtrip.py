@@ -42,6 +42,7 @@ import torch
 
 from tether.fixtures.vla_fixtures import load_fixtures
 from tether.export_config import (
+    UnsupportedExportKindError,
     UnsupportedExportPipelineError,
     decomposed_layout,
     load_tether_config,
@@ -57,6 +58,7 @@ from tether._onnx_backend import load_onnx_backend
 logger = logging.getLogger(__name__)
 
 SUPPORTED_MODEL_TYPES: tuple[str, ...] = ("smolvla", "pi0", "gr00t")
+MONOLITHIC_MODEL_TYPES: tuple[str, ...] = ("smolvla",)
 UNSUPPORTED_MODEL_MESSAGE = (
     "tether validate v1 supports smolvla, pi0, gr00t. "
     "For pi0.5 / openvla see roadmap."
@@ -135,18 +137,26 @@ class ValidateRoundTrip:
             )
 
         self.config = load_tether_config(self.export_dir)
-        require_supported_export_kind(
+        self.export_kind: str = require_supported_export_kind(
             self.config,
-            {"decomposed_onnx"},
+            {"decomposed_onnx", "monolithic_onnx"},
             "tether validate",
         )
         require_supported_pipeline(self.config, set(), "tether validate")
-        layout = decomposed_layout(self.config)
-        if layout not in {"expert_stack", "smolvla_full_bundle"}:
-            raise UnsupportedExportPipelineError(
-                f"tether validate supports only the expert_stack family, got {layout!r}"
-            )
         model_type = self.config["model_type"]
+        if self.export_kind == "monolithic_onnx":
+            if model_type not in MONOLITHIC_MODEL_TYPES:
+                raise UnsupportedExportKindError(
+                    f"tether validate does not support export_kind='monolithic_onnx' "
+                    f"for model_type={model_type!r}; supported: {list(MONOLITHIC_MODEL_TYPES)}. "
+                    "pi0/pi0.5/GR00T monolithic parity: scripts/local_*_monolithic_parity.py"
+                )
+        else:
+            layout = decomposed_layout(self.config)
+            if layout not in {"expert_stack", "smolvla_full_bundle"}:
+                raise UnsupportedExportPipelineError(
+                    f"tether validate supports only the expert_stack family, got {layout!r}"
+                )
 
         if model_type not in SUPPORTED_MODEL_TYPES:
             raise ValueError(UNSUPPORTED_MODEL_MESSAGE)
@@ -175,6 +185,8 @@ class ValidateRoundTrip:
         their shared initial-noise tensors, runs each fixture through both
         runtimes, compares outputs, and aggregates the results.
         """
+        if self.export_kind == "monolithic_onnx":
+            return self._run_monolithic()
         self.pytorch = self._load_pytorch()
         self.onnx = self._load_onnx()
 
@@ -193,6 +205,81 @@ class ValidateRoundTrip:
         return self._aggregate(per_fixture)
 
     # ----------------------------------------------------------------- private
+
+    def _run_monolithic(self) -> dict[str, Any]:
+        """Exported ``model.onnx`` (ONNX Runtime, CPU) vs native LeRobot
+        ``sample_actions`` on identical seeded inputs and noise.
+
+        The reference is the unpatched LeRobot policy: nothing here installs
+        Tether's export patches, so an export-only rewrite that changes
+        numerics shows up as a failure. Pass/fail uses the committed
+        export-parity thresholds (cosine >= MIN_COSINE and
+        max_abs <= MAX_ABS_ERROR, tether/eval/export_parity.py); ``threshold``
+        is not used on this path.
+        """
+        import onnxruntime as ort
+        from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+
+        from tether.eval.export_parity import DEFAULT_MAX_ABS_ERROR, DEFAULT_MIN_COSINE
+
+        onnx_path = self.export_dir / "model.onnx"
+        if not onnx_path.is_file():
+            raise FileNotFoundError(onnx_path)
+        num_steps = int(self.config["num_denoising_steps"])
+        policy = SmolVLAPolicy.from_pretrained(self.model_id)
+        policy.eval().to(self.device).to(torch.float32)
+        policy.model.config.num_steps = num_steps
+        vocab = policy.model.vlm_with_expert.get_vlm_model().text_model.embed_tokens.num_embeddings
+        session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        specs = {i.name: [int(d) for d in i.shape] for i in session.get_inputs()}
+
+        per_fixture: list[dict[str, Any]] = []
+        for idx in range(self.num_test_cases):
+            feed = _smolvla_monolithic_feed(specs, vocab, self.seed + idx, idx)
+            t = {k: torch.from_numpy(v).to(self.device) for k, v in feed.items()}
+            with torch.no_grad():
+                ref = policy.model.sample_actions(
+                    [t["img_cam1"], t["img_cam2"], t["img_cam3"]],
+                    [t["mask_cam1"], t["mask_cam2"], t["mask_cam3"]],
+                    t["lang_tokens"],
+                    t["lang_masks"],
+                    t["state"],
+                    noise=t["noise"],
+                )
+            ref_np = ref.detach().cpu().numpy().astype(np.float64)
+            (out,) = session.run(None, feed)
+            out_np = np.asarray(out, dtype=np.float64)
+            if ref_np.shape != out_np.shape:
+                raise ValueError(f"shape mismatch: reference {ref_np.shape} vs ONNX {out_np.shape}")
+            diff = np.abs(ref_np - out_np)
+            denom = np.linalg.norm(ref_np) * np.linalg.norm(out_np)
+            cosine = float(ref_np.ravel() @ out_np.ravel() / denom) if denom else float(
+                np.array_equal(ref_np, out_np)
+            )
+            max_abs = float(diff.max())
+            per_fixture.append(
+                {
+                    "fixture_idx": idx,
+                    "cosine": cosine,
+                    "max_abs_diff": max_abs,
+                    "mean_abs_diff": float(diff.mean()),
+                    "passed": bool(
+                        np.isfinite(out_np).all()
+                        and cosine >= DEFAULT_MIN_COSINE
+                        and max_abs <= DEFAULT_MAX_ABS_ERROR
+                    ),
+                }
+            )
+
+        result = self._aggregate(per_fixture)
+        result.update(
+            export_kind="monolithic_onnx",
+            num_denoising_steps=num_steps,
+            threshold=DEFAULT_MAX_ABS_ERROR,
+            min_cosine=DEFAULT_MIN_COSINE,
+        )
+        result["summary"]["min_cosine_across_all"] = min(r["cosine"] for r in per_fixture)
+        return result
 
     def _load_pytorch(self) -> Any:
         """Build and return the PyTorch reference backend for this export."""
@@ -246,6 +333,37 @@ class ValidateRoundTrip:
                 "passed": passed,
             },
         }
+
+
+def _smolvla_monolithic_feed(
+    specs: dict[str, list[int]], vocab: int, seed: int, idx: int
+) -> dict[str, np.ndarray]:
+    """Seeded inputs for a SmolVLA monolithic graph, shaped from its ONNX inputs.
+
+    Fixture 0 is fully populated; odd fixtures drop camera 3; fixtures >= 2
+    right-pad the language with ``idx`` masked tokens, so the camera and
+    language masks are exercised as graph inputs, not just traced constants.
+    """
+    expected = {
+        "img_cam1", "img_cam2", "img_cam3", "mask_cam1", "mask_cam2", "mask_cam3",
+        "lang_tokens", "lang_masks", "state", "noise",
+    }
+    if set(specs) != expected:
+        raise ValueError(f"unexpected SmolVLA monolithic inputs {sorted(specs)}; expected {sorted(expected)}")
+    g = torch.Generator().manual_seed(seed)
+    feed: dict[str, np.ndarray] = {}
+    for cam in (1, 2, 3):
+        feed[f"img_cam{cam}"] = (torch.rand(specs[f"img_cam{cam}"], generator=g) * 2 - 1).numpy()
+        feed[f"mask_cam{cam}"] = np.full(specs[f"mask_cam{cam}"], not (cam == 3 and idx % 2), dtype=bool)
+    tokens_shape = specs["lang_tokens"]
+    feed["lang_tokens"] = torch.randint(0, vocab, tokens_shape, generator=g).numpy().astype(np.int64)
+    lang_masks = np.ones(specs["lang_masks"], dtype=bool)
+    if idx >= 2:
+        lang_masks[:, max(1, tokens_shape[-1] - idx):] = False
+    feed["lang_masks"] = lang_masks
+    feed["state"] = torch.randn(specs["state"], generator=g).numpy()
+    feed["noise"] = torch.randn(specs["noise"], generator=g).numpy()
+    return feed
 
 
 __all__ = [

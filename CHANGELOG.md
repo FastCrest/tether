@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### SmolVLA monolithic export on transformers 5.5.4, and its parity check
+
+- **SmolVLA monolithic export works again on transformers 5.5.4.** onnx-diagnostic 0.9.3 (the latest release; its GitHub main is identical) replaces `transformers.masking_utils.eager_mask` with a function written for the pre-5.4 signature `(batch_size, cache_position, ...)`. SmolVLM's vision tower builds its mask through `create_bidirectional_mask`, so the export died with `patched_eager_mask() missing 1 required positional argument: 'cache_position'`. Every Tether `torch.export` now goes through `tether.exporters.monolithic.export_patches()`. It installs onnx-diagnostic's patches, then swaps in an `eager_mask` with the 5.4+ signature that returns the same masks as transformers. The patches are restored on exit. Any other transformers `eager_mask` signature is refused. pi0/pi0.5 never reached this path: SigLIP's vision tower builds no mask, and Gemma's `create_causal_mask` is already replaced by Tether's shim.
+- **The post-export weight-fusion pass no longer corrupts unrolled denoise loops.** `fuse_rmsnorm_into_matmul` folded each RMSNorm scale into the next MatMul weight. A monolithic export unrolls the denoise loop, so the action projection weight is shared across all ten steps, and the scale was folded in ten times (scale**10). On a tiny SmolVLA the ONNX output drifted to max_abs 1.9e-2 from PyTorch; with the fix it is 2.4e-7. A scale is now fused only when the weight has a single reader and sits on the matching input axis, including Gemm `transB`. The Euler dt fold has the same single-reader guard.
+- **`tether validate export` supports monolithic SmolVLA exports.** It runs `model.onnx` in ONNX Runtime on CPU against native LeRobot `sample_actions` with the same seeded inputs and noise. Some fixtures mask camera 3 or pad the language input. It reports cosine and max_abs per fixture and passes at the committed export-parity thresholds (cosine >= 0.999, max_abs <= 0.1). Monolithic pi0, pi0.5 and GR00T are still refused here and keep their `scripts/local_*_monolithic_parity.py` harnesses. The export banner no longer says "cos=1.0 verified path" and now points to `tether validate`.
+
 ### Export dispatch, precision and registry licences
 
 - Monolithic family detection reads config metadata first, with exact aliases and repository family tokens. Dotted `pi0.5` selects pi05; pi0_fast/pi0fast are refused because no FAST exporter exists. Invalid or unsupported metadata fails explicitly.
