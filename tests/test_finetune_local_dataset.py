@@ -784,5 +784,7 @@ def test_pinned_lerobot_sources_match_installed_qualified_runtime():
     if dist.version != QUALIFIED_LEROBOT_VERSION:
         pytest.skip(f"lerobot {dist.version} is not the qualified {QUALIFIED_LEROBOT_VERSION}")
     pins = {**local_dataset.WRITER_FILES, **local_dataset.NORMALIZATION_FILES}
-    actual = {name: hashlib.sha256(Path(dist.locate_file(name)).read_bytes()).hexdigest() for name in pins}
+    actual = {
+        name: hashlib.sha256(Path(dist.locate_file(name)).read_bytes()).hexdigest() for name in pins
+    }
     assert actual == pins

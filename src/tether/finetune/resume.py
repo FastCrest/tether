@@ -47,7 +47,15 @@ def resolve_resume_checkpoint(output_dir: Path) -> tuple[Path, Path]:
     except (OSError, ValueError) as exc:
         raise ResumeConfigurationError(f"resume train_config.json is unreadable: {config}") from exc
     if isinstance(saved, dict) and any(
-        key in saved for key in ("eval_freq", "use_rabc", "rabc_progress_path", "rabc_kappa", "rabc_epsilon", "rabc_head_mode")
+        key in saved
+        for key in (
+            "eval_freq",
+            "use_rabc",
+            "rabc_progress_path",
+            "rabc_kappa",
+            "rabc_epsilon",
+            "rabc_head_mode",
+        )
     ):
         raise ResumeConfigurationError(
             "cross-version-resume-unsupported: LeRobot 0.5.x training configs "
