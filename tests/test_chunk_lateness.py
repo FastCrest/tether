@@ -1,4 +1,5 @@
 """WIM's expiry contract, independent of inference hardware or wall time."""
+
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import importlib
@@ -126,11 +127,17 @@ def test_default_off_fifo_append_overwrite_clear(hz):
     assert buf.stats().dropped_replans == 0
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"max_lateness_ms": -1}, {"max_age_ms": float("nan")},
-    {"max_lateness_ms": float("inf")}, {"control_hz": 0},
-    {"control_hz": float("nan")}, {"capacity": -1},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_lateness_ms": -1},
+        {"max_age_ms": float("nan")},
+        {"max_lateness_ms": float("inf")},
+        {"control_hz": 0},
+        {"control_hz": float("nan")},
+        {"capacity": -1},
+    ],
+)
 def test_invalid_bounds(kwargs):
     with pytest.raises(ValueError):
         ActionChunkBuffer(**kwargs)
@@ -149,11 +156,13 @@ def test_concurrent_push_pop_stats_and_peeks_account_for_every_action():
     clock = Clock(1)
     buf = ActionChunkBuffer(capacity=5, clock=clock, max_lateness_ms=4)
     barrier = threading.Barrier(4)
+
     def push(fresh):
         barrier.wait()
         for _ in range(1000):
             buf.push_chunk(CHUNK, t_obs=1 if fresh else 0)
         return 0
+
     def pop():
         barrier.wait()
         consumed = 0
@@ -162,9 +171,14 @@ def test_concurrent_push_pop_stats_and_peeks_account_for_every_action():
             buf.peek_all()
             buf.stats()
         return consumed
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(push, True), pool.submit(push, False),
-                   pool.submit(pop), pool.submit(pop)]
+        futures = [
+            pool.submit(push, True),
+            pool.submit(push, False),
+            pool.submit(pop),
+            pool.submit(pop),
+        ]
         consumed = sum(f.result(timeout=20) for f in futures)
     stats = buf.stats()
     assert stats.replans == 2000
@@ -176,9 +190,12 @@ def test_concurrent_push_pop_stats_and_peeks_account_for_every_action():
 # These are all create_app backend classes; no inference/RTC qualification is
 # implied by configuring their common execution buffer on an unloaded instance.
 BACKENDS = [
-    ("server", "TetherServer"), ("decomposed_server", "Pi05DecomposedServer"),
-    ("pi0_onnx_server", "Pi0OnnxServer"), ("pi05_onnx_server", "Pi05OnnxServer"),
-    ("smolvla_onnx_server", "SmolVLAOnnxServer"), ("smolvla_native", "SmolVLANativeServer"),
+    ("server", "TetherServer"),
+    ("decomposed_server", "Pi05DecomposedServer"),
+    ("pi0_onnx_server", "Pi0OnnxServer"),
+    ("pi05_onnx_server", "Pi05OnnxServer"),
+    ("smolvla_onnx_server", "SmolVLAOnnxServer"),
+    ("smolvla_native", "SmolVLANativeServer"),
 ]
 
 
@@ -186,13 +203,15 @@ BACKENDS = [
 @pytest.mark.parametrize("hz", [50, 100, 200, 1000])
 def test_backend_buffer_deadline_ordering_and_rtc_identity(module, name, hz):
     from tether.runtime.server import configure_action_buffer
+
     cls = getattr(importlib.import_module(f"tether.runtime.{module}"), name)
     server = cls.__new__(cls)
     server.config = {"chunk_size": 5}
     server.rtc_adapter = SimpleNamespace(buffer=None)
     clock = Clock()
-    buf = configure_action_buffer(server, replan_hz=20, execute_hz=hz,
-                                  max_lateness_ms=4, clock=clock)
+    buf = configure_action_buffer(
+        server, replan_hz=20, execute_hz=hz, max_lateness_ms=4, clock=clock
+    )
     assert server.rtc_adapter.buffer is buf is server._action_buffer
     assert buf.control_hz == hz
     buf.push_chunk(CHUNK)
@@ -205,10 +224,12 @@ def test_backend_buffer_deadline_ordering_and_rtc_identity(module, name, hz):
 
 def test_rtc_peeks_and_previous_leftover_remain_read_only():
     from tether.runtime.rtc_adapter import RtcAdapter, RtcAdapterConfig
+
     clock = Clock()
     buf = ActionChunkBuffer(clock=clock, max_lateness_ms=4)
-    adapter = RtcAdapter(policy=SimpleNamespace(), action_buffer=buf,
-                         config=RtcAdapterConfig(enabled=False))
+    adapter = RtcAdapter(
+        policy=SimpleNamespace(), action_buffer=buf, config=RtcAdapterConfig(enabled=False)
+    )
     adapter.merge_and_update(CHUNK, elapsed_time=0.01, t_obs=0)
     clock.now = 0.005
     snapshot = buf.peek_all()
@@ -228,6 +249,7 @@ def test_rtc_peeks_and_previous_leftover_remain_read_only():
 def test_snapshot_prometheus_and_record(tmp_path):
     from tether.observability import render_metrics, set_action_buffer_stats
     from tether.runtime.record import RecordWriter
+
     clock = Clock()
     buf = ActionChunkBuffer(clock=clock, max_lateness_ms=4)
     buf.push_chunk(CHUNK)
@@ -239,14 +261,28 @@ def test_snapshot_prometheus_and_record(tmp_path):
     for key in ("expired_actions", "late_chunks", "dropped_replans", "max_observed_lateness_ms"):
         assert f"tether_action_buffer_{key} {float(snapshot[key])}" in metrics
     import json
+
     rec = RecordWriter(
-        record_dir=tmp_path, model_hash="test", config_hash="test",
-        export_dir=tmp_path, model_type="gr00t", export_kind="monolithic_onnx",
-        providers=[], gzip_output=False,
+        record_dir=tmp_path,
+        model_hash="test",
+        config_hash="test",
+        export_dir=tmp_path,
+        model_type="gr00t",
+        export_kind="monolithic_onnx",
+        providers=[],
+        gzip_output=False,
     )
     for kwargs in ({"action_buffer": snapshot}, {}):
-        rec.write_request(chunk_id=0, image_b64=None, instruction="test", state=None,
-                          actions=[], action_dim=1, latency_total_ms=0, **kwargs)
+        rec.write_request(
+            chunk_id=0,
+            image_b64=None,
+            instruction="test",
+            state=None,
+            actions=[],
+            action_dim=1,
+            latency_total_ms=0,
+            **kwargs,
+        )
     rec.close()
     rows = [json.loads(line) for line in rec.filepath.read_text().splitlines()]
     assert rows[1]["action_buffer"] == snapshot
@@ -255,6 +291,7 @@ def test_snapshot_prometheus_and_record(tmp_path):
 
 def test_server_rejects_unusable_or_invalid_expiry_before_loading(tmp_path):
     from tether.runtime.server import create_app
+
     with pytest.raises(ValueError, match="requires replan_hz"):
         create_app(str(tmp_path), max_lateness_ms=4)
     with pytest.raises(ValueError, match="max_lateness_ms"):
@@ -270,34 +307,51 @@ def test_late_prefix_is_skipped_before_capacity_limit():
     assert buf.stats().dropped_replans == 0
 
 
-@pytest.mark.parametrize("model_type,export_kind,artifacts,native", [
-    ("gr00t", "monolithic_onnx", ["model.onnx"], False),
-    ("pi05_decomposed", "decomposed_onnx", ["vlm_prefix.onnx", "expert_denoise.onnx"], False),
-    ("pi0", "monolithic_onnx", ["model.onnx"], False),
-    ("pi05", "monolithic_onnx", ["model.onnx"], False),
-    ("smolvla", "monolithic_onnx", ["model.onnx"], False),
-    ("smolvla", "decomposed_onnx", ["expert_stack.onnx"], False),
-    ("smolvla", "decomposed_onnx", ["expert_stack.onnx"], True),
-])
+@pytest.mark.parametrize(
+    "model_type,export_kind,artifacts,native",
+    [
+        ("gr00t", "monolithic_onnx", ["model.onnx"], False),
+        ("pi05_decomposed", "decomposed_onnx", ["vlm_prefix.onnx", "expert_denoise.onnx"], False),
+        ("pi0", "monolithic_onnx", ["model.onnx"], False),
+        ("pi05", "monolithic_onnx", ["model.onnx"], False),
+        ("smolvla", "monolithic_onnx", ["model.onnx"], False),
+        ("smolvla", "decomposed_onnx", ["expert_stack.onnx"], False),
+        ("smolvla", "decomposed_onnx", ["expert_stack.onnx"], True),
+    ],
+)
 def test_real_app_lifespan_config_and_metrics(
-    tmp_path, monkeypatch, model_type, export_kind, artifacts, native,
+    tmp_path,
+    monkeypatch,
+    model_type,
+    export_kind,
+    artifacts,
+    native,
 ):
     from fastapi.testclient import TestClient
     from tests.export_config_factory import write_test_export_config
     from tether.runtime.server import create_app
+
     monkeypatch.delenv("TETHER_NATIVE", raising=False)
     if native:
         monkeypatch.setenv("TETHER_NATIVE", "1")
     monkeypatch.setenv("TETHER_NO_CONTRIB_NUDGE", "1")
-    write_test_export_config(tmp_path, model_type=model_type, export_kind=export_kind,
-                             artifacts=artifacts, action_chunk_size=5)
-    app = create_app(str(tmp_path), device="cpu", prewarm=False,
-                     replan_hz=20, execute_hz=100, max_lateness_ms=4)
+    write_test_export_config(
+        tmp_path,
+        model_type=model_type,
+        export_kind=export_kind,
+        artifacts=artifacts,
+        action_chunk_size=5,
+    )
+    app = create_app(
+        str(tmp_path), device="cpu", prewarm=False, replan_hz=20, execute_hz=100, max_lateness_ms=4
+    )
     server = app.state.tether_server
+
     def load():
         server._ready = True
         server.chunk_size = 5
         server.action_dim = 1
+
     monkeypatch.setattr(server, "load", load)
     with TestClient(app) as client:
         buf = server._action_buffer
@@ -334,22 +388,27 @@ def test_invalid_clock_and_never_submitted_chunk():
 def test_concurrent_clock_progress_and_expiring_pops():
     class AdvancingClock:
         now = 0.0
+
         def __call__(self):
             self.now += 0.001
             return self.now
+
     buf = ActionChunkBuffer(capacity=5, clock=AdvancingClock(), max_lateness_ms=0)
     barrier = threading.Barrier(3)
+
     def producer():
         barrier.wait()
         for _ in range(1000):
             buf.push_chunk(CHUNK)
         return 0
+
     def consumer():
         barrier.wait()
         count = 0
         for _ in range(2000):
             count += buf.pop_next() is not None
         return count
+
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = [pool.submit(producer), pool.submit(consumer), pool.submit(consumer)]
         consumed = sum(f.result(timeout=20) for f in futures)
@@ -363,8 +422,13 @@ def test_concurrent_clock_progress_and_expiring_pops():
 def test_server_constructor_bounds_are_used_by_configure_replan(tmp_path):
     from tests.export_config_factory import write_test_export_config
     from tether.runtime.server import TetherServer
-    write_test_export_config(tmp_path, model_type="smolvla", export_kind="decomposed_onnx",
-                             artifacts=["expert_stack.onnx"])
+
+    write_test_export_config(
+        tmp_path,
+        model_type="smolvla",
+        export_kind="decomposed_onnx",
+        artifacts=["expert_stack.onnx"],
+    )
     server = TetherServer(tmp_path, device="cpu", max_lateness_ms=4, max_age_ms=100)
     clock = Clock()
     server.configure_replan(20, 100, clock=clock)
@@ -386,22 +450,34 @@ def test_default_off_zero_capacity_preserves_legacy_empty_buffer():
 
 @pytest.mark.parametrize("bound", [None, 4])
 def test_bad_replan_config_preserves_default_off_but_never_drops_requested_expiry(
-    tmp_path, monkeypatch, bound,
+    tmp_path,
+    monkeypatch,
+    bound,
 ):
     from fastapi.testclient import TestClient
     from tests.export_config_factory import write_test_export_config
     from tether.runtime.server import create_app
+
     monkeypatch.delenv("TETHER_NATIVE", raising=False)
     monkeypatch.setenv("TETHER_NO_CONTRIB_NUDGE", "1")
-    write_test_export_config(tmp_path, model_type="gr00t", export_kind="monolithic_onnx",
-                             artifacts=["model.onnx"])
-    app = create_app(str(tmp_path), device="cpu", prewarm=False,
-                     replan_hz=200, execute_hz=100, max_lateness_ms=bound)
+    write_test_export_config(
+        tmp_path, model_type="gr00t", export_kind="monolithic_onnx", artifacts=["model.onnx"]
+    )
+    app = create_app(
+        str(tmp_path),
+        device="cpu",
+        prewarm=False,
+        replan_hz=200,
+        execute_hz=100,
+        max_lateness_ms=bound,
+    )
     server = app.state.tether_server
+
     def load():
         server._ready = True
         server.chunk_size = 5
         server.action_dim = 1
+
     monkeypatch.setattr(server, "load", load)
     if bound is not None:
         with pytest.raises(ValueError, match="backwards"):

@@ -543,7 +543,7 @@ class RtcAdapter:
     def get_stats(self) -> dict[str, Any]:
         """Stats for logging / metrics. Consumed by Prometheus exporter
         (Phase 0.5.8) + ``tether monitor``."""
-        stats = {
+        stats: dict[str, Any] = {
             "enabled": self.config.enabled,
             "chunk_count": self._chunk_count,
             "active_episode_id": self._active_episode_id,
