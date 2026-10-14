@@ -555,6 +555,7 @@ class RecordWriter:
         vlm_conditioning: str = "real",
         deadline: dict[str, Any] | None = None,
         rtc: dict[str, Any] | None = None,
+        action_buffer: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
         routing: dict[str, Any] | None = None,
     ) -> int:
@@ -622,6 +623,8 @@ class RecordWriter:
             record["deadline"] = deadline
         if rtc is not None:
             record["rtc"] = rtc
+        if action_buffer is not None:
+            record["action_buffer"] = action_buffer
         if error is not None:
             record["error"] = error
         # Day 7 policy-versioning: optional `routing` block (slot, bucket,
