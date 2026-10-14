@@ -26,6 +26,7 @@ from tether.observability.prometheus import (
     observe_rtc_adaptive_chunking,
     record_act_latency,
     render_metrics,
+    set_action_buffer_stats,
     set_episodes_active,
     set_inference_executor_state,
     set_robot_info,
@@ -52,6 +53,7 @@ __all__ = [
     "track_in_flight",
     "set_server_up",
     "set_robot_info",
+    "set_action_buffer_stats",
     "set_episodes_active",
     "set_inference_executor_state",
 ]

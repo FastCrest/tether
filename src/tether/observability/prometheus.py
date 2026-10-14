@@ -779,6 +779,26 @@ def set_episode_cache_bytes(
     ).set(value)
 
 
+# Snapshots are gauges: buffer replacement starts a new counter lifetime.
+_ACTION_BUFFER_METRICS = {
+    name: Gauge(
+        f"tether_action_buffer_{name}", description, registry=REGISTRY,
+    )
+    for name, description in (
+        ("expired_actions", "Actions discarded by buffer expiry"),
+        ("late_chunks", "Chunks losing actions to expiry"),
+        ("dropped_replans", "Replans rejected because all admitted actions were late"),
+        ("max_observed_lateness_ms", "Maximum observed positive action lateness in ms"),
+    )
+}
+
+
+def set_action_buffer_stats(stats: Mapping[str, Any]) -> None:
+    """Publish the live execution buffer's cumulative snapshot on scrape."""
+    for name, metric in _ACTION_BUFFER_METRICS.items():
+        metric.set(stats[name])
+
+
 # ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
 import numpy as np
@@ -477,6 +477,8 @@ class RtcAdapter:
         self,
         actions: np.ndarray,
         elapsed_time: float,
+        *,
+        t_obs: float | None = None,
     ) -> None:
         """Push the new chunk into the action buffer; record inference latency.
 
@@ -502,7 +504,7 @@ class RtcAdapter:
         else:
             chunk_2d = actions
         self._last_action_delta = overlapping_action_delta(prev_leftover, chunk_2d)
-        self.buffer.push_chunk(chunk_2d)
+        self.buffer.push_chunk(chunk_2d, t_obs=t_obs)
 
         # 3. Stash the snapshot for the NEXT predict call's guidance
         self._prev_chunk_left_over = prev_leftover
@@ -541,13 +543,14 @@ class RtcAdapter:
     def get_stats(self) -> dict[str, Any]:
         """Stats for logging / metrics. Consumed by Prometheus exporter
         (Phase 0.5.8) + ``tether monitor``."""
-        stats = {
+        stats: dict[str, Any] = {
             "enabled": self.config.enabled,
             "chunk_count": self._chunk_count,
             "active_episode_id": self._active_episode_id,
             "latency": self.latency.summary(),
             "rtc_available": _RTC_AVAILABLE,
             "configured_execution_horizon": self.config.rtc_execution_horizon,
+            "action_buffer": asdict(self.buffer.stats()),
         }
         if self._last_execution_horizon is not None:
             stats["execution_horizon"] = self._last_execution_horizon

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Optional chunk lateness and age expiry
+
+- `ActionChunkBuffer` accepts `max_lateness_ms`, `max_age_ms`, `control_hz` and an injectable monotonic clock. Both bounds default to OFF. Late arrivals skip their stale prefix; a late pop discards the remaining tail and returns `None`. Expiry never holds, repeats, synthesizes a target or commands a pose.
+- Added buffer expiry counters, server config/Prometheus/JSONL snapshots, observation timestamps through RTC merge, and common backend buffer configuration. `tether serve` accepts `--max-lateness-ms` and `--max-age-ms` with replan/execute rates. HTTP `/act` still returns full chunks and does not consume the execution buffer; HTTP RTC remains unavailable.
+- Added fake-clock and concurrent tests, a reproducible million-pop local jitter measurement, and [WIM's Thor test plan](docs/chunk-lateness-test-plan.md). Polling and Python scheduling prevent a real-time or strict pre-6 ms guarantee; nothing here is verified on Thor.
+
 ### SmolVLA monolithic export on transformers 5.5.4, and its parity check
 
 - **SmolVLA monolithic export works again on transformers 5.5.4.** onnx-diagnostic 0.9.3 (the latest release; its GitHub main is identical) replaces `transformers.masking_utils.eager_mask` with a function written for the pre-5.4 signature `(batch_size, cache_position, ...)`. SmolVLM's vision tower builds its mask through `create_bidirectional_mask`, so the export died with `patched_eager_mask() missing 1 required positional argument: 'cache_position'`. Every Tether `torch.export` now goes through `tether.exporters.monolithic.export_patches()`. It installs onnx-diagnostic's patches, then swaps in an `eager_mask` with the 5.4+ signature that returns the same masks as transformers. The patches are restored on exit. Any other transformers `eager_mask` signature is refused. pi0/pi0.5 never reached this path: SigLIP's vision tower builds no mask, and Gemma's `create_causal_mask` is already replaced by Tether's shim.

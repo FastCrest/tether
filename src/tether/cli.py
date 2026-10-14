@@ -2391,6 +2391,17 @@ def serve(
         help="Execute frequency in Hz — the rate at which the robot pops "
              "an action from the buffer. Only used when --replan-hz > 0.",
     ),
+    max_lateness_ms: Optional[float] = typer.Option(
+        None, "--max-lateness-ms", min=0.0,
+        help="Buffer per-action lateness limit in ms; unset disables expiry. "
+             "Requires --replan-hz and --execute-hz. Checked by pop_next; "
+             "HTTP /act still returns full chunks.",
+    ),
+    max_age_ms: Optional[float] = typer.Option(
+        None, "--max-age-ms", min=0.0,
+        help="Optional total chunk age cap in ms from observation or push. "
+             "Unset disables the cap. Requires replan/execute Hz.",
+    ),
     rtc: bool = typer.Option(
         False,
         "--rtc",
@@ -3258,6 +3269,8 @@ def serve(
         api_key=api_key or None,
         replan_hz=replan_hz if replan_hz > 0 else None,
         execute_hz=execute_hz if execute_hz > 0 else None,
+        max_lateness_ms=max_lateness_ms,
+        max_age_ms=max_age_ms,
         embodiment_config=embodiment_cfg,
         record_dir=record or None,
         record_image_redaction=record_images,
@@ -3311,6 +3324,12 @@ def serve(
     if replan_hz > 0:
         composed.append(
             f"[cyan]replan[/cyan]={replan_hz:g}Hz/execute={execute_hz:g}Hz"
+        )
+    if max_lateness_ms is not None or max_age_ms is not None:
+        console.print(
+            "[yellow]Chunk expiry applies to in-process buffer pops. "
+            "HTTP /act returns full chunks; external consumers must apply "
+            "their own buffer.[/yellow]"
         )
     if otel_endpoint:
         composed.append(
