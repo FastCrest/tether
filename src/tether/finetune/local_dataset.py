@@ -746,19 +746,20 @@ def validate_local_config(cfg: Any) -> None:
         "dataset_root is required with a valid optional dataset_manifest_sha256 or dataset_content_sha256.",
     )
     _require(
-        not cfg.skip_preflight and not cfg.resume,
+        not cfg.skip_preflight and (not cfg.resume or
+            (raw and cfg.policy in {"diffusion", "vqbet", "tdmpc"} and cfg.mode == "full")),
         "local-config",
-        "Local dataset admission does not support skip_preflight or resume.",
+        "Local dataset admission does not support skip_preflight or resume outside the state-bound local Diffusion/VQ-BeT/TDMPC recipes.",
     )
     _require(
         cfg.phase == "train"
         and cfg.backend == "lerobot"
-        and ((cfg.policy == "act" and cfg.mode == "full") or (cfg.policy == "auto" and cfg.mode == "lora" and bool(cfg.base)))
+        and ((cfg.policy in {"act", "diffusion", "vqbet", "tdmpc"} and cfg.mode == "full") or (cfg.policy == "auto" and cfg.mode == "lora" and bool(cfg.base)))
         and (raw or cfg.policy == "auto")
         and bool(cfg.dataset)
         and not cfg.base_dataset,
         "unsupported-profile",
-        "Local datasets require ACT from scratch (policy=act, mode=full) or pretrained SmolVLA LoRA (policy=auto, mode=lora), phase=train.",
+        "Local datasets require ACT, Diffusion, VQ-BeT or TDMPC from scratch (policy=act|diffusion|vqbet|tdmpc, mode=full) or pretrained SmolVLA LoRA (policy=auto, mode=lora), phase=train.",
     )
     _require(not raw or not (Path(root).expanduser().resolve().parent / "export-receipt.json").exists(), "local-config", "dataset_manifest_sha256: a Studio export receipt requires its explicit digest; it cannot be downgraded to raw admission.")
     export = Path(root).expanduser().resolve()

@@ -190,6 +190,48 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
     # uploading). We don't push to Hub, but the validator runs anyway.
     # Pass a placeholder derived from the output dir name.
     # Customers who want to auto-push can override via extra_lerobot_args.
+    if cfg.resume and local_export is not None:
+        import json
+        candidates = sorted(p for p in (lerobot_output / "checkpoints").glob("*")
+                            if p.is_dir() and not p.is_symlink() and p.name.isdigit())
+        for checkpoint in reversed(candidates):
+            required = ("training_step.json", "optimizer_state.safetensors", "optimizer_param_groups.json", "rng_state.safetensors")
+            if cfg.policy != "tdmpc":
+                required += ("scheduler_state.json",)
+            if not all((checkpoint / "training_state" / name).is_file() for name in required):
+                continue
+            config_path = checkpoint / "pretrained_model/train_config.json"
+            if not config_path.is_file():
+                continue
+            saved = json.loads(config_path.read_text())
+            if "eval_freq" in saved or "env_eval_freq" not in saved:
+                raise ValueError("resume.lerobot_version: requires a LeRobot 0.6.1 trainer config, not a 0.5.1 checkpoint")
+            recorded_step = json.loads((checkpoint / "training_state/training_step.json").read_text()).get("step")
+            if type(recorded_step) is not int or recorded_step != int(checkpoint.name):
+                raise ValueError("resume.training_step: checkpoint folder differs from trainer state")
+            if saved.get("policy", {}).get("type") != cfg.policy:
+                raise ValueError("resume.policy.type: checkpoint family differs from reviewed recipe")
+            if Path(saved["dataset"]["root"]).resolve() != Path(cfg.dataset_root).resolve():
+                raise ValueError("resume.dataset.root: checkpoint dataset differs from immutable snapshot")
+            if not saved.get("output_dir") or Path(saved["output_dir"]).resolve() != lerobot_output.resolve():
+                raise ValueError("resume.output_dir: checkpoint differs from the reviewed job directory")
+            for key, expected in (("steps", cfg.num_steps), ("batch_size", cfg.batch_size), ("seed", cfg.seed)):
+                if saved.get(key) != expected:
+                    raise ValueError(f"resume.{key}: checkpoint differs from reviewed settings")
+            for key, expected in cfg.extra_lerobot_args.items():
+                if isinstance(expected, str):
+                    try:
+                        expected = json.loads(expected)
+                    except json.JSONDecodeError:
+                        pass
+                actual = saved
+                for part in key.split("."):
+                    actual = actual.get(part) if isinstance(actual, dict) else None
+                if actual != expected:
+                    raise ValueError(f"resume.{key}: checkpoint differs from reviewed settings")
+            return ["lerobot-train", f"--config_path={config_path}", "--resume=true"]
+        raise ValueError("resume.checkpoint: no complete numeric trainer checkpoint; retain previous checkpoint and retry")
+
     repo_id = f"local/{cfg.output.name}"
 
     cmd = [
@@ -217,7 +259,7 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
         cmd.append(f"--dataset.root={local_export['dataset_root']}")
     if cfg.dataset_revision:
         cmd.append(f"--dataset.revision={cfg.dataset_revision}")
-    if is_from_scratch and cfg.chunk_size:
+    if is_from_scratch and explicit_policy == "act" and cfg.chunk_size:
         # ACT (and similar chunked policies) need chunk_size; pretrained bases
         # bake this in. auto_soarm convention (per its train.py): set
         # n_action_steps == chunk_size so ACTConfig.__post_init__ doesn't
