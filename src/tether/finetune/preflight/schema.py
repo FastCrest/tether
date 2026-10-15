@@ -143,8 +143,44 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
         # its pretraining embodiment; the command clears them
         # (--policy.input_features=null) so LeRobot derives them from this
         # dataset. Only the padding bounds bind, as on the export path.
-        if cfg.policy == "act" and cfg.mode == "full":
-            return PreflightCheck("schema", "ok", "Local features match the ACT recipe.", {"features": features})
+        if cfg.policy in {"act", "diffusion", "vqbet", "tdmpc"} and cfg.mode == "full":
+            if cfg.policy != "act":
+                cameras = {key: feature["shape"] for key, feature in features.items()
+                           if feature["dtype"] in {"image", "video"}}
+                if not cameras:
+                    return PreflightCheck("schema", "fail", "features.observation.images: local image policy requires a camera")
+                unsupported = [key for key in features if key.startswith("observation.")
+                               and key != "observation.state" and key not in cameras]
+                if unsupported:
+                    return PreflightCheck("schema", "fail", f"features.{unsupported[0]}: this recipe consumes state and camera observations only")
+            if cfg.policy == "diffusion":
+                cameras = {key: feature["shape"] for key, feature in features.items()
+                           if feature["dtype"] in {"image", "video"}}
+                first = next(iter(cameras.values()))
+                for key, shape in cameras.items():
+                    if shape != first:
+                        return PreflightCheck("schema", "fail", f"features.{key}.shape: Diffusion cameras must share an RGB shape")
+                    if min(shape[:2]) < 32 or shape[:2] == [32, 32]:
+                        return PreflightCheck("schema", "fail", f"features.{key}.shape: Diffusion requires >=32 pixel sides and a ResNet18 initialization larger than 32 x 32")
+            if cfg.policy in {"vqbet", "tdmpc"}:
+                cameras = {key: f["shape"] for key, f in features.items() if f["dtype"] in {"image", "video"}}
+                if len(cameras) != 1:
+                    return PreflightCheck("schema", "fail", f"features.observation.images: {cfg.policy} requires exactly one camera")
+                key, shape = next(iter(cameras.items()))
+                if min(shape[:2]) < 64 or (cfg.policy == "tdmpc" and shape[0] != shape[1]):
+                    return PreflightCheck("schema", "fail", f"features.{key}.shape: requires >=64 pixel sides; TDMPC requires square images")
+                if cfg.policy == "tdmpc":
+                    reward = features.get("next.reward", {})
+                    if reward.get("dtype") not in {"float32", "float64"} or reward.get("shape") != [1]:
+                        return PreflightCheck("schema", "fail", "features.next.reward: TDMPC requires finite scalar transition rewards with shape [1]")
+                    import math
+                    import pyarrow.parquet as pq
+                    for path in sorted(Path(cfg.dataset_root).glob("data/**/*.parquet")):
+                        for batch in pq.ParquetFile(path).iter_batches(batch_size=1024, columns=["next.reward"]):
+                            for value in batch.column(0).to_pylist():
+                                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                                    return PreflightCheck("schema", "fail", f"features.next.reward: invalid scalar reward in {path.name}")
+            return PreflightCheck("schema", "ok", f"Local features match the {cfg.policy.upper()} recipe.", {"features": features})
         if not isinstance(base_config, dict) or base_config.get("type") != "smolvla":
             return PreflightCheck("schema", "fail", "base.config.type: requires a resolvable supported SmolVLA checkpoint")
         for key, maximum in (("action", "max_action_dim"), ("observation.state", "max_state_dim")):
