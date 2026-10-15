@@ -11,6 +11,8 @@ pixels, with at least one side larger than 32 for ResNet18 initialization.
 VQ-BeT and TDMPC accept exactly one RGB camera of at least 64 pixels per side;
 TDMPC requires square images. State and action vectors come from the dataset.
 Unsupported observation fields are refused explicitly.
+Local VQ-BeT requires explicit `policy.device=cpu`: LeRobot 0.6.1's factory
+refuses MPS. Preflight returns that reason before starting the trainer.
 
 TDMPC additionally needs `next.reward`, logical shape `[1]`, stored as a finite
 scalar float in every transition. Singleton list storage is refused because
@@ -22,7 +24,7 @@ Local resume for these three families verifies the dataset again and selects a
 complete numeric checkpoint. Saved LeRobot 0.6.1 config, trainer step, optimizer,
 RNG and scheduler where applicable are required. Family, dataset root, step
 budget, batch, seed and explicit LeRobot overrides must match. Changed settings,
-old 0.5.1 configs or incomplete state return named refusals. The caller must
+old 0.5.1 configs, changed output directories or incomplete state return named refusals. The caller must
 retain the checkpoint directory and dataset. Exact numerical equality with an
 uninterrupted run is unverified.
 
@@ -33,6 +35,7 @@ qualification follows from these recipes.
 
 Verified in simulation on 10/15/2026: native local dataset VQ-BeT and TDMPC CPU
 four-step plumbing and saved checkpoints; TDMPC uses explicitly synthetic zero
-rewards for that probe. Full Tether suite: 4,222 passed, 140 skipped with the
-S-11 interpreter and supplied MCP/async dependencies. Hardware, MPS numerical
-qualification for VQ-BeT/TDMPC and learned task quality remain unverified.
+rewards for that probe. Full Tether suite: 4,224 passed, 140 skipped with the
+S-11 interpreter and supplied MCP/async dependencies. Four native TDMPC MPS
+updates also produced finite losses and weights. VQ-BeT MPS is unavailable;
+hardware and learned task quality remain unverified.

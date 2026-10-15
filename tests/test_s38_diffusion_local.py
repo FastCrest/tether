@@ -55,7 +55,7 @@ def test_local_resume_selects_complete_numeric_checkpoint_and_binds_input(tmp_pa
     for name in ('training_step.json','optimizer_state.safetensors','optimizer_param_groups.json','rng_state.safetensors','scheduler_state.json'):
         (saved/'training_state'/name).write_text('{}')
     (saved/'training_state/training_step.json').write_text('{"step":500}')
-    data = {'env_eval_freq':0,'policy': {'type':'diffusion'}, 'dataset': {'root':str(cfg.dataset_root)},
+    data = {'env_eval_freq':0,'policy': {'type':'diffusion'}, 'dataset': {'root':str(cfg.dataset_root)}, 'output_dir':str(cfg.output/'training'),
             'steps':cfg.num_steps,'batch_size':cfg.batch_size,'seed':cfg.seed}
     path = saved/'pretrained_model/train_config.json';path.write_text(json.dumps(data))
     monkeypatch.setattr(run,'verify_local_dataset', lambda cfg: {'dataset_root':str(cfg.dataset_root)})
@@ -70,6 +70,8 @@ def test_local_resume_selects_complete_numeric_checkpoint_and_binds_input(tmp_pa
     with pytest.raises(ValueError,match='resume.policy.horizon'):_build_lerobot_command(cfg)
     cfg.extra_lerobot_args={'policy.horizon':16}
     assert _build_lerobot_command(cfg)==['lerobot-train',f'--config_path={path}','--resume=true']
+    data['output_dir']=str(tmp_path/'elsewhere');path.write_text(json.dumps(data))
+    with pytest.raises(ValueError,match='resume.output_dir'):_build_lerobot_command(cfg)
 
 
 @pytest.mark.parametrize('reward,ok', [(0.,True),([1.],False),(float('nan'),False)])
@@ -88,3 +90,27 @@ def test_tdmpc_refuses_non_scalar_or_nonfinite_stored_rewards(tmp_path,monkeypat
     result=schema.check_schema(cfg)
     assert result.severity==('ok' if ok else 'fail')
     if not ok:assert 'features.next.reward' in result.summary
+
+
+def test_local_vqbet_requires_explicit_cpu_before_native_factory(tmp_path,monkeypatch):
+    import tether.finetune.preflight.schema as schema
+    cfg=config(tmp_path);cfg.policy='vqbet';cfg.extra_lerobot_args={'policy.device':'mps'}
+    monkeypatch.setattr(schema,'verify_local_dataset',lambda cfg:{'info':{'features':{
+        'observation.state':{'dtype':'float32','shape':[6]},'action':{'dtype':'float32','shape':[6]},
+        'observation.images.wrist':{'dtype':'image','shape':[96,96,3]}}}})
+    result=schema.check_schema(cfg)
+    assert result.is_blocking and 'policy.device' in result.summary and 'refuses MPS' in result.summary
+
+
+def test_tdmpc_missing_stored_reward_is_named(tmp_path,monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import tether.finetune.preflight.schema as schema
+    cfg=config(tmp_path);cfg.policy='tdmpc'
+    path=cfg.dataset_root/'data/chunk-000/file-000.parquet';path.parent.mkdir(parents=True)
+    pq.write_table(pa.table({'index':[0]}),path)
+    monkeypatch.setattr(schema,'verify_local_dataset',lambda cfg:{'info':{'features':{
+        'observation.state':{'dtype':'float32','shape':[6]},'action':{'dtype':'float32','shape':[6]},
+        'observation.images.wrist':{'dtype':'image','shape':[96,96,3]},'next.reward':{'dtype':'float32','shape':[1]}}}})
+    result=schema.check_schema(cfg)
+    assert result.is_blocking and 'features.next.reward: missing stored column' in result.summary

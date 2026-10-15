@@ -213,6 +213,8 @@ def _build_lerobot_command(cfg: FinetuneConfig) -> list[str]:
                 raise ValueError("resume.policy.type: checkpoint family differs from reviewed recipe")
             if Path(saved["dataset"]["root"]).resolve() != Path(cfg.dataset_root).resolve():
                 raise ValueError("resume.dataset.root: checkpoint dataset differs from immutable snapshot")
+            if not saved.get("output_dir") or Path(saved["output_dir"]).resolve() != lerobot_output.resolve():
+                raise ValueError("resume.output_dir: checkpoint differs from the reviewed job directory")
             for key, expected in (("steps", cfg.num_steps), ("batch_size", cfg.batch_size), ("seed", cfg.seed)):
                 if saved.get(key) != expected:
                     raise ValueError(f"resume.{key}: checkpoint differs from reviewed settings")

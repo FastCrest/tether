@@ -163,6 +163,8 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
                     if min(shape[:2]) < 32 or shape[:2] == [32, 32]:
                         return PreflightCheck("schema", "fail", f"features.{key}.shape: Diffusion requires >=32 pixel sides and a ResNet18 initialization larger than 32 x 32")
             if cfg.policy in {"vqbet", "tdmpc"}:
+                if cfg.policy == "vqbet" and cfg.extra_lerobot_args.get("policy.device") != "cpu":
+                    return PreflightCheck("schema", "fail", "policy.device: this local VQ-BeT recipe requires explicit CPU; LeRobot 0.6.1 refuses MPS")
                 cameras = {key: f["shape"] for key, f in features.items() if f["dtype"] in {"image", "video"}}
                 if len(cameras) != 1:
                     return PreflightCheck("schema", "fail", f"features.observation.images: {cfg.policy} requires exactly one camera")
@@ -176,7 +178,10 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
                     import math
                     import pyarrow.parquet as pq
                     for path in sorted(Path(cfg.dataset_root).glob("data/**/*.parquet")):
-                        for batch in pq.ParquetFile(path).iter_batches(batch_size=1024, columns=["next.reward"]):
+                        parquet = pq.ParquetFile(path)
+                        if "next.reward" not in parquet.schema_arrow.names:
+                            return PreflightCheck("schema", "fail", f"features.next.reward: missing stored column in {path.name}")
+                        for batch in parquet.iter_batches(batch_size=1024, columns=["next.reward"]):
                             for value in batch.column(0).to_pylist():
                                 if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                                     return PreflightCheck("schema", "fail", f"features.next.reward: invalid scalar reward in {path.name}")
