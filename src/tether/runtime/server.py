@@ -717,6 +717,53 @@ warning will go away automatically and TRT EP will re-enable.
 # ─── End Blackwell auto-detect ──────────────────────────────────────────────
 
 
+def configure_action_buffer(
+    server: Any, *, replan_hz: float, execute_hz: float,
+    max_lateness_ms: float | None = None, max_age_ms: float | None = None,
+    clock: Any = time.monotonic,
+) -> Any:
+    """Configure the same buffer for every backend, including decomposed ones.
+
+    This does not turn HTTP /act into an execution loop. Integrations must
+    consume server._action_buffer.pop_next() themselves.
+    """
+    from tether.runtime.buffer import ActionChunkBuffer, compute_replan_window
+
+    config = getattr(server, "config", {})
+    chunk_size = (
+        getattr(server, "chunk_size", None)
+        or getattr(server, "action_horizon", None)
+        or config.get("chunk_size")
+        or config.get("decomposed", {}).get("chunk_size")
+        or 50
+    )
+    window = compute_replan_window(execute_hz, replan_hz, int(chunk_size))
+    server._action_buffer = ActionChunkBuffer(
+        capacity=window["capacity"], control_hz=execute_hz,
+        max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms, clock=clock,
+    )
+    server._replan_hz = replan_hz
+    server._execute_hz = execute_hz
+    server._replan_threshold = window["threshold_ratio"]
+    # RTC must retain the very same buffer after lifespan configuration.
+    adapter = getattr(server, "rtc_adapter", None)
+    if adapter is not None:
+        adapter.buffer = server._action_buffer
+    logger.info(
+        "replan configured: replan_hz=%g execute_hz=%g capacity=%d "
+        "max_lateness_ms=%s max_age_ms=%s; HTTP /act returns full chunks",
+        replan_hz, execute_hz, window["capacity"], max_lateness_ms, max_age_ms,
+    )
+    return server._action_buffer
+
+
+def _buffer_snapshot(server: Any) -> dict[str, Any] | None:
+    from dataclasses import asdict
+
+    buffer = getattr(server, "_action_buffer", None)
+    return asdict(buffer.stats()) if buffer is not None else None
+
+
 class TetherServer:
     """VLA inference server that loads exported models and serves predictions."""
 
@@ -735,6 +782,8 @@ class TetherServer:
         batch_timeout_ms: float = 5.0,
         inference_executor_workers: int = 1,
         inference_executor_queue: int = 8,
+        max_lateness_ms: float | None = None,
+        max_age_ms: float | None = None,
     ):
         """Create the server.
 
@@ -766,7 +815,12 @@ class TetherServer:
                 to offload synchronous predict calls.
             inference_executor_queue: accepted-but-not-yet-running inference
                 submissions before async entrypoints reject overload.
+            max_lateness_ms: optional per-action buffer lateness bound in ms.
+                OFF by default. Applied when configure_replan builds a buffer.
+            max_age_ms: independent optional total chunk age cap in ms.
         """
+        self._max_lateness_ms = max_lateness_ms
+        self._max_age_ms = max_age_ms
         self.export_dir = Path(export_dir)
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.num_denoising_steps = num_denoising_steps
@@ -842,35 +896,28 @@ class TetherServer:
         self,
         replan_hz: float,
         execute_hz: float,
+        *,
+        max_lateness_ms: float | None = None,
+        max_age_ms: float | None = None,
+        clock: Any = time.monotonic,
     ) -> None:
         """Enable async replan-while-execute buffering with a ring buffer.
 
-        When configured, callers that pop from the buffer receive single
-        actions instead of full chunks. The /act handler refills the
-        buffer by running predict() when should_replan() crosses the
-        threshold. See tether/runtime/buffer.py for the sliding_window
-        semantics.
+        Integrations must push predictions and call pop_next themselves.
+        HTTP /act returns full chunks and does not consume this buffer.
+        max_lateness_ms and max_age_ms use milliseconds; None uses the
+        constructor setting, which defaults to OFF. The injected clock
+        returns monotonic seconds. See tether/runtime/buffer.py.
 
         Typical robot setup: execute_hz=100, replan_hz=20 (matches the
         Physical Intelligence pattern). action_buffer capacity is auto-
         sized from the ratio.
         """
-        from tether.runtime.buffer import ActionChunkBuffer, compute_replan_window
-
-        window = compute_replan_window(
-            execute_hz=execute_hz,
-            replan_hz=replan_hz,
-            chunk_size=self.chunk_size,
-        )
-        self._action_buffer = ActionChunkBuffer(capacity=window["capacity"])
-        self._replan_hz = replan_hz
-        self._execute_hz = execute_hz
-        self._replan_threshold = window["threshold_ratio"]
-        logger.info(
-            "replan configured: replan_hz=%g execute_hz=%g "
-            "buffer capacity=%d threshold_ratio=%.2f",
-            replan_hz, execute_hz, window["capacity"],
-            window["threshold_ratio"],
+        configure_action_buffer(
+            self, replan_hz=replan_hz, execute_hz=execute_hz,
+            max_lateness_ms=(self._max_lateness_ms if max_lateness_ms is None else max_lateness_ms),
+            max_age_ms=(self._max_age_ms if max_age_ms is None else max_age_ms),
+            clock=clock,
         )
 
     def _latency_percentiles(self) -> dict[str, float]:
@@ -1981,6 +2028,8 @@ def create_app(
     # exports that predate the `action_units` field (see
     # tether.safety.guard.resolve_serve_action_units).
     action_units: dict | None = None,
+    max_lateness_ms: float | None = None,
+    max_age_ms: float | None = None,
 ) -> Any:
     """Create a FastAPI app for serving VLA predictions.
 
@@ -2030,6 +2079,18 @@ def create_app(
     `inference_executor_full` error result instead of growing an unbounded
     default-executor queue.
     """
+    if max_lateness_ms is not None or max_age_ms is not None:
+        # Refuse invalid opt-in settings before loading an export.
+        from tether.runtime.buffer import ActionChunkBuffer
+        ActionChunkBuffer(
+            max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
+            control_hz=execute_hz if execute_hz is not None else 100.0,
+        )
+        if replan_hz is None or execute_hz is None:
+            raise ValueError(
+                "chunk expiry requires replan_hz and execute_hz; HTTP /act returns full chunks"
+            )
+
     if rtc_config is not None and getattr(rtc_config, "enabled", False):
         raise RuntimeError(
             "RTC serving is not connected to the HTTP /act inference path. "
@@ -2440,7 +2501,11 @@ def create_app(
                     or _monolithic_cfg.get("decomposed", {}).get("chunk_size")
                     or 50
                 )
-                _buf = ActionChunkBuffer(capacity=int(_chunk))
+                _buf = ActionChunkBuffer(
+                    capacity=int(_chunk),
+                    control_hz=execute_hz or rtc_config.execute_hz,
+                    max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
+                )
                 # Stash on server too so any other RTC consumer can find it.
                 server._action_buffer = _buf  # type: ignore[attr-defined]
                 logger.info(
@@ -2454,7 +2519,11 @@ def create_app(
                     # replan tracker for any other code paths that read
                     # _replan_hz/_execute_hz. Best-effort.
                     try:
-                        server.configure_replan(replan_hz=20.0, execute_hz=100.0)
+                        _buf = configure_action_buffer(
+                            server, replan_hz=replan_hz or rtc_config.replan_hz,
+                            execute_hz=execute_hz or rtc_config.execute_hz,
+                            max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
+                        )
                     except Exception as e:
                         logger.warning(
                             "configure_replan call failed (buffer was built "
@@ -2915,15 +2984,16 @@ def create_app(
                     int(shadow_queue_size),
                 )
         # Only configure replan buffering after load() so chunk_size is known.
-        if replan_hz is not None and execute_hz is not None and hasattr(
-            server, "configure_replan"
-        ):
+        if replan_hz is not None and execute_hz is not None:
             try:
-                server.configure_replan(
-                    replan_hz=replan_hz, execute_hz=execute_hz
+                configure_action_buffer(
+                    server, replan_hz=replan_hz, execute_hz=execute_hz,
+                    max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
                 )
-            except Exception as e:
-                logger.warning("replan config failed, continuing without: %s", e)
+            except Exception as exc:
+                if max_lateness_ms is not None or max_age_ms is not None:
+                    raise  # Requested expiry must never silently disable itself.
+                logger.warning("replan config failed, continuing without: %s", exc)
         # Warm up: run one inference so any lazy-build (TRT engine build,
         # ORT graph optimization passes) happens before users hit /act.
         # Without this, the first /act request takes 30-90s with TRT EP enabled
@@ -3489,6 +3559,13 @@ def create_app(
         Returns text/plain with Prometheus expfmt v0.0.4 (or v1.0.0 from
         prometheus_client 0.20+). Skipped via --disable-metrics flag (TBD)."""
         from fastapi.responses import Response
+        snapshot = _buffer_snapshot(server)
+        if snapshot is not None:
+            try:
+                from tether.observability import set_action_buffer_stats
+                set_action_buffer_stats(snapshot)
+            except ImportError:
+                pass
         return Response(
             content=render_metrics(),
             media_type=METRICS_CONTENT_TYPE,
@@ -4042,6 +4119,7 @@ def create_app(
                     routing=_routing_for_record,
                     guard=_guard_for_record,
                     rtc=_rtc_for_record,
+                    action_buffer=_buffer_snapshot(server),
                     cache=result.get("cache"),
                 )
                 if rec_seq >= 0:
@@ -4162,6 +4240,15 @@ def create_app(
     async def config(_auth: None = Depends(_require_api_key)):
         cfg = dict(server.config) if isinstance(server.config, dict) else {}
         cfg["robot_id"] = getattr(server, "robot_id", "") or ""
+        buffer = getattr(server, "_action_buffer", None)
+        if buffer is not None:
+            cfg["action_buffer"] = {
+                "control_hz": buffer.control_hz,
+                "max_lateness_ms": buffer.max_lateness_ms,
+                "max_age_ms": buffer.max_age_ms,
+                "stats": _buffer_snapshot(server),
+                "http_act_consumes_buffer": False,
+            }
         return JSONResponse(content=cfg)
 
     @app.get("/guard/status")
