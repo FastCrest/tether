@@ -29,7 +29,30 @@ __all__ = [
     "SUPPORTED_MODEL_TYPES",
     "UNSUPPORTED_MODEL_MESSAGE",
     "load_fixtures",
+    # Customer SDK surface — re-exported from tether.client so a bare
+    # `pip install fastcrest-tether` gives `from tether import TetherClient`.
+    # httpx is a base dep, so this is cheap (no torch); lazy-loaded below.
+    "TetherClient",
+    "TetherAsyncClient",
+    "TetherClientError",
+    "TetherAuthError",
+    "TetherServerDegradedError",
+    "TetherServerNotReadyError",
+    "TetherValidationError",
+    "encode_image",
 ]
+
+# Names re-exported from tether.client (lazy — see __getattr__).
+_CLIENT_EXPORTS = frozenset({
+    "TetherClient",
+    "TetherAsyncClient",
+    "TetherClientError",
+    "TetherAuthError",
+    "TetherServerDegradedError",
+    "TetherServerNotReadyError",
+    "TetherValidationError",
+    "encode_image",
+})
 
 
 # ─── ORT-TRT EP first-class support (v0.7) ──────────────────────────────────
@@ -125,7 +148,6 @@ def _eager_dlopen_nvidia_libs() -> None:
     cached handle. No-op on macOS/Windows or when libs don't exist.
     """
     import ctypes
-    import glob
     import os
     import sys
 
@@ -193,4 +215,7 @@ def __getattr__(name: str):
     if name == "load_fixtures":
         from tether.fixtures import load_fixtures
         return load_fixtures
+    if name in _CLIENT_EXPORTS:
+        import tether.client as _client
+        return getattr(_client, name)
     raise AttributeError(f"module 'tether' has no attribute {name!r}")

@@ -42,6 +42,41 @@ from tether.client.client import (
     encode_image,
 )
 
+class ReflexClient(TetherClient):
+    """Deprecated alias for :class:`TetherClient`. Removed in v0.14.0.
+
+    Kept so pre-rename code (`from tether.client import ReflexClient`) keeps
+    working through the v0.13.x compat window, matching the `reflex` import
+    shim's removal schedule.
+    """
+
+    def __init__(self, *args, **kwargs):
+        import warnings
+
+        warnings.warn(
+            "ReflexClient is deprecated; use TetherClient. "
+            "The alias is removed in tether v0.14.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class ReflexAsyncClient(TetherAsyncClient):
+    """Deprecated alias for :class:`TetherAsyncClient`. Removed in v0.14.0."""
+
+    def __init__(self, *args, **kwargs):
+        import warnings
+
+        warnings.warn(
+            "ReflexAsyncClient is deprecated; use TetherAsyncClient. "
+            "The alias is removed in tether v0.14.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
+
+
 __all__ = [
     "TetherClient",
     "TetherAsyncClient",
@@ -51,4 +86,7 @@ __all__ = [
     "TetherServerNotReadyError",
     "TetherValidationError",
     "encode_image",
+    # Deprecated rename-compat aliases (removed v0.14.0).
+    "ReflexClient",
+    "ReflexAsyncClient",
 ]
