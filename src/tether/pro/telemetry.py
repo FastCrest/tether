@@ -156,6 +156,13 @@ def emit(
     if _is_disabled():
         logger.debug("Telemetry disabled via TETHER_NO_TELEMETRY env; skipping.")
         return False
+    if not _is_telemetry_enabled_by_onboarding():
+        # The first-run prompt and `tether config set telemetry off` write the
+        # onboarding telemetry_enabled flag. This live heartbeat path used to
+        # ignore it entirely (only the dead emit_free path honored it), so a
+        # user who answered "no" kept emitting. Honor it here.
+        logger.debug("Telemetry disabled via onboarding/config opt-out; skipping.")
+        return False
     if not customer_id:
         logger.debug("Telemetry skipped: no customer_id (free tier).")
         return False
@@ -297,9 +304,14 @@ def _write_free_cache() -> None:
 
 
 def _is_telemetry_enabled_by_onboarding() -> bool:
-    """Check onboarding.json for telemetry opt-out. Returns True if enabled or missing."""
+    """Check onboarding.json for the telemetry opt-out. True if enabled/missing.
+
+    Honors TETHER_HOME so a custom config home reads the right onboarding.json
+    (the free-tier cache already respects it — these must agree).
+    """
     try:
-        onboarding_path = Path("~/.tether/onboarding.json").expanduser()
+        home = Path(os.environ.get("TETHER_HOME", Path.home() / ".tether"))
+        onboarding_path = home / "onboarding.json"
         if not onboarding_path.exists():
             return True  # default: telemetry on
         data = json.loads(onboarding_path.read_text())
