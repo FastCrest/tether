@@ -291,11 +291,13 @@ def _verify_manifest(packet_dir: Path, *, require_hashes: bool) -> dict[str, Any
     )
 
     mismatches: list[dict[str, Any]] = []
+    listed_names: set[str] = set()
     for item in manifest.get("files") or []:
         name = item.get("name")
         if not name:
             mismatches.append({"name": "", "reason": "missing name"})
             continue
+        listed_names.add(str(name))
         path = packet_dir / str(name)
         if not path.exists():
             mismatches.append({"name": name, "reason": "missing file"})
@@ -305,15 +307,28 @@ def _verify_manifest(packet_dir: Path, *, require_hashes: bool) -> dict[str, Any
         if expected_size is not None and int(expected_size) != path.stat().st_size:
             mismatches.append({"name": name, "reason": "size mismatch"})
             continue
-        if expected_sha and _sha256_file(path) != expected_sha:
+        if not expected_sha:
+            mismatches.append({"name": name, "reason": "missing sha256"})
+        elif _sha256_file(path) != expected_sha:
             mismatches.append({"name": name, "reason": "sha256 mismatch"})
+
+    # Bind each decision input, including the sidecar that overrides the
+    # embedded policy report. Unrelated operator files need not be listed.
+    required_names = {"deployment-proof.json"}
+    if (packet_dir / "policy-diff.json").exists():
+        required_names.add("policy-diff.json")
+    for name in sorted(required_names - listed_names):
+        mismatches.append({"name": name, "reason": "missing manifest entry"})
 
     _add_check(
         checks,
         "packet_manifest_hashes",
         not mismatches or not require_hashes,
         category="reproducibility",
-        expected="all MANIFEST.json hashes match" if require_hashes else "optional",
+        expected=(
+            "decision inputs are listed and all MANIFEST.json hashes match"
+            if require_hashes else "optional"
+        ),
         actual=mismatches,
         remediation="Do not promote from a modified proof packet; rerun `tether prove`.",
     )
