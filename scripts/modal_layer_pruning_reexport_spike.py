@@ -216,7 +216,7 @@ def reexport_spike_modal(
 
     logger.info("[spike] exporting pruned prefix → %s", pruned_path)
     from onnx_diagnostic.torch_export_patches import torch_export_patches
-    from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
+    from tether.exporters.monolithic import _repair_exported_onnx
 
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
@@ -235,7 +235,7 @@ def reexport_spike_modal(
     )
     logger.info("[spike] torch.onnx.export: %.1fs", time.time() - t0)
 
-    cast_fixes = _fix_onnx_where_dtype_mismatches(pruned_path)
+    cast_fixes = _repair_exported_onnx(pruned_path)
     logger.info("[spike] post-export Cast fixes: %d", cast_fixes)
 
     pruned_size_mb = pruned_path.stat().st_size / (1024 * 1024)

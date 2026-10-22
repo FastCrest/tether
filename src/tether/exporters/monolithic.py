@@ -687,13 +687,48 @@ def _force_eager_attn(model: Any) -> None:
         model.config._attn_implementation = "eager"
 
 
-def _fix_onnx_where_dtype_mismatches(onnx_path: Path) -> int:
-    """Post-export pass: torch.onnx.export sometimes lowers aten::index_put to
-    ONNX Where(bool, int64, float32). onnxruntime rejects that at load time.
-    Walk the graph, find such Where ops, and insert Cast nodes that coerce
-    the mismatched branch to the declared output dtype.
+def _strip_default_scatternd_reduction(graph: Any) -> int:
+    """Drop ``reduction="none"`` from ScatterND nodes; return how many.
 
-    Returns count of fixes applied.
+    torch.onnx.export writes the attribute explicitly on every ScatterND it
+    emits for slice/index assignment (542 nodes in SmolVLA-base at torch 2.10).
+    "none" is the ONNX default, so removing it changes nothing numerically, but
+    TensorRT 10.3-10.7's ONNX parser rejects ScatterND whenever the attribute
+    is *present* (onnx-tensorrt ``onnxOpImporters.cpp``, release/10.3-GA:
+    ``ASSERT_NODE(!attrs.count("reduction"), ...)``), which is what pushed whole
+    VLA graphs off the TensorRT EP on JetPack 6.2. Real reductions ("add",
+    "mul", ...) are kept; they are not equivalent and stay off TensorRT.
+    Subgraphs are included so If/Loop bodies are cleaned too.
+    """
+    from onnx import AttributeProto
+
+    stripped = 0
+    for node in graph.node:
+        if node.op_type == "ScatterND" and node.domain in ("", "ai.onnx"):
+            for index, attr in enumerate(node.attribute):
+                if attr.name == "reduction" and attr.s == b"none":
+                    del node.attribute[index]
+                    stripped += 1
+                    break
+        for attr in node.attribute:
+            if attr.type == AttributeProto.GRAPH:
+                stripped += _strip_default_scatternd_reduction(attr.g)
+            elif attr.type == AttributeProto.GRAPHS:
+                stripped += sum(_strip_default_scatternd_reduction(g) for g in attr.graphs)
+    return stripped
+
+
+def _repair_exported_onnx(onnx_path: Path) -> int:
+    """Post-export repairs every exporter runs on its ``torch.onnx.export`` output.
+
+    1. torch.onnx.export sometimes lowers aten::index_put to ONNX
+       Where(bool, int64, float32), which onnxruntime rejects at load time.
+       Insert Cast nodes that coerce the mismatched branch to the declared
+       output dtype.
+    2. Remove the explicit default ``reduction="none"`` from ScatterND so
+       TensorRT accepts the node (see ``_strip_default_scatternd_reduction``).
+
+    Returns the count of fixes applied.
     """
     import onnx
     from onnx import helper, TensorProto
@@ -758,10 +793,16 @@ def _fix_onnx_where_dtype_mismatches(onnx_path: Path) -> int:
     if fixes > 0:
         model.graph.ClearField("node")
         model.graph.node.extend(new_nodes)
+    stripped = _strip_default_scatternd_reduction(model.graph)
+    for function in model.functions:
+        stripped += _strip_default_scatternd_reduction(function)
+    if stripped:
+        logger.info("stripped default reduction from %d ScatterND nodes", stripped)
+    if fixes or stripped:
         with open(onnx_path, "wb") as f:
             f.write(model.SerializeToString())
 
-    return fixes
+    return fixes + stripped
 
 
 def export_smolvla_monolithic(
@@ -862,7 +903,7 @@ def export_smolvla_monolithic(
     )
     logger.info("[smolvla] ONNX conversion: %.1fs", time.time() - t0)
 
-    fixes = _fix_onnx_where_dtype_mismatches(onnx_path)
+    fixes = _repair_exported_onnx(onnx_path)
     logger.info("[smolvla] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
@@ -1024,7 +1065,7 @@ def export_pi0_monolithic(
     )
     logger.info("[pi0] ONNX conversion: %.1fs", time.time() - t0)
 
-    fixes = _fix_onnx_where_dtype_mismatches(onnx_path)
+    fixes = _repair_exported_onnx(onnx_path)
     logger.info("[pi0] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
@@ -1217,7 +1258,7 @@ def export_pi05_monolithic(
     )
     logger.info("[pi05] ONNX conversion: %.1fs", time.time() - t0)
 
-    fixes = _fix_onnx_where_dtype_mismatches(onnx_path)
+    fixes = _repair_exported_onnx(onnx_path)
     logger.info("[pi05] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(
@@ -1508,7 +1549,7 @@ def export_snapflow_student_monolithic(
     )
     logger.info("[snapflow-export] ONNX conversion: %.1fs", time.time() - t0)
 
-    fixes = _fix_onnx_where_dtype_mismatches(onnx_path)
+    fixes = _repair_exported_onnx(onnx_path)
     logger.info("[snapflow-export] post-export Cast fixes: %d", fixes)
 
     _write_tether_config(

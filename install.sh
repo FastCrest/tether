@@ -6,7 +6,7 @@
 # Usage:
 #   curl -sSf https://fastcrest.com/install | sh
 #   curl -sSf https://fastcrest.com/install | sh -s -- --extras serve,gpu
-#   curl -sSf https://fastcrest.com/install | sh -s -- --jetson --jetpack 6.2
+#   curl -sSf https://fastcrest.com/install | sh -s -- --jetson --jetpack 6.2   # 6.1/6.2/6.2.1 only
 #
 # Source: https://github.com/FastCrest/tether
 set -eu
@@ -94,17 +94,45 @@ if [ -n "$JETSON_MODEL" ]; then
   esac
 fi
 
-# Detect JetPack version from nv_tegra_release if available
+# Detect the Jetson AI Lab wheel index. /etc/nv_tegra_release carries the L4T
+# release ("# R36 (release), REVISION: 4.3" = L4T 36.4.3 = JetPack 6.2), not
+# the JetPack version. Every L4T 36.4.x release (JetPack 6.1, 6.2, 6.2.1) ships
+# CUDA 12.6 / TensorRT 10.3, so all of them use the cu126 index. The cu129
+# index needs CUDA 12.9, which no JetPack 6 release ships by default.
+# TETHER_INSTALL_ROOTFS points detection at another root (tests only).
+ROOTFS="${TETHER_INSTALL_ROOTFS:-}"
+L4T_RELEASE=""
+JETSON_INDEX=""
 if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
-  if [ -r /etc/nv_tegra_release ]; then
-    # Format: # R36 (release), REVISION: 2.2, GCID: 34907586, BOARD: ...
-    # R36 = JetPack 6.x
-    JETPACK_VERSION="$(head -1 /etc/nv_tegra_release | grep -oP 'REVISION: \K[0-9.]+' || true)"
+  if [ -r "$ROOTFS/etc/nv_tegra_release" ]; then
+    L4T_RELEASE="$(sed -n 's/^# R\([0-9][0-9]*\) (release), REVISION: \([0-9][0-9.]*\).*/\1 \2/p' "$ROOTFS/etc/nv_tegra_release" | head -n 1 \
+      | awk '{ n = split($2, r, "."); printf "%s.%s.%s", $1, r[1], (n > 1 && r[2] != "" ? r[2] : 0) }')"
   fi
-  # Override with explicit arg
   if [ -n "$JETPACK_ARG" ]; then
     JETPACK_VERSION="$JETPACK_ARG"
+  else
+    case "$L4T_RELEASE" in
+      36.4.4) JETPACK_VERSION="6.2.1" ;;
+      36.4.3) JETPACK_VERSION="6.2" ;;
+      36.4.0) JETPACK_VERSION="6.1" ;;
+      36.3.0) JETPACK_VERSION="6.0" ;;
+      35.*) JETPACK_VERSION="5" ;;
+      36.4.*) JETPACK_VERSION="6.2.x" ;;
+      "") JETPACK_VERSION="" ;;
+      *) JETPACK_VERSION="unknown (L4T $L4T_RELEASE)" ;;
+    esac
   fi
+  case "$JETPACK_VERSION" in
+    6.1|6.1.*|6.2|6.2.*) JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126" ;;
+    "")
+      fail "Could not read the L4T release from /etc/nv_tegra_release, so the CUDA wheel index is unknown."
+      note "  Pass your JetPack version explicitly, e.g. --jetpack 6.2"
+      exit 1 ;;
+    *)
+      fail "JetPack $JETPACK_VERSION is not supported by this installer."
+      note "  Supported: JetPack 6.1 / 6.2 / 6.2.1 (L4T 36.4.x, CUDA 12.6). Reflash with JetPack 6.2."
+      exit 1 ;;
+  esac
 fi
 
 # -- Branch on hardware -------------------------------------------------------
@@ -178,11 +206,14 @@ if [ -z "$EXTRAS" ]; then
     # which requires Python >=3.12. JetPack 6 ships Python 3.10. Export
     # on a Python 3.12+ host, then serve the ONNX on the Jetson.
     #
-    # Instead we install [serve] only, and pre-install numpy<2, torch, and
+    # Instead we install [jetson], and pre-install numpy<2, torch, and
     # onnxruntime-gpu from the Jetson AI Lab index BEFORE tether so
     # pip doesn't pull incompatible x86_64 or numpy-2.x-linked wheels.
-    EXTRAS="serve"
-    ok "Detected Jetson ($JETSON_MODEL) → installing with [serve]"
+    # Not [serve]: it requires the CPU `onnxruntime` wheel, which installs
+    # into the same `onnxruntime/` package directory and replaces the GPU
+    # build, silently removing the CUDA and TensorRT providers.
+    EXTRAS="jetson"
+    ok "Detected Jetson ($JETSON_MODEL) → installing with [jetson]"
     note "  Jetson-specific GPU deps (numpy<2, torch, ort) will be installed first."
     note "  [monolithic] skipped — lerobot requires Python >=3.12 (Jetson has 3.10)."
     note "  Export on a desktop/cloud host, then serve the ONNX here."
@@ -230,24 +261,7 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
   echo
   info "Pre-installing Jetson GPU dependencies..."
 
-  # JetPack version → index URL mapping
-  # Default to JP6.0/6.1 (cu126) since that's the current standard.
-  # JP6.2+ uses cu129 and has cp310 + cp312 wheels.
-  case "${JETPACK_VERSION:-}" in
-    6.2*|6.3*|6.4*)
-      JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu129"
-      ok "Detected JetPack $JETPACK_VERSION → using cu129 index"
-      ;;
-    6.0*|6.1*|""|*)
-      JETSON_INDEX="https://pypi.jetson-ai-lab.io/jp6/cu126"
-      if [ -n "${JETPACK_VERSION:-}" ]; then
-        ok "Detected JetPack $JETPACK_VERSION → using cu126 index"
-      else
-        warn "Could not detect JetPack version. Assuming JetPack 6.0/6.1 (cu126)."
-        note "  If you are on JetPack 6.2+, run with: --jetpack 6.2"
-      fi
-      ;;
-  esac
+  ok "JetPack $JETPACK_VERSION (L4T ${L4T_RELEASE:-from --jetpack}) → CUDA 12.6 index $JETSON_INDEX"
 
   # 1. Pin numpy<2 FIRST — Jetson AI Lab torch and ort wheels are compiled
   #    against numpy 1.x C ABI. numpy 2.x causes:
@@ -260,13 +274,14 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
   if "$PYTHON" -m pip install --index-url "$JETSON_INDEX" torch torchvision; then
     ok "Installed torch (Jetson AI Lab, $JETSON_INDEX)"
   else
-    warn "Jetson AI Lab torch install failed — pip will fall back to PyPI torch."
-    note "  PyPI torch may be CPU-only on aarch64."
+    fail "Jetson AI Lab torch install failed. Not continuing: PyPI aarch64 torch is CPU-only."
+    exit 1
   fi
 
-  # 3. Install Jetson-native onnxruntime-gpu
+  # 3. Install Jetson-native onnxruntime-gpu. 1.24.0 is the newest cp310
+  #    build on the cu126 index; PyPI has no aarch64 onnxruntime-gpu at all.
   note "  Step 3/3: Installing onnxruntime-gpu from Jetson AI Lab index..."
-  if "$PYTHON" -m pip install --index-url "$JETSON_INDEX" onnxruntime-gpu; then
+  if "$PYTHON" -m pip install --index-url "$JETSON_INDEX" 'onnxruntime-gpu==1.24.0'; then
     ok "Installed onnxruntime-gpu (Jetson AI Lab, $JETSON_INDEX)"
   else
     echo
@@ -274,9 +289,10 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
     info "Manual install command:"
     note "  $PYTHON -m pip install 'numpy<2'"
     note "  $PYTHON -m pip install --index-url $JETSON_INDEX torch torchvision"
-    note "  $PYTHON -m pip install --index-url $JETSON_INDEX onnxruntime-gpu"
+    note "  $PYTHON -m pip install --index-url $JETSON_INDEX 'onnxruntime-gpu==1.24.0'"
     echo
-    warn "Tether will be installed but inference will fall back to CPU (slow)."
+    fail "Not installing Tether without a GPU onnxruntime: it would run on CPU."
+    exit 1
   fi
   echo
 fi

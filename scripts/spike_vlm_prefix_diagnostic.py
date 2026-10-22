@@ -3,7 +3,7 @@
 
 Per vlm_prefix capture divergence investigation (2026-04-24), the suspected
 root cause is the post-export Where+Cast workaround in
-`_fix_onnx_where_dtype_mismatches()`. CUDA graph capture bakes dtype
+`_repair_exported_onnx()`. CUDA graph capture bakes dtype
 assumptions at capture time; replay reads with wrong precision.
 
 This script:

@@ -254,7 +254,7 @@ def export(family, path, out_dir):
         output_names=["actions"],
         opset_version=19,
     )
-    monolithic._fix_onnx_where_dtype_mismatches(onnx_path)
+    monolithic._repair_exported_onnx(onnx_path)
     session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     (actions,) = session.run(None, {n: v.numpy() for n, v in feed.items()})
     actual = torch.from_numpy(np.asarray(actions))

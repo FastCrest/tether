@@ -202,11 +202,15 @@ def make_ort_session_options(onnx_path: str | Path | None = None) -> Any:
 def onnx_has_scatternd_reduction(onnx_path: str | Path | None) -> bool:
     """Return True for ONNX graphs TensorRT 10.x cannot import efficiently.
 
-    TensorRT 10.5 rejects ScatterND nodes carrying the ONNX ``reduction``
-    attribute. ORT can still fall those nodes back to CUDA, but large VLA
-    graphs may spend minutes attempting many unsupported TRT subgraphs before
-    benching. Preflight lets us choose CUDA EP directly and report that
-    honestly instead of timing out during provider initialization.
+    TensorRT 10.3-10.7 (JetPack 6.x ships 10.3) reject any ScatterND that
+    carries the ONNX ``reduction`` attribute, even the default "none"
+    (onnx-tensorrt ``onnxOpImporters.cpp`` release/10.3-GA). ORT can still fall
+    those nodes back to CUDA, but large VLA graphs may spend minutes attempting
+    many unsupported TRT subgraphs before benching. Preflight lets us choose
+    CUDA EP directly and report that honestly instead of timing out during
+    provider initialization. Exports from this Tether strip the default
+    "none" (``exporters.monolithic._strip_default_scatternd_reduction``), so a
+    hit means a real reduction or an export made before that fix.
     """
     if onnx_path is None:
         return False
@@ -307,7 +311,10 @@ def build_ort_provider_plan(
         disabled_reason = "Blackwell GPU detected"
         log_blackwell_trt_warning()
     elif scatternd_reduction:
-        disabled_reason = "ScatterND reduction unsupported by TensorRT EP"
+        disabled_reason = (
+            "ScatterND reduction unsupported by TensorRT EP (exports made before "
+            "the reduction='none' strip must be re-exported)"
+        )
     elif large_external_data:
         disabled_reason = (
             "large external-data ONNX; TensorRT EP/ORT graph optimizer can "

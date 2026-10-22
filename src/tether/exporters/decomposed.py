@@ -421,7 +421,7 @@ def _export_pi05_prefix_pass(
     import torch
     from tether.exporters.monolithic import export_patches
 
-    from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
+    from tether.exporters.monolithic import _repair_exported_onnx
 
     cfg = policy.config
     B = _PI05_BATCH_SIZE
@@ -469,7 +469,7 @@ def _export_pi05_prefix_pass(
     )
     logger.info("[decomposed] prefix ONNX conversion: %.1fs", time.time() - t0)
 
-    prefix_fixes = _fix_onnx_where_dtype_mismatches(prefix_path)
+    prefix_fixes = _repair_exported_onnx(prefix_path)
     logger.info("[decomposed] prefix Cast fixes: %d", prefix_fixes)
 
     del prefix_wrapper, ep_prefix
@@ -505,7 +505,7 @@ def _export_pi05_expert_pass(
     import torch
     from tether.exporters.monolithic import export_patches
 
-    from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
+    from tether.exporters.monolithic import _repair_exported_onnx
 
     cfg = policy.config
     B = _PI05_BATCH_SIZE
@@ -595,7 +595,7 @@ def _export_pi05_expert_pass(
     )
     logger.info("[decomposed] expert ONNX conversion: %.1fs", time.time() - t0)
 
-    expert_fixes = _fix_onnx_where_dtype_mismatches(expert_path)
+    expert_fixes = _repair_exported_onnx(expert_path)
     logger.info("[decomposed] expert Cast fixes: %d", expert_fixes)
 
     del expert_wrapper, ep_expert
