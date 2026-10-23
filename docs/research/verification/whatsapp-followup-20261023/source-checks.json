@@ -1,0 +1,33 @@
+{
+  "base_commit": "14c3a917e4118f1a0a1d47e4d3a6cde4a3fc53c5",
+  "scope": "344 affected source cases, no GPU or physical operation",
+  "passed": 344,
+  "existing_deprecation_warnings": 6,
+  "seconds": 8.38,
+  "source_sha256": {
+    "src/tether/chat/console.py": "daee902506c2143efd90bcfc701280595ef4c200c47ebec6c97d574c0681a160",
+    "src/tether/cli.py": "5f5614a6810131432206f9d007028bf532ca3bc3ac25622eca30f1aabc42999e",
+    "src/tether/curate/opt_in_cli.py": "aa298c44f03a53db994d94a7ad7671a2d8b826babb02dfb57b4ad1797ea3bb58",
+    "src/tether/deploy_proof.py": "126f00aef72504514c721cd79b994948db157d8e892692da3be29aec40661ed3",
+    "src/tether/eval/cli.py": "640650cb81bc27d277ef8b5f9eb894410ba4c58d1a695d2f3e8f3dc7ae791dd4",
+    "src/tether/finetune/cli.py": "762a026a855a69fe72954583dd850f3f4da079775ff05f8cc313ba02b24e73ef",
+    "src/tether/finetune/cli_distill.py": "d37dc5f425f8c957ea425c396b63ba4b034d44d866e2b3a102d3b0c0d0fca2b0",
+    "src/tether/realtime_cert.py": "8c5fde0e3a2df32bfa2a4f38d7880273dd6afc1e6cbed3950faf1192057a8e64",
+    "src/tether/runtime/hardware_probe.py": "9d042da756b95859bdfe5b1bb3e4c1a2f4eb99fc725c4ac282f8ee62891b08d6",
+    "tests/test_deploy_proof.py": "07cf17c688c509f21c8c424a0e9c040b7111647a54277920a091ec090428bf27",
+    "tests/test_one_command_deploy.py": "ec75ae8a2f0eff8d6f110b8e540d3e93712417c19c755b6d605b6784581f4b79",
+    "src/tether/console.py": "16af3712fef90df4a66df9a20516ebcd93341611d91ab46ae5256ba083b78f66",
+    "tests/test_console_encoding.py": "e864fe9d897fa3d8bc6ecf6ca0e9b48f85ab5ecdc12f179bfca4b69d9c6b793d",
+    "tests/test_hardware_probe_board_identity.py": "d0be0b458d04eb09bd4082da5edb01a5c7ac827aff3c1d81f26581c68e3eab9e",
+    "tests/test_proof_latency_precision.py": "6b32dbdc068313686c2fdb7a5211ec930a1906e927d5cf9252977cb7fa3a3dc8"
+  },
+  "reviews": [
+    "Encoding console and ordinary finite latency changes reviewed; no remaining finding",
+    "Ambiguous Jetson go admission reviewed after correction; no remaining finding",
+    "Nonfinite certificate rate/threshold admission reviewed after correction; no remaining finding"
+  ],
+  "post_type_correction": {
+    "passed": 58,
+    "scope": "Hardware/go affected cases after board_class variable narrowing; other source inputs unchanged"
+  }
+}

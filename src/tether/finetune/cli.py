@@ -13,7 +13,8 @@ import logging
 from pathlib import Path
 
 import typer
-from rich.console import Console
+
+from tether.console import Console
 
 console = Console()
 logger = logging.getLogger(__name__)

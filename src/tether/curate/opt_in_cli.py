@@ -19,9 +19,9 @@ import logging
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
+from tether.console import Console
 from tether.curate import consent as curate_consent
 from tether.curate import messaging
 

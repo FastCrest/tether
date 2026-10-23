@@ -139,16 +139,17 @@ def build_file_manifest(root: str | Path) -> dict[str, Any]:
 
 
 def _percentile(values: list[float], pct: float) -> float:
+    # These values feed profile/certificate gates; rounding belongs in presentation.
     if not values:
         return 0.0
     ordered = sorted(values)
     if len(ordered) == 1:
-        return round(float(ordered[0]), 1)
+        return float(ordered[0])
     rank = (len(ordered) - 1) * (pct / 100.0)
     lo = int(rank)
     hi = min(lo + 1, len(ordered) - 1)
     frac = rank - lo
-    return round(float(ordered[lo] + (ordered[hi] - ordered[lo]) * frac), 1)
+    return float(ordered[lo] + (ordered[hi] - ordered[lo]) * frac)
 
 
 def summarize_deploy_latency(
@@ -156,7 +157,7 @@ def summarize_deploy_latency(
     *,
     control_hz: float | None = None,
 ) -> dict[str, Any]:
-    """Summarize /act latency with deployment-oriented fields."""
+    """Summarize /act latency without rounding inputs to decision thresholds."""
 
     def _values(key: str, source: list[dict[str, Any]]) -> list[float]:
         return [
@@ -172,7 +173,7 @@ def summarize_deploy_latency(
             "p50_ms": _percentile(values, 50.0),
             "p95_ms": _percentile(values, 95.0),
             "p99_ms": _percentile(values, 99.0),
-            "max_ms": round(max(values), 1),
+            "max_ms": max(values),
         }
 
     roundtrip = _values("roundtrip_ms", samples)
@@ -181,7 +182,7 @@ def summarize_deploy_latency(
     first = samples[0] if samples else {}
     jitter_ms = 0.0
     if roundtrip:
-        jitter_ms = round(_percentile(roundtrip, 95.0) - _percentile(roundtrip, 50.0), 1)
+        jitter_ms = _percentile(roundtrip, 95.0) - _percentile(roundtrip, 50.0)
 
     budget_ms = None
     missed_budget = 0
@@ -200,18 +201,18 @@ def summarize_deploy_latency(
     return {
         "samples": len(samples),
         "ttfa_ms": (
-            round(float(first["roundtrip_ms"]), 1)
+            float(first["roundtrip_ms"])
             if isinstance(first.get("roundtrip_ms"), (int, float))
             else 0.0
         ),
         "first_sample": {
             "inference_ms": (
-                round(float(first["latency_ms"]), 1)
+                float(first["latency_ms"])
                 if isinstance(first.get("latency_ms"), (int, float))
                 else 0.0
             ),
             "roundtrip_ms": (
-                round(float(first["roundtrip_ms"]), 1)
+                float(first["roundtrip_ms"])
                 if isinstance(first.get("roundtrip_ms"), (int, float))
                 else 0.0
             ),
@@ -223,7 +224,7 @@ def summarize_deploy_latency(
         "jitter": {"p95_minus_p50_ms": jitter_ms},
         "control_budget": {
             "control_hz": control_hz,
-            "period_ms": round(budget_ms, 3) if budget_ms else None,
+            "period_ms": budget_ms,
             "missed_samples": missed_budget,
         },
         "deadline_misses": deadline_misses,
@@ -1072,7 +1073,7 @@ def run_deploy_proof(
                 "num_actions": body.get("num_actions"),
                 "action_dim": body.get("action_dim"),
                 "latency_ms": body.get("latency_ms"),
-                "roundtrip_ms": round(roundtrip_ms, 1),
+                "roundtrip_ms": roundtrip_ms,
                 "inference_mode": body.get("inference_mode"),
                 "provider_mode": body.get("provider_mode"),
                 "active_providers": body.get("active_providers", []),

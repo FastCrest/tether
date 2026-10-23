@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
-from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
 from tether import __version__
+from tether.console import Console
 from tether.config import ExportConfig, get_hardware_profile, HARDWARE_PROFILES
 from tether.exporters._export_mode import ExportMode, InsufficientVRAMError
 
@@ -5408,6 +5408,18 @@ def go(
     for note in probe.notes:
         console.print(f"  [yellow]note:[/yellow] {note}")
 
+    if probe.requires_device_override:
+        err_console.print(
+            "[red]Automatic detection cannot select a supported Jetson profile. "
+            "Refusing to choose or download a model for this board.[/red]"
+        )
+        console.print(
+            "Check the board model, then pass [cyan]--device-class orin_nano[/cyan], "
+            "[cyan]agx_orin[/cyan] or [cyan]thor[/cyan] only if it matches that supported board. "
+            "Unsupported board models require their own qualified profile."
+        )
+        raise typer.Exit(2)
+
     # Step 2: resolve model
     try:
         resolution = resolve_model(model=model, device_class=probe.device_class, embodiment=embodiment)
@@ -6698,7 +6710,6 @@ connect_app = typer.Typer(
 @connect_app.command("list")
 def connect_list():
     """List available integrations."""
-    from rich.console import Console
     from rich.table import Table
     from tether.integrations.registry import list_integrations
 
@@ -6728,7 +6739,6 @@ def connect_up(
     extra_args: list[str] = typer.Argument(default=None, help="Extra args passed to the integration"),
 ):
     """Install (if needed) and start an integration."""
-    from rich.console import Console
     from tether.integrations.connector import connect
 
     console = Console()
@@ -6756,7 +6766,6 @@ def connect_down(
     name: str = typer.Argument(help="Integration name to stop"),
 ):
     """Stop a running integration."""
-    from rich.console import Console
     from tether.integrations.connector import disconnect
 
     console = Console()
@@ -6769,7 +6778,6 @@ def connect_status(
     name: str = typer.Argument(help="Integration name to check"),
 ):
     """Check if an integration is running and healthy."""
-    from rich.console import Console
     from tether.integrations.registry import get_integration
 
     console = Console()

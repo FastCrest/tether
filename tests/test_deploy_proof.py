@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tether.deploy_proof import (
     _run_policy_diff_evidence,
     _redact_command,
@@ -123,10 +125,10 @@ def test_summarize_deploy_latency_reports_realtime_fields():
 
     assert summary["samples"] == 3
     assert summary["ttfa_ms"] == 15.0
-    assert summary["roundtrip_ms"]["p95_ms"] == 101.5
-    assert summary["roundtrip_ms"]["p99_ms"] == 108.3
-    assert summary["warm_roundtrip_ms"]["p95_ms"] == 105.8
-    assert summary["jitter"]["p95_minus_p50_ms"] == 76.5
+    assert summary["roundtrip_ms"]["p95_ms"] == pytest.approx(101.5)
+    assert summary["roundtrip_ms"]["p99_ms"] == pytest.approx(108.3)
+    assert summary["warm_roundtrip_ms"]["p95_ms"] == pytest.approx(105.75)
+    assert summary["jitter"]["p95_minus_p50_ms"] == pytest.approx(76.5)
     assert summary["control_budget"]["period_ms"] == 50.0
     assert summary["control_budget"]["missed_samples"] == 1
     assert summary["deadline_misses"] == 1
