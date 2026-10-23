@@ -11,16 +11,14 @@ Without this test, every future exporter shipped to `src/tether/exporters/`
 silently regresses the discovery surface. Anyone running `tether models
 list` won't see the new model.
 
-Internal-only exporters (helpers consumed by other exporters, not
-directly customer-facing) are exempt via the EXPORTERS_INTERNAL set.
-Adding to the exempt list requires a docstring justification per the
-"explicit exemption" pattern.
+Internal helpers and standalone auxiliary exports without a policy serving
+contract are classified separately. Each classification needs an explicit
+purpose; an image encoder or precision conversion is not a new policy family.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 from tether.registry.data import REGISTRY
 
@@ -30,22 +28,27 @@ EXPORTERS_DIR = Path(__file__).parent.parent / "src" / "tether" / "exporters"
 # consumed by the primary exporters. Each must have a docstring explaining
 # WHY it's internal so future contributors don't add to this set casually.
 EXPORTERS_INTERNAL = {
-    "decomposed.py",          # pi05 + pi05-libero use this; not standalone
+    "decomposed.py",  # pi05 + pi05-libero use this; not standalone
     "eagle_export_stack.py",  # GR00T VLM stack; consumed by gr00t_exporter
-    "fp16_convert.py",        # FP32 → FP16 weight converter utility
-    "monolithic.py",          # path-spec for all monolithic exports
-    "onnx_export.py",         # generic torch.onnx.export wrapper
-    "pi0_prefix.py",          # SigLIP/Gemma split; renamed from pi0_prefix_exporter.py at lift #1 Day 9
+    "monolithic.py",  # path-spec for all monolithic exports
+    "onnx_export.py",  # generic torch.onnx.export wrapper
+    "pi0_prefix.py",  # SigLIP/Gemma split; renamed from pi0_prefix_exporter.py at lift #1 Day 9
     # vlm_components.py moved to src/tether/runtime/vlm_components.py
     # on 2026-05-20 (basevla-spine lift #1 Day 1 janitor) — it's an
     # inference-time helper, not an export-time helper, so it belongs in
     # runtime/. No replacement entry here because the audit is
     # exporters/-directory-scoped.
-    "vlm_prefix_exporter.py", # vlm prefix exporter; consumed via decomposed
-    "_export_mode.py",        # parallel/sequential mode selector
-    "trt_build.py",           # TensorRT engine builder; consumed by all primary exporters
-    "weight_fusion.py",       # RMSNorm→MatMul fusion + external-data ONNX save; consumed by monolithic export, not a standalone model family
+    "vlm_prefix_exporter.py",  # vlm prefix exporter; consumed via decomposed
+    "_export_mode.py",  # parallel/sequential mode selector
+    "trt_build.py",  # TensorRT engine builder; consumed by all primary exporters
+    "weight_fusion.py",  # RMSNorm→MatMul fusion + external-data ONNX save; consumed by monolithic export, not a standalone model family
     "__init__.py",
+}
+
+# Standalone tools that do not emit a new policy family/serving contract.
+EXPORTERS_AUXILIARY = {
+    "fp16_convert.py": "Validated conversion of an existing policy export, preserving its family.",
+    "rtsm_siglip.py": "Pooled image embeddings only; no action output or policy adapter.",
 }
 
 # Primary exporters → expected registry family. Add a row here when
@@ -70,10 +73,7 @@ EXPECTED_FAMILIES = {
 
 def _list_exporter_files() -> list[str]:
     """Names (basename only) of all .py files in src/tether/exporters/."""
-    return [
-        p.name for p in EXPORTERS_DIR.iterdir()
-        if p.suffix == ".py"
-    ]
+    return [p.name for p in EXPORTERS_DIR.iterdir() if p.suffix == ".py"]
 
 
 def test_every_primary_exporter_has_registry_entry():
@@ -84,9 +84,7 @@ def test_every_primary_exporter_has_registry_entry():
     missing = []
     for exporter_file, expected_family in EXPECTED_FAMILIES.items():
         if expected_family not in families_in_registry:
-            missing.append(
-                f"{exporter_file} → no registry entry with family={expected_family!r}"
-            )
+            missing.append(f"{exporter_file} → no registry entry with family={expected_family!r}")
     assert not missing, (
         "Primary exporter(s) missing registry entry — `tether models list` / "
         "`tether chat` / `tether doctor` will say 'not supported' for these "
@@ -99,20 +97,24 @@ def test_every_primary_exporter_has_registry_entry():
 def test_exporter_directory_audit_covers_all_files():
     """Every file in src/tether/exporters/ must be either:
       (a) classified as internal (EXPORTERS_INTERNAL), OR
-      (b) classified as primary with expected family (EXPECTED_FAMILIES)
+      (b) a standalone auxiliary tool without a policy family, OR
+      (c) classified as primary with expected family (EXPECTED_FAMILIES)
     Catches the case where someone adds a NEW exporter file but
     forgets to update either set, leaving its registry-coverage
     untested."""
     actual_files = set(_list_exporter_files())
-    classified_files = EXPORTERS_INTERNAL | set(EXPECTED_FAMILIES.keys())
+    auxiliary = set(EXPORTERS_AUXILIARY)
+    assert not auxiliary.intersection(EXPORTERS_INTERNAL | set(EXPECTED_FAMILIES))
+    assert all(EXPORTERS_AUXILIARY.values())
+    classified_files = EXPORTERS_INTERNAL | auxiliary | set(EXPECTED_FAMILIES.keys())
     # Drop the synthetic _pi05_via_decomposed marker
     classified_files.discard("_pi05_via_decomposed")
 
     unclassified = actual_files - classified_files
     assert not unclassified, (
         f"New exporter file(s) found that aren't classified as internal "
-        f"or primary:\n  {sorted(unclassified)}\n"
-        f"Fix: add to either EXPORTERS_INTERNAL (with docstring why) or "
+        f"auxiliary, or primary:\n  {sorted(unclassified)}\n"
+        f"Fix: classify in EXPORTERS_INTERNAL or EXPORTERS_AUXILIARY (with purpose), or "
         f"EXPECTED_FAMILIES (with the registry family it should map to) "
         f"in tests/test_registry_completeness.py."
     )
