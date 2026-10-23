@@ -130,10 +130,6 @@ def export_rtsm_siglip(
     pretrained model's transforms. Existing outputs are never replaced.
     Dependencies are imported only after arguments and output paths validate.
     """
-    if sys.version_info < (3, 11):
-        raise ValueError(
-            "SigLIP export requires Python 3.11 or newer for its CPU ONNX Runtime cohort"
-        )
     mode = _select_preprocess(checkpoint, preprocess)
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
         raise ValueError("seed must be an integer in [0, 2**32)")
@@ -155,6 +151,11 @@ def export_rtsm_siglip(
             raise ValueError(
                 "Checkpoint must be a local weights file (.pt, .pth, .bin, .safetensors)"
             )
+
+    if sys.version_info < (3, 11):
+        raise ValueError(
+            "SigLIP export requires Python 3.11 or newer for its CPU ONNX Runtime cohort"
+        )
 
     import numpy as np
     import onnx

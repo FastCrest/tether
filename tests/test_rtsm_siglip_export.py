@@ -43,6 +43,18 @@ def test_existing_output_is_preserved(tmp_path):
     assert (tmp_path / "sentinel").read_text() == "keep"
 
 
+def test_python310_refuses_before_optional_imports_and_preserves_argument_errors(
+    tmp_path, monkeypatch
+):
+    with monkeypatch.context() as patch:
+        patch.setattr(exporter.sys, "version_info", (3, 10, 16))
+        with pytest.raises(ValueError, match="Python 3.11"):
+            exporter.export_rtsm_siglip(tmp_path / "export")
+        with pytest.raises(ValueError, match="local checkpoint requires"):
+            exporter.export_rtsm_siglip(tmp_path / "export", checkpoint=Path("weights.pt"))
+    assert not (tmp_path / "export").exists()
+
+
 def _unit_embedding():
     result = np.ones((1, 768), dtype=np.float32)
     return result / np.linalg.norm(result)
