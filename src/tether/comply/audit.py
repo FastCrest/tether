@@ -13,6 +13,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Iterable, Iterator
 
+from tether.runtime.record import verify_record_chain
+
 
 def _canonical_record_bytes(record: dict[str, Any]) -> bytes:
     return json.dumps(record, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -36,7 +38,18 @@ def _open_text(path: Path):
     return path.open("r", encoding="utf-8")
 
 
-def _iter_records(files: Iterable[Path]) -> Iterator[tuple[Path, dict[str, Any]]]:
+def _iter_records(
+    files: Iterable[Path], stats: dict[str, int] | None = None
+) -> Iterator[tuple[Path, dict[str, Any]]]:
+    """Yield (file, record) for every JSON-object line.
+
+    Skipped lines are *counted* into ``stats`` (parse_error_count,
+    non_dict_count, unreadable_file_count) rather than silently dropped — for
+    an audit summarizer, a vanished (possibly tampered) line is an integrity
+    signal the report must surface, not hide.
+    """
+    if stats is None:
+        stats = {}
     for file in files:
         try:
             with _open_text(file) as fh:
@@ -47,10 +60,14 @@ def _iter_records(files: Iterable[Path]) -> Iterator[tuple[Path, dict[str, Any]]
                     try:
                         rec = json.loads(line)
                     except json.JSONDecodeError:
+                        stats["parse_error_count"] = stats.get("parse_error_count", 0) + 1
                         continue
                     if isinstance(rec, dict):
                         yield file, rec
+                    else:
+                        stats["non_dict_count"] = stats.get("non_dict_count", 0) + 1
         except OSError:
+            stats["unreadable_file_count"] = stats.get("unreadable_file_count", 0) + 1
             continue
 
 
@@ -94,8 +111,39 @@ def summarize_audit_log(path: str | Path | None) -> dict[str, Any]:
     redaction_modes: dict[str, set[str]] = {"image": set(), "instruction": set()}
     safety_samples: list[dict[str, Any]] = []
 
+    parse_stats: dict[str, int] = {}
+
+    # Per-file tamper-evident chain verification. The runtime recorder writes a
+    # prev_record_hash/record_hash chain per session/file (record.py); we verify
+    # each file's chain with the SAME verifier the recorder is tested against,
+    # instead of merely re-hashing and asserting nothing. _iter_records groups
+    # by file in order, so we accumulate the current file's records and verify
+    # at each file boundary.
+    chain_results: list[dict[str, Any]] = []
+    _chain_file: Path | None = None
+    _chain_records: list[dict[str, Any]] = []
+
+    def _flush_chain() -> None:
+        nonlocal _chain_records
+        if _chain_file is None:
+            return
+        is_chained = any("record_hash" in r for r in _chain_records)
+        if is_chained:
+            ok, broken_index = verify_record_chain(_chain_records)
+            chain_results.append({
+                "file": _chain_file.name,
+                "verified": ok,
+                "broken_index": broken_index,
+            })
+        _chain_records = []
+
     prev_hash = "0" * 64
-    for file, rec in _iter_records(files):
+    for file, rec in _iter_records(files, parse_stats):
+        if file is not _chain_file:
+            _flush_chain()
+            _chain_file = file
+        _chain_records.append(rec)
+
         record_count += 1
         schema = rec.get("schema_version")
         if schema is not None:
@@ -180,6 +228,33 @@ def summarize_audit_log(path: str | Path | None) -> dict[str, Any]:
                     "clamped": bool(rec.get("clamped")),
                 })
 
+    _flush_chain()
+
+    # Aggregate the per-file chain verdicts. chain_verified is True only if
+    # every chained file verifies; None when no file carried a chain (e.g.
+    # standalone ActionGuard logs) — we don't claim verification we didn't do.
+    chained_file_count = len(chain_results)
+    broken = [r for r in chain_results if not r["verified"]]
+    if chained_file_count == 0:
+        chain_verified: bool | None = None
+    else:
+        chain_verified = len(broken) == 0
+    first_broken_file = broken[0]["file"] if broken else ""
+    first_broken_index = broken[0]["broken_index"] if broken else None
+    unchained_file_count = max(0, len(files) - chained_file_count)
+
+    parse_error_count = parse_stats.get("parse_error_count", 0)
+    non_dict_count = parse_stats.get("non_dict_count", 0)
+    unreadable_file_count = parse_stats.get("unreadable_file_count", 0)
+
+    # The log is integrity-clean only if every chain verifies AND nothing was
+    # dropped. A False chain or any parse/unreadable skip flips status to
+    # "tampered" so downstream (regulatory mapping, technical file) can react.
+    integrity_ok = chain_verified is not False and (
+        parse_error_count + non_dict_count + unreadable_file_count
+    ) == 0
+    status = "ok" if integrity_ok else "tampered"
+
     first_ts = min(timestamps) if timestamps else ""
     last_ts = max(timestamps) if timestamps else ""
     return {
@@ -218,9 +293,25 @@ def summarize_audit_log(path: str | Path | None) -> dict[str, Any]:
             "alg": "sha256(prev_hash || canonical_json_record)",
             "head": prev_hash if record_count else "",
             "record_count": record_count,
+            # Authoritative tamper check: per-file verification of the runtime
+            # recorder's prev_record_hash/record_hash chain via
+            # record.verify_record_chain. True = all chained files intact,
+            # False = a chain broke (edit/insert/reorder/truncate),
+            # None = no file carried a chain (nothing to verify).
+            "chain_verified": chain_verified,
+            "chained_file_count": chained_file_count,
+            "unchained_file_count": unchained_file_count,
+            "first_broken_file": first_broken_file,
+            "first_broken_index": first_broken_index,
+        },
+        "integrity": {
+            "chain_verified": chain_verified,
+            "parse_error_count": parse_error_count,
+            "non_dict_record_count": non_dict_count,
+            "unreadable_file_count": unreadable_file_count,
         },
         "safety_violations_sample": safety_samples,
-        "status": "ok",
+        "status": status,
     }
 
 
