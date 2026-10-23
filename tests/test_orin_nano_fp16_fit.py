@@ -1,11 +1,7 @@
-"""FP16 conversion unit tests — Orin Nano 8GB fit goal.
+"""Legacy FP16 helper tests; sizing arithmetic is not target-fit evidence.
 
-The actual conversion runs on Modal (12GB ONNX can't load locally).
-These tests cover the pure helpers: sizing estimator, parity gate,
-op blocklist defaults. They establish the contract that the Modal
-runs will execute.
-
-Goal: orin-nano-fp16-fit (weight 8).
+Actual local conversion/session/parity checks live in
+``test_fp16_validated_export.py``. Neither suite establishes device memory fit.
 """
 from __future__ import annotations
 
@@ -35,14 +31,13 @@ class TestSizeEstimate:
         assert estimate_fp16_size_bytes(0) == 0
 
     def test_smolvla_stays_small(self):
-        # SmolVLA 1.6GB → expect ~0.84GB post-FP16 (well under 8GB obviously)
+        # Arithmetic estimate only: activations and engine-build memory are not included.
         smolvla = int(1.6e9)
         estimate = estimate_fp16_size_bytes(smolvla)
         assert 0.7e9 < estimate < 1.0e9
 
-    def test_fits_orin_nano_after_conversion(self):
-        """The key claim: pi0 FP16 fits under 8 GB (leaving room for
-        activations + OS)."""
+    def test_estimate_compared_with_hypothetical_weight_budget(self):
+        """An estimate can be compared with a budget; this proves no device fit."""
         pi0_fp32 = int(12.5 * 1e9)
         pi05_fp32 = int(13.0 * 1e9)
         # Budget: 8GB total, reserve 1.5GB for activations+OS = 6.5GB for weights.
@@ -92,16 +87,8 @@ class TestBlocklist:
         """Protect against accidental in-place mutation at import time."""
         assert isinstance(FP16_OP_BLOCKLIST, tuple)
 
-    def test_blocklist_is_empty_by_default(self):
-        """Empty default blocklist — full graph gets converted to FP16.
-
-        onnxconverter_common.float16 doesn't insert Cast nodes for
-        blocklisted-op outputs, so a non-empty blocklist creates
-        FP32/FP16 operand mismatches on Mul/MatMul that ORT rejects.
-        Empty list = all ops converted, parity gate (cos>0.999)
-        catches any precision regression.
-        """
-        assert FP16_OP_BLOCKLIST == ()
+    def test_sensitive_operations_remain_in_fp32(self):
+        assert {"LayerNormalization", "Softmax", "Pow", "ReduceMean", "Sqrt"} <= set(FP16_OP_BLOCKLIST)
 
 
 @pytest.fixture
@@ -229,20 +216,20 @@ class TestImportGuard:
         should see a clean ImportError, not an AttributeError mid-run."""
         from tether.exporters import fp16_convert
 
-        # Simulate missing onnxconverter-common by making the import fail.
+        # Simulate missing ORT conversion tools by making the import fail.
         import builtins
         real_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):
-            if name == "onnxconverter_common.float16":
+            if name == "onnxruntime.transformers.float16":
                 raise ImportError("simulated missing dep")
-            if name == "onnxconverter_common":
+            if name == "onnxruntime":
                 raise ImportError("simulated missing dep")
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", fake_import)
 
-        with pytest.raises(ImportError, match="onnxconverter-common"):
+        with pytest.raises(ImportError, match="onnxruntime"):
             fp16_convert.convert_fp32_to_fp16(
                 "/tmp/nonexistent.onnx", "/tmp/out.onnx"
             )

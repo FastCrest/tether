@@ -51,6 +51,14 @@ libraries; mixing CUDA families is not an automatic repair path.
 
 Requires Python ≥ 3.10.
 
+For a smaller existing monolithic export, use the opt-in
+[validated mixed-FP16 conversion](docs/precision-conversion.md). It preserves the
+FP32 source and requires supplied parity inputs and explicit tolerances. Target
+memory fit and TensorRT remain separate qualification checks.
+The standalone [RTSM SigLIP encoder export](docs/rtsm-siglip-export.md) records its
+checkpoint, applied preprocessing and CPU parity; policy integration needs a
+separate adapter contract.
+
 ### What's new in v0.11.2 (2026-05-29)
 
 - **`tether connect` works on a clean install** — `requests` is now a core dependency, so `tether connect status` no longer raises `ModuleNotFoundError` on `pip install fastcrest-tether` without extras (it had been an undeclared import that only resolved transitively).

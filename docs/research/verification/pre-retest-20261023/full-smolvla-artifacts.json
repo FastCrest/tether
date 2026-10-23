@@ -1,0 +1,57 @@
+{
+  "model_sources": {
+    "models--HuggingFaceTB--SmolLM2-135M": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+    "models--HuggingFaceTB--SmolVLM2-500M-Video-Instruct": "7b375e1b73b11138ff12fe22c8f2822d8fe03467",
+    "models--lerobot--smolvla_base": "5e8d12a6e2975b0e5e5fce7c8caf47c371d257b6"
+  },
+  "export": {
+    "model_id": "lerobot/smolvla_base",
+    "revision": "5e8d12a6e2975b0e5e5fce7c8caf47c371d257b6",
+    "versions": {
+      "torch": "2.10.0",
+      "torchvision": "0.25.0",
+      "transformers": "5.5.4",
+      "lerobot": "0.6.1",
+      "onnx": "1.23.2",
+      "onnxruntime": "1.30.0",
+      "onnx-diagnostic": "0.9.3",
+      "onnxscript": "0.7.2"
+    },
+    "result": {
+      "status": "ok",
+      "onnx_path": "smolvla-fp32/model.onnx",
+      "size_mb": 1649.385803,
+      "num_steps": 10
+    },
+    "wall_s": 355.5195412635803
+  },
+  "artifact_files": {
+    "VERIFICATION.md": {
+      "sha256": "b82c71e9b11f576ce8ca41f807cb8b2892b59978712de72f2715e104c71fa97c",
+      "bytes": 1302
+    },
+    "model.onnx": {
+      "sha256": "cbf58131580d2c0286bce16aa08fcfbe982dc5d6af1aeee0bde7002141c7747a",
+      "bytes": 17901477
+    },
+    "model.onnx.data": {
+      "sha256": "38d93491e4d7873ab61c506477ecd62ef3afa6e889afd79a61e8d77864658620",
+      "bytes": 1627661129
+    },
+    "tether_config.json": {
+      "sha256": "c1193e209b53fb5a7dc46feb2889f0f641dfc2f17ecb589195c9720782c917a7",
+      "bytes": 3280
+    },
+    "tokenizer/tokenizer.json": {
+      "sha256": "bf346d64f6f0fbcefb4c1b6928a98241467dff36c6fbae5fe1785c4ff90667f4",
+      "bytes": 3522871
+    },
+    "tokenizer/tokenizer_config.json": {
+      "sha256": "b5b7bbc9f39d002f281b632e3f4ea5bf8c5600376e95bb1a323cade3946f32dc",
+      "bytes": 746
+    }
+  },
+  "public_base": "9832130d25374c7f783277e3c33acc76d13ee36a",
+  "monolithic_exporter_git_blob": "05671de29d91e220f12237af7be45e7171d78ad1",
+  "scope": "Full pinned SmolVLA FP32 export and eight numerical CPU cases; no target/GPU/task/physical qualification"
+}

@@ -1,0 +1,932 @@
+{
+  "schema_version": 1,
+  "operation": "monolithic_mixed_fp16_conversion",
+  "parity_verdict": "FAIL",
+  "provider": "CPUExecutionProvider",
+  "source_artifacts": {
+    "model.onnx": {
+      "sha256": "cbf58131580d2c0286bce16aa08fcfbe982dc5d6af1aeee0bde7002141c7747a",
+      "bytes": 17901477
+    },
+    "model.onnx.data": {
+      "sha256": "38d93491e4d7873ab61c506477ecd62ef3afa6e889afd79a61e8d77864658620",
+      "bytes": 1627661129
+    },
+    "tether_config.json": {
+      "sha256": "c1193e209b53fb5a7dc46feb2889f0f641dfc2f17ecb589195c9720782c917a7",
+      "bytes": 3280
+    },
+    "tokenizer/tokenizer.json": {
+      "sha256": "bf346d64f6f0fbcefb4c1b6928a98241467dff36c6fbae5fe1785c4ff90667f4",
+      "bytes": 3522871
+    },
+    "tokenizer/tokenizer_config.json": {
+      "sha256": "b5b7bbc9f39d002f281b632e3f4ea5bf8c5600376e95bb1a323cade3946f32dc",
+      "bytes": 746
+    }
+  },
+  "candidate_artifacts": {
+    "model.bin": {
+      "sha256": "aa0304406029534af0a3687b7b2976110d695c61702b67063c62a9d0094fa6cf",
+      "bytes": 813945801
+    },
+    "model.onnx": {
+      "sha256": "1612f998ab8f194d1bf8fc96335c373f30f28d541c6b0818f25b13ff69ff847c",
+      "bytes": 18327590
+    },
+    "tether_config.json": {
+      "sha256": "63e8d423f9c40d06e0f12fb234deeac6cb89829e9a5ca93072e6c538774966eb",
+      "bytes": 2895
+    },
+    "tokenizer/tokenizer.json": {
+      "sha256": "bf346d64f6f0fbcefb4c1b6928a98241467dff36c6fbae5fe1785c4ff90667f4",
+      "bytes": 3522871
+    },
+    "tokenizer/tokenizer_config.json": {
+      "sha256": "b5b7bbc9f39d002f281b632e3f4ea5bf8c5600376e95bb1a323cade3946f32dc",
+      "bytes": 746
+    }
+  },
+  "max_abs_threshold": 0.01,
+  "cos_threshold": 0.999,
+  "cases": [
+    {
+      "case": 0,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "948aa7e1aac4119910c8acdb95ffcbef9681150cbba92fb06fde8af6cf6a30bb"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "8ecec85387ea287659e502f8226248e4e2407d873469acd955378c0d6a20c4fe"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "60f98fdd28ee2a9aad9c228540ce1f016ffef42a50c3f9f6cdbf3983f9cf8a5d"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "7a926395ac8bd34934faea1e96462fc3c76e68eb911d37ff868784661a0d094e"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "a5623986e0c5bd9c601515ccb628d5ee1515c2b0fe11d4a7a2726a9210709362"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "bd2dbffc5955da2c75032ebf0de9335bf2534253724b0818a2da4ffcd0e8f34b"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.7875817736119926,
+          "max_abs_diff": 1.356073796749115,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.787582 below threshold 0.999",
+            "max_abs_diff 1.36e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 1,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "c8dd6ad14037cce10ae7144d7e1e357606a53c42d205043aed4918706ce62938"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "cbe53f8a0c57b3288cfb02b3c905da6b581bbe6a69cd467c14c3a233bc74bd67"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "2fc594e1cc6980775dce6d0e38242a4c3e418be1fa51cb5a10332ddaeb0ceac6"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "7d82bf25f5f0cbe8977c63433c1b9fd3a92902eaf3f1660e026e6e27a8120cc8"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "940a93be2c2fd36f3a5aad31fbb1fa62367f9133ced9ceb93a84c28a4a18019e"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "d001d3ec711e9a98b084162b44c65bb2ab8b6c11a32a8cfc16f485b263b7b049"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.6822676206319929,
+          "max_abs_diff": 1.5455883145332336,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.682268 below threshold 0.999",
+            "max_abs_diff 1.55e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 2,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "9eec44449a42ca68011b380163e6f8548cd6a3a221b69b41eb2f9282679aeaee"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "0e81e0bb604ce3513b93320e22b2c26eb129f28d2940cd86e525b1e665733052"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "e4d7cfa53a0a6adf23d77c6f3ad0431e468a88c4e83845467f3a729c7463fe54"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "440a674411715f011fcd23e6f1cdc910bd37ed0a996d73d3c8bcf13267b5a46d"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "62a3f8e626e0f8b552611da7fbdb3f5d652a34275152972d536561a86dba4550"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "9032454b0f7ae54ad20e07cf2a2d56210678ae455863deb36d90c99ca5066924"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.34375950232336655,
+          "max_abs_diff": 3.5762245655059814,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.343760 below threshold 0.999",
+            "max_abs_diff 3.58e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 3,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "2f64ecf4ea58611fad75fcd82eeadc049bbe49abb5e21169fe50a9fda09678b3"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "529b0d23df90a115fa715396b8afb2aa18011235be56c62fcc6a2bd39ef66f95"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "277a92d364cc5eade96d97ad238b547ff1def46edbc24d35317e7fc7b121c5a6"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "27eb5ed029519235cb83d37f9d635c465a211d411e18e9ea6fe0a80124fa9bdb"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "65ea674fe854d85deec230cf172cff778dc2f1c8c3e687fbf9aea910d8b850c5"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "8e5112b4de672f657d4f70ddb257f95125a3c147aeb6dbc55b9be0a68d6dff67"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.4233125963235069,
+          "max_abs_diff": 1.2927049398422241,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.423313 below threshold 0.999",
+            "max_abs_diff 1.29e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 4,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "7b0ea25467ec5b4a540f0036bc03b81e15ccbbe003a2a08aa5e293d676fe81e2"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "1791486d8b4d36ab6df2267f12ec77fe21753c8203e2b1928f7dc1c7812e9615"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "12cac9b8a130239568962374e64058e3bc6c27ea26da7b7d55b5fcf0f6bfae14"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "a35add3532a02fdfc33ee9306b61f8a4d9f9288cb999df7d9763ef42f03e31ab"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "a845c8b6f0756f704775f7a9a2dcb2467e5e490603164fa69b9481215afbfb0f"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "44909814dfe4c54bc395d607ab630e349ddeb806685a96fa97d91e17f8c6c366"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.4386716971662928,
+          "max_abs_diff": 2.065858542919159,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.438672 below threshold 0.999",
+            "max_abs_diff 2.07e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 5,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "68ad97371761d256e6641000abd09dfb8ab657f0859d30d41ccd047b3778d132"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "840b1c93063e84c6e3d543da29c0df93e7db5b13be941fc3721a69a5b4628c34"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "64c4fcb76a821978fba9435a2996889f98a8c42ec9178bfbff9824a0488a2b44"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "04d757e39bbefbdccbf896120e5d549a201a60caff3e6210f990513e6bcdd474"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "0efb11e1289a6d2c5641a537fe2c7b16ada4d1b3f2d4eb86ecbe8f87f9bfb8d5"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "2a3acf7356440fdf33469f494881eb6834a1f83b81f4893f168603ee44a4f07c"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.962873765222897,
+          "max_abs_diff": 0.9314970970153809,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.962874 below threshold 0.999",
+            "max_abs_diff 9.31e-01 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 6,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "528e6efc5ffc9a0659f8339ba06477cffe8cf61e25ab02e88492a0dd4cf0e551"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "1933c0c10be138366e7088c11871e5b29a88e4b7ce82723271dea02487d7c7af"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "285962700f1d5a2dbf2f190c1f18de634064d4644297403d0cd28cb88e11d40f"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "f2b24427144cdf0d927390170b096c69ff281858fce63e21d3946d46c418ae4e"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "a6b0c20c269c03e9c7b90be99deb875e9907599bd12ebef63cbec5a423abf5a2"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "51d86f585f75c2339d94cc899c48b23b4f76244de4e08fcf40e3ddd1c3c01f12"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.5379833630188401,
+          "max_abs_diff": 1.0239070653915405,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.537983 below threshold 0.999",
+            "max_abs_diff 1.02e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    },
+    {
+      "case": 7,
+      "inputs": {
+        "img_cam1": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "cb14abad3a66e5033fd871d64f708ec17bbf0cd254f1abca905dde57a69b97bc"
+        },
+        "img_cam2": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "303fc4547826c8971eaa99cd2df2728b5d3cd55de7899f632f6f43407e0e2df6"
+        },
+        "img_cam3": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            3,
+            512,
+            512
+          ],
+          "sha256": "d07c522a2cb81729bd21197113d371de41692bdd8716042da7a340098915f3b0"
+        },
+        "lang_masks": {
+          "dtype": "bool",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "cc8cd41cef907c4d216069122c4b89936211361f9050a717a1e37ad1862e952f"
+        },
+        "lang_tokens": {
+          "dtype": "int64",
+          "shape": [
+            1,
+            16
+          ],
+          "sha256": "1c16274e20f30ed1e042ca784764efe13666b5660062024f060c46b1c54c4616"
+        },
+        "mask_cam1": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam2": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"
+        },
+        "mask_cam3": {
+          "dtype": "bool",
+          "shape": [
+            1
+          ],
+          "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
+        },
+        "noise": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            50,
+            32
+          ],
+          "sha256": "9aeaa7643ee4188632e6150fd5af1214b65fdaee8ccb2173f771cc3ee38a36d3"
+        },
+        "state": {
+          "dtype": "float32",
+          "shape": [
+            1,
+            32
+          ],
+          "sha256": "a3ef7998729a571f1f61b2f4691baa378f22bde7ec9c289bc4bc31a70c68561b"
+        }
+      },
+      "outputs": {
+        "actions": {
+          "verdict": "FAIL",
+          "passed": false,
+          "cos_sim": 0.32213337109380874,
+          "max_abs_diff": 1.705611139535904,
+          "cos_threshold": 0.999,
+          "max_abs_threshold": 0.01,
+          "reasons": [
+            "cos_sim 0.322133 below threshold 0.999",
+            "max_abs_diff 1.71e+00 above threshold 1e-02"
+          ]
+        }
+      }
+    }
+  ],
+  "keep_io_types": true,
+  "op_block_list": [
+    "ArrayFeatureExtractor",
+    "Binarizer",
+    "CastMap",
+    "CategoryMapper",
+    "CumSum",
+    "DictVectorizer",
+    "FeatureVectorizer",
+    "Imputer",
+    "LabelEncoder",
+    "LayerNormalization",
+    "LinearClassifier",
+    "LinearRegressor",
+    "Max",
+    "Min",
+    "NonMaxSuppression",
+    "Normalizer",
+    "OneHotEncoder",
+    "Pow",
+    "RandomUniformLike",
+    "Range",
+    "ReduceMean",
+    "RoiAlign",
+    "SVMClassifier",
+    "SVMRegressor",
+    "Scaler",
+    "Softmax",
+    "Sqrt",
+    "TopK",
+    "TreeEnsemble",
+    "TreeEnsembleClassifier",
+    "TreeEnsembleRegressor",
+    "Upsample",
+    "ZipMap"
+  ],
+  "model_bytes_before": 1645562606,
+  "model_bytes_after": 832273391,
+  "float16_min_positive_val": 5.960464477539063e-08,
+  "float16_max_finite_val": 65504.0,
+  "converter": "onnxruntime.transformers.float16",
+  "duplicate_casts_removed": 495,
+  "versions": {
+    "onnx": "1.23.2",
+    "numpy": "2.5.4",
+    "onnxruntime": "1.30.0"
+  },
+  "limits": [
+    "supplied inputs only",
+    "FP32 reference accuracy not established",
+    "target memory fit not measured",
+    "TensorRT not qualified",
+    "physical execution not qualified"
+  ]
+}
