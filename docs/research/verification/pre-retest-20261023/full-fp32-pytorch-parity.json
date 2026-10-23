@@ -1,0 +1,123 @@
+{
+  "comparison": "full SmolVLA current FP32 export vs pinned PyTorch CPU",
+  "cases": [
+    {
+      "seed": 0,
+      "wall_s": 0.725691084000573,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.999999999999538,
+        "max_abs_diff": 2.0563602447509766e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 1,
+      "wall_s": 0.6690100420000817,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.9999999999965997,
+        "max_abs_diff": 6.020069122314453e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 2,
+      "wall_s": 0.6539560000001075,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.9999999999990248,
+        "max_abs_diff": 3.3080577850341797e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 3,
+      "wall_s": 0.6512642910001887,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.9999999999989713,
+        "max_abs_diff": 2.682209014892578e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 4,
+      "wall_s": 0.6557196670000849,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.9999999999990695,
+        "max_abs_diff": 3.933906555175781e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 5,
+      "wall_s": 0.6545222920003653,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.9999999999996871,
+        "max_abs_diff": 1.430511474609375e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 6,
+      "wall_s": 0.6593956249998882,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.999999999999765,
+        "max_abs_diff": 1.3113021850585938e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    },
+    {
+      "seed": 7,
+      "wall_s": 0.6588702919998468,
+      "comparison": {
+        "verdict": "PASS",
+        "passed": true,
+        "cos_sim": 0.9999999999984961,
+        "max_abs_diff": 5.364418029785156e-06,
+        "cos_threshold": 0.99999,
+        "max_abs_threshold": 0.0001,
+        "reasons": []
+      }
+    }
+  ],
+  "versions": {
+    "onnxruntime": "1.30.0"
+  },
+  "acceptance": {
+    "mixed_fp16": {
+      "max_abs": 0.01,
+      "cosine": 0.999
+    },
+    "fp32_vs_pytorch": {
+      "max_abs": 0.0001,
+      "cosine": 0.99999
+    },
+    "scope": "numerical engineering checks on eight generated raw-input cases; not task accuracy or robot safety"
+  }
+}

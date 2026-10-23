@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "scope": "Fresh ORT CPU session reload of real SigLIP artifact, all files hashes and four saved tensors checked",
+  "files_verified": 17,
+  "cases": 4,
+  "max_reload_absolute_error": 0.0,
+  "input_shape": [
+    1,
+    3,
+    224,
+    224
+  ],
+  "output_shape": [
+    1,
+    768
+  ],
+  "provider": [
+    "CPUExecutionProvider"
+  ],
+  "onnx_sha256": "32a3b971b49791d2abcc3f4eecd6e63c28dea8ab1d7640705417a5cd8e722797"
+}

@@ -66,6 +66,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Standalone RTSM pooled image encoder. Keep this CPU export environment
+# separate from GPU serving: CPU and GPU ORT distributions share module files.
+# Exact encoder dependencies are the measured numerical-export cohort.
+siglip-export = [
+    "open-clip-torch==3.3.0; python_version >= '3.11'",
+    "timm==1.0.30; python_version >= '3.11'",
+    "torch==2.10.0; python_version >= '3.11'",
+    "torchvision==0.25.0; python_version >= '3.11'",
+    "onnx==1.23.2; python_version >= '3.11'",
+    "onnxruntime==1.30.0; python_version >= '3.11'",
+    "Pillow>=10; python_version >= '3.11'",
+]
 # CPU inference runtime (onnx is a core dep now). Use this for CPU-only boxes.
 onnx = ["onnxruntime>=1.17.0"]
 # CUDA 12 serving cohort. ORT 1.27+ defaults to CUDA 13 on PyPI;
@@ -373,6 +385,13 @@ markers = [
     "asyncio: mark a coroutine test for pytest-asyncio (strict mode)",
     "hardware: requires a physical robot wired in; skipped unless RUN_HARDWARE_TESTS=1",
     "receipt: validates a signed or provenance-bound operational receipt",
+]
+
+[tool.uv]
+# The CPU encoder export and CUDA 12 serving cohorts need separate environments.
+conflicts = [
+    [{ extra = "siglip-export" }, { extra = "gpu" }],
+    [{ extra = "siglip-export" }, { extra = "gpu-min" }],
 ]
 
 # Exact published metadata avoids executing NVIDIA's download shim while locking.

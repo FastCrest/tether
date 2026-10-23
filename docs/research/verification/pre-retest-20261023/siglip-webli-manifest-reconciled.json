@@ -1,0 +1,231 @@
+{
+  "schema": "tether.rtsm-siglip-image-encoder.v1",
+  "status": "VERIFIED_CPU_NUMERICAL_PARITY",
+  "model": "ViT-B-16-SigLIP",
+  "pretrained": "webli",
+  "precision": "float32",
+  "input": {
+    "name": "images",
+    "shape": [
+      1,
+      3,
+      224,
+      224
+    ],
+    "dtype": "float32"
+  },
+  "output": {
+    "name": "embedding",
+    "shape": [
+      1,
+      768
+    ],
+    "l2_normalized": true
+  },
+  "upstream": {
+    "repository": "https://github.com/calabi-inc/rtsm",
+    "commit": "85b94e603b25e32fe9c3484070807081da07dca0",
+    "loader_blob": "19b73bf780f7018a006514fea1a9702b24e21461",
+    "inference_blob": "192f9db260ff5d0956e177b6ccac9b7ef22f9193"
+  },
+  "checkpoint": {
+    "source": "public-webli",
+    "file": "open_clip_model.safetensors",
+    "sha256": "81942ea8c09b9e41963357cca5d2682118bf7eb7491c2ae51a28bc4f4f95b194",
+    "bytes": 812658408
+  },
+  "preprocessing": {
+    "mode": "pretrained",
+    "transform": "Compose(\n    Resize(size=(224, 224), interpolation=bicubic, max_size=None, antialias=True)\n    MaybeConvertMode()\n    MaybeToTensor()\n    Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))\n)",
+    "tensor_boundary": "Preprocessing runs on RGB images outside ONNX",
+    "applied": {
+      "color_mode": "RGB",
+      "image_dtype": "uint8",
+      "operations": [
+        {
+          "type": "Resize",
+          "size": [
+            224,
+            224
+          ],
+          "max_size": null,
+          "antialias": true,
+          "interpolation": "bicubic"
+        },
+        {
+          "type": "MaybeConvertMode"
+        },
+        {
+          "type": "MaybeToTensor"
+        },
+        {
+          "type": "Normalize",
+          "mean": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "std": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    "webli_config_reference": {
+      "applied": true,
+      "config": {
+        "url": "",
+        "hf_hub": "timm/ViT-B-16-SigLIP/",
+        "mean": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "std": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "interpolation": "bicubic",
+        "resize_mode": "squash"
+      }
+    }
+  },
+  "libraries": {
+    "open-clip-torch": "3.3.0",
+    "torch": "2.10.0",
+    "torchvision": "0.25.0",
+    "timm": "1.0.30",
+    "Pillow": "13.0.0",
+    "numpy": "2.5.4",
+    "onnx": "1.23.2",
+    "onnxruntime": "1.30.0"
+  },
+  "parity": {
+    "provider": "CPUExecutionProvider",
+    "seed": 0,
+    "samples": 4,
+    "max_absolute_error_limit": 0.0001,
+    "minimum_cosine_similarity": 0.99999,
+    "cases": [
+      {
+        "index": 0,
+        "max_absolute_error": 3.7159770727157593e-07,
+        "cosine_similarity": 0.9999999999983907,
+        "reference_l2_norm": 0.9999999932302704,
+        "onnx_l2_norm": 0.9999999129731034
+      },
+      {
+        "index": 1,
+        "max_absolute_error": 2.169981598854065e-07,
+        "cosine_similarity": 0.99999999999866,
+        "reference_l2_norm": 1.0000000162023361,
+        "onnx_l2_norm": 1.0000002797280998
+      },
+      {
+        "index": 2,
+        "max_absolute_error": 3.501772880554199e-07,
+        "cosine_similarity": 0.9999999999975024,
+        "reference_l2_norm": 0.9999999179944596,
+        "onnx_l2_norm": 1.0000001452837906
+      },
+      {
+        "index": 3,
+        "max_absolute_error": 2.086162567138672e-07,
+        "cosine_similarity": 0.9999999999989447,
+        "reference_l2_norm": 0.9999998849364636,
+        "onnx_l2_norm": 1.0000001142819739
+      }
+    ]
+  },
+  "limits": [
+    "Generated images establish numerical parity, not task accuracy or customer-image parity",
+    "TensorRT acceptance, target memory and latency are unmeasured",
+    "No policy serving contract, RTSM snapshot consumer or robot control is included"
+  ],
+  "files": {
+    "image-encoder.onnx": {
+      "sha256": "32a3b971b49791d2abcc3f4eecd6e63c28dea8ab1d7640705417a5cd8e722797",
+      "bytes": 371674073
+    },
+    "parity-inputs/00-input.npy": {
+      "sha256": "8c052cfbaebb871e379f76fd8f97b9f2efe6c38af99bf5890ce537c52ede84dc",
+      "bytes": 602240
+    },
+    "parity-inputs/00-onnx.npy": {
+      "sha256": "29561e2ba996b25b9b9c8e36c29ac580b87836be7a5119101428e0a3ea19ee4e",
+      "bytes": 3200
+    },
+    "parity-inputs/00-pytorch.npy": {
+      "sha256": "234b96eeb0a687264b073d50109399cb7aaa2e62e3bcef1aa35c5de3aaaa151b",
+      "bytes": 3200
+    },
+    "parity-inputs/00.png": {
+      "sha256": "1044ce73297256d219727cdca7ec645b753f980706db1dbe791a2f872b489ee9",
+      "bytes": 230992
+    },
+    "parity-inputs/01-input.npy": {
+      "sha256": "6fba987b669b5f8b3a8db4d25d128db6eb958cab13e7c230e836538937a6b0d3",
+      "bytes": 602240
+    },
+    "parity-inputs/01-onnx.npy": {
+      "sha256": "efcf7c433b1404ad3aaac56d73dc94727815e216dd87d111568f8235b67b4746",
+      "bytes": 3200
+    },
+    "parity-inputs/01-pytorch.npy": {
+      "sha256": "dca18ea0296f5c910f2c76aee1c71f636d695155deb0bc13c421c19ea1c2b01e",
+      "bytes": 3200
+    },
+    "parity-inputs/01.png": {
+      "sha256": "8bd8dd2272128a9826619c92f83ee82e7b0d7a4b11d2276da33775f1cf6d066a",
+      "bytes": 230933
+    },
+    "parity-inputs/02-input.npy": {
+      "sha256": "252ef65d18dc0042a9ca7f53247deb7d7d2810733ccf53d4b27a86118481cb84",
+      "bytes": 602240
+    },
+    "parity-inputs/02-onnx.npy": {
+      "sha256": "dc3218c0660d21e1141fcd13ca669d24d1d55613cfa5ddfb8babb30892c1fb17",
+      "bytes": 3200
+    },
+    "parity-inputs/02-pytorch.npy": {
+      "sha256": "e57bbfc80647ef1f15d99e88816c4f9c9ea7282257db070f7765237efee05230",
+      "bytes": 3200
+    },
+    "parity-inputs/02.png": {
+      "sha256": "3faa4db73aac38b27fc2b8ca0c77d490fb974487d2ed17a3f00f00db8088725a",
+      "bytes": 675
+    },
+    "parity-inputs/03-input.npy": {
+      "sha256": "b6ec177b9dcc1306ad557f59fc4c26d74ad454f71d99b69c0a21e3370cd62fe4",
+      "bytes": 602240
+    },
+    "parity-inputs/03-onnx.npy": {
+      "sha256": "2ca0d7c04c2aa8bb5d2032ef09da8a402d1dfac6c518f31e1bd6196c641c76eb",
+      "bytes": 3200
+    },
+    "parity-inputs/03-pytorch.npy": {
+      "sha256": "794731088ed50d9eb71edbb24487ccc26bb895245bfc3cb92aefd20525482cc0",
+      "bytes": 3200
+    },
+    "parity-inputs/03.png": {
+      "sha256": "b6ceaa45bc3c4ef3bcebb4e73f428ff6cb846cd1f541011d7b75169143594f9c",
+      "bytes": 230989
+    }
+  },
+  "architecture_config_reference": {
+    "model": "ViT-B-16-SigLIP",
+    "pretrained_config": "webli"
+  },
+  "metadata_reconciliation": {
+    "original_manifest_sha256": "df040deeabf82c466e4dfc3eec7b7d81d88af3791a2f3dca8fca8e2636f6a6a3",
+    "source_sha256": "5bb3b90414bb60bbda01227403c0b1576c51562b308a945a082383d34d181b77",
+    "scope": "Metadata only; actual transform objects recreated, all four saved preprocessed tensors match bit-for-bit, checkpoint rehashed unchanged; graph/inference evidence reused from original export",
+    "checkpoint_rehashed": true,
+    "preprocessing_cases_checked": 4,
+    "model_inference_repeated": false,
+    "atomic_publication_and_mutation_refusal": "Covered by focused regression tests; historical export not rerun"
+  }
+}

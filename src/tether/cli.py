@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 from rich.logging import RichHandler
@@ -217,6 +217,83 @@ def _maybe_write_embodiment_bundle(
     )
     written = adapter.save_calibration(bundle_path)
     console.print(f"  Embodiment bundle: {written}")
+
+
+@app.command("export-rtsm-siglip")
+def export_rtsm_siglip_cli(
+    output: Annotated[Path, typer.Argument(help="New directory for the standalone image encoder and evidence")],
+    checkpoint: Annotated[Path | None, typer.Option(help="Optional local SigLIP weights file")] = None,
+    preprocess: Annotated[str | None, typer.Option(help="pretrained or rtsm-local; required for local weights")] = None,
+    seed: Annotated[int, typer.Option(help="Seed for generated RGB parity images")] = 0,
+    samples: Annotated[int, typer.Option(help="Generated image cases, from 3 to 32")] = 4,
+) -> None:
+    """Export RTSM's normalized pooled SigLIP encoder with CPU parity evidence."""
+    from tether.exporters.rtsm_siglip import export_rtsm_siglip
+
+    try:
+        manifest = export_rtsm_siglip(
+            output, checkpoint=checkpoint, preprocess=preprocess, seed=seed, samples=samples,
+        )
+    except ImportError as exc:
+        err_console.print(
+            f"SigLIP export dependencies unavailable: {exc}. "
+            "Use a separate export environment with fastcrest-tether[siglip-export].",
+            style="red", markup=False,
+        )
+        raise typer.Exit(2) from exc
+    except Exception as exc:  # command boundary retains actionable model/runtime failures
+        err_console.print(f"SigLIP export refused: {exc}", style="red", markup=False)
+        raise typer.Exit(2) from exc
+    console.print(f"Standalone image encoder and CPU parity manifest: {manifest}", markup=False)
+    console.print("A policy adapter, TensorRT and target qualification remain separate.", markup=False)
+
+
+@app.command("export-precision")
+def export_precision(
+    source: Annotated[Path, typer.Argument(help="Existing monolithic FP32 export directory")],
+    output: Annotated[Path, typer.Option(help="New, separate mixed-FP16 export directory")],
+    validation_inputs: Annotated[list[Path], typer.Option(
+        "--validation-inputs", help="NPZ with exact ONNX input names/dtypes; repeat for each validation case",
+    )],
+    max_abs_threshold: Annotated[float, typer.Option(help="Explicit maximum absolute output error tolerance")],
+    cos_threshold: Annotated[float, typer.Option(help="Explicit minimum output cosine similarity")],
+) -> None:
+    """Convert an existing export only after measured CPU FP32/FP16 parity.
+
+    Preserves the source and every public I/O type. Supplied-case parity does not
+    establish target memory fit, TensorRT support or physical task accuracy.
+    """
+    from tether.exporters.fp16_convert import FP16ParityError, convert_monolithic_export_fp16
+
+    try:
+        import numpy as np
+        cases = []
+        for path in validation_inputs:
+            with np.load(path, allow_pickle=False) as archive:
+                cases.append({name: archive[name] for name in archive.files})
+        receipt = convert_monolithic_export_fp16(
+            source, output, validation_cases=cases,
+            max_abs_threshold=max_abs_threshold, cos_threshold=cos_threshold,
+        )
+    except FP16ParityError as exc:
+        err_console.print(str(exc), style="red", markup=False)
+        # Retain the measured failed result in captured command output without
+        # creating a serving directory that could be mistaken for a pass.
+        err_console.print(
+            json.dumps(exc.receipt, indent=2, allow_nan=False),
+            markup=False, soft_wrap=True, highlight=False,
+        )
+        raise typer.Exit(1) from exc
+    except Exception as exc:  # command boundary reports converter/runtime failures
+        err_console.print(f"Precision conversion refused: {exc}", style="red", markup=False)
+        raise typer.Exit(2) from exc
+    console.print(f"Validated mixed-FP16 export: {output}", markup=False)
+    console.print(
+        f"Model bytes: {receipt['model_bytes_before']} -> {receipt['model_bytes_after']}; "
+        f"{len(receipt['cases'])} supplied CPU parity cases passed.", markup=False,
+    )
+    console.print("Receipt: " + str(output / "precision-conversion.json"), markup=False)
+    console.print("Target memory fit, TensorRT and physical execution remain unqualified.", markup=False)
 
 
 @app.command(hidden=True)

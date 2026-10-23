@@ -1,0 +1,96 @@
+{
+  "status": "PASS",
+  "scope": "Metadata reconciliation only, no repeated model inference",
+  "results": [
+    {
+      "mode": "pretrained",
+      "original_manifest_sha256": "df040deeabf82c466e4dfc3eec7b7d81d88af3791a2f3dca8fca8e2636f6a6a3",
+      "reconciled_manifest": "siglip-webli-manifest-reconciled.json",
+      "reconciled_manifest_sha256": "ec1be81f6b33abca98e3a25cefa0e5796794f3bdc0cfcba10b6f42aeee05bf23",
+      "preprocessing_cases_bit_identical": 4,
+      "checkpoint_sha256": "81942ea8c09b9e41963357cca5d2682118bf7eb7491c2ae51a28bc4f4f95b194",
+      "applied": {
+        "color_mode": "RGB",
+        "image_dtype": "uint8",
+        "operations": [
+          {
+            "type": "Resize",
+            "size": [
+              224,
+              224
+            ],
+            "max_size": null,
+            "antialias": true,
+            "interpolation": "bicubic"
+          },
+          {
+            "type": "MaybeConvertMode"
+          },
+          {
+            "type": "MaybeToTensor"
+          },
+          {
+            "type": "Normalize",
+            "mean": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "std": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "mode": "rtsm-local",
+      "original_manifest_sha256": "27ee4d8aace21ae025390c7d5312fa7aed964300ad64db8fb8932eb0c721e676",
+      "reconciled_manifest": "siglip-rtsm-local-manifest-reconciled.json",
+      "reconciled_manifest_sha256": "fd5028cad774b49b4974a5d4d15a4612e70891d1317ac1e86eb86e1cf6417e37",
+      "preprocessing_cases_bit_identical": 4,
+      "checkpoint_sha256": "81942ea8c09b9e41963357cca5d2682118bf7eb7491c2ae51a28bc4f4f95b194",
+      "applied": {
+        "color_mode": "RGB",
+        "image_dtype": "uint8",
+        "operations": [
+          {
+            "type": "Resize",
+            "size": 224,
+            "max_size": null,
+            "antialias": true,
+            "interpolation": "bicubic"
+          },
+          {
+            "type": "CenterCrop",
+            "size": [
+              224,
+              224
+            ]
+          },
+          {
+            "type": "MaybeConvertMode"
+          },
+          {
+            "type": "MaybeToTensor"
+          },
+          {
+            "type": "Normalize",
+            "mean": [
+              0.48145466,
+              0.4578275,
+              0.40821073
+            ],
+            "std": [
+              0.26862954,
+              0.26130258,
+              0.27577711
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
