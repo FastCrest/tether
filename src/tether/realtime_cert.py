@@ -41,6 +41,22 @@ def _number(value: Any) -> float | None:
     return None
 
 
+def _validate_numeric_argument(name: str, value: Any, *, positive: bool = False) -> None:
+    """Refuse invalid caller budgets before certificate comparisons or division."""
+    try:
+        valid = (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(value)
+            and (value > 0 if positive else value >= 0)
+        )
+    except OverflowError:
+        valid = False
+    if not valid:
+        bound = "> 0" if positive else ">= 0"
+        raise RealtimeCertificateError(f"{name} must be finite and {bound}; booleans are not allowed")
+
+
 def _threshold(receipt: dict[str, Any], key: str) -> Any:
     profile = receipt.get("profile") or {}
     thresholds = profile.get("thresholds") or {}
@@ -86,14 +102,14 @@ def _control_hz(
     latency: dict[str, Any],
     override_hz: float | None,
 ) -> tuple[float | None, str]:
-    if override_hz and override_hz > 0:
-        return float(override_hz), "argument"
-    budget_hz = _number((latency.get("control_budget") or {}).get("control_hz"))
-    if budget_hz and budget_hz > 0:
-        return budget_hz, "latency.control_budget"
-    profile_hz = _number(_threshold(receipt, "control_hz"))
-    if profile_hz and profile_hz > 0:
-        return profile_hz, "profile.thresholds.control_hz"
+    for value, source in (
+        (override_hz, "argument"),
+        ((latency.get("control_budget") or {}).get("control_hz"), "latency.control_budget"),
+        (_threshold(receipt, "control_hz"), "profile.thresholds.control_hz"),
+    ):
+        hz = _number(value)
+        if hz is not None and hz > 0 and math.isfinite(1000.0 / hz):
+            return hz, source
     return None, "missing"
 
 
@@ -116,6 +132,7 @@ def _control_budget_summary(
     latency: dict[str, Any],
     control_hz: float | None,
 ) -> dict[str, Any]:
+    # The returned period is also the default p95 limit, so retain its precision.
     budget = latency.get("control_budget") or {}
     period_ms = _number(budget.get("period_ms"))
     if control_hz and control_hz > 0:
@@ -132,8 +149,8 @@ def _control_budget_summary(
         missed_source = "latency.control_budget" if missed is not None else "missing"
 
     return {
-        "control_hz": round(control_hz, 3) if control_hz else None,
-        "period_ms": round(period_ms, 3) if period_ms else None,
+        "control_hz": control_hz,
+        "period_ms": period_ms,
         "missed_samples": missed_samples,
         "missed_samples_source": missed_source,
         "roundtrip_sample_count": len(samples),
@@ -208,8 +225,25 @@ def build_realtime_certificate(
 
     if receipt.get("kind") != "tether.deployment_proof":
         raise RealtimeCertificateError("receipt is not a Tether deployment proof")
-    if control_hz is not None and control_hz <= 0:
-        raise RealtimeCertificateError("control_hz must be > 0 when supplied")
+    if control_hz is not None:
+        _validate_numeric_argument("control_hz", control_hz, positive=True)
+        if not math.isfinite(1000.0 / control_hz):
+            raise RealtimeCertificateError("control_hz must produce a finite control period")
+    for name, value in (
+        ("max_roundtrip_p95_ms", max_roundtrip_p95_ms),
+        ("max_jitter_p95_minus_p50_ms", max_jitter_p95_minus_p50_ms),
+    ):
+        if value is not None:
+            _validate_numeric_argument(name, value)
+    for name, value in (
+        ("max_deadline_misses", max_deadline_misses),
+        ("max_control_budget_misses", max_control_budget_misses),
+        ("max_act_errors", max_act_errors),
+        ("max_stale_action_window_ms", max_stale_action_window_ms),
+        ("max_chunk_boundary_delta", max_chunk_boundary_delta),
+        ("max_velocity_discontinuity", max_velocity_discontinuity),
+    ):
+        _validate_numeric_argument(name, value)
 
     latency = receipt.get("latency") or {}
     if not isinstance(latency, dict):
@@ -279,7 +313,7 @@ def build_realtime_certificate(
             _pass_fail(roundtrip_p95 <= p95_budget_ms),
             metric="latency.roundtrip_ms.p95_ms",
             actual=roundtrip_p95,
-            expected=f"<= {round(p95_budget_ms, 3)}",
+            expected=f"<= {p95_budget_ms}",
             remediation="Reduce model/server latency or lower the control rate.",
         )
 
@@ -399,9 +433,7 @@ def build_realtime_certificate(
             "scope": "single_action_period",
             "chunk_amortization_applied": False,
             "control_hz_source": control_source,
-            "roundtrip_p95_budget_ms": (
-                round(float(p95_budget_ms), 3) if p95_budget_ms is not None else None
-            ),
+            "roundtrip_p95_budget_ms": p95_budget_ms,
             "max_control_budget_misses": max_control_budget_misses,
         },
         "latency": {

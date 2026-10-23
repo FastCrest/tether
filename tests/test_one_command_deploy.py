@@ -23,7 +23,6 @@ from tether.runtime.hardware_probe import (
 )
 from tether.runtime.model_resolver import (
     ModelResolverError,
-    ResolveResult,
     resolve_model,
 )
 
@@ -31,6 +30,12 @@ from tether.runtime.model_resolver import (
 # ---------- hardware_probe ----------
 
 class TestHardwareProbe:
+    @pytest.fixture(autouse=True)
+    def _no_host_device_tree(self):
+        # Board identity cases use real temporary files in the dedicated tests.
+        with patch("tether.runtime.hardware_probe._try_jetson_model", return_value=None):
+            yield
+
     def test_override_bypass(self):
         r = probe_device_class(override="orin_nano")
         assert r.device_class == "orin_nano"
@@ -69,7 +74,8 @@ class TestHardwareProbe:
         with patch("tether.runtime.hardware_probe._try_nvidia_smi",
                    return_value=("NVIDIA Orin", "raw")):
             r = probe_device_class()
-        assert r.device_class == "agx_orin"  # generic Orin → AGX (more capable default)
+        assert r.device_class == "cpu"  # Generic Orin is insufficient to identify an AGX.
+        assert "no AGX profile assumed" in r.notes[0]
 
     def test_nvidia_smi_unknown_falls_back_to_a10g(self):
         with patch("tether.runtime.hardware_probe._try_nvidia_smi",
@@ -253,6 +259,59 @@ class TestTetherGoCli:
         ])
         assert result.exit_code == 2
         assert "Orin Nano" in result.output
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_unknown_jetson_refuses_before_download_or_serve(
+        self, runner, cli_app, tmp_path, monkeypatch, dry_run
+    ):
+        from tether.runtime import hardware_probe
+
+        model_file = tmp_path / "board-model"
+        model_file.write_text("NVIDIA Jetson Orin NX Developer Kit")
+        monkeypatch.setattr(hardware_probe, "_DEVICE_TREE_MODEL_PATHS", (model_file,))
+        target = tmp_path / "must-not-download"
+        args = ["go", "--model", "molmoact2-base", "--target-dir", str(target)]
+        if dry_run:
+            args.append("--dry-run")
+        with patch("huggingface_hub.snapshot_download") as download, \
+             patch("tether.runtime.server.create_app", side_effect=RuntimeError("serve must not start")) as server, \
+             patch("uvicorn.run", side_effect=RuntimeError("serve must not run")) as serve, \
+             patch("subprocess.Popen") as process:
+            result = runner.invoke(cli_app, args)
+
+        assert result.exit_code == 2, result.output
+        assert "cannot select a supported Jetson profile" in result.output
+        assert "--device-class" in result.output
+        assert "DRY RUN" not in result.output
+        download.assert_not_called()
+        server.assert_not_called()
+        serve.assert_not_called()
+        process.assert_not_called()
+        assert not target.exists()
+
+    def test_explicit_supported_override_bypasses_unknown_board(
+        self, runner, cli_app, tmp_path, monkeypatch
+    ):
+        from tether.runtime import hardware_probe
+
+        model_file = tmp_path / "board-model"
+        model_file.write_text("NVIDIA Jetson Orin NX Developer Kit")
+        monkeypatch.setattr(hardware_probe, "_DEVICE_TREE_MODEL_PATHS", (model_file,))
+        with patch("tether.cli._is_jetson_linux_aarch64", return_value=False):
+            result = runner.invoke(cli_app, [
+                "go", "--model", "smolvla-base", "--device-class", "orin_nano", "--dry-run",
+            ])
+        assert result.exit_code == 0, result.output
+        assert "DRY RUN" in result.output
+
+    def test_ordinary_cpu_autodetection_still_allows_dry_run(self, runner, cli_app):
+        with patch("tether.runtime.hardware_probe._try_jetson_model", return_value=None), \
+             patch("tether.runtime.hardware_probe._try_nvidia_smi", return_value=None), \
+             patch("tether.runtime.hardware_probe._try_tegrastats", return_value=None), \
+             patch("tether.cli._is_jetson_linux_aarch64", return_value=False):
+            result = runner.invoke(cli_app, ["go", "--model", "smolvla-base", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "DRY RUN" in result.output
 
     def test_go_on_jetson_requires_preexported_onnx(self, runner, cli_app):
         with patch("tether.cli._is_jetson_linux_aarch64", return_value=True):

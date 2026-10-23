@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
-
 from tether.chat.backends import ChatBackend, ProxyError, RateLimitError
 from tether.chat.loop import LoopState
+from tether.console import Console, write_human_text
 
 console = Console()
 
@@ -26,15 +25,15 @@ class _UIState:
 
     def on_token(self, text: str) -> None:
         if not self._stream_started:
-            sys.stdout.write("\n")
+            write_human_text("\n", stream=sys.stdout)
             sys.stdout.flush()
             self._stream_started = True
-        sys.stdout.write(text)
+        write_human_text(text, stream=sys.stdout)
         sys.stdout.flush()
 
     def end_stream(self) -> None:
         if self._stream_started:
-            sys.stdout.write("\n\n")
+            write_human_text("\n\n", stream=sys.stdout)
             sys.stdout.flush()
         self._stream_started = False
         self.streaming_reply = False

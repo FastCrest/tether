@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 import typer
-from rich.console import Console
 
+from tether.console import Console
 from tether.eval.aloha import AlohaEvalConfig, run_aloha_eval
 
 
