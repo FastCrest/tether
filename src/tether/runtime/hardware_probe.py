@@ -186,13 +186,13 @@ def probe_device_class(
     # Board identity takes precedence over generic SoC names and telemetry.
     board = _try_jetson_model()
     if board is not None:
-        cls, model = board
+        board_class, model = board
         return ProbeResult(
-            device_class=cls,
+            device_class=board_class,
             raw_gpu_name=model,
             detection_method="device-tree",
-            notes=_unidentified_jetson_notes() if cls == "cpu" else [],
-            requires_device_override=cls == "cpu",
+            notes=_unidentified_jetson_notes() if board_class == "cpu" else [],
+            requires_device_override=board_class == "cpu",
         )
 
     # 1. nvidia-smi

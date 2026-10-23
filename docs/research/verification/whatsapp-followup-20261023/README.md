@@ -44,3 +44,15 @@ checks. Existing hardware certificates remain FAIL. Studio's synthetic HTTP
 receipt does not establish consumed action horizons, physical execution or RTSM
 policy-snapshot integration. Studio owns protected build/installation evidence and
 replacement tester instructions before describing the download as updated.
+
+## Protected quality follow-up
+
+The first GitHub protected comparison reported one new mypy finding: the board
+classifier's local `cls` was inferred as a string before assignment of an
+optional GPU match. Naming the board result separately corrects the type without
+changing behavior; all 58 hardware/go cases pass again. The initial local quality
+check could not complete because this host's managed Python injects an unrelated
+NumPy stub using syntax newer than the project's configured type target. That
+operational failure is not a passing quality comparison. The normal protected
+GitHub comparison will determine the corrected source's status; no gate or
+workflow configuration is changed.

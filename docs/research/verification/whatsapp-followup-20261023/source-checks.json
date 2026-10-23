@@ -13,7 +13,7 @@
     "src/tether/finetune/cli.py": "762a026a855a69fe72954583dd850f3f4da079775ff05f8cc313ba02b24e73ef",
     "src/tether/finetune/cli_distill.py": "d37dc5f425f8c957ea425c396b63ba4b034d44d866e2b3a102d3b0c0d0fca2b0",
     "src/tether/realtime_cert.py": "8c5fde0e3a2df32bfa2a4f38d7880273dd6afc1e6cbed3950faf1192057a8e64",
-    "src/tether/runtime/hardware_probe.py": "7aed68f2e6a5a7683c3b6e92749e0694cfe72ad717d52dfe3db7df6fa2b3e947",
+    "src/tether/runtime/hardware_probe.py": "9d042da756b95859bdfe5b1bb3e4c1a2f4eb99fc725c4ac282f8ee62891b08d6",
     "tests/test_deploy_proof.py": "07cf17c688c509f21c8c424a0e9c040b7111647a54277920a091ec090428bf27",
     "tests/test_one_command_deploy.py": "ec75ae8a2f0eff8d6f110b8e540d3e93712417c19c755b6d605b6784581f4b79",
     "src/tether/console.py": "16af3712fef90df4a66df9a20516ebcd93341611d91ab46ae5256ba083b78f66",
@@ -25,5 +25,9 @@
     "Encoding console and ordinary finite latency changes reviewed; no remaining finding",
     "Ambiguous Jetson go admission reviewed after correction; no remaining finding",
     "Nonfinite certificate rate/threshold admission reviewed after correction; no remaining finding"
-  ]
+  ],
+  "post_type_correction": {
+    "passed": 58,
+    "scope": "Hardware/go affected cases after board_class variable narrowing; other source inputs unchanged"
+  }
 }
