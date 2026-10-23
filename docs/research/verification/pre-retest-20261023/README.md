@@ -28,7 +28,7 @@ with max errors 0.93–3.58 and cosines 0.32–0.96. No serving directory was pu
 Individual FP32 normalization operations were separated by FP16 casts, overflowing
 intermediates above 65,504. Rotary phase rounding was a secondary error source.
 
-The [corrected mixed-FP16 receipt](full-mixed-fp16-parity.json) preserves strongly
+The [corrected mixed-FP16 receipt](full-mixed-fp16-parity.json.gz) preserves strongly
 typed FP32 normalization/phase connections and every original I/O type. Original
 semantic casts are not bypassed. All eight original cases pass the unchanged
 0.01 / 0.999 thresholds: max error 0.00366658, min cosine 0.999998734. Model bytes
@@ -74,8 +74,8 @@ A snapshot API or embedding encoder is not a policy/control integration.
 
 ## Verification scope
 
-Focused results and final source identities are added alongside this report as
-integration completes. An earlier 197-case pass predates final numerical-island
+Focused results and final source identities accompany this report. The full
+conversion receipt is gzip-compressed without changing its JSON bytes. An earlier 197-case pass predates final numerical-island
 and SigLIP corrections and is retained as historical scope, not the final total.
 The source-only final selection reports 226 passes and four absent-optional-stack
 skips; SigLIP's own isolated export environment supplies its unskipped checks.
