@@ -88,3 +88,8 @@ GPU/TensorRT, native WSL/5090, Orin build fit, customer images/policy adapter an
 physical stop qualification remain unestablished. Existing FAIL certificates are
 not revised. Protected Studio installer/customer-flow evidence belongs in the
 Studio repository's matching receipt folder.
+
+The retained case generator accepts a work-directory argument containing the
+pinned `hf-cache`; its numerical input generation is unchanged from the run.
+The first local quality comparison flagged six style findings in the initially
+unformatted reproducer, which were corrected before final validation.

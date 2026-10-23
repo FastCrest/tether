@@ -1,11 +1,13 @@
-import json, time
+import json
+import sys
+import time
 from pathlib import Path
 import numpy as np
 import torch
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from tether.exporters.monolithic import _force_eager_attn
 
-root = Path(__file__).parent
+root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).parent
 out = root / "full-model-cases"
 out.mkdir(exist_ok=True)
 thresholds = {
