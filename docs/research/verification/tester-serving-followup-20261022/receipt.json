@@ -1,0 +1,101 @@
+{
+  "base_commit": "7603af8",
+  "source_state": "uncommitted shared tester-serving followup; no push",
+  "python": "3.12.12",
+  "sources": [
+    {
+      "path": "src/tether/deploy_proof.py",
+      "sha256": "c66790b01d21b7762b3f6c884e9ca8b08e23dab862f9375c6c6c00f894d07b87"
+    },
+    {
+      "path": "src/tether/realtime_cert.py",
+      "sha256": "88430020b429a046e991d319b6a768afc98ffa9f3d9eaf4904710fee76d9ae92"
+    },
+    {
+      "path": "src/tether/action_execution_cert.py",
+      "sha256": "26499f49638165f3b45b3c368617b9d74b1b3a1e1357cd861ee55c86a1800e81"
+    },
+    {
+      "path": "src/tether/proof_context.py",
+      "sha256": "4ba9f3e9c5d121f0ca441b5031381bb7aed880992d390fae14d05c4234a00cd8"
+    },
+    {
+      "path": "src/tether/proof_startup.py",
+      "sha256": "f108b8077e5b936a9ae1b2cab5f5040b96f2477d102581b7bb186bd38968ce8e"
+    }
+  ],
+  "checks": {
+    "focused": "63 passed in 4.32s",
+    "release_and_publisher": "15 passed in 0.74s",
+    "ruff": "pass",
+    "diff_check": "pass"
+  },
+  "local_cpu_cli": {
+    "input": "tiny offline constant ONNX fixture, 3 identical synthetic requests",
+    "proof_passed": true,
+    "certificate_with_execution": "FAIL",
+    "scope": "serving_only",
+    "horizon": null,
+    "physical_execution_verified": false,
+    "startup_timeout_s": 15.0,
+    "per_request_timeout_s": 3,
+    "startup_ready": "ready",
+    "process_memory_scope": "server_process_host_memory",
+    "gpu_memory_measured": false,
+    "artifacts": [
+      {
+        "label": "proof_json",
+        "sha256": "209a89fa8fe3e302c38acafb88571606bf287177a009f7462de8c7a92f3f1309"
+      },
+      {
+        "label": "proof_manifest",
+        "sha256": "2736d22da48f883cfd5c7c826ff3e3600243ac5985d7481b8df2b0693d4ab812"
+      },
+      {
+        "label": "cert_json",
+        "sha256": "2c6a934e48c0ba9ed52dccb24f4fcbcd0b5f3b1d5c8ffa70fc6ada4b1c3ddbbb"
+      },
+      {
+        "label": "cert_manifest",
+        "sha256": "67255a92e3874996f69125021f5853abf3ba1ed5ef2f5dd86c42a9ac9e520d4b"
+      }
+    ]
+  },
+  "original_private_certificates": [
+    {
+      "label": "5090_trt_original",
+      "sha256": "05982d948899fa260aaa20a76448cea634df1be5b4dae4efa606ea696a3d7dd7",
+      "original_decision": "FAIL"
+    },
+    {
+      "label": "orin_cuda_original",
+      "sha256": "3576ff71729c94878a564c8880072beb267bfebccdd139cba91346b28dd82880",
+      "original_decision": "FAIL"
+    },
+    {
+      "label": "orin_trt_original",
+      "sha256": "7d12b967a5013998bc1729d5a27cdb7e1f52ca57a59d9957da3061e4d3b01148",
+      "original_decision": "FAIL"
+    }
+  ],
+  "failed_orin_proof_re_evaluation": {
+    "source_sha256": "c4474135f6ec7a19f2c8b059a1edc13553ac8f764b7a09e2ca58f4b98707c5f4",
+    "decision": "FAIL",
+    "actions_observed": 0,
+    "execution_horizon": null,
+    "executed_boundary": null,
+    "diagnostic": "server_exit_before_ready",
+    "exit_code": -9,
+    "oom_confirmed": false,
+    "memory_observation": "unavailable in legacy receipt"
+  },
+  "limits": [
+    "No GPU work or download",
+    "No new hardware latency qualification",
+    "5090 source proof JSON absent; no raw observations reconstructed from certificate aggregates",
+    "Private source logs/packets remain outside repository and unchanged",
+    "No physical execution verified"
+  ],
+  "receipt_generation_python": "3.9.6",
+  "runtime_executable": "/Users/romirjain/dev/studio-wt-integration-011/.venv/bin/python"
+}

@@ -37,9 +37,17 @@ The bootstrap installer detects your platform (Mac / Jetson Orin / NVIDIA GPU / 
 
 ```bash
 pip install fastcrest-tether                            # core
-pip install 'fastcrest-tether[serve,gpu,monolithic]'    # GPU production path
+pip install 'fastcrest-tether[serve,gpu]'               # CUDA 12 GPU serving environment
 pip install 'fastcrest-tether[serve,onnx]'              # Mac / CPU runtime
 ```
+
+`serve` installs the HTTP stack; choose `onnx` or `gpu` for the inference
+runtime. Keep model export in its own virtual environment with `[monolithic]`
+when its PyTorch/CUDA requirements differ from serving. The default GPU extra
+selects one bounded CUDA 12 dependency family. Jetson uses its JetPack vendor
+stack through the installer instead of these x86 GPU wheels. A manually managed
+CUDA 13 serving environment must provide matching ORT, TensorRT and CUDA
+libraries; mixing CUDA families is not an automatic repair path.
 
 Requires Python ≥ 3.10.
 
@@ -98,7 +106,11 @@ only needed for caches built by v0.5.3 or earlier.
 | `CUDAExecutionProvider` (ORT-CUDA fallback) | 108.11 ms | 108.68 ms |
 | **`TensorrtExecutionProvider` (default)** | **19.49 ms** | 19.71 ms |
 
-**5.55x faster.** The win comes from TensorRT's FP16 kernels + engine fusion. The `[serve,gpu]` extras pull `tensorrt>=10` and `tether` patches `LD_LIBRARY_PATH` automatically at import.
+The measured A10G speedup used TensorRT FP16 and engine fusion. It is not a
+prediction for another board or model. The `[serve,gpu]` extras select a CUDA 12
+TensorRT package. Tether discovers library paths for child processes and attempts
+compatible preloads for the current process; inspect Doctor's actual session
+probe and any loader errors rather than assuming a package directory proves use.
 
 ### How to verify you're getting the win
 
@@ -106,13 +118,38 @@ only needed for caches built by v0.5.3 or earlier.
 tether doctor
 ```
 
-Look for a **green ✓** on these checks (all four must pass):
+Inspect the load checks and the empirical session probe:
 - `TensorRT runtime (libnvinfer.so.10)` — loadable
 - `CUDA cuBLAS (libcublas.so.12)` — loadable
 - `CUDA cuDNN (libcudnn.so.9)` — loadable
 - `ORT-TRT EP active` — session created with TRT EP in active providers
 
-If any are red ✗, the remediation hint says exactly which `pip install` to run. The most common cause is that you used `[serve,gpu-min]` or an older release that didn't pull `tensorrt` automatically.
+JetPack may provide these libraries through the system rather than pip. A tiny
+probe passing proves its session can initialize. Check the real model's
+`/config` `execution_providers` for requested, configured and active providers
+and options. Neither provider registration nor an FP16 request proves actual
+node placement, precision, latency or board memory fit.
+
+To require a TensorRT session explicitly and allow a longer first build without
+changing request or control-loop budgets:
+
+```bash
+TETHER_TRT_WORKSPACE_BYTES=536870912 tether prove ./export --device cuda \
+  --providers TensorrtExecutionProvider,CUDAExecutionProvider \
+  --startup-timeout-s 600 --timeout-s 30 --control-hz 20 --output-dir ./proof
+```
+
+The 512 MiB workspace here is a configuration example, not a memory-fit result.
+Workspace bounds builder scratch space, not total RAM or GPU allocation. Jetson
+defaults use a fraction of detected shared RAM; record the actual configuration
+and startup telemetry before requesting a hardware certificate. A startup kill
+has no inference latency result; exit -9 alone does not identify an OOM killer.
+`go` and chat's serving/proof tools also accept explicit provider selection.
+
+Proof sends synthetic requests and does not actuate a robot. Serving latency is
+checked against the declared single-action period; returned chunk length does
+not multiply that budget. Execution certification needs consumer-observed
+horizons and transitions. A runtime scheduling plan cannot supply that evidence.
 
 ### Reproduce the measurement
 
@@ -130,10 +167,12 @@ Full reproducer + 9-iteration debug log: [`reflex_context/03_experiments/2026-04
 
 ### Opt-out
 
-Adds ~2 GB to `[serve,gpu]` install (the `tensorrt` package + bundled libs). If you don't want it:
+TensorRT adds a multi-GB download. The selected CUDA 12 native library wheel
+alone is about 3.96 GB compressed, before PyTorch and other dependencies. To
+serve with CUDA without installing TensorRT:
 
 ```bash
-pip install 'fastcrest-tether[serve,gpu-min]'   # ORT-CUDA only, ~5x slower on transformers
+pip install 'fastcrest-tether[serve,gpu-min]'   # ORT-CUDA without TensorRT
 ```
 
 Or disable the `LD_LIBRARY_PATH` patch (e.g. if it conflicts with another env-aware tool):
@@ -693,3 +732,7 @@ For commercial licensing inquiries (offering Tether as a hosted service to compe
 Tether is built by [FastCrest](https://fastcrest.com). No signup, no telemetry by default.
 
 Made with 🔥 Passion in San Francisco
+
+### Development lockfile
+
+The checked-in `uv.lock` predates the current package and extras: it still names `reflex-vla` 0.1.0. Do not use `uv sync --locked` or `--frozen` for the current development environment until that legacy lock is reconciled. Use the install commands above, with separate export and serving environments. Universal lock regeneration also encounters an existing aarch64 NumPy/LeRobot extras conflict; the Linux x86_64 Python 3.12 `[serve,gpu]` dependency cohort has been checked separately.

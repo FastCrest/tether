@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import platform
 import subprocess
@@ -25,6 +26,8 @@ from typing import Any
 import yaml
 
 from tether import __version__
+from tether.proof_context import SERVING_CONTRACT, export_metadata
+from tether.proof_startup import StartupObservation
 from tether.smoke import (
     _log_tail,
     _offline_env,
@@ -832,6 +835,7 @@ def run_deploy_proof(
     offline: bool = True,
     port: int = 0,
     timeout_s: float = 30.0,
+    startup_timeout_s: float | None = None,
     act_samples: int = 20,
     device: str = "cpu",
     providers: str = "",
@@ -863,6 +867,9 @@ def run_deploy_proof(
         raise DeployProofError(f"act_samples must be >= 1, got {act_samples}")
     if state_dim < 0:
         raise DeployProofError(f"state_dim must be >= 0, got {state_dim}")
+    startup_limit = timeout_s if startup_timeout_s is None else startup_timeout_s
+    if not math.isfinite(startup_limit) or startup_limit <= 0:
+        raise DeployProofError("startup_timeout_s must be finite and > 0")
     if control_hz is not None and control_hz <= 0:
         raise DeployProofError(f"control_hz must be > 0, got {control_hz}")
 
@@ -900,6 +907,12 @@ def run_deploy_proof(
         "export_dir": str(export_path),
         "output_dir": str(out_path),
         "profile": profile,
+        "evidence_contract": {**SERVING_CONTRACT, "state_dim": state_dim,
+                              "instruction": instruction},
+        "export_metadata": export_metadata(export_path),
+        "runtime_request": {"device": device, "providers": providers,
+                            "strict_providers": not no_strict_providers,
+                            "deadline_ms": deadline_ms, "prewarm": prewarm},
         "server": {
             "url": base_url,
             "port": port,
@@ -995,7 +1008,10 @@ def run_deploy_proof(
         receipt["server"]["command"] = _redact_command(cmd)
         receipt["server"]["started"] = True
 
-        health = _wait_for_health(server_process, base_url, timeout_s=timeout_s)
+        startup = StartupObservation(server_process, startup_limit)
+        receipt["server"]["startup"] = startup.report
+        with startup:
+            health = _wait_for_health(server_process, base_url, timeout_s=startup_limit)
         receipt["health"] = health
         _add_check(
             checks,
@@ -1073,6 +1089,9 @@ def run_deploy_proof(
             }
             if isinstance(body.get("actions"), list):
                 sample["actions"] = body["actions"]
+            for key in ("deadline_cause", "deadline_source", "action_units", "model_id", "policy_version"):
+                if key in body:
+                    sample[key] = body[key]
             for key in (
                 "action_execution",
                 "execution",
@@ -1224,6 +1243,7 @@ def format_deploy_proof_human(receipt: dict[str, Any]) -> str:
     doctor_summary = doctor.get("summary") or {}
     lines = [
         f"tether deploy-proof - {status}",
+        "scope:   synthetic HTTP serving only; physical robot execution unverified",
         f"export:  {receipt.get('export_dir')}",
         f"packet:  {receipt.get('output_dir')}",
         f"server:  {receipt.get('server', {}).get('url')}",
@@ -1299,6 +1319,8 @@ def format_deploy_proof_markdown(receipt: dict[str, Any]) -> str:
 
     lines = [
         "# Tether Deployment Proof",
+        "",
+        "Evidence covers synthetic HTTP serving probes. No physical robot consumes these returned chunks.",
         "",
         f"- Status: {status}",
         f"- Tether version: {receipt.get('tether_version')}",

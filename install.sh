@@ -202,16 +202,15 @@ if [ -z "$EXTRAS" ]; then
     # tensorrt). They will either fail to install, segfault, or silently
     # fall back to CPU.
     #
-    # NEVER install [monolithic] on Jetson — it depends on lerobot==0.5.1
+    # NEVER install [monolithic] on Jetson — it depends on lerobot==0.6.1
     # which requires Python >=3.12. JetPack 6 ships Python 3.10. Export
     # on a Python 3.12+ host, then serve the ONNX on the Jetson.
     #
     # Instead we install [jetson], and pre-install numpy<2, torch, and
     # onnxruntime-gpu from the Jetson AI Lab index BEFORE tether so
     # pip doesn't pull incompatible x86_64 or numpy-2.x-linked wheels.
-    # Not [serve]: it requires the CPU `onnxruntime` wheel, which installs
-    # into the same `onnxruntime/` package directory and replaces the GPU
-    # build, silently removing the CUDA and TensorRT providers.
+    # [jetson] leaves ORT/torch to this vendor stack. Never add [onnx]: its
+    # CPU wheel shares the onnxruntime/ directory and replaces the GPU build.
     EXTRAS="jetson"
     ok "Detected Jetson ($JETSON_MODEL) → installing with [jetson]"
     note "  Jetson-specific GPU deps (numpy<2, torch, ort) will be installed first."

@@ -1,0 +1,37 @@
+[
+  {
+    "package": "nvidia-cublas",
+    "version": "13.1.1.3",
+    "url": "https://files.pythonhosted.org/packages/3b/cd/154ca20c38269e05eff77c1464e6c1da89f50a6390b565e9d82e06bc11e1/nvidia_cublas-13.1.1.3-py3-none-manylinux_2_27_x86_64.whl",
+    "wheel_sha256": "37936a16db8fe4ac1f065c2139360608a543a09275cb1a1af612e08cfa065436",
+    "wheel_bytes": 423138758,
+    "bytes_read": 66671,
+    "libraries": [
+      "nvidia/cu13/lib/libcublas.so.13",
+      "nvidia/cu13/lib/libcublasLt.so.13",
+      "nvidia/cu13/lib/libnvblas.so.13"
+    ]
+  },
+  {
+    "package": "nvidia-cuda-runtime",
+    "version": "13.0.96",
+    "url": "https://files.pythonhosted.org/packages/2e/24/d1558f3b68b1d26e706813b1d10aa1d785e4698c425af8db8edc3dced472/nvidia_cuda_runtime-13.0.96-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+    "wheel_sha256": "7f82250d7782aa23b6cfe765ecc7db554bd3c2870c43f3d1821f1d18aebf0548",
+    "wheel_bytes": 2243632,
+    "bytes_read": 74137,
+    "libraries": [
+      "nvidia/cu13/lib/libcudart.so.13"
+    ]
+  },
+  {
+    "package": "nvidia-nvjitlink",
+    "version": "13.4.92",
+    "url": "https://files.pythonhosted.org/packages/1d/6b/eef7a9e32872b8f41e145bf10cddc9af26e153c338852811fe9a9baddf9e/nvidia_nvjitlink-13.4.92-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+    "wheel_sha256": "e0391f24ed94ec879b84e3da4d4ec320c879aff681f2c7a638462f7199284323",
+    "wheel_bytes": 42452378,
+    "bytes_read": 66150,
+    "libraries": [
+      "nvidia/cu13/lib/libnvJitLink.so.13"
+    ]
+  }
+]

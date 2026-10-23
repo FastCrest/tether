@@ -102,6 +102,20 @@ class _StubInference:
         self.calls: list[dict] = []
         self.export_dir = kwargs.get("export_dir")
         self.providers = kwargs.get("providers")
+        # The wrapper validates actual per-stage registration before readiness.
+        # These are explicit fixture session facts, never hardware evidence.
+        from types import SimpleNamespace
+        from tether.runtime.ort_providers import provider_name
+        stage_providers = kwargs.get("providers_by_stage") or {
+            name: self.providers or ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            for name in ("vlm_prefix", "expert_denoise")
+        }
+        for name, attribute in (("vlm_prefix", "_sess_prefix"), ("expert_denoise", "_sess_expert")):
+            active = [provider_name(value) for value in stage_providers[name]]
+            setattr(self, attribute, SimpleNamespace(
+                get_providers=lambda active=active: active,
+                get_provider_options=lambda: {}, get_inputs=lambda: [],
+            ))
         # Mimic the _expert_session lang_seq probe -- present but None
         # so the probe falls back to default DEFAULT_LANG_SEQ_LEN.
         self._expert_session = None

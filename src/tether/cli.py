@@ -3094,7 +3094,7 @@ def serve(
     except ImportError:
         err_console.print(
             "onnxruntime is not installed.\n"
-            "For CPU serving: pip install 'fastcrest-tether[serve]'\n"
+            "For CPU serving: pip install 'fastcrest-tether[serve,onnx]'\n"
             "For GPU serving: pip install 'fastcrest-tether[serve,gpu]'",
             markup=False,
         )
@@ -3791,81 +3791,44 @@ def check(
 
 
 def _check_trt_ep_load_chain(add) -> None:
-    """Validate that ORT-TRT EP can actually load + activate.
+    """Report library load evidence and independently probe an ORT TRT session.
 
-    Adds 4 checks to the doctor table via the `add(name, ok, detail)` callback:
-    1. libnvinfer.so.10 loadable (the TRT runtime; from `tensorrt` pip pkg)
-    2. libcublas.so.12 loadable (CUDA BLAS; from `nvidia-cublas-cu12` pip pkg)
-    3. libcudnn.so.9 loadable (CUDA NN; from `nvidia-cudnn-cu12` pip pkg)
-    4. ort.InferenceSession with TRT EP succeeds + active providers includes it
-       (gold standard — proves the entire load chain works end-to-end)
-
-    Each check has a remediation hint inline. Per ADR
-    2026-04-29-ort-trt-ep-first-class-support.md.
+    A system library can be usable without a file in pip site-packages.
+    Failed discovery must not suppress the empirical session probe.
     """
-    import ctypes
-    import os
+    from tether._gpu_loader import cuda_families, load_library
 
-    # Check 1-3: shared library loadability. Resolve full paths from the
-    # candidate dirs (same logic as tether/__init__.py:_candidate_lib_dirs)
-    # because bare `ctypes.CDLL("libnvinfer.so.10")` only works if the
-    # dynamic loader's path includes the lib dir — and modifying
-    # LD_LIBRARY_PATH after process start does NOT update the loader.
-    # The tether import already eagerly dlopen's these libs with RTLD_GLOBAL;
-    # we re-do the lookup here to surface the per-lib status to the user.
-    from tether import _candidate_lib_dirs
-
-    def _find_lib(libname: str) -> str | None:
-        for libdir in _candidate_lib_dirs():
-            full = os.path.join(libdir, libname)
-            if os.path.exists(full):
-                return full
-        return None
-
-    # Use \[ to escape Rich markup brackets so they render as literal text
-    # in the doctor table.
+    families = cuda_families(system=True)
+    if len(families) > 1:
+        add("CUDA library family", False,
+            "Both CUDA 12 and 13 libraries detected. Automatic preloading is disabled; "
+            "use separate export and serving environments with one matching CUDA family. "
+            "The provider session probe below reports what ORT can actually load.")
+    family = next(iter(families)) if len(families) == 1 else None
     libs = [
-        ("libnvinfer.so.10", "TensorRT runtime",
-         r"pip install 'tether\[serve,gpu]' (brings tensorrt>=10)"),
-        ("libcublas.so.12", "CUDA cuBLAS",
-         r"pip install nvidia-cublas-cu12 (auto-included in \[serve,gpu])"),
-        ("libcudnn.so.9", "CUDA cuDNN",
-         r"pip install nvidia-cudnn-cu12 (auto-included in \[serve,gpu])"),
+        ("libnvinfer.so.10", "TensorRT runtime"),
+        (f"libcublas.so.{family}" if family else None, "CUDA cuBLAS"),
+        ("libcudnn.so.9", "CUDA cuDNN"),
     ]
-    all_libs_loadable = True
-    for libname, friendly, fix_hint in libs:
-        full_path = _find_lib(libname)
-        if full_path is None:
-            all_libs_loadable = False
-            add(
-                f"{friendly} ({libname})",
-                False,
-                f"NOT installed (not found in pip site-packages). "
-                f"Fix: {fix_hint}",
-            )
+    for libname, friendly in libs:
+        if family is None:
+            add(friendly, False,
+                "CUDA family ambiguous or not detected; no speculative library preload. "
+                "Use the empirical provider result below.")
             continue
-        try:
-            ctypes.CDLL(full_path, mode=ctypes.RTLD_GLOBAL)
-            add(f"{friendly} ({libname})", True, f"loadable at {full_path}")
-        except OSError as exc:
-            all_libs_loadable = False
-            add(
-                f"{friendly} ({libname})",
-                False,
-                f"installed at {full_path} but not loadable: {exc}. "
-                f"Fix: {fix_hint}",
-            )
-
-    # Check 4: gold standard — actually create an ORT session with TRT EP
-    # and verify the provider becomes active. Skip if libs failed (would
-    # produce a less-informative error).
-    if not all_libs_loadable:
-        add(
-            "ORT-TRT EP active",
-            False,
-            "skipped — fix the missing libs above first",
-        )
-        return
+        result = load_library(libname)
+        if result.loaded:
+            detail = f"loadable at {result.path}"
+            if result.errors:
+                detail += f"; earlier candidate failed: {result.errors[0]}"
+            add(f"{friendly} ({libname})", True, detail)
+        else:
+            add(f"{friendly} ({libname})", False,
+                "Not loadable through discovered paths or the OS loader. "
+                + "; ".join(result.errors[-2:])
+                + ". Check matching CUDA/TensorRT libraries; for the supported CUDA 12 "
+                "serving cohort: pip install 'fastcrest-tether[serve,gpu]'. "
+                "This does not establish that the library is uninstalled.")
 
     try:
         import onnxruntime as ort
@@ -3887,7 +3850,6 @@ def _check_trt_ep_load_chain(add) -> None:
     # Build a tiny dummy ONNX in-memory and try to load with TRT EP.
     # If the session creates AND active providers includes TRT EP, we're golden.
     try:
-        import onnx
         from onnx import helper, TensorProto
 
         # Trivial 1-add graph: y = x + x. Smallest valid ONNX.
@@ -4050,6 +4012,11 @@ def deploy_proof(
         30.0,
         "--timeout-s",
         help="Seconds to wait for /health, /act, /metrics, and auth probes.",
+    ),
+    startup_timeout_s: float | None = typer.Option(
+        None,
+        "--startup-timeout-s",
+        help="Separate bounded startup wait, including TensorRT engine building. Defaults to --timeout-s; request and latency budgets stay unchanged.",
     ),
     samples: int = typer.Option(
         20,
@@ -4218,6 +4185,7 @@ def deploy_proof(
             offline=offline,
             port=port,
             timeout_s=timeout_s,
+            startup_timeout_s=startup_timeout_s,
             act_samples=samples,
             device=device,
             providers=providers,
@@ -4462,7 +4430,7 @@ def doctor(
         console.print(f"  tether_version: {cache.tether_version}")
         console.print(f"  calibration_date: {cache.calibration_date}")
         console.print(
-            f"  hardware_fingerprint: " +
+            "  hardware_fingerprint: " +
             ("[green]matches current host[/green]" if not is_stale else
              "[yellow]STALE — hardware/version mismatch or > 30d old[/yellow]")
         )
@@ -4601,12 +4569,8 @@ def doctor(
     except (OSError, ImportError):
         pass
 
-    # ─── CUDA driver vs cuDNN version skew guard ────────────────────────
-    # cuDNN minor versions have driver minimum requirements (cuDNN 9.5
-    # needs NVIDIA driver R555+; cuDNN 9.0 needs R550+). Mismatch causes
-    # silent kernel failures at first invocation, not at session-init.
-    # Catches: customer pinned old driver via apt-hold, used Tether's
-    # bundled cuDNN at the wrong system driver level.
+    # Driver support depends on CUDA builds and the host, not cuDNN minor alone.
+    # In WSL the host Windows driver provides CUDA; Linux apt driver advice is wrong.
     try:
         import subprocess as _sub
         nv_proc = _sub.run(
@@ -4615,34 +4579,11 @@ def doctor(
         )
         if nv_proc.returncode == 0:
             driver_str = (nv_proc.stdout or "").strip().split("\n")[0]
-            try:
-                driver_major = int(driver_str.split(".")[0])
-            except (ValueError, IndexError):
-                driver_major = 0
-            try:
-                from importlib.metadata import version as _v
-                cudnn_v = _v("nvidia-cudnn-cu12")
-                cudnn_minor = int(cudnn_v.split(".")[1]) if cudnn_v else 0
-                # cuDNN 9.5 needs driver R555+; cuDNN 9.0 needs R550+
-                min_driver = 555 if cudnn_minor >= 5 else 550
-                if driver_major and driver_major < min_driver:
-                    add(
-                        "  → CUDA driver vs cuDNN",
-                        False,
-                        f"❌ NVIDIA driver R{driver_major} predates cuDNN "
-                        f"{cudnn_v} requirement (needs R{min_driver}+). "
-                        f"Kernels will silently fail at first inference call. "
-                        f"Upgrade driver: `sudo apt install nvidia-driver-{min_driver}` "
-                        f"or use cuDNN <9.5 (`pip install 'nvidia-cudnn-cu12<9.5'`).",
-                    )
-                elif driver_major:
-                    add(
-                        "  → CUDA driver vs cuDNN",
-                        True,
-                        f"driver R{driver_major} OK for cuDNN {cudnn_v}",
-                    )
-            except Exception:  # noqa: BLE001 — best-effort probe
-                pass
+            if driver_str:
+                add("NVIDIA driver observed", True,
+                    f"{driver_str}; compatibility depends on the installed CUDA build. "
+                    "Provider session and policy inference checks are still required. "
+                    "On WSL, update the Windows host driver when needed.")
     except (FileNotFoundError, ImportError, OSError):
         pass
 
@@ -4662,7 +4603,7 @@ def doctor(
             "  → CUDAExecutionProvider",
             has_cuda,
             "available" if has_cuda else (
-                "NOT available — install onnxruntime-gpu or check CUDA 12 + cuDNN 9 system libs"
+                "NOT available — install a GPU ORT build and matching CUDA/cuDNN libraries"
             ),
         )
         add(
@@ -4686,7 +4627,6 @@ def doctor(
             try:
                 import os as _os
                 import tempfile as _tmp
-                import onnx as _onnx
                 from onnx import TensorProto, helper
 
                 # Build a tiny stub model (1x1 add) — small enough that
@@ -4701,11 +4641,11 @@ def doctor(
                     ],
                     [helper.make_tensor_value_info("C", TensorProto.FLOAT, [1])],
                 )
-                model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
-                model.ir_version = 9
+                probe_model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
+                probe_model.ir_version = 9
 
                 with _tmp.NamedTemporaryFile(suffix=".onnx", delete=False) as _f:
-                    _f.write(model.SerializeToString())
+                    _f.write(probe_model.SerializeToString())
                     stub_path = _f.name
 
                 try:
@@ -4720,8 +4660,8 @@ def doctor(
                         add(
                             "  → TRT EP empirical load",
                             True,
-                            "session-init with TRT EP succeeds; production "
-                            "serve will get the 5.55× win.",
+                            "TRT provider retained for this tiny session-init probe. "
+                            "This does not measure policy inference or latency.",
                         )
                     else:
                         add(
@@ -4729,9 +4669,8 @@ def doctor(
                             False,
                             f"❌ TRT EP listed available but session falls back "
                             f"to {active}. Likely libnvinfer.so.10 not on dlopen "
-                            f"path. Fix: `pip install -U 'tensorrt>=10.0,<11'` + "
-                            f"restart shell. Customer silently loses ~5× perf "
-                            f"otherwise. See ADR 2026-04-29-ort-trt-ep-first-class.",
+                            f"path or incompatible CUDA/TensorRT libraries. Use the "
+                            f"library details below and a matching serving environment.",
                         )
                 finally:
                     _os.unlink(stub_path)
@@ -5391,6 +5330,12 @@ def go(
     port: int = typer.Option(8000, "--port", help="HTTP port for /act + /health"),
     host: str = typer.Option("0.0.0.0", "--host"),
     api_key: str = typer.Option("", "--api-key", help="If set, /act requires X-Tether-Key header"),
+    providers: str = typer.Option(
+        "", "--providers", help="Comma-separated ORT providers in priority order. Omit for automatic device planning.",
+    ),
+    no_strict_providers: bool = typer.Option(
+        False, "--no-strict-providers", help="Allow provider fallback instead of failing loudly.",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -5701,6 +5646,8 @@ def go(
     app_instance = create_app(
         export_dir=str(target),
         device="cuda" if probe.device_class != "cpu" else "cpu",
+        providers=[p.strip() for p in providers.split(",") if p.strip()] if providers else None,
+        strict_providers=not no_strict_providers,
         embodiment_config=embodiment_cfg,
         api_key=api_key or None,
         action_units=_go_units,

@@ -164,7 +164,7 @@ class Pi05DecomposedInference:
     def __init__(
         self,
         export_dir: str | Path,
-        providers: list[str] | None = None,
+        providers: list[Any] | None = None,
         enable_cache: bool = True,
         cache_ttl_sec: float = 0.2,
         cache_max_age_steps: int = 0,
@@ -174,6 +174,7 @@ class Pi05DecomposedInference:
         cache_ignore_lang: bool = False,
         episode_cache_max_episodes: int = 8,
         *,
+        providers_by_stage: dict[str, list[Any]] | None = None,
         cuda_graphs_enabled: bool = False,
         cuda_graphs_embodiment: str = "unknown",
         cuda_graphs_model_id: str = "unknown",
@@ -245,6 +246,12 @@ class Pi05DecomposedInference:
         # cuda_graphs_enabled=True overrides the providers list to include
         # enable_cuda_graph=1 on the CUDA Execution Provider (Phase 1
         # cuda-graphs feature; see ADR 2026-04-24-cuda-graphs-architecture).
+        if providers_by_stage is not None and cuda_graphs_enabled:
+            raise ValueError(
+                "providers_by_stage cannot be combined with cuda_graphs_enabled; "
+                "disable capture to preserve the explicit stage provider plans."
+            )
+        self._providers_by_stage = providers_by_stage or {}
         self._cuda_graphs_enabled = cuda_graphs_enabled
         self._cuda_graphs_embodiment = cuda_graphs_embodiment
         self._cuda_graphs_model_id = cuda_graphs_model_id
@@ -359,7 +366,7 @@ class Pi05DecomposedInference:
             )
         else:
             logger.info("loading vlm_prefix: %s", prefix_path)
-            _raw_prefix = ort.InferenceSession(str(prefix_path), providers=self._providers)
+            _raw_prefix = ort.InferenceSession(str(prefix_path), providers=self._providers_by_stage.get("vlm_prefix", self._providers))
             actual_prefix = _raw_prefix.get_providers()
             logger.info("vlm_prefix actual providers: %s", actual_prefix)
             if cuda_required and "CUDAExecutionProvider" not in actual_prefix:
@@ -372,7 +379,7 @@ class Pi05DecomposedInference:
             self._sess_prefix = _raw_prefix
 
             logger.info("loading expert_denoise: %s", expert_path)
-            _raw_expert = ort.InferenceSession(str(expert_path), providers=self._providers)
+            _raw_expert = ort.InferenceSession(str(expert_path), providers=self._providers_by_stage.get("expert_denoise", self._providers))
             actual_expert = _raw_expert.get_providers()
             logger.info("expert_denoise actual providers: %s", actual_expert)
             self._sess_expert = _raw_expert

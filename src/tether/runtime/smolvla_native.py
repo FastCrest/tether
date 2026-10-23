@@ -64,6 +64,11 @@ class SmolVLANativeServer:
         batch_timeout_ms: float = 5.0,
         num_denoising_steps: int | None = None,
     ):
+        if providers:
+            raise ValueError(
+                "ORT providers cannot be honored by the native PyTorch runtime. "
+                "Use the ONNX server for --providers, or omit providers for native execution."
+            )
         self.export_dir = Path(export_dir)
         self._requested_device = device
         self._safety_config_path = Path(safety_config) if safety_config else None

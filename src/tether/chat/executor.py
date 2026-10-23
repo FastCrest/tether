@@ -50,6 +50,7 @@ def _build_go(p: dict[str, Any]) -> list[str]:
     _flag(args, "device-class", p.get("device_class"))
     _flag(args, "embodiment", p.get("embodiment"))
     _flag(args, "port", p.get("port"))
+    _flag(args, "providers", p.get("providers"))
     return args
 
 
@@ -66,6 +67,8 @@ def _build_serve(p: dict[str, Any]) -> list[str]:
     args = ["serve", str(p["export_dir"])]
     _flag(args, "port", p.get("port"))
     _flag(args, "host", p.get("host"))
+    _flag(args, "device", p.get("device"))
+    _flag(args, "providers", p.get("providers"))
     return args
 
 
@@ -82,8 +85,10 @@ def _build_prove(p: dict[str, Any]) -> list[str]:
         args.append("--policy-diff-shadow")
     _flag(args, "policy-diff-fail-on", p.get("policy_diff_fail_on"))
     _flag(args, "device", p.get("device"))
+    _flag(args, "providers", p.get("providers"))
     _flag(args, "samples", p.get("samples"))
     _flag(args, "timeout-s", p.get("timeout_s"))
+    _flag(args, "startup-timeout-s", p.get("startup_timeout_s"))
     _flag(args, "control-hz", p.get("control_hz"))
     if p.get("offline") is False:
         args.append("--online")

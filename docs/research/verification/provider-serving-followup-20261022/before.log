@@ -1,0 +1,56 @@
+F.FF                                                                                                                                                                                             [100%]
+=============================================================================================== FAILURES ===============================================================================================
+__________________________________________________________________ test_explicit_trt_receives_cache_precision_and_workspace_defaults ___________________________________________________________________
+
+tmp_path = PosixPath('/private/var/folders/0m/9x1qvrkn179c6cpstxkqxcn80000gn/T/pytest-of-romirjain/pytest-1964/test_explicit_trt_receives_cac0')
+
+    def test_explicit_trt_receives_cache_precision_and_workspace_defaults(tmp_path):
+        requested = [TRT, CUDA]
+        plan = providers.build_ort_provider_plan(tmp_path, requested_providers=requested,
+                                                 available_providers=requested)
+        assert [providers.provider_name(p) for p in plan.providers] == requested
+>       assert isinstance(plan.providers[0], tuple)
+E       AssertionError: assert False
+E        +  where False = isinstance('TensorrtExecutionProvider', tuple)
+
+tests/test_provider_followup.py:19: AssertionError
+_____________________________________________________________________ test_strict_explicit_trt_cannot_succeed_after_cuda_fallback ______________________________________________________________________
+
+tmp_path = PosixPath('/private/var/folders/0m/9x1qvrkn179c6cpstxkqxcn80000gn/T/pytest-of-romirjain/pytest-1964/test_strict_explicit_trt_canno0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108ee6630>
+
+    def test_strict_explicit_trt_cannot_succeed_after_cuda_fallback(tmp_path, monkeypatch):
+        server, _ = mocked_server(tmp_path, monkeypatch, active=[CUDA, CPU])
+>       with pytest.raises(RuntimeError, match='TensorrtExecutionProvider'):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_provider_followup.py:57: Failed
+___________________________________________________________________________ test_trt_presence_does_not_claim_fp16_execution ____________________________________________________________________________
+
+tmp_path = PosixPath('/private/var/folders/0m/9x1qvrkn179c6cpstxkqxcn80000gn/T/pytest-of-romirjain/pytest-1964/test_trt_presence_does_not_cla0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10e5c63f0>
+
+    def test_trt_presence_does_not_claim_fp16_execution(tmp_path, monkeypatch):
+        server, _ = mocked_server(tmp_path, monkeypatch, active=[TRT, CUDA, CPU])
+        server.load()
+>       assert server._provider_mode == 'onnx_trt'
+E       AssertionError: assert 'onnx_trt_fp16' == 'onnx_trt'
+E         
+E         - onnx_trt
+E         + onnx_trt_fp16
+E         ?         +++++
+
+tests/test_provider_followup.py:64: AssertionError
+=========================================================================================== warnings summary ===========================================================================================
+../studio-wt-integration-011/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1464
+  /Users/romirjain/dev/studio-wt-integration-011/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================================================================================= short test summary info ========================================================================================
+FAILED tests/test_provider_followup.py::test_explicit_trt_receives_cache_precision_and_workspace_defaults - AssertionError: assert False
+FAILED tests/test_provider_followup.py::test_strict_explicit_trt_cannot_succeed_after_cuda_fallback - Failed: DID NOT RAISE RuntimeError
+FAILED tests/test_provider_followup.py::test_trt_presence_does_not_claim_fp16_execution - AssertionError: assert 'onnx_trt_fp16' == 'onnx_trt'
+3 failed, 1 passed, 1 warning in 2.16s

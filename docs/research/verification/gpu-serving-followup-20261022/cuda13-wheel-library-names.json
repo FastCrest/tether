@@ -1,0 +1,61 @@
+[
+  {
+    "package": "nvidia-cusparse",
+    "version": "12.6.3.3",
+    "url": "https://files.pythonhosted.org/packages/fa/18/623c77619c31d62efd55302939756966f3ecc8d724a14dab2b75f1508850/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+    "wheel_sha256": "2b3c89c88d01ee0e477cb7f82ef60a11a4bcd57b6b87c33f789350b59759360b",
+    "wheel_bytes": 145942937,
+    "bytes_read": 66227,
+    "libraries": [
+      "nvidia/cu13/lib/libcusparse.so.12"
+    ]
+  },
+  {
+    "package": "nvidia-curand",
+    "version": "10.4.0.35",
+    "url": "https://files.pythonhosted.org/packages/a5/9f/be0a41ca4a4917abf5cb9ae0daff1a6060cc5de950aec0396de9f3b52bc5/nvidia_curand-10.4.0.35-py3-none-manylinux_2_27_x86_64.whl",
+    "wheel_sha256": "1aee33a5da6e1db083fe2b90082def8915f30f3248d5896bcec36a579d941bfc",
+    "wheel_bytes": 59544258,
+    "bytes_read": 67484,
+    "libraries": [
+      "nvidia/cu13/lib/libcurand.so.10"
+    ]
+  },
+  {
+    "package": "nvidia-cufft",
+    "version": "12.0.0.61",
+    "url": "https://files.pythonhosted.org/packages/a8/2f/7b57e29836ea8714f81e9898409196f47d772d5ddedddf1592eadb8ab743/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+    "wheel_sha256": "6c44f692dce8fd5ffd3e3df134b6cdb9c2f72d99cf40b62c32dde45eea9ddad3",
+    "wheel_bytes": 214085489,
+    "bytes_read": 66435,
+    "libraries": [
+      "nvidia/cu13/lib/libcufft.so.12",
+      "nvidia/cu13/lib/libcufftw.so.12"
+    ]
+  },
+  {
+    "package": "nvidia-nvjitlink",
+    "version": "13.0.88",
+    "url": "https://files.pythonhosted.org/packages/56/7a/123e033aaff487c77107195fa5a2b8686795ca537935a24efae476c41f05/nvidia_nvjitlink-13.0.88-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+    "wheel_sha256": "13a74f429e23b921c1109976abefacc69835f2f433ebd323d3946e11d804e47b",
+    "wheel_bytes": 40713933,
+    "bytes_read": 66150,
+    "libraries": [
+      "nvidia/cu13/lib/libnvJitLink.so.13"
+    ]
+  },
+  {
+    "package": "nvidia-cuda-nvrtc",
+    "version": "13.0.88",
+    "url": "https://files.pythonhosted.org/packages/c3/68/483a78f5e8f31b08fb1bb671559968c0ca3a065ac7acabfc7cee55214fd6/nvidia_cuda_nvrtc-13.0.88-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+    "wheel_sha256": "ad9b6d2ead2435f11cbb6868809d2adeeee302e9bb94bcf0539c7a40d80e8575",
+    "wheel_bytes": 90215200,
+    "bytes_read": 66405,
+    "libraries": [
+      "nvidia/cu13/lib/libnvrtc-builtins.alt.so.13.0",
+      "nvidia/cu13/lib/libnvrtc-builtins.so.13.0",
+      "nvidia/cu13/lib/libnvrtc.alt.so.13",
+      "nvidia/cu13/lib/libnvrtc.so.13"
+    ]
+  }
+]

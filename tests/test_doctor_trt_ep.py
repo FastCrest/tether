@@ -10,6 +10,7 @@ Tests verify each branch (lib missing / lib loadable / session creates with
 TRT EP active / session creates with fallback / session creation throws /
 ORT not installed / TRT EP not in available providers list).
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tether.cli import _check_trt_ep_load_chain
+
+
+@pytest.fixture(autouse=True)
+def cuda12_environment(monkeypatch):
+    # Most cases exercise a known CUDA 12 cohort, independently of the host.
+    monkeypatch.setattr("tether._gpu_loader.cuda_families", lambda **kwargs: {12})
+    monkeypatch.setattr("tether._gpu_loader.candidate_lib_dirs", lambda: ["/pip-libs"])
+    monkeypatch.setattr("ctypes.util.find_library", lambda name: None)
 
 
 def _fake_onnx_module():
@@ -67,13 +76,13 @@ def test_all_libs_loadable_runs_full_chain(add_capture):
     fake_cdll = MagicMock(return_value=MagicMock())
 
     fake_session = MagicMock()
-    fake_session.get_providers.return_value = [
-        "TensorrtExecutionProvider", "CPUExecutionProvider"
-    ]
+    fake_session.get_providers.return_value = ["TensorrtExecutionProvider", "CPUExecutionProvider"]
     fake_ort = MagicMock()
     fake_ort.InferenceSession.return_value = fake_session
     fake_ort.get_available_providers.return_value = [
-        "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
     ]
 
     with (
@@ -89,28 +98,70 @@ def test_all_libs_loadable_runs_full_chain(add_capture):
     assert _result_for(calls, "ORT-TRT EP active")["ok"] is True
 
 
-def test_libnvinfer_missing_skips_session_check(add_capture):
-    """If libnvinfer doesn't exist in candidate dirs, mark ✗ + skip session check."""
+def test_library_lookup_failure_does_not_suppress_empirical_probe(add_capture):
     calls, fake_add = add_capture
+    fake_ort = MagicMock()
+    fake_ort.get_available_providers.return_value = ["TensorrtExecutionProvider"]
+    fake_ort.InferenceSession.return_value.get_providers.return_value = [
+        "TensorrtExecutionProvider"
+    ]
 
-    # libnvinfer is NOT found anywhere; libcublas + libcudnn ARE found
-    def exists_side_effect(path):
-        return "libnvinfer" not in path
+    def load(path, **kwargs):
+        if "libnvinfer" in path:
+            raise OSError("not found by this loader")
+        return MagicMock()
 
     with (
-        patch("ctypes.CDLL", return_value=MagicMock()),
-        patch("os.path.exists", side_effect=exists_side_effect),
+        patch("ctypes.CDLL", side_effect=load),
+        patch("os.path.exists", return_value=False),
+        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
-
     nvinfer = _result_for(calls, "libnvinfer.so.10")
     assert nvinfer["ok"] is False
-    assert "NOT installed" in nvinfer["detail"]
-    assert "pip install" in nvinfer["detail"]  # remediation hint present
+    assert "not establish" in nvinfer["detail"]
+    assert "NOT installed" not in nvinfer["detail"]
+    assert _result_for(calls, "ORT-TRT EP active")["ok"] is True
+    fake_ort.InferenceSession.assert_called_once()
 
-    session = _result_for(calls, "ORT-TRT EP active")
-    assert session["ok"] is False
-    assert "skipped" in session["detail"]
+
+def test_system_libraries_work_without_pip_files(add_capture):
+    calls, fake_add = add_capture
+    fake_ort = MagicMock()
+    fake_ort.get_available_providers.return_value = []
+    with (
+        patch("ctypes.CDLL", return_value=MagicMock()) as load,
+        patch("os.path.exists", return_value=False),
+        patch.dict("sys.modules", {"onnxruntime": fake_ort}),
+    ):
+        _check_trt_ep_load_chain(fake_add)
+    assert all(
+        _result_for(calls, name)["ok"]
+        for name in ("libnvinfer.so.10", "libcublas.so.12", "libcudnn.so.9")
+    )
+    assert [call.args[0] for call in load.call_args_list] == [
+        "libnvinfer.so.10",
+        "libcublas.so.12",
+        "libcudnn.so.9",
+    ]
+
+
+def test_mixed_family_diagnostics_do_not_preload_but_keep_probe(add_capture):
+    calls, fake_add = add_capture
+    fake_ort = MagicMock()
+    fake_ort.get_available_providers.return_value = ["TensorrtExecutionProvider"]
+    fake_ort.InferenceSession.return_value.get_providers.return_value = [
+        "TensorrtExecutionProvider"
+    ]
+    with (
+        patch("tether._gpu_loader.cuda_families", return_value={12, 13}),
+        patch("ctypes.CDLL") as load,
+        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+    ):
+        _check_trt_ep_load_chain(fake_add)
+    load.assert_not_called()
+    assert _result_for(calls, "CUDA library family")["ok"] is False
+    assert _result_for(calls, "ORT-TRT EP active")["ok"] is True
 
 
 def test_remediation_hints_present_for_each_lib(add_capture):
@@ -140,7 +191,8 @@ def test_trt_ep_not_in_available_providers(add_capture):
 
     fake_ort = MagicMock()
     fake_ort.get_available_providers.return_value = [
-        "CUDAExecutionProvider", "CPUExecutionProvider"  # no TRT
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",  # no TRT
     ]
 
     with (
@@ -161,13 +213,13 @@ def test_session_creates_but_trt_ep_falls_back(add_capture):
 
     fake_session = MagicMock()
     # TRT EP requested but ORT fell back to CUDA only
-    fake_session.get_providers.return_value = [
-        "CUDAExecutionProvider", "CPUExecutionProvider"
-    ]
+    fake_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
     fake_ort = MagicMock()
     fake_ort.InferenceSession.return_value = fake_session
     fake_ort.get_available_providers.return_value = [
-        "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
     ]
 
     with (
@@ -190,7 +242,9 @@ def test_session_creation_throws(add_capture):
     fake_ort = MagicMock()
     fake_ort.InferenceSession.side_effect = RuntimeError("BOOM internal ORT error")
     fake_ort.get_available_providers.return_value = [
-        "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
     ]
 
     with (
