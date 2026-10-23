@@ -375,11 +375,44 @@ def test_shared_blocklisted_input_reuses_identical_converter_cast(tmp_path):
     write_tether_config(src, cfg)
     receipt = _convert(src, tmp_path / "fp16")
     assert receipt["parity_verdict"] == "PASS"
-    assert receipt["duplicate_casts_removed"] >= 1
     converted = onnx.load(tmp_path / "fp16/model.onnx", load_external_data=False)
     outputs = [name for node in converted.graph.node for name in node.output]
     assert len(outputs) == len(set(outputs))
     onnx.checker.check_model(str(tmp_path / "fp16/model.onnx"))
+
+
+def test_identical_duplicate_casts_are_reused_without_changing_consumers():
+    import onnxruntime as ort
+
+    from tether.exporters.fp16_convert import _deduplicate_conversion_casts
+
+    graph = helper.make_graph(
+        [
+            helper.make_node("Cast", ["x"], ["shared"], to=TensorProto.FLOAT, name="a"),
+            helper.make_node("Cast", ["x"], ["shared"], to=TensorProto.FLOAT, name="b"),
+            helper.make_node("Add", ["shared", "shared"], ["actions"], name="consumer"),
+        ],
+        "duplicate_casts",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT16, [4])],
+        [helper.make_tensor_value_info("actions", TensorProto.FLOAT, [4])],
+        value_info=[
+            helper.make_tensor_value_info("shared", TensorProto.FLOAT, [4]),
+            helper.make_tensor_value_info("shared", TensorProto.FLOAT, [4]),
+        ],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 19)])
+    model.ir_version = 9
+    assert _deduplicate_conversion_casts(model) == 1
+    assert [node.op_type for node in model.graph.node] == ["Cast", "Add"]
+    assert list(model.graph.node[1].input) == ["shared", "shared"]
+    assert len(model.graph.value_info) == 1
+    assert _deduplicate_conversion_casts(model) == 0
+    onnx.checker.check_model(model)
+    session = ort.InferenceSession(model.SerializeToString(), providers=["CPUExecutionProvider"])
+    inputs = np.array([-3, 0, 0.125, 2048], np.float16)
+    np.testing.assert_array_equal(
+        session.run(None, {"x": inputs})[0], inputs.astype(np.float32) * 2
+    )
 
 
 @pytest.mark.parametrize("conflict", ["target", "input", "op", "declaration"])
