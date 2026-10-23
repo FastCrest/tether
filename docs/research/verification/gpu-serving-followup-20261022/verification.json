@@ -1,0 +1,40 @@
+{
+  "base": "7603af891bfaa9f08062c97549c67ea619fbbc52",
+  "source_sha256": {
+    "install.sh": "ff6c6859fd83a8ab18cbf285ac3651510cb8a0e086cf87425d9945655993ba0a",
+    "pyproject.toml": "e7a6dca7be1e91834c349bcfb85993ab51fbe9d83f9e8f085a16c08baed6ade5",
+    "src/tether/__init__.py": "7a3888c63dfabdb423e312de0478759805c6ee0abd007b61a165a8e9ef8a163a",
+    "src/tether/_gpu_loader.py": "2cde613056ac16e123146847f7d33f36e3ba30a2dac2813a00e74b03d6ecb070",
+    "src/tether/action_execution_cert.py": "26499f49638165f3b45b3c368617b9d74b1b3a1e1357cd861ee55c86a1800e81",
+    "src/tether/chat/executor.py": "b498e87e32c2ec29c854a4791630df108178b7ea4a75b8f27b3add3b015ab95a",
+    "src/tether/chat/schema.py": "b306f06f6b5ed87a40c6c1bc27770dda6b4c0ffe96ed6770726f581744f0737e",
+    "src/tether/cli.py": "a8849d813387e0ab544eec62251a8732eebfea5bee7f4020f3451e76fd559bd8",
+    "src/tether/deploy_proof.py": "c66790b01d21b7762b3f6c884e9ca8b08e23dab862f9375c6c6c00f894d07b87",
+    "src/tether/proof_context.py": "4ba9f3e9c5d121f0ca441b5031381bb7aed880992d390fae14d05c4234a00cd8",
+    "src/tether/proof_startup.py": "f108b8077e5b936a9ae1b2cab5f5040b96f2477d102581b7bb186bd38968ce8e",
+    "src/tether/realtime_cert.py": "88430020b429a046e991d319b6a768afc98ffa9f3d9eaf4904710fee76d9ae92",
+    "src/tether/runtime/decomposed_server.py": "87b28af335ae2f90ad11ee7cd6ba46e18ff7542cf0a96997551019be9c5bdf7c",
+    "src/tether/runtime/ort_providers.py": "b13210c189f94c8ebd23c0bae1f0b7d6b1f625c339636521dcbde12dfa415f9d",
+    "src/tether/runtime/pi05_decomposed_server.py": "2ee83e50be4b8753352c9de93b78143c7a493e660b35b0bb4d29c5f1baf836ac",
+    "src/tether/runtime/pi0_onnx_server.py": "90ca1b9f8f52ee0adfab22a200a16cde161d36e35c4882efe451fc8282c5469e",
+    "src/tether/runtime/server.py": "df47f45e2cf5ed5dabcc40bc606740274836a5f11a10bd431467a676479d5446",
+    "src/tether/runtime/smolvla_native.py": "89b1c796bcf8a4fed0b81d756a62d53d7a350ecdfc1bce78697100ba9eede22a",
+    "src/tether/runtime/smolvla_onnx_server.py": "573e1f27002add91b0ddb47935326117e0ae501b66916dfc25a949fb4019ebb4",
+    "src/tether/smoke.py": "dde5226fe0f3287acff2cd8c384cf5440c3e7fe4774d0dc4c23b9a0db5d9307b"
+  },
+  "combined_tests": {
+    "passed": 360,
+    "skipped": 1,
+    "skip_reason": "Linux-specific install smoke on macOS",
+    "seconds": 7.57,
+    "whole_repository": false
+  },
+  "initial_combined_run": {
+    "passed": 323,
+    "failed": 1,
+    "skipped": 1,
+    "reason": "Global TETHER_OFFLINE/HF_HUB_OFFLINE made the existing missing-tokenizer test expect warn while its offline behavior correctly fails; unchanged dcbcbb5 reproduces. Final run removes the global overrides; offline tests configure their own environment."
+  },
+  "gpu_qualified": false,
+  "kernel_oom_independently_verified": false
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "verdict": "PASS",
+  "confidence": "MEDIUM",
+  "findings": [],
+  "scope": "Independent customer/spec/security review of latest serving follow-up in Studio dc5b18d4 and public 17e73dbb; reviewed concrete changed code and scoped receipts, not a fresh review of every historical PR file.",
+  "observations": [
+    "Studio provider/startup/workspace settings invalidate the visible review, pending review disables the fieldset, and a new review clears confirmation and weight-license acknowledgement.",
+    "Backend re-evaluates capability, source, licensing and resource admission before process startup; loopback endpoint and ephemeral key remain separate from persisted provider facts.",
+    "Stop during spawn/config waits is handled; shared monitor and finally cleanup retain failed logs and keep an unconfirmed running process slot occupied.",
+    "Planar import validates the same public metadata gate as serve, uses truthful analytical/content-derived identity, normalizes tokenizer to a fixed padded local bundle, and preserves source/old immutable assets.",
+    "Compiled local CPU flow receipt documents authentication refusal, varied action values, retained facts/traces and port closure. It cannot validate CUDA13 dependencies or GPU fit/latency.",
+    "Source pin was exact 17e73dbb at review. Public permits squash/rebase rather than merge commits, so root must update Studio pin and producer-transfer binding to actual public merge SHA after public source merge; preserve old evidence producer identities."
+  ],
+  "tester_instructions_constraints": [
+    "Orin: keep its known vendor JetPack stack and existing export. Update only pinned Tether source without dependency replacement; do not install public [gpu], CPU [onnx], Studio x86 requirements or rerun full installer merely to obtain these source fixes.",
+    "WSL: choose an isolated public CUDA12.8 [serve,gpu] cohort for CLI reruns, or separately a rebuilt Studio CUDA13 locked engine. Do not transplant versions between the cohorts or coexist CPU/GPU ORT.",
+    "No new Linux installer is published. Linux desktop app rerun needs an actual rebuilt artifact or private source setup; do not tell tester an existing download contains these fixes.",
+    "Preserve Orin before/after server and proof logs, driver/JetPack/pkg facts, hashes and actual kernel/memory observations; -9 is not independently confirmed OOM.",
+    "Synthetic proof cannot supply consumer_observed horizons; preserve 20Hz/50ms failures and old FAIL certificates. No robot motion belongs to this rerun."
+  ],
+  "qualification_limits": [
+    "No real GPU/physical target execution performed for this review.",
+    "Prior broad safety/installer evidence reused only within recorded original scope.",
+    "Actions/billing remains explicitly outside owner scope."
+  ],
+  "followup_guard_fixture": {
+    "path": "tests/test_guard_callers.py",
+    "change": "Reuse existing split-runtime inference stub with per-stage session provider methods; preserve all original guard assertions.",
+    "tests": "16 passed in 0.95s",
+    "ruff_check": "pass",
+    "git_diff_check": "pass",
+    "ruff_format_check": "Existing file would reformat; prior HEAD also fails the formatter. No unrelated full-file formatting applied.",
+    "receipt": "guard-callers-final.log",
+    "commit_status": "Uncommitted; root owns integration."
+  }
+}

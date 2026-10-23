@@ -31,7 +31,7 @@ def _int(value: Any) -> int | None:
     if number is None:
         return None
     rounded = int(number)
-    return rounded if rounded > 0 else None
+    return rounded if rounded > 0 and number == rounded else None
 
 
 def _round(value: float | None, digits: int = 6) -> float | None:
@@ -146,7 +146,7 @@ def _extract_actions(sample: dict[str, Any]) -> list[list[float]] | None:
 
 def _extract_execution(sample: dict[str, Any]) -> dict[str, Any]:
     response = _sample_response(sample)
-    return _first_mapping(
+    candidates = (
         sample.get("execution"),
         sample.get("action_execution"),
         sample.get("adaptive_action_chunking"),
@@ -156,22 +156,20 @@ def _extract_execution(sample: dict[str, Any]) -> dict[str, Any]:
         response.get("adaptive_action_chunking"),
         response.get("rtc"),
     )
+    # Consumer observations form one evidence record. A retained server RTC plan
+    # must neither overwrite that record nor fill its missing observed fields.
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate.get("evidence_scope") == "consumer_observed":
+            return dict(candidate)
+    return _first_mapping(*candidates)
 
 
 def _execution_horizon(execution: dict[str, Any]) -> int | None:
-    for key in (
-        "executed_horizon",
-        "execute_horizon",
-        "execution_horizon",
-        "action_horizon",
-        "horizon_actions",
-        "actions_to_execute",
-        "execute_steps",
-    ):
-        value = _int(execution.get(key))
-        if value is not None:
-            return value
-    return None
+    # Scheduler plans, configured chunk lengths and the legacy RTC field are not
+    # evidence that a consumer actually consumed a horizon.
+    if execution.get("evidence_scope") != "consumer_observed":
+        return None
+    return _int(execution.get("executed_horizon"))
 
 
 def _truthy_sequence(value: Any) -> bool:
@@ -233,6 +231,8 @@ def _execution_rows(receipt: dict[str, Any]) -> list[dict[str, Any]]:
         chunk = _extract_actions(sample)
         execution = _extract_execution(sample)
         horizon = _execution_horizon(execution)
+        if (receipt.get("evidence_contract") or {}).get("scope") == "serving_only":
+            horizon = None  # synthetic HTTP probes never become robot execution evidence
         roundtrip_ms = _number(sample.get("roundtrip_ms"))
         rows.append(
             {
@@ -282,7 +282,8 @@ def build_action_execution_certificate(
     horizon_over_chunk = sum(
         1
         for row in chunk_rows
-        if row["horizon"] is not None and row["actions"] is not None
+        if row["horizon"] is not None
+        and row["actions"] is not None
         and row["horizon"] > len(row["actions"])
     )
 
@@ -298,14 +299,20 @@ def build_action_execution_certificate(
 
     boundary_deltas: list[float] = []
     velocity_jumps: list[float] = []
+    returned_boundaries: list[float] = []
     if shape_consistent:
         for prev, cur in zip(chunk_rows, chunk_rows[1:], strict=False):
             prev_actions = prev["actions"]
             cur_actions = cur["actions"]
             if prev_actions is None or cur_actions is None:
                 continue
-            prev_horizon = prev["horizon"] or len(prev_actions)
-            boundary_idx = max(0, min(prev_horizon, len(prev_actions)) - 1)
+            returned = _max_abs_delta(prev_actions[-1], cur_actions[0])
+            if returned is not None:
+                returned_boundaries.append(returned)
+            prev_horizon = prev["horizon"]
+            if prev_horizon is None or prev_horizon > len(prev_actions) or cur["horizon"] is None:
+                continue
+            boundary_idx = prev_horizon - 1
             boundary_delta = _max_abs_delta(prev_actions[boundary_idx], cur_actions[0])
             if boundary_delta is not None:
                 boundary_deltas.append(boundary_delta)
@@ -363,7 +370,10 @@ def build_action_execution_certificate(
         "action_shape_consistent",
         _pass_fail(shape_consistent),
         metric="act_samples.actions.shape",
-        actual={"dims": sorted(set(dims)), "chunk_sizes": [min(sizes), max(sizes)] if sizes else []},
+        actual={
+            "dims": sorted(set(dims)),
+            "chunk_sizes": [min(sizes), max(sizes)] if sizes else [],
+        },
         expected="non-empty chunks with one action_dim",
         remediation="Record complete action chunks with a stable action dimension.",
     )
@@ -383,7 +393,7 @@ def build_action_execution_certificate(
         metric="act_samples.action_execution.executed_horizon",
         actual={"present": len(horizons), "missing": missing_horizons},
         expected="one positive horizon per action chunk",
-        remediation="Have the runtime emit action_execution.executed_horizon for each /act sample.",
+        remediation="Supply consumer-observed execution telemetry. Returned chunks or RTC planned horizons cannot establish executed actions.",
     )
     _add_check(
         checks,
@@ -509,10 +519,26 @@ def build_action_execution_certificate(
         "pass": sum(1 for check in checks if check["status"] == "pass"),
         "fail": sum(1 for check in checks if check["status"] == "fail"),
         "skip": sum(1 for check in checks if check["status"] == "skip"),
-        "failed_checks": [
-            check["name"] for check in checks if check["status"] == "fail"
-        ],
+        "failed_checks": [check["name"] for check in checks if check["status"] == "fail"],
     }
+    missing_checks = {
+        "action_chunks_present": not chunks,
+        "action_shape_consistent": not chunks,
+        "control_hz_defined": control_hz is None,
+        "execution_horizon_present": not chunks or missing_horizons > 0,
+        "execution_horizon_within_chunk": not chunks or missing_horizons > 0,
+        "stale_action_window_within_budget": max_stale is None,
+        "chunk_boundary_delta_within_budget": max_boundary is None,
+        "velocity_discontinuity_within_budget": max_velocity_jump is None,
+        "runtime_attribution_present": attribution_samples == 0,
+    }
+    for check in checks:
+        if check["status"] == "fail":
+            check["classification"] = (
+                "missing_evidence"
+                if missing_checks.get(check["name"], False)
+                else "threshold_or_contract_failure"
+            )
     decision = "PASS" if summary["fail"] == 0 else "FAIL"
 
     return {
@@ -521,6 +547,17 @@ def build_action_execution_certificate(
         "generated_at": _now_iso(),
         "decision": decision,
         "passed": decision == "PASS",
+        "evidence_scope": "reported_consumer_execution"
+        if missing_horizons == 0 and chunks
+        else "execution_unobserved",
+        "physical_execution_verified": False,
+        "diagnostics": {
+            "returned_chunk_tail_to_next_head_max_abs": _round(max(returned_boundaries), 6)
+            if returned_boundaries
+            else None,
+            "returned_chunk_boundary_is_executed_transition": False,
+            "limitation": "Serving responses and planned horizons do not establish physical robot execution.",
+        },
         "control_hz": _round(control_hz, 3),
         "control_period_ms": _round(period_ms, 3),
         "metrics": {
@@ -576,6 +613,8 @@ def format_action_execution_markdown(report: dict[str, Any]) -> str:
         "## Action Execution",
         "",
         f"- Decision: **{report.get('decision', 'FAIL')}**",
+        f"- Evidence scope: `{report.get('evidence_scope', 'legacy_unclassified')}`",
+        "- Physical robot execution verified: `False`",
         f"- Control period: `{report.get('control_period_ms')} ms`",
         f"- Action chunks: `{metrics.get('action_chunk_count')}`",
         f"- Execution horizon: `{metrics.get('execution_horizon_min')}` to `{metrics.get('execution_horizon_max')}` actions",

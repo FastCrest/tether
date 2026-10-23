@@ -87,6 +87,8 @@ class Pi0OnnxServer:
             gpu_provider_active,
             gpu_provider_requested,
             make_ort_session_options,
+            validate_primary_provider,
+            primary_provider_mode,
         )
 
         onnx_path = self._find_onnx_path()
@@ -115,6 +117,7 @@ class Pi0OnnxServer:
         )
         elapsed = time.perf_counter() - start
         self._active_providers = self._session.get_providers()
+        validate_primary_provider(self._provider_plan, self._active_providers, strict=self._strict_providers)
         if gpu_provider_requested(self.providers) and not gpu_provider_active(self._active_providers):
             msg = (
                 "CUDA/TensorRT provider requested for pi0 monolithic runtime, but "
@@ -123,12 +126,7 @@ class Pi0OnnxServer:
             if self._strict_providers:
                 raise RuntimeError(msg)
             logger.warning(msg)
-        if "TensorrtExecutionProvider" in self._active_providers:
-            self._provider_mode = "onnx_trt_fp16"
-        elif gpu_provider_active(self._active_providers):
-            self._provider_mode = "onnx_gpu"
-        else:
-            self._provider_mode = "onnx_cpu"
+        self._provider_mode = primary_provider_mode(self._active_providers)
 
         # Load config if present (optional — may not exist for ad-hoc ONNX)
         cfg_path = self.export_dir / "tether_config.json"

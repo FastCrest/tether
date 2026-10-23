@@ -50,7 +50,7 @@ def _require_smoke_export_deps() -> tuple[Any, Any, Any, Any, Any, Any]:
         raise SmokeError(
             "Cannot create the local smoke export because dependencies are missing: "
             + ", ".join(missing)
-            + ". Install the serve extra with `pip install 'fastcrest-tether[serve]'`."
+            + ". Install with `pip install 'fastcrest-tether[serve,onnx]'`."
         )
     from tokenizers.models import WordLevel
     from tokenizers.pre_tokenizers import Whitespace
@@ -75,7 +75,7 @@ def _require_serve_runtime_deps() -> None:
         raise SmokeError(
             "Cannot start the smoke server because the serve runtime is missing: "
             f"{type(exc).__name__}: {exc}. Install with "
-            "`pip install 'fastcrest-tether[serve]'`."
+            "`pip install 'fastcrest-tether[serve,onnx]'`."
         ) from exc
 
 

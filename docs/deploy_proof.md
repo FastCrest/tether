@@ -94,9 +94,27 @@ For adaptive-action-chunking or RTC reviews, add `--execution-cert`. That
 requires proof evidence with action chunks and `action_execution` telemetry, then
 checks stale-action window, chunk-boundary continuity, boundary velocity jump,
 phase-aware horizon evidence when requested, and runtime attribution.
-Servers started with `tether serve --rtc` emit `action_execution` in `/act`
-responses, so `tether prove` preserves the execution horizon, RTC carry status,
-adaptive horizon reason, and deadline cause in the proof packet automatically.
+Servers started with `tether serve --rtc` emit scheduling metadata in `/act`
+responses. It is marked `evidence_scope: runtime_schedule` and records a
+`planned_horizon`; the legacy horizon aliases do not prove consumption.
+`tether prove` preserves that metadata but labels its own repeated synthetic
+HTTP requests `serving_only`. It never actuates a robot, so execution
+certification correctly fails when consumer evidence is missing. Returned
+chunk-tail differences remain diagnostics rather than measured transitions.
+
+Execution checks require per-sample `action_execution.evidence_scope` equal to
+`consumer_observed` and a positive integer `executed_horizon` from the actual
+consumer. Missing horizons are not replaced with the returned chunk length.
+Such supplied telemetry remains reported evidence, not an independent physical
+verification. Preserve the original serving packet and hashes when adding a
+separate consumer receipt; do not relabel a synthetic proof to manufacture it.
+The realtime serving budget remains one control period, with no nominal chunk
+amortization.
+
+For first-time TensorRT builds, `--startup-timeout-s` sets a separate finite
+readiness wait. `/act` request timeouts and realtime budgets remain unchanged.
+Startup receipts retain bounded host RSS samples when available. They do not
+measure GPU memory, and a SIGKILL is not automatically classified as kernel OOM.
 
 ## What it checks
 

@@ -410,6 +410,9 @@ class TestAdaptiveSignalHelper:
 
         assert execution == {
             "scheduler": "rtc",
+            "evidence_scope": "runtime_schedule",
+            "physical_execution_observed": False,
+            "planned_horizon": 5,
             "execution_mode": "rtc_fixed",
             "executed_horizon": 5,
             "execution_horizon": 5,

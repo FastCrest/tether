@@ -75,6 +75,8 @@ class SmolVLAOnnxServer:
             gpu_provider_active,
             gpu_provider_requested,
             make_ort_session_options,
+            validate_primary_provider,
+            primary_provider_mode,
         )
 
         onnx_path = self._find_onnx_path()
@@ -103,6 +105,7 @@ class SmolVLAOnnxServer:
         )
         elapsed = time.perf_counter() - start
         self._active_providers = self._session.get_providers()
+        validate_primary_provider(self._provider_plan, self._active_providers, strict=self._strict_providers)
         if gpu_provider_requested(self.providers) and not gpu_provider_active(self._active_providers):
             msg = (
                 "CUDA/TensorRT provider requested for SmolVLA monolithic runtime, "
@@ -111,12 +114,7 @@ class SmolVLAOnnxServer:
             if self._strict_providers:
                 raise RuntimeError(msg)
             logger.warning(msg)
-        if "TensorrtExecutionProvider" in self._active_providers:
-            self._provider_mode = "onnx_trt_fp16"
-        elif gpu_provider_active(self._active_providers):
-            self._provider_mode = "onnx_gpu"
-        else:
-            self._provider_mode = "onnx_cpu"
+        self._provider_mode = primary_provider_mode(self._active_providers)
 
         cfg_path = self.export_dir / "tether_config.json"
         if cfg_path.exists():

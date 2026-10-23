@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from tether.proof_context import certificate_context
 
 
 class RealtimeCertificateError(ValueError):
@@ -29,10 +31,11 @@ def _number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        return float(value) if math.isfinite(value) else None
     if isinstance(value, str) and value.strip():
         try:
-            return float(value)
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) else None
         except ValueError:
             return None
     return None
@@ -160,6 +163,12 @@ def _add_check(
     }
     if remediation:
         check["remediation"] = remediation
+    if status == "fail":
+        check["classification"] = (
+            "upstream_proof_failure" if metric == "receipt.passed" else
+            "missing_evidence" if actual is None or (name == "latency_summary_present" and actual is False) else
+            "threshold_or_contract_failure"
+        )
     checks.append(check)
 
 
@@ -378,6 +387,8 @@ def build_realtime_certificate(
         "decision": decision,
         "passed": decision == "PASS",
         "target": target,
+        **certificate_context(receipt),
+        "physical_execution_verified": False,
         "source": {
             "deployment_proof": receipt.get("_source_proof_path", ""),
             "export_dir": receipt.get("export_dir", ""),
@@ -385,6 +396,8 @@ def build_realtime_certificate(
         },
         "control_budget": {
             **control_budget,
+            "scope": "single_action_period",
+            "chunk_amortization_applied": False,
             "control_hz_source": control_source,
             "roundtrip_p95_budget_ms": (
                 round(float(p95_budget_ms), 3) if p95_budget_ms is not None else None
@@ -392,6 +405,7 @@ def build_realtime_certificate(
             "max_control_budget_misses": max_control_budget_misses,
         },
         "latency": {
+            **{key: latency[key] for key in ("inference_ms", "warm_inference_ms", "warm_roundtrip_ms", "first_sample", "ttfa_ms") if key in latency},
             "samples": latency.get("samples"),
             "roundtrip_ms": {
                 "p50_ms": roundtrip_p50,
@@ -457,6 +471,9 @@ def format_realtime_certificate_human(report: dict[str, Any]) -> str:
     lines = [
         f"tether realtime-serving-cert - {decision}",
         f"target:  {report.get('target') or 'unspecified'}",
+        f"scope:   {(report.get('evidence_contract') or {}).get('scope', 'legacy_unclassified')}; physical execution unverified",
+        f"model:   {json.dumps(report.get('model') or {}, sort_keys=True)}",
+        f"providers: active={(report.get('runtime') or {}).get('active_providers', [])}; precision not measured",
         f"proof:   {source.get('deployment_proof') or 'unknown'}",
         (
             "control: "
@@ -518,6 +535,12 @@ def format_realtime_certificate_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Decision: **{report.get('decision', 'FAIL')}**",
         f"- Target: `{report.get('target') or 'unspecified'}`",
+        f"- Evidence scope: `{(report.get('evidence_contract') or {}).get('scope', 'legacy_unclassified')}`",
+        "- Physical execution verified: `False`",
+        "- Budget applies to one action period; returned chunk length does not extend it.",
+        f"- Declared model metadata: `{json.dumps(report.get('model') or {}, sort_keys=True)}`",
+        f"- Active providers observed: `{(report.get('runtime') or {}).get('active_providers', [])}`",
+        "- Runtime precision and per-node placement: not measured by this certificate.",
         f"- Source proof: `{source.get('deployment_proof') or 'unknown'}`",
         f"- Control rate: `{control.get('control_hz') or 'unknown'} Hz`",
         f"- Control period: `{control.get('period_ms') or 'unknown'} ms`",
@@ -571,11 +594,13 @@ def _latency_cell(value: Any) -> str:
 def _certificate_model_label(report: dict[str, Any]) -> str:
     """Best-effort model name for a certificate row.
 
-    The certificate has no explicit model field, so derive it from the source
-    export directory (e.g. ``~/.cache/tether/exports/smolvla-base`` ->
-    ``smolvla-base``). Falls back to the target, then ``unknown``.
+    Prefer recorded model metadata. Legacy packets fall back to their export
+    directory display label; that label does not verify model identity.
     """
 
+    model = report.get("model") or {}
+    if model.get("model_id") or model.get("model_type"):
+        return str(model.get("model_id") or model.get("model_type"))
     export_dir = ((report.get("source") or {}).get("export_dir") or "").rstrip("/")
     name = Path(export_dir).name if export_dir else ""
     return name or (report.get("target") or "unknown")

@@ -21,14 +21,48 @@ def _toml_loads(text: str):
     return tomllib.loads(text)
 
 
-def test_serve_extra_installs_cpu_onnxruntime():
+def test_serve_extra_requires_explicit_runtime_choice():
     pyproject = _toml_loads((REPO_ROOT / "pyproject.toml").read_text())
-    serve_deps = pyproject["project"]["optional-dependencies"]["serve"]
+    extras = pyproject["project"]["optional-dependencies"]
+    assert not any(Requirement(dep).name.startswith("onnxruntime") for dep in extras["serve"])
+    for runtime_extra, expected in (("onnx", "onnxruntime"), ("gpu", "onnxruntime-gpu")):
+        runtimes = {
+            Requirement(dep).name
+            for dep in extras["serve"] + extras[runtime_extra]
+            if Requirement(dep).name.startswith("onnxruntime")
+        }
+        assert runtimes == {expected}
 
-    assert any(dep.startswith("onnxruntime") for dep in serve_deps), (
-        "`pip install 'fastcrest-tether[serve]'` must install CPU ONNX Runtime "
-        "so `tether serve` works on a fresh CPU machine."
+
+@pytest.mark.parametrize("extra", ["gpu", "gpu-min"])
+def test_cuda12_serving_cohort_cannot_float_to_cuda13(extra):
+    pyproject = _toml_loads((REPO_ROOT / "pyproject.toml").read_text())
+    requirements = {
+        Requirement(dep).name: Requirement(dep)
+        for dep in pyproject["project"]["optional-dependencies"][extra]
+    }
+    assert Version("1.25.1") in requirements["onnxruntime-gpu"].specifier
+    assert Version("1.27.0") not in requirements["onnxruntime-gpu"].specifier
+    for name, known_version in (
+        ("nvidia-cuda-runtime-cu12", "12.8.90"),
+        ("nvidia-cublas-cu12", "12.8.4.1"),
+        ("nvidia-cudnn-cu12", "9.10.2.21"),
+    ):
+        assert Version(known_version) in requirements[name].specifier
+        assert Version("13.0.0") not in requirements[name].specifier
+    assert Version("2.8.0") in requirements["torch"].specifier
+    assert Version("2.10.0") not in requirements["torch"].specifier
+    assert requirements["torch"].marker.evaluate(
+        {"sys_platform": "linux", "platform_machine": "x86_64"}
     )
+    assert not requirements["torch"].marker.evaluate(
+        {"sys_platform": "darwin", "platform_machine": "arm64"}
+    )
+    if extra == "gpu":
+        assert "tensorrt" not in requirements
+        assert Version("10.14.1.48.post1") in requirements["tensorrt-cu12"].specifier
+        assert Version("10.16.0") not in requirements["tensorrt-cu12"].specifier
+        assert Version("12.8.1") in requirements["cuda-toolkit"].specifier
 
 
 def test_safety_extra_requires_xxe_safe_lxml():

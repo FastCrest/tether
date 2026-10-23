@@ -68,50 +68,37 @@ dependencies = [
 [project.optional-dependencies]
 # CPU inference runtime (onnx is a core dep now). Use this for CPU-only boxes.
 onnx = ["onnxruntime>=1.17.0"]
-# GPU inference — installs onnxruntime-gpu AND the ORT-compatible CUDA stack
-# AND TensorRT so ORT-TRT EP loads out of the box. Use this when deploying to
-# a box with an NVIDIA GPU.
-#
-# ORT 1.20+ wants CUDA 12.x + cuDNN 9.x; these pip deps ship their own libs
-# so the end-user doesn't have to install CUDA separately.
-#
-# v0.7 (2026-04-29): tensorrt added to default [gpu] extras after Modal A10G
-# spike measured 5.55x speedup of ORT-TRT EP vs ORT-CUDA EP on SmolVLA
-# monolithic. Without tensorrt installed, libnvinfer.so.10 isn't loadable
-# and ORT silently falls back to CUDA EP — losing the 5.55x. See ADR
-# 2026-04-29-ort-trt-ep-first-class-support.md. Adds ~2 GB to install.
-#
-# v0.9.2 (2026-05-07): bumped onnxruntime-gpu floor to 1.25.1 + dropped the
-# <1.24 ceiling. ORT 1.25.0 (2026-04-20) shipped Blackwell sm_120 kernels
-# via PR #27278 (CUDA arch family codes 100f/110f/120f) — first PyPI wheels
-# with usable RTX 5090 / RTX 5060 / B200 / GB200 support. Earlier 1.23/1.24
-# regressed sm_120 (cudaErrorNoKernelImageForDevice on Blackwell); 1.25.1
-# is the current stable. Live caveat: open issue #27621 (silent threading
-# deadlock on sm_120 with PTX JIT + GIL) means Blackwell tier needs smoke
-# validation before declaring fully production-ready.
-#
-# Apr-14 post-mortem: omitting cuDNN/cuBLAS pulls was the cause of silent
-# CPU fallback in v0.1 benchmarks. Same shape of bug at the TRT layer is
-# why v0.7 ships tensorrt by default in [gpu].
+# CUDA 12 serving cohort. ORT 1.27+ defaults to CUDA 13 on PyPI;
+# never combine that runtime with these CUDA 12 libraries.
+# ORT v1.25.0's release build uses CUDA 12.8.1 and TensorRT 10.14.1:
+# https://github.com/microsoft/onnxruntime/blob/v1.25.0/tools/ci_build/github/linux/docker/Dockerfile.manylinux2_28_cuda
+# Explicit cu12 avoids generic TensorRT's newer CUDA 13 default.
+# torch 2.8.0 metadata pins the same CUDA 12.8/cuDNN 9.10 libraries.
+# Keep the torch bound local to serving; export environments can use newer torch.
+# These are dependency compatibility bounds, not device qualification.
 gpu = [
-    "onnxruntime-gpu>=1.25.1",
-    "nvidia-cudnn-cu12>=9.5,<10.0",
-    "nvidia-cublas-cu12>=12.6,<13.0",
-    # New in v0.7: provides libnvinfer.so.10 for ORT-TRT EP
-    "tensorrt>=10.0,<11; sys_platform == 'linux'",
+    "onnxruntime-gpu>=1.25.1,<1.26",
+    "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cuda-runtime-cu12==12.8.90.*",
+    "nvidia-cudnn-cu12==9.10.2.21.*",
+    "nvidia-cublas-cu12==12.8.4.1.*",
+    "cuda-toolkit==12.8.1; sys_platform == 'linux'",
+    "tensorrt-cu12==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "tensorrt-cu12-libs==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "tensorrt-cu12-bindings==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
-# Optional: skip tensorrt for users who explicitly don't want the 2 GB install
-# footprint. They get ORT-CUDA EP only (~5x slower than TRT EP on transformers).
+# CUDA EP without the TensorRT download. Use an isolated serving environment.
 gpu-min = [
-    "onnxruntime-gpu>=1.25.1",
-    "nvidia-cudnn-cu12>=9.5,<10.0",
-    "nvidia-cublas-cu12>=12.6,<13.0",
+    "onnxruntime-gpu>=1.25.1,<1.26",
+    "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cuda-runtime-cu12==12.8.90.*",
+    "nvidia-cudnn-cu12==9.10.2.21.*",
+    "nvidia-cublas-cu12==12.8.4.1.*",
 ]
-# HTTP serve stack. Includes onnxruntime (CPU) so `pip install fastcrest-tether[serve]`
-# gives you a working server out of the box. For GPU, use `[serve,gpu]` to pull in
-# onnxruntime-gpu + CUDA libs.
+# HTTP/transports only. Choose exactly one runtime: [serve,onnx] for CPU
+# or [serve,gpu] for the CUDA 12 cohort. CPU and GPU ORT share module files
+# and must not be installed together in one environment.
 serve = [
-    "onnxruntime>=1.17.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     "Pillow>=10.0.0",
@@ -387,3 +374,28 @@ markers = [
     "hardware: requires a physical robot wired in; skipped unless RUN_HARDWARE_TESTS=1",
     "receipt: validates a signed or provenance-bound operational receipt",
 ]
+
+# Exact published metadata avoids executing NVIDIA's download shim while locking.
+# Source: https://pypi.org/pypi/tensorrt-cu12/10.14.1.48.post1/json
+[[tool.uv.dependency-metadata]]
+name = "tensorrt-cu12"
+version = "10.14.1.48.post1"
+requires-python = ">=3.6"
+requires-dist = ["tensorrt_cu12_libs==10.14.1.48.post1", "tensorrt_cu12_bindings==10.14.1.48.post1", "numpy; extra == \"numpy\""]
+
+# Exact published metadata avoids executing NVIDIA's download shim while locking.
+# Source: https://pypi.org/pypi/tensorrt-cu12-libs/10.14.1.48.post1/json
+[[tool.uv.dependency-metadata]]
+name = "tensorrt-cu12-libs"
+version = "10.14.1.48.post1"
+requires-dist = ["cuda-toolkit[cudart]<13,>=12"]
+
+# Lock real NVIDIA wheels and their hashes instead of the PyPI download shim.
+[[tool.uv.index]]
+name = "nvidia-tensorrt"
+url = "https://pypi.nvidia.com"
+explicit = true
+
+[tool.uv.sources]
+tensorrt-cu12-libs = { index = "nvidia-tensorrt" }
+tensorrt-cu12-bindings = { index = "nvidia-tensorrt" }

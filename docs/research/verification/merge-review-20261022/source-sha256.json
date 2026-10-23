@@ -1,0 +1,13 @@
+{
+  "docs/research/verification/jetson-scatternd-20261021-parity.py": "0558cc0dabbf6d87a65d645b04729195d62a1a3fcebb8dbd4efc7b1d68aba8b0",
+  "src/tether/_gpu_loader.py": "decac6394d4469c47fda3aa6ed133f6a16024c5ffd2812061589be0351d406ef",
+  "src/tether/action_execution_cert.py": "a7f00f96e32b6880f47830e47e19f0063e20e172364a86ee16698bf832eba9fe",
+  "src/tether/cli.py": "e636ce44d5b2345ee8a367bacc001f27a9260ed0d508ce6e6f79c3582d89a4ba",
+  "tests/test_action_execution_cert.py": "260c01c5424137293bc7b0a87e1225867a76a4455d9ea9e9fc05a02fae598026",
+  "tests/test_chat_provider_followup.py": "235c52f2208900fdbe504916055f66ed82597a95e322b3e5ca6b4b1bd8a225f7",
+  "tests/test_guard_callers.py": "98f94359b36b65d3e97c5c3963b5be07b5dd727a19974d17b19bc46914af49bc",
+  "tests/test_install_jetson_index.py": "abf07ba4fc4cc4826439e74021fb510aefa42388d831a7b85434bbe297f44bc5",
+  "tests/test_provider_dispatch_followup.py": "7cab133e520c80a6261f033b6ae603d98fe83ff8af235814ae72102b4a45b3ea",
+  "tests/test_provider_followup.py": "38862914d2d7f7b17d8de4bb2f1cdc6d3507e6f54eff6f05489b8233b2fd5a88",
+  "tests/test_scatternd_default_reduction.py": "852cbd54b78f8a11017e3cf5bb9480df651b065e497a673576a70911cf0bfd5b"
+}

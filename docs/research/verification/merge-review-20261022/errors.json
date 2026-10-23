@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "verdict": "PASS",
+  "confidence": "MEDIUM",
+  "findings": [],
+  "scope": "Independent source review of public 17e73dbb25a8e652297e44992f061cfda3bf32c9 and Studio dc5b18d4b04151d8339e43841a8a292832a47702; error paths perspective. No new merge-blocking defect found.",
+  "reviewed": [
+    "Explicit versus automatic provider plans and strict TRT-primary failure, alternate native/split provider dispatch, requested/configured/active provider facts",
+    "CUDA ABI-family discovery/preload retry and honest mixed-family diagnostics",
+    "StartupObservation telemetry failure isolation and SIGKILL attribution",
+    "Studio single stdout owner, startup monitor failure propagation, stop during spawn/config/health wait, forced stop and retained occupied slot on unconfirmed exit",
+    "Proof serving-only scope and preserved execution certificate failure semantics",
+    "Recorded final source/native/actual CPU flow evidence; source merge readiness distinct from target qualification"
+  ],
+  "limits": [
+    "No GPU, Jetson/WSL target, full-policy engine construction, signed installer or physical-consumer verification in this review. Recorded target reruns remain required before release qualification.",
+    "Reused recorded targeted tests and actual native CPU customer flow; did not rerun broad suites without a concrete unanswered source risk.",
+    "GitHub Actions deliberately excluded from scope."
+  ],
+  "merge_note": "Preserve public commit ancestry (merge commit rather than squash/rebase) because Studio pins public 17e73db exactly."
+}

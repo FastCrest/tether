@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "verdict": "FAIL",
+  "confidence": "HIGH",
+  "findings": [
+    {
+      "severity": "significant",
+      "description": "Observed execution telemetry is overwritten or contaminated by scheduler metadata before certificate validation.",
+      "location": "src/tether/action_execution_cert.py:147",
+      "fix": "Select a consumer_observed execution mapping atomically from supported explicit telemetry locations; do not merge its scope or executed_horizon with RTC/adaptive scheduler mappings. Add regression cases for conflicting current response RTC and legacy RTC without an evidence_scope. Keep serving_only suppression.",
+      "why": "Reproduced on public17e: sample.action_execution={evidence_scope:consumer_observed,executed_horizon:2}, response.rtc={evidence_scope:runtime_schedule,planned_horizon:50,executed_horizon:50} yields runtime_schedule horizon50 then None, rejecting valid observed telemetry. More seriously, sample.action_execution={evidence_scope:consumer_observed} with legacy response.rtc={executed_horizon:50} yields consumer_observed horizon50 despite no consumer-observed horizon, defeating the new contract."
+    }
+  ],
+  "scope": "Independent API, dependencies and evidence review of public17e and Studio dc5b18d4. Exact package markers and isolated CPU/GPU ORT selection inspected, setup hash/index contract and provider strictness/reporting inspected. Existing receipts reused. Actual GPU model qualification remains unknown and is not itself a source merge blocker."
+}

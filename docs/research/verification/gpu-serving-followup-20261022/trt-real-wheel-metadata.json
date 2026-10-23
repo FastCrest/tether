@@ -1,0 +1,6 @@
+{
+  "url": "https://pypi.nvidia.com/tensorrt-cu12-libs/tensorrt_cu12_libs-10.14.1.48.post1-py2.py3-none-manylinux_2_28_x86_64.whl",
+  "wheel_size_bytes": 3960385540,
+  "bytes_read": 68565,
+  "metadata": "Metadata-Version: 2.1\nName: tensorrt_cu12_libs\nVersion: 10.14.1.48.post1\nSummary: TensorRT Libraries\nHome-page: https://github.com/nvidia/tensorrt\nDownload-URL: https://developer.nvidia.com/tensorrt\nAuthor: NVIDIA Corporation\nLicense: Proprietary\nKeywords: nvidia tensorrt deeplearning inference\nClassifier: License :: Other/Proprietary License\nClassifier: Intended Audience :: Developers\nClassifier: Programming Language :: Python :: 3\nLicense-File: LICENSE.txt\nRequires-Dist: cuda-toolkit[cudart]<13,>=12\n\nTensorRT Libraries\n"
+}

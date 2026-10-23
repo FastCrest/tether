@@ -1,0 +1,52 @@
+{
+ "repairs_applied": 542,
+ "repair_seconds": 0.2,
+ "scatternd_total": 542,
+ "scatternd_with_reduction_after": 0,
+ "graph_otherwise_identical": true,
+ "preflight_before": true,
+ "preflight_after": false,
+ "checker": "ok",
+ "seeds": 8,
+ "output_shape": [
+  1,
+  50,
+  32
+ ],
+ "stripped_vs_original_ort_cpu": {
+  "mean": 0.0,
+  "p50": 0.0,
+  "p95": 0.0,
+  "p99": 0.0,
+  "max": 0.0,
+  "frac_gt_1e-6": 0.0,
+  "frac_gt_1e-4": 0.0,
+  "frac_gt_1e-3": 0.0
+ },
+ "stripped_ort_cpu_vs_pytorch_cpu": {
+  "mean": 2.2243689556944446e-07,
+  "p50": 1.0058283805847168e-07,
+  "p95": 9.203322406392545e-07,
+  "p99": 2.205371856689453e-06,
+  "max": 5.7220458984375e-06,
+  "frac_gt_1e-6": 0.041875,
+  "frac_gt_1e-4": 0.0,
+  "frac_gt_1e-3": 0.0
+ },
+ "original_ort_cpu_vs_pytorch_cpu": {
+  "mean": 2.2243689556944446e-07,
+  "p50": 1.0058283805847168e-07,
+  "p95": 9.203322406392545e-07,
+  "p99": 2.205371856689453e-06,
+  "max": 5.7220458984375e-06,
+  "frac_gt_1e-6": 0.041875,
+  "frac_gt_1e-4": 0.0,
+  "frac_gt_1e-3": 0.0
+ },
+ "pytorch_output_absmax": 3.464125394821167,
+ "versions": {
+  "onnxruntime": "1.30.0",
+  "onnx": "1.23.2",
+  "torch": "2.10.0"
+ }
+}

@@ -4,7 +4,6 @@ Targets the version-comparison + arch-detection logic the new guards
 add. Guards extracted from cli.py for testability:
   - multi-GPU mixed-arch detection
   - Jetson JetPack version comparison
-  - CUDA driver vs cuDNN version skew
 
 The empirical TRT EP session test is hard to unit-test (needs ORT +
 GPU) — covered by the manual smoke + the 2026-04-29 v07-install-
@@ -135,59 +134,5 @@ def test_jetpack_threshold_36_ort_compat():
     assert _parse_jetpack_version("# R37 (release)") >= 36
 
 
-# --- CUDA driver vs cuDNN minor version requirements ---
-
-def _min_driver_for_cudnn(cudnn_version: str) -> int:
-    """Extracted from cli.py doctor() driver/cuDNN guard.
-    cuDNN 9.5+ needs NVIDIA driver R555+; cuDNN 9.0-9.4 needs R550+."""
-    try:
-        cudnn_minor = int(cudnn_version.split(".")[1])
-    except (ValueError, IndexError):
-        return 550  # conservative default
-    return 555 if cudnn_minor >= 5 else 550
-
-
-@pytest.mark.parametrize("cudnn_version,expected_min_driver", [
-    ("9.0.0", 550),
-    ("9.4.99", 550),
-    ("9.5.0", 555),  # threshold
-    ("9.5.1", 555),
-    ("9.10.0", 555),
-    ("9.0", 550),  # short version string
-])
-def test_min_driver_for_cudnn(cudnn_version: str, expected_min_driver: int):
-    assert _min_driver_for_cudnn(cudnn_version) == expected_min_driver
-
-
-def test_min_driver_for_cudnn_handles_garbage():
-    """Garbage version strings return conservative default (550)."""
-    assert _min_driver_for_cudnn("") == 550
-    assert _min_driver_for_cudnn("not.a.version") == 550
-
-
-def test_driver_550_blocks_cudnn_95():
-    """The combo that actually trips customers: driver R550 + cuDNN 9.5
-    silently fails at first kernel call. Guard catches it."""
-    cudnn = "9.5.0"
-    min_required = _min_driver_for_cudnn(cudnn)
-    actual_driver = 550
-    assert actual_driver < min_required, (
-        f"This combination should be flagged as blocking: "
-        f"driver R{actual_driver}, cuDNN {cudnn}, needs R{min_required}+"
-    )
-
-
-def test_driver_555_passes_cudnn_95():
-    """Driver R555+ is fine for cuDNN 9.5+."""
-    cudnn = "9.5.0"
-    min_required = _min_driver_for_cudnn(cudnn)
-    actual_driver = 555
-    assert actual_driver >= min_required
-
-
-def test_driver_550_passes_cudnn_94():
-    """Driver R550 is fine for cuDNN 9.0-9.4 (the pre-9.5 envelope)."""
-    cudnn = "9.4.0"
-    min_required = _min_driver_for_cudnn(cudnn)
-    actual_driver = 550
-    assert actual_driver >= min_required
+# Driver/cuDNN minor versions do not establish CUDA build compatibility.
+# The Doctor CLI regression exercises observed driver facts and empirical probes.

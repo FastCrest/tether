@@ -533,7 +533,7 @@ def _action_execution_from_rtc_stats(
     stats: Any,
     result: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Translate RTC/AAC runtime stats into response-level execution evidence."""
+    """Report the runtime scheduling plan; these stats do not observe physical consumption."""
     if not isinstance(stats, dict):
         return None
     if stats.get("enabled") is not True:
@@ -552,10 +552,13 @@ def _action_execution_from_rtc_stats(
     )
     out: dict[str, Any] = {
         "scheduler": "rtc",
+        "evidence_scope": "runtime_schedule",
+        "physical_execution_observed": False,
         "execution_mode": "rtc_adaptive" if adaptive else "rtc_fixed",
     }
     if horizon is not None:
-        out["executed_horizon"] = horizon
+        out["planned_horizon"] = horizon
+        out["executed_horizon"] = horizon  # legacy alias, explicitly scoped as planned above
         out["execution_horizon"] = horizon
 
     reason = adaptive.get("reason")
@@ -1127,6 +1130,8 @@ class TetherServer:
             gpu_provider_active,
             gpu_provider_requested,
             make_ort_session_options,
+            validate_primary_provider,
+            primary_provider_mode,
         )
 
         plan = build_ort_provider_plan(
@@ -1137,6 +1142,7 @@ class TetherServer:
             max_batch=self._max_batch,
             onnx_path=onnx_path,
         )
+        self._provider_plan = plan
         providers = plan.providers
         logger.info(
             "Requested providers: %s; available: %s; trt=%s reason=%s",
@@ -1153,6 +1159,8 @@ class TetherServer:
             providers=providers,
         )
         active = self._ort_session.get_providers()
+        self._active_providers = list(active)
+        validate_primary_provider(plan, active, strict=self._strict_providers)
         logger.info("Loaded ONNX model: %s — active providers: %s", onnx_path.name, active)
 
         # Strict check: if caller asked for any GPU provider (CUDA or TRT) but
@@ -1180,13 +1188,8 @@ class TetherServer:
                 f"--device cpu to explicitly request CPU execution.{install_hint}"
             )
 
-        # Tag the inference mode so /act responses report which path was used
-        if "TensorrtExecutionProvider" in active:
-            self._inference_mode = "onnx_trt_fp16"
-        elif cuda_active:
-            self._inference_mode = "onnx_gpu"
-        else:
-            self._inference_mode = "onnx_cpu"
+        # Registration priority is observable; node placement and precision need profiling.
+        self._inference_mode = primary_provider_mode(active)
 
     def _load_vlm_orchestrator(self) -> None:
         """Load the 4-file VLM prefix pipeline via VLMPrefixOrchestrator.
@@ -2165,7 +2168,7 @@ def create_app(
         shadow_export_dir = Path(shadow_export_dir)
         shadow_cfg = load_tether_config(shadow_export_dir)
 
-        if _os.environ.get("TETHER_NATIVE", "0") == "1":
+        if _os.environ.get("TETHER_NATIVE", "0") == "1" and not providers:
             _require_native_smolvla(shadow_cfg, "shadow export")
             from tether.runtime.smolvla_native import SmolVLANativeServer
             shadow_srv = SmolVLANativeServer(
@@ -2273,7 +2276,7 @@ def create_app(
         shadow_srv._inference_policy_slot = "shadow"  # type: ignore[attr-defined]
         return shadow_srv
 
-    if _os.environ.get("TETHER_NATIVE", "0") == "1":
+    if _os.environ.get("TETHER_NATIVE", "0") == "1" and not providers:
         _require_native_smolvla(_monolithic_cfg, "primary export")
         from tether.runtime.smolvla_native import SmolVLANativeServer
         server = SmolVLANativeServer(
@@ -4240,6 +4243,11 @@ def create_app(
     async def config(_auth: None = Depends(_require_api_key)):
         cfg = dict(server.config) if isinstance(server.config, dict) else {}
         cfg["robot_id"] = getattr(server, "robot_id", "") or ""
+        provider_plan = getattr(server, "_provider_plan", None)
+        provider_session = getattr(server, "_session", None) or getattr(server, "_ort_session", None)
+        if provider_plan is not None and provider_session is not None:
+            from .ort_providers import provider_runtime_details
+            cfg["execution_providers"] = provider_runtime_details(provider_plan, provider_session)
         buffer = getattr(server, "_action_buffer", None)
         if buffer is not None:
             cfg["action_buffer"] = {

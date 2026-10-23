@@ -236,7 +236,7 @@ def lockstep_spike_modal(
     prefix_path = out_dir / "vlm_prefix.onnx"
     logger.info("[spike] exporting pruned prefix → %s", prefix_path)
     from onnx_diagnostic.torch_export_patches import torch_export_patches
-    from tether.exporters.monolithic import _fix_onnx_where_dtype_mismatches
+    from tether.exporters.monolithic import _repair_exported_onnx
 
     t0 = time.time()
     with torch_export_patches(patch_transformers=True):
@@ -253,7 +253,7 @@ def lockstep_spike_modal(
         opset_version=19,
     )
     logger.info("[spike] prefix torch.onnx.export: %.1fs", time.time() - t0)
-    _ = _fix_onnx_where_dtype_mismatches(prefix_path)
+    _ = _repair_exported_onnx(prefix_path)
     prefix_size_mb = prefix_path.stat().st_size / (1024 * 1024)
     logger.info("[spike] pruned prefix ONNX: %.1f MB", prefix_size_mb)
 
@@ -342,7 +342,7 @@ def lockstep_spike_modal(
         optimize=False,
     )
     logger.info("[spike] expert torch.onnx.export: %.1fs", time.time() - t0)
-    _ = _fix_onnx_where_dtype_mismatches(expert_path)
+    _ = _repair_exported_onnx(expert_path)
     expert_size_mb = expert_path.stat().st_size / (1024 * 1024)
     logger.info("[spike] pruned expert ONNX: %.1f MB", expert_size_mb)
 

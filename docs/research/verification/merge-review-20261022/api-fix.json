@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "verdict": "PASS",
+  "confidence": "HIGH",
+  "findings": [],
+  "resolved": "api.json original finding fixed: consumer_observed record selected atomically before merged scheduler diagnostics. Incomplete observed records cannot borrow plan horizon or attribution. Serving-only suppression retained.",
+  "tests": "23 passed,1 existing pytest unknown-config warning; action_execution_cert, proof_evidence_contract, realtime_cert suites. Ruff check/format and scoped git diff --check passed.",
+  "receipt": "/Users/romirjain/Documents/Codex/2026-10-22/i-wa/work/pr-review/api-fix-tests.log",
+  "files": [
+    "src/tether/action_execution_cert.py",
+    "tests/test_action_execution_cert.py"
+  ]
+}

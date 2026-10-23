@@ -71,7 +71,7 @@ class Pi05DecomposedServer:
         self,
         export_dir: str | Path,
         device: str = "cuda",
-        providers: list[str] | None = None,
+        providers: list[Any] | None = None,
         strict_providers: bool = True,
         safety_config: str | Path | None = None,
         adaptive_steps: bool = False,
@@ -158,11 +158,14 @@ class Pi05DecomposedServer:
         Decomposed exports always use ORT; expose the actual provider."""
         if self._inference is None:
             return "uninitialized"
-        # Pi05DecomposedInference doesn't expose providers directly; report
-        # the requested one for now.
-        if self._requested_device == "cuda":
-            return "onnx_cuda_decomposed"
-        return "onnx_cpu_decomposed"
+        from tether.runtime.ort_providers import primary_provider_mode
+
+        stages = self.config.get("execution_providers", {}).get("stages", {})
+        modes = {primary_provider_mode(facts["active_providers"]) for facts in stages.values()}
+        if len(modes) != 1:
+            return "onnx_mixed_decomposed" if modes else "onnx_decomposed"
+        mode = modes.pop()
+        return ("onnx_cuda" if mode == "onnx_gpu" else mode) + "_decomposed"
 
     def _load_config(self) -> dict[str, Any]:
         """Read tether_config.json from the export dir."""
@@ -201,12 +204,26 @@ class Pi05DecomposedServer:
             decomposed_block.get("max_action_dim", DEFAULT_MAX_ACTION_DIM)
         )
 
-        # Build providers list.
-        providers = self._requested_providers or (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if self._requested_device == "cuda"
-            else ["CPUExecutionProvider"]
+        import onnxruntime as ort
+        from tether.runtime.ort_providers import (
+            build_ort_provider_plan, gpu_provider_active, gpu_provider_requested,
+            provider_runtime_details, validate_primary_provider,
         )
+
+        stage_paths = {
+            "vlm_prefix": self.export_dir / decomposed_block["vlm_prefix_onnx"],
+            "expert_denoise": self.export_dir / decomposed_block["expert_denoise_onnx"],
+        }
+        self._provider_plans = {
+            name: build_ort_provider_plan(
+                self.export_dir, device=self._requested_device,
+                requested_providers=self._requested_providers,
+                available_providers=list(ort.get_available_providers()),
+                max_batch=self._max_batch, onnx_path=path,
+                trt_cache_dirname=f".trt_cache/{name}",
+            ) for name, path in stage_paths.items()
+        }
+        providers = self._provider_plans["vlm_prefix"].providers
 
         logger.info(
             "Pi05DecomposedServer loading from %s (action_dim=%d, "
@@ -221,11 +238,42 @@ class Pi05DecomposedServer:
         self._inference = Pi05DecomposedInference(
             export_dir=self.export_dir,
             providers=providers,
+            providers_by_stage={name: plan.providers for name, plan in self._provider_plans.items()},
             enable_cache=True,
             cache_level="prefix",  # safe default; episode mode requires per-call episode_id
             action_similarity_threshold=self._action_similarity_threshold,
             max_similar_skips=self._max_similar_skips,
         )
+
+        stage_reports = {}
+        for name, attribute in (("vlm_prefix", "_sess_prefix"), ("expert_denoise", "_sess_expert")):
+            session = getattr(self._inference, attribute, None)
+            raw = getattr(session, "session", session)
+            if raw is None or not callable(getattr(raw, "get_providers", None)):
+                raise RuntimeError(f"{name}: runtime cannot verify actual session providers")
+            plan = self._provider_plans[name]
+            facts = provider_runtime_details(plan, raw)
+            active = facts["active_providers"]
+            try:
+                validate_primary_provider(plan, active, strict=self._strict_providers)
+                if gpu_provider_requested(plan.providers) and not gpu_provider_active(active):
+                    message = f"GPU provider requested but active providers are {active}"
+                    if self._strict_providers:
+                        raise RuntimeError(message)
+                    logger.warning("%s: %s", name, message)
+            except RuntimeError as exc:
+                raise RuntimeError(f"{name}: {exc}") from exc
+            stage_reports[name] = facts
+        self.config["execution_providers"] = {
+            "requested_device": self._requested_device,
+            "requested_providers": self._requested_providers,
+            "active_providers": list(dict.fromkeys(
+                provider for facts in stage_reports.values() for provider in facts["active_providers"]
+            )),
+            "active_provider_scope": "union_of_stage_sessions",
+            "stages": stage_reports,
+            "node_placement": "not_measured", "precision": "not_measured",
+        }
 
         # Probe the lang_tokens input shape from the ONNX session to
         # determine the expected sequence length for tokenization.

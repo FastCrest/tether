@@ -246,6 +246,7 @@ def test_bench_realtime_execution_cert_json_from_proof_packet(tmp_path):
                 "roundtrip_ms": 40.0,
                 "actions": [[0.0, 0.0], [0.04, 0.02], [0.08, 0.04]],
                 "action_execution": {
+                    "evidence_scope": "consumer_observed",
                     "executed_horizon": 3,
                     "adaptive_reason": "low_speed_transition",
                     "phase_transition_indices": [2],
@@ -256,6 +257,7 @@ def test_bench_realtime_execution_cert_json_from_proof_packet(tmp_path):
                 "roundtrip_ms": 40.0,
                 "actions": [[0.09, 0.04], [0.13, 0.06], [0.17, 0.08]],
                 "action_execution": {
+                    "evidence_scope": "consumer_observed",
                     "executed_horizon": 3,
                     "adaptive_reason": "low_speed_transition",
                     "phase_transition_indices": [2],
@@ -353,6 +355,7 @@ def _write_cli_release_proof(tmp_path):
                 "roundtrip_ms": 40.0,
                 "actions": [[0.0, 0.0], [0.04, 0.02], [0.08, 0.04]],
                 "action_execution": {
+                    "evidence_scope": "consumer_observed",
                     "executed_horizon": 3,
                     "adaptive_reason": "low_speed_transition",
                     "phase_transition_indices": [2],
@@ -363,6 +366,7 @@ def _write_cli_release_proof(tmp_path):
                 "roundtrip_ms": 40.0,
                 "actions": [[0.09, 0.04], [0.13, 0.06], [0.17, 0.08]],
                 "action_execution": {
+                    "evidence_scope": "consumer_observed",
                     "executed_horizon": 3,
                     "adaptive_reason": "low_speed_transition",
                     "phase_transition_indices": [2],
@@ -980,7 +984,7 @@ def test_serve_missing_onnxruntime_hint_preserves_extras(tmp_path, monkeypatch):
     result = runner.invoke(app, ["serve", str(export_dir), "--device", "cpu"])
 
     assert result.exit_code == 1
-    assert "fastcrest-tether[serve]" in result.output
+    assert "fastcrest-tether[serve,onnx]" in result.output
     assert "fastcrest-tether[serve,gpu]" in result.output
 
 
