@@ -146,7 +146,7 @@ def _extract_actions(sample: dict[str, Any]) -> list[list[float]] | None:
 
 def _extract_execution(sample: dict[str, Any]) -> dict[str, Any]:
     response = _sample_response(sample)
-    return _first_mapping(
+    candidates = (
         sample.get("execution"),
         sample.get("action_execution"),
         sample.get("adaptive_action_chunking"),
@@ -156,6 +156,12 @@ def _extract_execution(sample: dict[str, Any]) -> dict[str, Any]:
         response.get("adaptive_action_chunking"),
         response.get("rtc"),
     )
+    # Consumer observations form one evidence record. A retained server RTC plan
+    # must neither overwrite that record nor fill its missing observed fields.
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate.get("evidence_scope") == "consumer_observed":
+            return dict(candidate)
+    return _first_mapping(*candidates)
 
 
 def _execution_horizon(execution: dict[str, Any]) -> int | None:
@@ -276,7 +282,8 @@ def build_action_execution_certificate(
     horizon_over_chunk = sum(
         1
         for row in chunk_rows
-        if row["horizon"] is not None and row["actions"] is not None
+        if row["horizon"] is not None
+        and row["actions"] is not None
         and row["horizon"] > len(row["actions"])
     )
 
@@ -303,8 +310,7 @@ def build_action_execution_certificate(
             if returned is not None:
                 returned_boundaries.append(returned)
             prev_horizon = prev["horizon"]
-            if (prev_horizon is None or prev_horizon > len(prev_actions)
-                    or cur["horizon"] is None):
+            if prev_horizon is None or prev_horizon > len(prev_actions) or cur["horizon"] is None:
                 continue
             boundary_idx = prev_horizon - 1
             boundary_delta = _max_abs_delta(prev_actions[boundary_idx], cur_actions[0])
@@ -364,7 +370,10 @@ def build_action_execution_certificate(
         "action_shape_consistent",
         _pass_fail(shape_consistent),
         metric="act_samples.actions.shape",
-        actual={"dims": sorted(set(dims)), "chunk_sizes": [min(sizes), max(sizes)] if sizes else []},
+        actual={
+            "dims": sorted(set(dims)),
+            "chunk_sizes": [min(sizes), max(sizes)] if sizes else [],
+        },
         expected="non-empty chunks with one action_dim",
         remediation="Record complete action chunks with a stable action dimension.",
     )
@@ -510,9 +519,7 @@ def build_action_execution_certificate(
         "pass": sum(1 for check in checks if check["status"] == "pass"),
         "fail": sum(1 for check in checks if check["status"] == "fail"),
         "skip": sum(1 for check in checks if check["status"] == "skip"),
-        "failed_checks": [
-            check["name"] for check in checks if check["status"] == "fail"
-        ],
+        "failed_checks": [check["name"] for check in checks if check["status"] == "fail"],
     }
     missing_checks = {
         "action_chunks_present": not chunks,
@@ -528,7 +535,8 @@ def build_action_execution_certificate(
     for check in checks:
         if check["status"] == "fail":
             check["classification"] = (
-                "missing_evidence" if missing_checks.get(check["name"], False)
+                "missing_evidence"
+                if missing_checks.get(check["name"], False)
                 else "threshold_or_contract_failure"
             )
     decision = "PASS" if summary["fail"] == 0 else "FAIL"
@@ -539,10 +547,14 @@ def build_action_execution_certificate(
         "generated_at": _now_iso(),
         "decision": decision,
         "passed": decision == "PASS",
-        "evidence_scope": "reported_consumer_execution" if missing_horizons == 0 and chunks else "execution_unobserved",
+        "evidence_scope": "reported_consumer_execution"
+        if missing_horizons == 0 and chunks
+        else "execution_unobserved",
         "physical_execution_verified": False,
         "diagnostics": {
-            "returned_chunk_tail_to_next_head_max_abs": _round(max(returned_boundaries), 6) if returned_boundaries else None,
+            "returned_chunk_tail_to_next_head_max_abs": _round(max(returned_boundaries), 6)
+            if returned_boundaries
+            else None,
             "returned_chunk_boundary_is_executed_transition": False,
             "limitation": "Serving responses and planned horizons do not establish physical robot execution.",
         },

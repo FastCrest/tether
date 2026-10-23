@@ -1,4 +1,5 @@
 """Exported ScatterND must not carry reduction="none": TensorRT 10.3-10.7 reject the attribute."""
+
 import numpy as np
 import pytest
 
@@ -23,16 +24,27 @@ def model(reductions, *, nested=False):
     outputs = [helper.make_tensor_value_info(prev, TensorProto.FLOAT, [4, 3])]
     if nested:
         branch = lambda tag: helper.make_graph(  # noqa: E731
-            [scatter(f"{tag}_s", prev, f"{tag}_out", "none")], tag, [],
-            [helper.make_tensor_value_info(f"{tag}_out", TensorProto.FLOAT, [4, 3])])
-        nodes.append(helper.make_node("If", ["cond"], ["final"], then_branch=branch("then"), else_branch=branch("else")))
+            [scatter(f"{tag}_s", prev, f"{tag}_out", "none")],
+            tag,
+            [],
+            [helper.make_tensor_value_info(f"{tag}_out", TensorProto.FLOAT, [4, 3])],
+        )
+        nodes.append(
+            helper.make_node(
+                "If", ["cond"], ["final"], then_branch=branch("then"), else_branch=branch("else")
+            )
+        )
         outputs = [helper.make_tensor_value_info("final", TensorProto.FLOAT, [4, 3])]
-    inputs = [helper.make_tensor_value_info("data", TensorProto.FLOAT, [4, 3]),
-              helper.make_tensor_value_info("idx", TensorProto.INT64, [2, 1]),
-              helper.make_tensor_value_info("upd", TensorProto.FLOAT, [2, 3])]
+    inputs = [
+        helper.make_tensor_value_info("data", TensorProto.FLOAT, [4, 3]),
+        helper.make_tensor_value_info("idx", TensorProto.INT64, [2, 1]),
+        helper.make_tensor_value_info("upd", TensorProto.FLOAT, [2, 3]),
+    ]
     if nested:
         inputs.append(helper.make_tensor_value_info("cond", TensorProto.BOOL, []))
-    m = helper.make_model(helper.make_graph(nodes, "g", inputs, outputs), opset_imports=[helper.make_opsetid("", 18)])
+    m = helper.make_model(
+        helper.make_graph(nodes, "g", inputs, outputs), opset_imports=[helper.make_opsetid("", 18)]
+    )
     m.ir_version = 8
     return m
 
@@ -49,8 +61,11 @@ def attrs(m):
 
 
 def run(path, nested=False):
-    feeds = {"data": np.arange(12, dtype=np.float32).reshape(4, 3), "idx": np.array([[2], [0]], dtype=np.int64),
-             "upd": np.full((2, 3), 7.5, dtype=np.float32)}
+    feeds = {
+        "data": np.arange(12, dtype=np.float32).reshape(4, 3),
+        "idx": np.array([[2], [0]], dtype=np.int64),
+        "upd": np.full((2, 3), 7.5, dtype=np.float32),
+    }
     if nested:
         feeds["cond"] = np.array(True)
     return ort.InferenceSession(str(path), providers=["CPUExecutionProvider"]).run(None, feeds)[0]

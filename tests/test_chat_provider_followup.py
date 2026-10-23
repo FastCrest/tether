@@ -10,11 +10,17 @@ from tether.chat.schema import by_name
 from tether.cli import app
 
 
-@pytest.mark.parametrize("tool,params", [
-    ("prove_deployment", {"export_dir": "./export", "device": "cuda", "startup_timeout_s": 180}),
-    ("serve_model", {"export_dir": "./export", "device": "cuda"}),
-    ("deploy_one_command", {"model": "smolvla-base"}),
-])
+@pytest.mark.parametrize(
+    "tool,params",
+    [
+        (
+            "prove_deployment",
+            {"export_dir": "./export", "device": "cuda", "startup_timeout_s": 180},
+        ),
+        ("serve_model", {"export_dir": "./export", "device": "cuda"}),
+        ("deploy_one_command", {"model": "smolvla-base"}),
+    ],
+)
 def test_chat_exposes_and_preserves_explicit_provider_choice(tool, params):
     providers = "TensorrtExecutionProvider,CUDAExecutionProvider"
     properties = by_name()[tool]["function"]["parameters"]["properties"]
@@ -36,9 +42,24 @@ def test_prove_cli_keeps_startup_and_request_budgets_separate(monkeypatch):
         return {"passed": True}
 
     monkeypatch.setattr(proof, "run_deploy_proof", run)
-    result = CliRunner().invoke(app, ["prove", "./export", "--device", "cuda",
-        "--providers", "TensorrtExecutionProvider,CUDAExecutionProvider",
-        "--startup-timeout-s", "180", "--timeout-s", "2", "--control-hz", "20", "--json"])
+    result = CliRunner().invoke(
+        app,
+        [
+            "prove",
+            "./export",
+            "--device",
+            "cuda",
+            "--providers",
+            "TensorrtExecutionProvider,CUDAExecutionProvider",
+            "--startup-timeout-s",
+            "180",
+            "--timeout-s",
+            "2",
+            "--control-hz",
+            "20",
+            "--json",
+        ],
+    )
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["passed"]
     assert seen["startup_timeout_s"] == 180

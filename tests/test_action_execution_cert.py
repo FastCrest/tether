@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tether.action_execution_cert import build_action_execution_certificate
 
 
@@ -99,4 +101,71 @@ def test_action_execution_certificate_fails_missing_chunks() -> None:
 
     assert report["decision"] == "FAIL"
     assert "action_chunks_present" in report["summary"]["failed_checks"]
+    assert "execution_horizon_present" in report["summary"]["failed_checks"]
+
+
+def test_consumer_observation_survives_retained_runtime_schedule() -> None:
+    receipt = _receipt()
+    for sample in receipt["act_samples"]:
+        sample["response"] = {
+            "rtc": {
+                "evidence_scope": "runtime_schedule",
+                "planned_horizon": 50,
+                "executed_horizon": 50,
+                "adaptive_reason": "fixed_rtc_horizon",
+            }
+        }
+
+    report = build_action_execution_certificate(receipt, control_hz=20.0)
+
+    assert report["decision"] == "PASS"
+    assert report["metrics"]["execution_horizon_min"] == 3
+    assert report["metrics"]["adaptive_reasons"] == {"low_speed_transition": 2}
+    assert report["physical_execution_verified"] is False
+
+
+@pytest.mark.parametrize("scope", [None, "runtime_schedule"])
+def test_plan_cannot_supply_missing_consumer_horizon(scope) -> None:
+    receipt = _receipt()
+    for sample in receipt["act_samples"]:
+        sample["action_execution"].pop("executed_horizon")
+        plan = {"executed_horizon": 3, "planned_horizon": 3}
+        if scope is not None:
+            plan["evidence_scope"] = scope
+        sample["response"] = {"rtc": plan}
+
+    report = build_action_execution_certificate(receipt, control_hz=20.0)
+
+    assert report["decision"] == "FAIL"
+    assert report["metrics"]["execution_horizon_min"] is None
+    assert "execution_horizon_present" in report["summary"]["failed_checks"]
+
+
+def test_plan_cannot_supply_missing_consumer_attribution() -> None:
+    receipt = _receipt()
+    for sample in receipt["act_samples"]:
+        sample["action_execution"] = {"evidence_scope": "consumer_observed", "executed_horizon": 3}
+        sample["response"] = {
+            "rtc": {
+                "cache_status": "rtc_carry_hit",
+                "adaptive_reason": "fixed_rtc_horizon",
+            }
+        }
+
+    report = build_action_execution_certificate(receipt, control_hz=20.0)
+
+    assert report["decision"] == "FAIL"
+    assert report["metrics"]["execution_horizon_min"] == 3
+    assert report["metrics"]["runtime_attribution_samples"] == 0
+    assert "runtime_attribution_present" in report["summary"]["failed_checks"]
+
+
+def test_serving_only_receipt_cannot_promote_consumer_marker() -> None:
+    receipt = _receipt()
+    receipt["evidence_contract"] = {"scope": "serving_only"}
+
+    report = build_action_execution_certificate(receipt, control_hz=20.0)
+
+    assert report["decision"] == "FAIL"
+    assert report["evidence_scope"] == "execution_unobserved"
     assert "execution_horizon_present" in report["summary"]["failed_checks"]

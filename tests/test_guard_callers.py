@@ -119,18 +119,18 @@ def test_batched_predict_nan_item_is_guard_stop(onnx_server):
 
 
 def _decomposed(tmp_path, monkeypatch, chunk: np.ndarray, limits: SafetyLimits):
-    from tests.test_decomposed_server import _make_export_dir, _StubTokenizer
+    from tests.test_decomposed_server import _make_export_dir, _StubInference, _StubTokenizer
     from tether.runtime.decomposed_server import Pi05DecomposedServer
 
-    class _Inference:
-        _expert_session = None
-
+    class _Inference(_StubInference):
+        # Keep the split-runtime fixture's actual prefix/expert provider interface
+        # so startup reaches the guard under test without weakening admission.
         def predict_action_chunk(self, **kwargs):
             return chunk
 
     monkeypatch.setattr(
         "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
-        lambda **kwargs: _Inference(),
+        lambda **kwargs: _Inference(**kwargs),
     )
     monkeypatch.setattr(
         "tether.runtime.decomposed_server.Pi05DecomposedServer._infer_teacher_ref",

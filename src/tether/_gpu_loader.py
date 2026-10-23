@@ -74,7 +74,7 @@ def cuda_families(dirs: list[str] | None = None, *, system: bool = False) -> set
     """Return observed CUDA ABI families. A mixed result is a conflict, not a choice."""
     families: set[int] = set()
     for dist in metadata.distributions():
-        name = (dist.metadata.get("Name") or "").lower().replace("_", "-")
+        name = (dist.metadata["Name"] or "").lower().replace("_", "-")
         if name.startswith(("nvidia-", "tensorrt")):
             match = re.search(r"-cu(12|13)(?:-|$)", name)
             if match:

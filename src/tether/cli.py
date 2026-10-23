@@ -3811,7 +3811,7 @@ def _check_trt_ep_load_chain(add) -> None:
         ("libcudnn.so.9", "CUDA cuDNN"),
     ]
     for libname, friendly in libs:
-        if family is None:
+        if family is None or libname is None:
             add(friendly, False,
                 "CUDA family ambiguous or not detected; no speculative library preload. "
                 "Use the empirical provider result below.")

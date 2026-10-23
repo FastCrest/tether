@@ -1,0 +1,13 @@
+# Source merge review, 10/22/2026
+
+Three independent reviewers examined errors, API/dependency/evidence contracts and the Studio customer/security flow, reusing valid earlier receipts. Error/customer reviews found no source blocker. API review reproduced one certificate defect: mixing consumer observations and RTC plans could overwrite an observed horizon or supply a missing horizon from a plan. The correction selects one consumer-observed record atomically; scheduling fields cannot fill its gaps. Six added regression cases preserve serving-only refusal. Reviewer results and the corrected API verdict are beside this file.
+
+GitHub runtime CI at 17e73db ran 4,357 passing cases, 115 skips and three failures, all from a decomposed guard fixture without session-provider methods. The fixture now inherits the faithful two-session stub, preserving every guard assertion; all 16 guard-caller cases pass. Native runtime provider admission is unchanged. Final affected local checks pass 152 cases in 2.96 seconds, including the certificate, provider, Doctor, loader and guard contracts. Earlier local/CPU/operator receipts retain their recorded scope.
+
+The protected quality comparison also exposed two new type findings plus formatting/lint in tests and the historical parity driver. Fixed the metadata protocol access and nullable-library narrowing, and formatted those files. No Actions workflow, billing, branch rule or quality policy was edited. The historical parity driver formatting does not rerun or replace its original full-model numerical receipt.
+
+The public Doctor and wheel jobs failed installing dependencies with disk quota exceeded, before their probes. Studio jobs did not start because of account billing. These infrastructure limits remain outside the owner's assigned scope. The protected quality comparison is checked locally separately; no blanket CI-green claim follows.
+
+Complexity analysis was skipped because radon is unavailable; no analyzer dependency was added. Review remains source merge readiness, not a complete audit of every historical file, full-policy GPU/physical acceptance or a release. Orin memory fit, 5090 latency and Linux GPU app acceptance require target reruns. Public merge policy permits squash/rebase but not merge commits, so Studio must pin the actual resulting public merge commit before its own merge.
+
+Own logs are compressed without rewriting failures: [final affected run](public-final-tests.log.gz), [certificate fix](api-fix-tests.log.gz), [guard fixture](guard-callers-final.log.gz). [Final changed source identities](source-sha256.json). No paid GPU, hardware move, installer publication or tester message occurred.
