@@ -44,6 +44,9 @@ dependencies = [
     # mis-scaled; Studio ADR 0003 correction 2026-10-12). The upper bound keeps
     # pip from pulling an unqualified 5.6+ here.
     "transformers>=4.40,<5.6",
+    # Transitive via huggingface_hub/transformers; floor clears GHSA-v4x8-3wr5-3wq8,
+    # GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92 (fixed in 4.2.1).
+    "filelock>=4.2.1",
     "onnx>=1.15.0",
     "onnxscript>=0.1.0",
     # TetherClient (Phase 0.5 customer-sdk) — sync + async HTTP client.
