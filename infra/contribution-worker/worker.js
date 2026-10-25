@@ -12,6 +12,7 @@ export { ContributorStorageFence } from "./contributor-storage-fence.js";
  * Reflex contribution-worker — Cloudflare Worker for the Curate wedge.
  *
  * Endpoints:
+ *   POST /internal/maintenance                   → upload/nonce housekeeping only (maintenance auth)
  *   GET  /healthz                                → health probe
  *   POST /admin/init-bucket                      → confirm R2 bucket exists (admin auth)
  *   GET  /admin/contributors                     → list contributors + stats (admin auth)
@@ -66,6 +67,12 @@ export default {
 
     try {
       if (method === "GET" && path === "/healthz") return healthz();
+      if (method === "POST" && path === "/internal/maintenance") {
+        if (!(await hasValidBearer(request, env.MAINTENANCE_TOKEN))) {
+          return jsonResponse(401, { error: "unauthorized" });
+        }
+        return jsonResponse(200, await runSafeMaintenance(env));
+      }
       if (method === "POST" && path === "/admin/init-bucket")
         return await adminAuth(request, env, () => adminInitBucket(env));
       if (method === "GET" && path === "/admin/contributors")
@@ -144,13 +151,8 @@ export default {
   },
 
   scheduled(_controller, env, ctx) {
-    // Timed cascade progression is deliberately unavailable over public HTTP.
-    // Cloudflare invokes this hook from the configured cron trigger.
-    ctx.waitUntil(Promise.all([
-      progressPendingCascades(env),
-      recoverStaleUploadAttempts(env),
-      pruneExpiredContributorNonces(env),
-    ]));
+    // Even an accidentally restored cron has no authority to purge contributors.
+    ctx.waitUntil(runSafeMaintenance(env));
   },
 };
 
@@ -171,11 +173,15 @@ async function adminAuth(request, env, handler) {
  * not change the comparison loop. An absent server-side secret always fails.
  */
 async function hasValidAdminBearer(request, env) {
+  return await hasValidBearer(request, env.ADMIN_TOKEN);
+}
+
+async function hasValidBearer(request, secret) {
   const authorization = request.headers.get(ADMIN_TOKEN_HEADER) || "";
   const supplied = authorization.startsWith("Bearer ")
     ? authorization.slice("Bearer ".length)
     : "";
-  const expected = typeof env.ADMIN_TOKEN === "string" ? env.ADMIN_TOKEN : "";
+  const expected = typeof secret === "string" ? secret : "";
   const encoder = new TextEncoder();
   const [suppliedDigest, expectedDigest] = await Promise.all([
     crypto.subtle.digest("SHA-256", encoder.encode(supplied)),
@@ -834,12 +840,14 @@ async function initiateRevoke(env, contributorId, scope, source) {
   await env.DB.prepare(
     `INSERT INTO revoke_requests
        (request_id, contributor_id, requested_at, scope, status,
-        derived_rebuild_completed_at, buyer_notification_completed_at, notes)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`
+        derived_rebuild_completed_at, buyer_notification_completed_at, notes,
+        purge_authorized_at, purge_authority)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, 'admin_bearer_v1')`
   ).bind(
     requestId, contributorId, nowIso, scope,
     nowIso, nowIso,  // derived_rebuild + buyer_notification auto-complete
     `source=${source}; phase1_no_derived_datasets_no_buyers`,
+    nowIso,
   ).run();
 
   // Optional: alert via Slack so an operator can monitor.
@@ -853,7 +861,7 @@ async function initiateRevoke(env, contributorId, scope, source) {
     request_id: requestId,
     contributor_id: contributorId,
     sla_days: REVOKE_SLA_DAYS,
-    note: "Cascade advances through the private scheduled handler; status GET is read-only.",
+    note: "Cascade requires explicit admin execution; maintenance and status GET never advance it.",
   });
 }
 
@@ -862,7 +870,7 @@ async function initiateRevoke(env, contributorId, scope, source) {
  * GET /v1/revoke/cascade-status/<request_id>
  *
  * Returns the current cascade state for a request. This handler is strictly
- * read-only; timed progression runs only from the Worker's scheduled hook.
+ * read-only; only explicit authenticated admin execution can advance it.
  */
 async function getRevokeCascadeStatus(requestId, env, principal) {
   if (!requestId) return jsonResponse(400, { error: "missing_request_id" });
@@ -881,33 +889,27 @@ async function adminExecuteCascade(requestId, env) {
   if (!requestId) return jsonResponse(400, { error: "missing_request_id" });
   const fresh = await loadAndProgressCascade(requestId, env, { force: true });
   if (!fresh) return jsonResponse(404, { error: "request_not_found" });
+  if (!hasPurgeAuthority(fresh)) {
+    return jsonResponse(409, { error: "unverified_legacy_revoke", request_id: requestId });
+  }
   return jsonResponse(200, formatCascadeStatus(fresh));
 }
 
 
-/**
- * Progress pending cascades from Cloudflare's non-HTTP scheduled event.
- * Each stage remains idempotent in loadAndProgressCascade, so retrying a
- * scheduled event is safe.
- */
-async function progressPendingCascades(env) {
-  const pending = await env.DB.prepare(
-    `SELECT request_id FROM revoke_requests WHERE status != 'completed' LIMIT 100`
-  ).all();
-  for (const row of pending.results || []) {
-    try {
-      await loadAndProgressCascade(row.request_id, env, { force: false });
-    } catch (error) {
-      // One malformed historical row or transient storage failure must not
-      // starve the other revocations selected by this scheduled invocation.
-      // The failed cascade remains non-completed and is retried next time.
-      console.error(JSON.stringify({
-        message: "revoke_cascade_progress_failed",
-        request_id: row.request_id,
-        error: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }
+// No endpoint upgrades an existing legacy request. An operator must establish
+// the contributor's request separately and create a new authenticated request.
+function hasPurgeAuthority(req) {
+  return req.purge_authority === "admin_bearer_v1"
+    && typeof req.purge_authorized_at === "string"
+    && Number.isFinite(Date.parse(req.purge_authorized_at));
+}
+
+async function runSafeMaintenance(env) {
+  const [uploads, noncesPruned] = await Promise.all([
+    recoverStaleUploadAttempts(env),
+    pruneExpiredContributorNonces(env),
+  ]);
+  return { status: "ok", purges_executed: 0, uploads, nonces_pruned: noncesPruned };
 }
 
 
@@ -934,7 +936,8 @@ function formatCascadeStatus(req) {
     request_id: req.request_id,
     contributor_id: req.contributor_id,
     requested_at: req.requested_at,
-    overall_status: allDone ? "completed" : "in_progress",
+    overall_status: allDone ? "completed" : (hasPurgeAuthority(req) ? "in_progress" : "quarantined"),
+    purge_authorized: hasPurgeAuthority(req),
     stages,
     sla_days: REVOKE_SLA_DAYS,
     completed_at: req.completed_at,
@@ -954,7 +957,7 @@ async function loadAndProgressCascade(requestId, env, { force = false } = {}) {
     `SELECT * FROM revoke_requests WHERE request_id = ?`
   ).bind(requestId).first();
   if (!req) return null;
-  if (req.status === "completed") return req;
+  if (req.status === "completed" || !hasPurgeAuthority(req)) return req;
 
   const now = Date.now();
   const requestedAtMs = Date.parse(req.requested_at);
@@ -999,6 +1002,19 @@ async function loadAndProgressCascade(requestId, env, { force = false } = {}) {
 
 
 async function executeR2Purge(env, req) {
+  // Defense in depth: admin force bypasses timing only, never authorization.
+  if (!hasPurgeAuthority(req)) throw new Error("unverified_legacy_revoke");
+  if (req.scope !== "all" && req.scope !== "future_only") {
+    throw new Error("invalid_revoke_scope");
+  }
+  // Withdrawing future permission does not authorize deletion of past data.
+  if (req.scope === "future_only") {
+    await env.DB.prepare(
+      `UPDATE revoke_requests SET r2_purge_completed_at = ?, r2_objects_purged = 0
+       WHERE request_id = ? AND r2_purge_completed_at IS NULL`
+    ).bind(new Date().toISOString(), req.request_id).run();
+    return;
+  }
   const startedAtIso = new Date().toISOString();
   await env.DB.prepare(
     `UPDATE revoke_requests SET r2_purge_started_at = COALESCE(r2_purge_started_at, ?)
@@ -1040,6 +1056,7 @@ async function executeR2Purge(env, req) {
 }
 
 async function recoverStaleUploadAttempts(env) {
+  const counts = { inspected: 0, recovered: 0, reset: 0, abandoned_objects_deleted: 0 };
   const nowSeconds = Math.floor(Date.now() / 1000);
   const rows = await env.DB.prepare(
     `SELECT upload_id, r2_key, byte_size, content_sha256, manifest_sha256,
@@ -1049,6 +1066,7 @@ async function recoverStaleUploadAttempts(env) {
       LIMIT 100`
   ).bind(nowSeconds - UPLOAD_ATTEMPT_STALE_SECONDS).all();
   for (const row of rows.results || []) {
+    counts.inspected += 1;
     const attemptKey = `${row.r2_key}/attempts/${row.attempt_id}`;
     const object = await env.CURATE_BUCKET.head(attemptKey);
     const metadata = object?.customMetadata || {};
@@ -1061,11 +1079,12 @@ async function recoverStaleUploadAttempts(env) {
       && metadata.upload_id === row.upload_id,
     );
     if (valid) {
-      await env.DB.prepare(
+      const recovered = await env.DB.prepare(
         `UPDATE uploads
             SET status = 'uploaded', r2_key = ?, uploaded_at = ?
           WHERE upload_id = ? AND status = 'uploading' AND attempt_id = ?`
       ).bind(attemptKey, nowSeconds, row.upload_id, row.attempt_id).run();
+      counts.recovered += Number(recovered?.meta?.changes ?? recovered?.changes ?? 0);
       continue;
     }
     // Claim the exact invalid attempt before deletion. If the owner wrote and
@@ -1079,16 +1098,21 @@ async function recoverStaleUploadAttempts(env) {
               attempt_started_at = NULL
         WHERE upload_id = ? AND status = 'uploading' AND attempt_id = ?`
     ).bind(nowSeconds, row.upload_id, row.attempt_id).run();
-    if (Number(reset?.meta?.changes ?? reset?.changes ?? 0) === 1 && object) {
+    const changed = Number(reset?.meta?.changes ?? reset?.changes ?? 0);
+    counts.reset += changed;
+    if (changed === 1 && object) {
       await env.CURATE_BUCKET.delete(attemptKey);
+      counts.abandoned_objects_deleted += 1;
     }
   }
+  return counts;
 }
 
 async function pruneExpiredContributorNonces(env) {
-  await env.DB.prepare(
+  const result = await env.DB.prepare(
     `DELETE FROM contributor_nonces WHERE expires_at <= ?`
   ).bind(Math.floor(Date.now() / 1000)).run();
+  return Number(result?.meta?.changes ?? result?.changes ?? 0);
 }
 
 function validateAnonymizationManifest(value, nowSeconds) {
