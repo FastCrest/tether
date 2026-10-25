@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import sqlite3
 import sys
 
@@ -15,7 +16,7 @@ def fingerprint(rows):
     return hashlib.sha256(json.dumps(values, separators=(",", ":")).encode()).hexdigest()
 
 
-def restore(snapshot_file, expected_sha256, target):
+def restore(snapshot_file, expected_sha256, target, media_directory=None):
     os.umask(0o077)
     snapshot_file = pathlib.Path(snapshot_file)
     if snapshot_file.stat().st_size > 8 * 1024 * 1024:
@@ -24,7 +25,7 @@ def restore(snapshot_file, expected_sha256, target):
     if hashlib.sha256(raw).hexdigest() != expected_sha256:
         raise ValueError("Snapshot checksum does not match publication receipt")
     snapshot = json.loads(raw)
-    if snapshot.get("version") != 1 or snapshot.get("complete") is not True:
+    if snapshot.get("version") not in (1, 2) or snapshot.get("complete") is not True:
         raise ValueError("Incomplete or unsupported snapshot")
     legacy_tables = {"contributors", "uploads", "daily_uploads", "revoke_requests"}
     auth_tables = legacy_tables | {"contributor_keys", "contributor_nonces"}
@@ -72,13 +73,40 @@ def restore(snapshot_file, expected_sha256, target):
             if fingerprint(actual) != fingerprint(rows):
                 raise ValueError("Restored row fingerprint differs")
     mapping = []
-    for item in snapshot["objects"]:
-        data = base64.b64decode(item["bodyBase64"], validate=True)
-        if len(data) != item["size"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
-            raise ValueError("Object checksum differs")
+    media_directory = (
+        pathlib.Path(media_directory) if media_directory else snapshot_file.parent / "objects"
+    )
+    seen = set()
+    for index, item in enumerate(snapshot["objects"]):
+        if item["key"] in seen:
+            raise ValueError("Duplicate source object key")
+        seen.add(item["key"])
         name = hashlib.sha256(item["key"].encode()).hexdigest()
-        (target / name).write_bytes(data)
-        mapping.append({"key": item["key"], "file": name, "sha256": item["sha256"]})
+        output = target / name
+        if snapshot["version"] == 1:
+            data = base64.b64decode(item["bodyBase64"], validate=True)
+            output.write_bytes(data)
+        else:
+            # Numeric filenames are generated locally, never taken from an untrusted object key.
+            source = media_directory / f"{index:06d}"
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("Missing local backup object")
+            with source.open("rb") as src, output.open("xb") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+        digest = hashlib.sha256()
+        with output.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        if output.stat().st_size != item["size"] or digest.hexdigest() != item["sha256"]:
+            raise ValueError("Object checksum differs")
+        mapping.append(
+            {
+                "key": item["key"],
+                "file": name,
+                "sha256": item["sha256"],
+                "version": item.get("version"),
+            }
+        )
     (target / "object-map.json").write_text(json.dumps(mapping, indent=2))
     return {
         "verified": True,
@@ -92,6 +120,8 @@ def restore(snapshot_file, expected_sha256, target):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        raise SystemExit("Usage: restore.py SNAPSHOT_JSON PUBLICATION_SHA256 NEW_LOCAL_DIRECTORY")
+    if len(sys.argv) not in (4, 5):
+        raise SystemExit(
+            "Usage: restore.py SNAPSHOT_JSON PUBLICATION_SHA256 NEW_LOCAL_DIRECTORY [MEDIA_DIRECTORY]"
+        )
     print(json.dumps(restore(*sys.argv[1:])))

@@ -25,3 +25,10 @@ service = "accsync-voice-backup"
 
 # Set RECOVERY_TOKEN and ACCSYNC_BACKUP_TRIGGER_TOKEN with wrangler secret put.
 # Never copy backup credentials into the contribution application Worker.
+
+[[services]]
+binding = "CONTRIBUTIONS"
+service = "reflex-contributions"
+
+# Set MAINTENANCE_TRIGGER_TOKEN to the contribution Worker's MAINTENANCE_TOKEN.
+# Maintenance never runs the combined legacy purge scheduler.
