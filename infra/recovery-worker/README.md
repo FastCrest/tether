@@ -4,7 +4,7 @@ The contribution application still uses legacy Reflex resource names. This
 separate Worker backs up its six D1 tables, including contributor keys and replay nonces, and complete R2 object inventory.
 Backup capture never advances revocations or writes to the source bucket or database. The separate authenticated maintenance job runs only safe stale-upload/nonce housekeeping; it never executes the combined legacy purge scheduler.
 
-The daily 10:15 UTC coordinator independently runs this backup and the AccSync
+The daily 10:15 UTC coordinator first waits for safe maintenance to settle, then independently runs this backup and the AccSync
 voice-backup Worker through a service binding. One failed job does not prevent
 the other from running. This coordinator uses one new cron slot; AccSync shares that trigger. No plan upgrade is required.
 `POST /run-backups`, `POST /backup`, `GET /status`, `GET /snapshot?key=...` and manifest-scoped `GET /object?key=...&index=N` require the

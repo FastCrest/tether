@@ -253,20 +253,16 @@ async function invoke(binding, token, path, missing) {
   });
   if (!r.ok) throw Error("service_http_" + r.status);
   const receipt = await r.json();
-  if (receipt.complete !== true) throw Error("service_incomplete");
+  if (path === "/internal/maintenance") {
+    if (receipt.status !== "ok" || receipt.purges_executed !== 0)
+      throw Error("maintenance_invalid_receipt");
+  } else if (receipt.complete !== true) throw Error("service_incomplete");
   return receipt;
 }
 async function coordinate(env, origin) {
-  const settled = await Promise.allSettled([
-    job(env, "tether", origin, () => capture(env)),
-    job(env, "accsync", origin, () =>
-      invoke(
-        env.ACCSYNC_BACKUP,
-        env.ACCSYNC_BACKUP_TRIGGER_TOKEN,
-        "/backup",
-        "accsync_binding_or_token_missing",
-      ),
-    ),
+  // Housekeeping writes upload/nonce rows. Let it settle before capture's
+  // consistency window, while still attempting both backups after any failure.
+  const maintenance = await Promise.allSettled([
     job(env, "maintenance", origin, () =>
       invoke(
         env.CONTRIBUTIONS,
@@ -276,6 +272,18 @@ async function coordinate(env, origin) {
       ),
     ),
   ]);
+  const backups = await Promise.allSettled([
+    job(env, "tether", origin, () => capture(env)),
+    job(env, "accsync", origin, () =>
+      invoke(
+        env.ACCSYNC_BACKUP,
+        env.ACCSYNC_BACKUP_TRIGGER_TOKEN,
+        "/backup",
+        "accsync_binding_or_token_missing",
+      ),
+    ),
+  ]);
+  const settled = [...backups, ...maintenance];
   const jobs = settled.map((r, i) => ({
     project: ["tether", "accsync", "maintenance"][i],
     success: r.status === "fulfilled",

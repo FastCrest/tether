@@ -154,7 +154,12 @@ function environment(count = 0, size = 0) {
       async fetch(url, init) {
         assert.equal(new URL(url).pathname, "/internal/maintenance");
         assert.equal(init.headers.authorization, "Bearer maintenance-token");
-        return Response.json({ complete: true, revocationsExecuted: false });
+        return Response.json({
+          status: "ok",
+          purges_executed: 0,
+          uploads: { recovered: 0 },
+          nonces_pruned: 0,
+        });
       },
     },
   };
@@ -377,4 +382,55 @@ test("slow backup storage backpressures source without queuing full media", asyn
   assert.ok(pulls < 10, `queued ${pulls} source chunks while storage paused`);
   release();
   assert.equal((await capture).status, 200);
+});
+
+test("real maintenance contract settles its DB mutation before backup consistency window", async () => {
+  const env = environment();
+  let maintained = false;
+  env.CONTRIBUTIONS.fetch = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    maintained = true;
+    return Response.json({
+      status: "ok",
+      purges_executed: 0,
+      uploads: { recovered: 1 },
+      nonces_pruned: 2,
+    });
+  };
+  env.DB.batch = async () => {
+    assert.equal(maintained, true, "capture must wait for maintenance writes");
+    return tables.map(() => ({ results: [{ id: 1 }] }));
+  };
+  const response = await worker.fetch(request("/run-backups", "POST"), env);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.complete, true);
+  assert.equal(
+    result.jobs.find((j) => j.project === "maintenance").receipt
+      .purges_executed,
+    0,
+  );
+  assert.equal(
+    result.jobs.find((j) => j.project === "tether").receipt.tables
+      .contributor_nonces,
+    1,
+  );
+});
+test("failed maintenance still attempts both backups and reports partial result", async () => {
+  const env = environment();
+  env.CONTRIBUTIONS.fetch = async () =>
+    new Response("unavailable", { status: 503 });
+  const response = await worker.fetch(request("/run-backups", "POST"), env);
+  assert.equal(response.status, 500);
+  const result = await response.json();
+  assert.equal(
+    result.jobs.find((j) => j.project === "maintenance").success,
+    false,
+  );
+  assert.equal(result.jobs.find((j) => j.project === "tether").success, true);
+  assert.equal(result.jobs.find((j) => j.project === "accsync").success, true);
+  const state = await (await worker.fetch(request("/status"), env)).json();
+  assert.equal(state.jobs.maintenance.lastFailure.error, "service_http_503");
+  assert.equal(state.jobs.tether.fresh, true);
+  assert.equal(state.jobs.accsync.fresh, true);
 });
