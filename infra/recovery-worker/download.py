@@ -10,6 +10,8 @@ import sys
 import urllib.parse
 import urllib.request
 
+from format_v3 import SHARD_BYTES
+
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -57,7 +59,7 @@ def download(endpoint, key, expected_sha256, destination):
     if actual != expected_sha256:
         raise ValueError("Snapshot checksum does not match publication receipt")
     manifest = json.loads(manifest_file.read_bytes())
-    if manifest.get("complete") is not True or manifest.get("version") not in (1, 2):
+    if manifest.get("complete") is not True or manifest.get("version") not in (1, 2, 3):
         raise ValueError("Incomplete or unsupported snapshot")
     if manifest["version"] == 2:
         (destination / "objects").mkdir(mode=0o700)
@@ -69,7 +71,42 @@ def download(endpoint, key, expected_sha256, destination):
             )
             if size != item["size"] or checksum != item["sha256"]:
                 raise ValueError("Downloaded object checksum differs")
-    return {"verified": True, "objects": len(manifest["objects"]), "snapshot": str(manifest_file)}
+    if manifest["version"] == 3:
+        for name in ("indexes", "shards", "media"):
+            (destination / name).mkdir(mode=0o700)
+        for index, descriptor in enumerate(manifest["indexes"]):
+            index_path = destination / "indexes" / f"{index:08d}.json"
+            size, checksum = fetch(
+                "/index?" + query + "&index=" + str(index), index_path, SHARD_BYTES
+            )
+            if size != descriptor["size"] or checksum != descriptor["sha256"]:
+                raise ValueError("Index checksum differs")
+            listing = json.loads(index_path.read_bytes())
+            for number, item in enumerate(listing["entries"]):
+                if item["kind"] not in {"table", "object"}:
+                    raise ValueError("Unknown manifest entry")
+                shard_path = destination / "shards" / f"{index:08d}-{number:08d}.json"
+                suffix = query + "&index=" + str(index) + "&entry=" + str(number)
+                size, checksum = fetch("/shard?" + suffix, shard_path, SHARD_BYTES)
+                if size != item["size"] or checksum != item["sha256"]:
+                    raise ValueError("Manifest shard checksum differs")
+                if item["kind"] == "object":
+                    media = json.loads(shard_path.read_bytes())
+                    for chunk, piece in enumerate(media["chunks"]):
+                        size, checksum = fetch(
+                            "/chunk?" + suffix + "&chunk=" + str(chunk),
+                            destination / "media" / f"{index:08d}-{number:08d}-{chunk:08d}",
+                            piece["size"],
+                        )
+                        if size != piece["size"] or checksum != piece["sha256"]:
+                            raise ValueError("Media chunk checksum differs")
+    return {
+        "verified": True,
+        "objects": manifest["objectCount"]
+        if manifest["version"] == 3
+        else len(manifest["objects"]),
+        "snapshot": str(manifest_file),
+    }
 
 
 if __name__ == "__main__":
