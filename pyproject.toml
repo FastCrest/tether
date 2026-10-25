@@ -8,7 +8,7 @@ version = "0.12.0"
 description = "FastCrest Tether — edge-to-cloud robotics + edge AI deploy CLI. Optimize, deploy, verify any VLA across Jetson, RTX, Apple Silicon, AMD. Standalone or wired to FastCrest Cloud."
 readme = "README.md"
 license = "BUSL-1.1"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "FastCrest" }]
 keywords = ["vla", "robotics", "edge", "tensorrt", "jetson", "deployment", "tether", "fastcrest"]
 classifiers = [
@@ -21,6 +21,8 @@ classifiers = [
 
 dependencies = [
     "torch>=2.1.0",
+    # Security floor for the Hub/PyTorch cache lock dependency.
+    "filelock>=4.2.1",
     "safetensors>=0.4.0",
     "typer>=0.9.0",
     "rich>=13.0.0",
@@ -76,7 +78,7 @@ siglip-export = [
     "torchvision==0.25.0; python_version >= '3.11'",
     "onnx==1.23.2; python_version >= '3.11'",
     "onnxruntime==1.30.0; python_version >= '3.11'",
-    "Pillow>=10; python_version >= '3.11'",
+    "Pillow>=13; python_version >= '3.11'",
 ]
 # CPU inference runtime (onnx is a core dep now). Use this for CPU-only boxes.
 onnx = ["onnxruntime>=1.17.0"]
@@ -113,7 +115,7 @@ gpu-min = [
 serve = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
     # Embodiment-config validation (per-embodiment-configs B.1). Tiny dep.
     "jsonschema>=4.0",
     # Prometheus /metrics endpoint (D.1.8 prometheus-grafana). Tiny dep.
@@ -140,7 +142,7 @@ comply = []
 # that's why it's a separate extra, not a base dep.
 #
 # lerobot 0.6.x requires Python >=3.12. Jetson (JetPack 6) ships 3.10,
-# so we gate lerobot behind a version marker — pip skips it on 3.10/3.11
+# so we gate lerobot behind a version marker — pip skips it on Python 3.11
 # instead of hard-failing with ResolutionImpossible. Native parity
 # verification should be run on a Python 3.12+ host.
 native = [
@@ -226,8 +228,8 @@ tracing = [
 #   pip install 'fastcrest-tether[lerobot]'
 #   tether serve bundle/ --embodiment so_arm100 --port /dev/ttyUSB0
 #
-# lerobot 0.6.x requires Python >=3.12 (we skip on 3.10/3.11 to avoid pip's
-# ResolutionImpossible; users on JetPack 6 Python 3.10 can still construct an
+# lerobot 0.6.x requires Python >=3.12 (we skip on 3.11 to avoid pip's
+# ResolutionImpossible; Python 3.11 users can still construct an
 # adapter + run the conversion math, they just can't open a serial bus until
 # they upgrade to Python 3.12 or install scservo_sdk directly via the [so100]
 # extra).
@@ -249,7 +251,7 @@ so100 = [
 # RTC-enabled deployments. Skeleton + config validation work without this
 # extra; only the actual processor construction needs it.
 #
-# lerobot 0.6.x requires Python >=3.12 (skipped on 3.10/3.11).
+# lerobot 0.6.x requires Python >=3.12 (skipped on Python 3.11).
 rtc = [
     "lerobot==0.6.1; python_version >= '3.12'",
     "draccus==0.11.6; python_version >= '3.12'",
@@ -272,7 +274,7 @@ curate-hdf5 = [
 # than ffmpeg-python's pipe builder + sufficient for the H.264 path).
 curate-video = [
     "imageio-ffmpeg>=0.4.9",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
 ]
 # [curate-rlds]: Google's RLDS / TFRecord format + Open X-Embodiment.
 # tensorflow_datasets is heavy (~80MB; pulls TF + numpy version pins that
@@ -293,7 +295,7 @@ jetson = [
     # serve stack
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
-    "Pillow>=10.0.0",
+    "Pillow>=13.0.0",
     "jsonschema>=4.0",
     "prometheus-client>=0.19.0",
     # monolithic export stack minus lerobot

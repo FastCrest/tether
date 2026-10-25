@@ -19,11 +19,14 @@ ARG L4T_BASE=nvcr.io/nvidia/l4t-base:r36.2.0
 FROM ${L4T_BASE}
 
 # L4T base includes Python 3.10 and system JetPack 6.x libraries.
-# We only install the user-space Python packages.
+# Current Tether needs >=3.11. This legacy default must fail clearly until a
+# matching Python/GPU-wheel base is qualified; never replace host CUDA implicitly.
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-pip libgl1 libglib2.0-0 libusb-1.0-0 libsndfile1 ffmpeg git \
   && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -c "import sys; assert sys.version_info >= (3, 11), 'This L4T base bundles unsupported Python 3.10; Tether requires Python >=3.11 and a separately qualified matching GPU wheel'"
 
 ARG JETPACK_INDEX_URL=https://pypi.jetson-ai-lab.io/jp6/cu126
 

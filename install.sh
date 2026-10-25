@@ -53,7 +53,7 @@ echo "  Arch: $ARCH"
 
 # -- Detect Python ------------------------------------------------------------
 PYTHON=""
-for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+for candidate in python3.13 python3.12 python3.11 python3 python; do
   if command -v "$candidate" >/dev/null 2>&1; then
     PYTHON="$candidate"; break
   fi
@@ -62,7 +62,7 @@ done
 if [ -z "$PYTHON" ]; then
   echo
   fail "No Python interpreter found."
-  note "  Install Python 3.10+ first:"
+  note "  Install Python 3.11+ first:"
   note "    macOS:  brew install python@3.11"
   note "    Linux:  pyenv install 3.11.9 && pyenv global 3.11.9"
   exit 1
@@ -155,8 +155,8 @@ if [ "$IS_OLD_NANO" -eq 1 ]; then
 fi
 
 # -- Python version check -----------------------------------------------------
-if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-  fail "Python $PY_VER is too old. Tether requires Python 3.10+."
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 11 ]; }; then
+  fail "Python $PY_VER is too old. Tether requires Python 3.11+."
   echo
   info "Install a newer Python:"
   case "$OS" in
@@ -167,34 +167,16 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }
       note "  pyenv install 3.11.9 && pyenv global 3.11.9"
       note "  # or via your distro: apt install python3.11   (Ubuntu 22+)" ;;
     *)
-      note "  Use pyenv or your platform's package manager to install Python 3.10+." ;;
+      note "  Use pyenv or your platform's package manager to install Python 3.11+." ;;
   esac
   echo
   exit 1
 fi
-ok "Python $PY_VER (>=3.10 required)"
+ok "Python $PY_VER (>=3.11 required)"
 
-# -- Jetson-specific Python version check ------------------------------------
-# JetPack 6 ships Python 3.10. Jetson Zoo wheels are built for cp310.
-# Running on Python 3.11+ means no pre-built GPU wheel and a source build.
-if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
-  if [ "$PY_MINOR" -ne 10 ]; then
-    echo
-    warn "Jetson detected but Python is $PY_VER."
-    note "  Jetson Zoo provides GPU wheels for Python 3.10 only."
-    note "  Python $PY_VER will work for CPU inference but GPU (CUDA) may fail."
-    note "  Recommended: use Python 3.10, e.g. pyenv or a Docker image."
-    echo
-    if [ "$FORCE_JETSON" -eq 0 ]; then
-      read -r -p "Continue anyway? [y/N] " response
-      case "$response" in
-        [yY][eE][sS]|[yY]) ;;  # continue
-        *) exit 1 ;;
-      esac
-    fi
-  fi
-fi
-
+# JetPack 6's bundled Python 3.10 is below the security floor. A newer
+# interpreter must have a matching vendor GPU wheel; never suggest downgrading
+# Python or silently replace the JetPack CUDA runtime.
 # -- Pick install extras based on detected platform ---------------------------
 if [ -z "$EXTRAS" ]; then
   if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
@@ -214,7 +196,7 @@ if [ -z "$EXTRAS" ]; then
     EXTRAS="jetson"
     ok "Detected Jetson ($JETSON_MODEL) → installing with [jetson]"
     note "  Jetson-specific GPU deps (numpy<2, torch, ort) will be installed first."
-    note "  [monolithic] skipped — lerobot requires Python >=3.12 (Jetson has 3.10)."
+    note "  [monolithic] requires a Python 3.12+ export host."
     note "  Export on a desktop/cloud host, then serve the ONNX here."
   elif [ "$OS" = "Darwin" ]; then
     EXTRAS="serve,onnx,monolithic"
@@ -261,6 +243,21 @@ if [ "$IS_JETSON" -eq 1 ] || [ "$FORCE_JETSON" -eq 1 ]; then
   info "Pre-installing Jetson GPU dependencies..."
 
   ok "JetPack $JETPACK_VERSION (L4T ${L4T_RELEASE:-from --jetpack}) → CUDA 12.6 index $JETSON_INDEX"
+
+  # Check wheel availability before touching numpy/torch or installing Tether.
+  # A cp310-only index cannot satisfy the approved Python >=3.11 floor.
+  probe_dir=$(mktemp -d)
+  if ! "$PYTHON" -m pip download --no-deps --only-binary=:all: \
+      --index-url "$JETSON_INDEX" 'onnxruntime-gpu==1.24.0' --dest "$probe_dir"; then
+    rm -rf "$probe_dir"
+    fail "No compatible JetPack 6 GPU onnxruntime wheel for Python $PY_VER."
+    note "  Tether requires Python 3.11+; the observed cu126 wheel is cp310-only."
+    note "  No GPU packages were installed. Do not downgrade Python or change CUDA automatically."
+    note "  Use a separately qualified Python 3.11+ GPU runtime, or install [serve,onnx] manually for CPU inference."
+    exit 1
+  fi
+  rm -rf "$probe_dir"
+  note "  Matching wheel found; availability alone does not qualify CUDA execution."
 
   # 1. Pin numpy<2 FIRST — Jetson AI Lab torch and ort wheels are compiled
   #    against numpy 1.x C ABI. numpy 2.x causes:

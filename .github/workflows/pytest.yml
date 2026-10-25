@@ -19,7 +19,7 @@ jobs:
       matrix:
         # Linux-only: every tether tester runs Linux. Macs use the [onnx] extra
         # path locally but CI doesn't add coverage there. Saves ~50% runner time.
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4

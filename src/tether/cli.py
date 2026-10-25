@@ -4547,8 +4547,8 @@ def doctor(
     py = sys.version_info
     add(
         "Python version",
-        py >= (3, 10),
-        f"{py.major}.{py.minor}.{py.micro} (need ≥3.10)",
+        py >= (3, 11),
+        f"{py.major}.{py.minor}.{py.micro} (need ≥3.11)",
     )
 
     # OS / architecture

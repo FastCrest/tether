@@ -15,7 +15,7 @@
 # If you want a fully-bundled JetPack image (larger, no host-leak):
 #   see Dockerfile.jetpack
 
-FROM python:3.10-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 ARG TARGETARCH
 
@@ -45,6 +45,11 @@ COPY src/ ./src/
 #    stack without the x86_64 [gpu] wheels or lerobot (needs Python 3.12).
 # 2) Install Jetson Zoo onnxruntime-gpu over the top of any CPU wheel that
 #    may have been pulled transitively by transformers / pi0.
+# Matching cp311 GPU wheels are required; this image is not newly qualified
+# merely by raising Python. Check availability before installing the project.
+RUN pip download --no-deps --only-binary=:all: --dest /tmp/ort-preflight \
+      --index-url "${JETPACK_INDEX_URL}" 'onnxruntime-gpu==1.24.0' \
+  && rm -rf /tmp/ort-preflight
 RUN pip install --no-cache-dir -e ".[jetson]" \
   && pip install --no-cache-dir --index-url "${JETPACK_INDEX_URL}" onnxruntime-gpu
 

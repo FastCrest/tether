@@ -49,7 +49,10 @@ stack through the installer instead of these x86 GPU wheels. A manually managed
 CUDA 13 serving environment must provide matching ORT, TensorRT and CUDA
 libraries; mixing CUDA families is not an automatic repair path.
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.11. Python 3.10 cannot install the patched Pillow and
+filelock releases required by this version. See the
+[dependency security and JetPack compatibility notes](docs/dependency-security.md)
+before upgrading an existing JetPack 6 environment.
 
 For a smaller existing monolithic export, use the opt-in
 [validated mixed-FP16 conversion](docs/precision-conversion.md). It preserves the

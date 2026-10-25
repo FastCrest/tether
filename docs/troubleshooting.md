@@ -172,25 +172,19 @@ If you already installed numpy 2.x, downgrade:
 pip install 'numpy<2' --force-reinstall
 ```
 
-### `No matching distribution found for lerobot==0.5.1` (Python 3.10)
+### Python 3.10 or missing JetPack 6 GPU wheels
 
-```
-ERROR: Could not find a version that satisfies the requirement lerobot==0.5.1; extra == "monolithic"
-ERROR: Ignored the following versions that require a different python version: 0.5.0 Requires-Python >=3.12; 0.5.1 Requires-Python >=3.12
-```
+Current Tether requires Python 3.11 or newer so patched Pillow and filelock
+releases can be installed. JetPack 6 bundles Python 3.10, and the observed
+cu126 ONNX Runtime 1.24.0 wheel is cp310-only. The installer checks for a matching
+GPU wheel before changing packages and fails clearly when one is unavailable.
+It does not downgrade Python, change CUDA, or silently install CPU inference.
 
-**Cause:** The `[monolithic]` (and `[native]`, `[rtc]`) extras depend on `lerobot==0.5.1`, which requires Python ≥ 3.12. JetPack 6 ships Python 3.10.
-
-**Fix:** On Jetson, install `[serve]` only — **not** `[monolithic]`:
-```bash
-pip install 'fastcrest-tether[serve]'
-```
-
-The monolithic ONNX export (`tether export --monolithic`) requires lerobot and must run on a **Python 3.12+ host** (desktop, cloud GPU, or Docker). Export there, then copy the ONNX to the Jetson and serve it:
-```bash
-# On Jetson — serve a pre-exported model
-tether serve /path/to/exported/model/
-```
+Use a separately qualified Python 3.11+ GPU environment. For explicit CPU
+inference, install `[serve,onnx]` in a separate Python 3.11+ environment; that
+path does not establish Jetson CUDA qualification. Model export with LeRobot
+requires a Python 3.12+ host. See [dependency security](dependency-security.md)
+for current runtime and lockfile boundaries.
 
 ### `Thermal throttling during inference`
 

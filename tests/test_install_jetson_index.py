@@ -10,18 +10,21 @@ INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
 FAKE_PYTHON = """#!/bin/sh
 case "$1" in
   -c) case "$2" in
-        *micro*) echo 3.10.12 ;;
-        *minor*) echo 10 ;;
+        *micro*) echo 3.${TEST_PY_MINOR:-11}.12 ;;
+        *minor*) echo ${TEST_PY_MINOR:-11} ;;
         *major*) echo 3 ;;
       esac ;;
   -m) shift 2; printf '%s\\n' "$*" >> "$PIP_LOG"
-      case "$*" in *onnxruntime-gpu*) exit "${FAIL_ORT:-0}" ;; esac ;;
+      case "$*" in
+        download*) exit "${FAIL_PROBE:-0}" ;;
+        *onnxruntime-gpu*) exit "${FAIL_ORT:-0}" ;;
+      esac ;;
 esac
 exit 0
 """
 
 
-def run(tmp_path, revision=None, args=(), fail_ort=0):
+def run(tmp_path, revision=None, args=(), fail_ort=0, fail_probe=0, python_minor=11):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"):
@@ -40,6 +43,8 @@ def run(tmp_path, revision=None, args=(), fail_ort=0):
         "PIP_LOG": str(log),
         "TETHER_INSTALL_ROOTFS": str(rootfs),
         "FAIL_ORT": str(fail_ort),
+        "FAIL_PROBE": str(fail_probe),
+        "TEST_PY_MINOR": str(python_minor),
         "NO_COLOR": "1",
     }
     result = subprocess.run(
@@ -67,6 +72,7 @@ def test_l4t_36_4_uses_cu126_jetson_extra_and_pinned_ort(tmp_path, revision, jet
     assert f"JetPack {jetpack} (L4T 36.4." in result.stdout
     assert "--index-url https://pypi.jetson-ai-lab.io/jp6/cu126 onnxruntime-gpu==1.24.0" in pip
     assert "cu129" not in pip
+    assert "download --no-deps --only-binary=:all:" in pip
     assert pip.splitlines()[-1] == "install --upgrade fastcrest-tether[jetson]"
 
 
@@ -98,3 +104,20 @@ def test_gpu_onnxruntime_failure_stops_instead_of_cpu_fallback(tmp_path):
     assert result.returncode == 1
     assert "Not installing Tether without a GPU onnxruntime" in result.stdout
     assert "fastcrest-tether" not in pip
+
+
+def test_python_310_refuses_before_any_package_operation(tmp_path):
+    result, pip = run(tmp_path, ("36", "4.3"), python_minor=10)
+    assert result.returncode == 1
+    assert "requires Python 3.11+" in result.stdout
+    assert pip == ""
+
+
+def test_python_311_missing_vendor_wheel_refuses_before_install(tmp_path):
+    result, pip = run(tmp_path, ("36", "4.3"), fail_probe=1)
+    assert result.returncode == 1
+    assert "No compatible JetPack 6 GPU onnxruntime wheel" in result.stdout
+    assert "No GPU packages were installed" in result.stdout
+    assert "download --no-deps --only-binary=:all:" in pip
+    assert not any(line.startswith("install ") for line in pip.splitlines())
+    assert "use Python 3.10" not in result.stdout
