@@ -42,6 +42,8 @@ snapshots; it contains no credentials or contributor rows. Conditional writes
 prevent simultaneous jobs from losing each other's status. Capture and maintenance
 failures are reported separately. A later failure never erases the prior success.
 The scheduled handler awaits every job, persists outcomes and throws on failure.
+Scheduled attempts and successes also have separate `lastScheduledAttempt` and
+`lastScheduledSuccess` records, so a later manual run cannot erase scheduler proof.
 Status requires an external monitor to deliver alerts; the endpoint alone sends
 nothing. A configured schedule is not proof of an actual scheduled dispatch.
 

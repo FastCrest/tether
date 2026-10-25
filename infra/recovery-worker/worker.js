@@ -207,6 +207,12 @@ async function record(env, job, result) {
       ...previous,
       latest: result,
       [result.success ? "lastSuccess" : "lastFailure"]: result,
+      ...(result.origin === "scheduled"
+        ? {
+            lastScheduledAttempt: result,
+            ...(result.success ? { lastScheduledSuccess: result } : {}),
+          }
+        : {}),
     };
     const written = await env.BACKUPS.put(STATUS_KEY, JSON.stringify(state), {
       onlyIf: object ? { etagMatches: object.etag } : { etagDoesNotMatch: "*" },

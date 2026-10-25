@@ -434,3 +434,31 @@ test("failed maintenance still attempts both backups and reports partial result"
   assert.equal(state.jobs.tether.fresh, true);
   assert.equal(state.jobs.accsync.fresh, true);
 });
+
+test("manual runs preserve scheduled success and a later scheduled failure preserves its proof", async () => {
+  const env = environment();
+  await worker.scheduled({}, env);
+  let status = await (await worker.fetch(request("/status"), env)).json();
+  const scheduled = structuredClone(status.jobs.tether.lastScheduledSuccess);
+  assert.equal(scheduled.origin, "scheduled");
+  assert.equal(
+    (await worker.fetch(request("/run-backups", "POST"), env)).status,
+    200,
+  );
+  status = await (await worker.fetch(request("/status"), env)).json();
+  assert.equal(status.jobs.tether.lastSuccess.origin, "manual");
+  assert.deepEqual(status.jobs.tether.lastScheduledSuccess, scheduled);
+  assert.deepEqual(status.jobs.tether.lastScheduledAttempt, scheduled);
+  env.SOURCE.list = async () => {
+    throw Error("source_unavailable");
+  };
+  await assert.rejects(worker.scheduled({}, env), /one_or_more/);
+  status = await (await worker.fetch(request("/status"), env)).json();
+  assert.equal(status.jobs.tether.lastScheduledAttempt.success, false);
+  assert.deepEqual(status.jobs.tether.lastScheduledSuccess, scheduled);
+  assert.equal(status.jobs.accsync.lastScheduledSuccess.origin, "scheduled");
+  assert.equal(
+    status.jobs.maintenance.lastScheduledSuccess.origin,
+    "scheduled",
+  );
+});
