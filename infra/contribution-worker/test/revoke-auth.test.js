@@ -135,18 +135,53 @@ test("cascade status GET is read-only even when a stage is due", async () => {
   assert.match(DB.calls[0].sql, /^SELECT \* FROM revoke_requests/);
 });
 
-test("scheduled event uses the private progression path", async () => {
+test("scheduled event only performs safe housekeeping", async () => {
   const DB = dbMock({ all: { results: [] } });
   const work = [];
   worker.scheduled({}, { DB }, { waitUntil: (promise) => work.push(promise) });
 
   assert.equal(work.length, 1);
   await Promise.all(work);
-  assert.equal(DB.calls.length, 3);
+  assert.equal(DB.calls.length, 2);
   assert.equal(DB.calls[0].operation, "all");
-  assert.match(DB.calls[0].sql, /status != 'completed'/);
-  assert.equal(DB.calls[1].operation, "all");
-  assert.match(DB.calls[1].sql, /status = 'uploading'/);
-  assert.equal(DB.calls[2].operation, "run");
-  assert.match(DB.calls[2].sql, /DELETE FROM contributor_nonces/);
+  assert.match(DB.calls[0].sql, /status = 'uploading'/);
+  assert.equal(DB.calls[1].operation, "run");
+  assert.match(DB.calls[1].sql, /DELETE FROM contributor_nonces/);
+  assert.equal(DB.calls.some((call) => /revoke_requests/.test(call.sql)), false);
+});
+
+
+test("maintenance bearer cannot inherit admin deletion authority", async () => {
+  for (const [token, secret] of [[undefined, "maintenance-only"], [ADMIN_TOKEN, "maintenance-only"], ["maintenance-only", undefined]]) {
+    const DB = dbMock();
+    const response = await worker.fetch(request("/internal/maintenance", {
+      method: "POST", token,
+    }), { DB, ADMIN_TOKEN, MAINTENANCE_TOKEN: secret });
+    assert.equal(response.status, 401);
+    assert.equal(DB.calls.length, 0);
+  }
+  const DB = dbMock();
+  const env = { DB, ADMIN_TOKEN, MAINTENANCE_TOKEN: "maintenance-only" };
+  const response = await worker.fetch(request("/internal/maintenance", {
+    method: "POST", token: "maintenance-only",
+  }), env);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).purges_executed, 0);
+  const purge = await worker.fetch(request("/admin/cascade-execute/rev_test", {
+    method: "POST", token: "maintenance-only",
+  }), env);
+  assert.equal(purge.status, 401);
+});
+
+test("admin force cannot upgrade an unverified legacy revoke", async () => {
+  for (const authorization of [{}, { purge_authorized_at: "2000-01-01", purge_authority: "unknown" }, { purge_authorized_at: "invalid", purge_authority: "admin_bearer_v1" }]) {
+    const DB = dbMock({ first: revokeRow({ requested_at: "2000-01-01", ...authorization }) });
+    const response = await worker.fetch(request("/admin/cascade-execute/rev_test", {
+      method: "POST", token: ADMIN_TOKEN,
+    }), { DB, ADMIN_TOKEN });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error, "unverified_legacy_revoke");
+    assert.equal(DB.calls.length, 1);
+    assert.equal(DB.calls[0].operation, "first");
+  }
 });
