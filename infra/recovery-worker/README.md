@@ -37,3 +37,19 @@ or infer legitimate consent from its `source=customer` note.
 
 The backup is protected against application-bound object deletion; same-account
 loss or compromise of account administrators remains outside that boundary.
+
+## Local restore command
+
+Download the private snapshot through the authenticated Worker snapshot endpoint
+or the private bucket, and use its SHA256 from the successful publication receipt.
+Run from this directory:
+
+```sh
+python3 restore.py /private/snapshot.json PUBLICATION_SHA256 /private/new-restore
+```
+
+The destination must not exist. The tool verifies the publication checksum before
+creating files, uses private permissions, verifies the restored contents, and
+never connects to production. AccSync audio verification requires ffmpeg on PATH.
+Preserve any incomplete local output for inspection; do not start application
+workers or replay provider operations from a restore.
