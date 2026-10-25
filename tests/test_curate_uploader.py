@@ -164,7 +164,11 @@ def test_run_once_archives_all_rejected(tmp_path: Path) -> None:
     assert (tmp_path / "rejected" / "2026-05-05.jsonl").exists()
 
 
-def test_run_once_live_mode_raises_stub_for_now(tmp_path: Path) -> None:
+def test_run_once_live_mode_retains_queue_on_transport_failure(tmp_path: Path) -> None:
+    class OfflineAuthClient:
+        def upload(self, **kwargs):
+            raise ConnectionError("deterministic offline fixture")
+
     queue_dir = tmp_path / "queue"
     queue_dir.mkdir()
     jsonl_path = queue_dir / "2026-05-05.jsonl"
@@ -182,12 +186,16 @@ def test_run_once_live_mode_raises_stub_for_now(tmp_path: Path) -> None:
         uploaded_dir=tmp_path / "uploaded",
         rejected_dir=tmp_path / "rejected",
         live=True,
+        auth_client=OfflineAuthClient(),
     )
     outcome = uploader.run_once()
-    # Live mode + worker not deployed → falls back to keeping in queue + logs
+    # A transient transport failure retains the source for a later retry.
+    # Never send test contributions or create default credentials on the network.
     assert outcome.files_kept_in_queue == 1
     assert outcome.files_uploaded == 0
     assert jsonl_path.exists()
+    assert len(outcome.errors) == 1
+    assert "deterministic offline fixture" in outcome.errors[0]
 
 
 def test_kill_switch_skips_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
