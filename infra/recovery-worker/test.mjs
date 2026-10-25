@@ -462,3 +462,35 @@ test("manual runs preserve scheduled success and a later scheduled failure prese
     "scheduled",
   );
 });
+
+test("portable downloader identifies the operator while preserving token auth", () => {
+  const script = new URL("./download.py", import.meta.url).pathname;
+  const proof = execFileSync(
+    "python3",
+    [
+      "-c",
+      `
+import importlib.util, os, pathlib, tempfile, json, hashlib, io
+spec = importlib.util.spec_from_file_location("recovery_download", ${JSON.stringify(script)})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+body = json.dumps({"version": 1, "complete": True, "objects": []}).encode()
+class Response(io.BytesIO):
+    pass
+class Opener:
+    def open(self, request, timeout):
+        assert request.get_header("User-agent") == "Tether recovery operator"
+        assert request.get_header("Authorization") == "Bearer test-private-token"
+        return Response(body)
+module.urllib.request.build_opener = lambda *args: Opener()
+os.environ["RECOVERY_TOKEN"] = "test-private-token"
+with tempfile.TemporaryDirectory() as directory:
+    result = module.download("https://backup.example", "snapshots/20261025T020000Z-test/snapshot.json", hashlib.sha256(body).hexdigest(), pathlib.Path(directory) / "download")
+    assert result["verified"] is True
+print("verified")
+`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(proof.trim(), "verified");
+});

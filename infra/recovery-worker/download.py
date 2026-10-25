@@ -38,7 +38,8 @@ def download(endpoint, key, expected_sha256, destination):
 
     def fetch(path, target, maximum):
         request = urllib.request.Request(
-            endpoint.rstrip("/") + path, headers={"Authorization": "Bearer " + token}
+            endpoint.rstrip("/") + path,
+            headers={"Authorization": "Bearer " + token, "User-Agent": "Tether recovery operator"},
         )
         digest, size = hashlib.sha256(), 0
         with opener.open(request, timeout=120) as response, target.open("xb") as output:
