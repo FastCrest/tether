@@ -32,6 +32,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   doctor-smoke:
     name: doctor (${{ matrix.os }} py${{ matrix.python-version }})
@@ -83,7 +86,16 @@ jobs:
           # exercises the LD_LIBRARY_PATH patch path without pulling tensorrt
           # (which has no Mac wheel and is huge on Linux). Doctor should still
           # exit 0 with TRT libs ⚠ NOT installed warnings.
-          /tmp/tether-doctor-venv/bin/python -m pip install "$(ls dist/fastcrest_tether-*.whl)[onnx]"
+          # Hosted Linux runners have no GPU; choose CPU torch from its own
+          # index rather than downloading the default multi-GB CUDA toolchain.
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            /tmp/tether-doctor-venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          else
+            /tmp/tether-doctor-venv/bin/python -m pip install torch
+          fi
+          /tmp/tether-doctor-venv/bin/python -c 'import importlib.metadata as m; print("torch==" + m.version("torch"))' > /tmp/tether-doctor-cpu-constraints.txt
+          /tmp/tether-doctor-venv/bin/python -m pip install -c /tmp/tether-doctor-cpu-constraints.txt "$(ls dist/fastcrest_tether-*.whl)[onnx]"
+          /tmp/tether-doctor-venv/bin/python -m pip check
 
       - name: Verify tether --version matches pyproject.toml
         shell: bash
@@ -129,43 +141,18 @@ jobs:
           fi
           echo "PASS: doctor table rendered + version line present"
 
-      - name: Platform-specific assertions — macOS
-        if: runner.os == 'macOS'
+      - name: Assert CPU platform and TensorRT diagnostics semantically
         shell: bash
         run: |
-          # Mac path expectations: TRT/CUDA libs ⚠ NOT installed (no Mac wheel),
-          # ORT-TRT EP check skipped, Platform Darwin ✓
-          if ! grep -qE "Platform.*Darwin" /tmp/doctor.log; then
-            echo "FAIL: macOS doctor output missing 'Platform Darwin'"
-            exit 1
-          fi
-          if ! grep -qE "libnvinfer" /tmp/doctor.log; then
-            echo "FAIL: macOS doctor output missing libnvinfer check (regression in TRT EP check rendering)"
-            exit 1
-          fi
-          echo "PASS: macOS-specific assertions"
-
-      - name: Platform-specific assertions — Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          # Linux CPU path expectations: Platform Linux ✓, libnvinfer ⚠ NOT installed
-          # (because we installed [onnx] not [serve,gpu]), torch + CUDA available=False
-          # (no GPU on free GHA runners), ORT-TRT EP check skipped or deferred.
-          if ! grep -qE "Platform.*Linux" /tmp/doctor.log; then
-            echo "FAIL: Linux doctor output missing 'Platform Linux'"
-            exit 1
-          fi
-          if ! grep -qE "libnvinfer" /tmp/doctor.log; then
-            echo "FAIL: Linux doctor output missing libnvinfer check"
-            exit 1
-          fi
-          echo "PASS: Linux-specific assertions"
+          /tmp/tether-doctor-venv/bin/tether doctor --json > /tmp/doctor.json
+          /tmp/tether-doctor-venv/bin/python .github/scripts/check_cpu_doctor.py /tmp/doctor.json
 
       - name: Upload doctor log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: doctor-log-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: /tmp/doctor.log
+          path: |
+            /tmp/doctor.log
+            /tmp/doctor.json
           retention-days: 7

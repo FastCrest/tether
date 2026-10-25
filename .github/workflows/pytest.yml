@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -36,7 +40,10 @@ jobs:
           # We deliberately skip [gpu] since GitHub-hosted runners have no GPU
           # and tensorrt is a 2 GB install for tests that would all skip via
           # @pytest.mark.skipif anyway.
-          pip install -e ".[dev,onnx,serve]"
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -c 'import importlib.metadata as m; print("torch==" + m.version("torch")); print("torchvision==" + m.version("torchvision"))' > /tmp/tether-cpu-constraints.txt
+          python -m pip install -c /tmp/tether-cpu-constraints.txt -e ".[dev,onnx,serve]"
+          python -m pip check
 
       - name: Run tests
         run: |
