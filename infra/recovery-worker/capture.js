@@ -28,6 +28,17 @@ const number = (value) => String(value).padStart(8, "0");
 const schemaQuery =
   "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name";
 const schema = async (env) => (await env.DB.prepare(schemaQuery).all()).results;
+// R2 stores NFC-normalized names but preserves uploaded display encoding.
+// Compare UTF-8 bytes, not JS UTF-16 units, while retaining original keys below.
+// https://developers.cloudflare.com/r2/reference/unicode-interoperability/
+function compareObjectKeys(a, b) {
+  const left = encoder.encode(a.normalize("NFC")),
+    right = encoder.encode(b.normalize("NFC"));
+  for (let i = 0; i < Math.min(left.length, right.length); i++) {
+    if (left[i] !== right[i]) return left[i] - right[i];
+  }
+  return left.length - right.length;
+}
 const objectIdentity = (objects) =>
   objects.map(({ key, etag, version, size, httpMetadata, customMetadata }) => ({
     key,
@@ -266,7 +277,7 @@ export class Capture {
       const entries = objectIdentity(page.objects);
       let lastKey = job.lastKey;
       for (const entry of entries) {
-        if (lastKey !== undefined && entry.key <= lastKey)
+        if (lastKey !== undefined && compareObjectKeys(entry.key, lastKey) <= 0)
           throw Error("source_inventory_order_changed");
         lastKey = entry.key;
       }

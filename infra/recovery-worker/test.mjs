@@ -740,3 +740,29 @@ test("duplicate inventory keys and unsupported schema fail before publication", 
     "source_schema_unsupported",
   );
 });
+
+test("Unicode inventory ordering uses NFC UTF-8 bytes across page boundaries", async () => {
+  const fixture = environment(52, 0);
+  const keys = [
+    ...Array.from(
+      { length: 48 },
+      (_, i) => "source/a" + String(i).padStart(3, "0"),
+    ),
+    "source/z",
+    "source/e\u0301",
+    "source/\uE000",
+    "source/\u{10000}",
+  ];
+  assert.ok(keys[50] > keys[51], "fixture must exercise JS UTF-16 reversal");
+  assert.ok(
+    keys[49] < keys[48],
+    "fixture must exercise preserved decomposed display encoding",
+  );
+  fixture.env.objects.forEach((item, i) => {
+    item.key = keys[i];
+  });
+  const job = await started(fixture);
+  assert.equal(job.phase, "complete");
+  assert.equal(job.receipt.objects, 52);
+  assert.equal(job.inventoryPages, 2);
+});
