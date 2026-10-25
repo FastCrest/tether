@@ -2,11 +2,11 @@ name = "reflex-contributions"
 main = "worker.js"
 compatibility_date = "2026-05-01"
 
-# Cascade status GETs are read-only. This private scheduler hook is the only
-# non-admin path that advances elapsed revoke stages.
+# Scheduled events and /internal/maintenance only reconcile uploads/nonces.
+# Destructive revocation requires a verified request and explicit admin execution.
 [triggers]
-# Legacy pending requests have no verified caller identity. Review and reauthorize
-# them before restoring automatic purge. Recovery jobs have a separate Worker.
+# The recovery coordinator owns the shared maintenance/backup schedule.
+# This Worker consumes no extra cron slot; its scheduler cannot advance purges.
 crons = []
 
 # D1 binding for contributor metadata + upload tracking + revoke cascade.
@@ -40,4 +40,5 @@ new_sqlite_classes = ["ContributorStorageFence"]
 
 # Required Secrets (set via `wrangler secret put`):
 #   ADMIN_TOKEN                — bearer token for admin + revoke mutations
+#   MAINTENANCE_TOKEN          — distinct maintenance-only bearer, shared with coordinator
 #   SLACK_WEBHOOK_URL          — optional; alert on revoke + suspicious uploads

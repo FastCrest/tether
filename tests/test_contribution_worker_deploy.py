@@ -31,7 +31,7 @@ case " $* " in
   *" whoami "*) printf '%s\\n' 'authenticated';;
   *" d1 list --json "*) printf '%s\\n' '[{{"name":"reflex-contributions","uuid":"{DATABASE_ID}"}}]';;
   *" r2 bucket list "*) printf '%s\\n' 'reflex-curate';;
-  *" secret list "*) printf '%s\\n' '[{{"name": "ADMIN_TOKEN"}},{{"name": "UPLOAD_CAPABILITY_SECRET"}}]';;
+  *" secret list "*) printf '%s\\n' '[{{"name": "ADMIN_TOKEN"}},{{"name": "UPLOAD_CAPABILITY_SECRET"}},{{"name": "MAINTENANCE_TOKEN"}}]';;
   *" d1 execute "*" --command PRAGMA table_info(uploads) "*)
     current=$(<"$FAKE_SCHEMA_STATE")
     if [[ "$current" == fresh* ]]; then
@@ -46,7 +46,10 @@ case " $* " in
     if [[ "$current" == fresh* ]]; then
       printf '%s\\n' '[{{"results":[],"success":true}}]'
     elif [[ "$current" == *revoke* ]]; then
-      printf '%s\\n' '[{{"results":[{{"name":"request_id"}},{{"name":"tombstone_at"}},{{"name":"r2_purge_started_at"}},{{"name":"r2_purge_completed_at"}},{{"name":"derived_rebuild_completed_at"}},{{"name":"buyer_notification_completed_at"}}],"success":true}}]'
+      authority=''
+      if [[ "$current" == *partial_authority* ]]; then authority='{{"name":"purge_authorized_at"}},';
+      elif [[ "$current" == *authority* ]]; then authority='{{"name":"purge_authorized_at"}},{{"name":"purge_authority"}},'; fi
+      printf '%s\\n' '[{{"results":['"$authority"'{{"name":"request_id"}},{{"name":"tombstone_at"}},{{"name":"r2_purge_started_at"}},{{"name":"r2_purge_completed_at"}},{{"name":"derived_rebuild_completed_at"}},{{"name":"buyer_notification_completed_at"}}],"success":true}}]'
     else
       printf '%s\\n' '[{{"results":[{{"name":"request_id"}},{{"name":"contributor_id"}}],"success":true}}]'
     fi;;
@@ -101,7 +104,9 @@ case " $* " in
     current=$(<"$FAKE_SCHEMA_STATE"); printf '%s\\n' "${{current}} revoke" > "$FAKE_SCHEMA_STATE";;
   *" --file ./migrations/2026-08-28-contributor-auth-v1.sql "*)
     current=$(<"$FAKE_SCHEMA_STATE"); printf '%s\\n' "${{current}} auth" > "$FAKE_SCHEMA_STATE";;
-  *" --file ./schema.sql "*) printf '%s\\n' 'revoke auth' > "$FAKE_SCHEMA_STATE";;
+  *" --file ./migrations/2026-10-24-revoke-purge-authority.sql "*)
+    current=$(<"$FAKE_SCHEMA_STATE"); printf '%s\\n' "${{current}} authority" > "$FAKE_SCHEMA_STATE";;
+  *" --file ./schema.sql "*) printf '%s\\n' 'revoke auth authority' > "$FAKE_SCHEMA_STATE";;
   *" deploy "*) printf '%s\\n' 'Uploaded https://reflex-contributions.fastcrest.workers.dev';;
   *) printf '%s\\n' "unexpected wrangler invocation: $*" >&2; exit 64;;
 esac
@@ -154,7 +159,11 @@ esac
     assert len(revoke) == 1
     assert len(auth) == 1
     assert len(deploys) == 2
-    assert revoke[0] < auth[0] < deploys[0]
+    authority = [
+        index for index, call in enumerate(calls) if "2026-10-24-revoke-purge-authority.sql" in call
+    ]
+    assert len(authority) == 1
+    assert revoke[0] < auth[0] < authority[0] < deploys[0]
     assert not any("--file ./schema.sql" in call for call in calls)
     assert sum("/healthz" in call for call in calls) == 2
     assert sum("/v1/uploads/sign" in call for call in calls) == 2
@@ -181,7 +190,12 @@ esac
     assert schema_index < deploy_index
     assert not any("/migrations/" in call for call in fresh_calls)
 
-    for partial in ("partial_table", "revoke auth partial_index", "revoke auth wrong_structure"):
+    for partial in (
+        "partial_table",
+        "revoke auth partial_index",
+        "revoke auth wrong_structure",
+        "revoke auth partial_authority",
+    ):
         state.write_text(f"{partial}\n", encoding="utf-8")
         log.write_text("", encoding="utf-8")
         failed = subprocess.run(
@@ -272,3 +286,26 @@ def test_real_schema_has_exact_auth_semantics(tmp_path: Path) -> None:
         assert listed[name][2] == unique
         assert listed[name][4] == partial
         assert [r[2] for r in database.execute(f"PRAGMA index_info({name})")] == columns
+
+
+def test_purge_authority_migration_quarantines_without_mutating_legacy_rows() -> None:
+    database = sqlite3.connect(":memory:")
+    database.execute(
+        "CREATE TABLE revoke_requests (request_id TEXT PRIMARY KEY, contributor_id TEXT, status TEXT, notes TEXT)"
+    )
+    database.execute(
+        "INSERT INTO revoke_requests VALUES ('legacy', 'owner', 'pending', 'unchanged evidence')"
+    )
+    before = database.execute("SELECT * FROM revoke_requests").fetchall()
+    database.executescript(
+        (DEPLOY.parent / "migrations/2026-10-24-revoke-purge-authority.sql").read_text()
+    )
+    assert (
+        database.execute(
+            "SELECT request_id, contributor_id, status, notes FROM revoke_requests"
+        ).fetchall()
+        == before
+    )
+    assert database.execute(
+        "SELECT purge_authorized_at, purge_authority FROM revoke_requests"
+    ).fetchone() == (None, None)

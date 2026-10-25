@@ -759,7 +759,7 @@ test("signed completion expires an unclaimed persisted reservation", async () =>
   assert.equal(env.CURATE_BUCKET.objects.size, 0);
 });
 
-test("scheduled recovery finalizes only matching attempt-specific objects", async () => {
+test("maintenance route recovers matching attempt-specific objects without purge authority", async () => {
   const env = environment();
   assert.equal((await register(env)).status, 201);
   const content = Buffer.from("{\"recover\":true}\n");
@@ -798,9 +798,14 @@ test("scheduled recovery finalizes only matching attempt-specific objects", asyn
     },
   });
 
-  const work = [];
-  worker.scheduled({}, env, { waitUntil: (promise) => work.push(promise) });
-  await Promise.all(work);
+  env.MAINTENANCE_TOKEN = "maintenance-only";
+  const maintenance = await worker.fetch(new Request("https://worker.test/internal/maintenance", {
+    method: "POST", headers: { Authorization: "Bearer maintenance-only" },
+  }), env);
+  assert.equal(maintenance.status, 200);
+  const result = await maintenance.json();
+  assert.equal(result.uploads.recovered, 1);
+  assert.equal(result.purges_executed, 0);
   const recovered = env.DB.sqlite.prepare(
     "SELECT status, r2_key FROM uploads WHERE upload_id = ?",
   ).get(reservation.upload_id);
@@ -1109,7 +1114,7 @@ test("completion HEAD followed by purge reports purged after its lost CAS", asyn
   assert.equal(contributor.total_uploads, 0);
 });
 
-test("scheduled purge accepts arbitrary historical Pro IDs and one failure cannot starve later cascades", async () => {
+test("safe maintenance quarantines all historical revokes without touching their objects", async () => {
   const env = environment();
   const requestedAt = "2000-01-01T00:00:00.000Z";
   const legacyId = "alice@bigco.com";
@@ -1136,25 +1141,38 @@ test("scheduled purge accepts arbitrary historical Pro IDs and one failure canno
   const legacyKey = `pro-contributors/${legacyId}/2025-01-01/legacy.jsonl`;
   await env.CURATE_BUCKET.put(legacyKey, Buffer.from("legacy"));
 
-  const errors = [];
-  const originalConsoleError = console.error;
-  console.error = (message) => errors.push(String(message));
-  try {
-    const work = [];
-    worker.scheduled({}, env, { waitUntil: (promise) => work.push(promise) });
-    await Promise.all(work);
-  } finally {
-    console.error = originalConsoleError;
-  }
+  const before = env.DB.sqlite.prepare("SELECT * FROM revoke_requests ORDER BY request_id").all();
+  env.MAINTENANCE_TOKEN = "safe-maintenance-only";
+  env.DB.sqlite.prepare("INSERT INTO contributor_nonces VALUES (?, ?, ?)").run(legacyId, "expired", 0);
+  env.DB.sqlite.prepare("INSERT INTO contributor_nonces VALUES (?, ?, ?)").run(legacyId, "fresh", Math.floor(Date.now() / 1000) + 600);
+  const maintenance = await worker.fetch(new Request("https://worker.test/internal/maintenance", {
+    method: "POST", headers: { Authorization: "Bearer safe-maintenance-only" },
+  }), env);
+  assert.equal(maintenance.status, 200);
+  const result = await maintenance.json();
+  assert.equal(result.purges_executed, 0);
+  assert.equal(result.nonces_pruned, 1);
+  assert.deepEqual(env.DB.sqlite.prepare("SELECT nonce FROM contributor_nonces").all().map((r) => r.nonce), ["fresh"]);
+  const work = [];
+  worker.scheduled({}, env, { waitUntil: (promise) => work.push(promise) });
+  await Promise.all(work);
+  assert.deepEqual(env.DB.sqlite.prepare("SELECT * FROM revoke_requests ORDER BY request_id").all(), before);
 
   assert.equal(env.DB.sqlite.prepare(
     "SELECT status FROM revoke_requests WHERE request_id = 'rev_broken'",
   ).get().status, "pending");
   assert.equal(env.DB.sqlite.prepare(
     "SELECT status FROM revoke_requests WHERE request_id = 'rev_legacy'",
-  ).get().status, "completed");
-  assert.equal(env.CURATE_BUCKET.objects.has(legacyKey), false);
-  assert.equal(errors.some((line) => line.includes("rev_broken")), true);
+  ).get().status, "pending");
+  assert.equal(env.CURATE_BUCKET.objects.has(legacyKey), true);
+  env.ADMIN_TOKEN = "admin-force";
+  for (const requestId of ["rev_broken", "rev_legacy"]) {
+    const forced = await worker.fetch(new Request(`https://worker.test/admin/cascade-execute/${requestId}`, {
+      method: "POST", headers: { Authorization: "Bearer admin-force" },
+    }), env);
+    assert.equal(forced.status, 409);
+  }
+  assert.deepEqual(env.DB.sqlite.prepare("SELECT * FROM revoke_requests ORDER BY request_id").all(), before);
 
   // Legacy identifiers are purge-only. Even an internal caller cannot use a
   // historical arbitrary-ID namespace to put payload bytes through the fence.
@@ -1172,7 +1190,7 @@ test("scheduled purge accepts arbitrary historical Pro IDs and one failure canno
     },
   ));
   assert.equal(rejectedWrite.status, 400);
-  assert.equal(env.CURATE_BUCKET.objects.has(legacyKey), false);
+  assert.equal(env.CURATE_BUCKET.objects.has(legacyKey), true);
   const rejectedReservation = await worker.fetch(signedRequest("/v1/uploads/sign", {
     contributorId: legacyId,
     method: "POST",
@@ -1257,4 +1275,33 @@ test("reservation key replay returns one usable reservation without double quota
   ]);
   assert.deepEqual([raceOne.status, raceTwo.status].sort(), [200, 409]);
   assert.equal(raceEnv.DB.sqlite.prepare("SELECT COUNT(*) AS count FROM uploads").get().count, 1);
+});
+
+
+test("future-only authenticated revocation preserves stored contributions", async () => {
+  const env = environment();
+  assert.equal((await register(env)).status, 201);
+  env.ADMIN_TOKEN = "admin-test";
+  const contributorId = vectors[0].contributor_id;
+  const key = `free-contributors/${contributorId}/existing.jsonl`;
+  await env.CURATE_BUCKET.put(key, Buffer.from("retained contribution"));
+  const headers = { Authorization: "Bearer admin-test", "Content-Type": "application/json" };
+  const created = await worker.fetch(new Request("https://worker.test/v1/revoke/cascade", {
+    method: "POST", headers,
+    body: JSON.stringify({ contributor_id: contributorId, scope: "future_only" }),
+  }), env);
+  assert.equal(created.status, 200);
+  const requestId = (await created.json()).request_id;
+  const row = env.DB.sqlite.prepare("SELECT * FROM revoke_requests WHERE request_id = ?").get(requestId);
+  assert.equal(row.purge_authority, "admin_bearer_v1");
+  assert.ok(row.purge_authorized_at);
+  const executed = await worker.fetch(new Request(`https://worker.test/admin/cascade-execute/${requestId}`, {
+    method: "POST", headers,
+  }), env);
+  assert.equal(executed.status, 200);
+  const result = await executed.json();
+  assert.equal(result.overall_status, "completed");
+  assert.equal(result.stages.find((stage) => stage.name === "r2_purge").objects_purged, 0);
+  assert.equal(env.CURATE_BUCKET.objects.has(key), true);
+  assert.ok(env.DB.sqlite.prepare("SELECT revoked_at FROM contributors WHERE contributor_id = ?").get(contributorId).revoked_at);
 });

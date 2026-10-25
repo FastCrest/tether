@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS revoke_requests (
   derived_rebuild_completed_at TEXT,
   buyer_notification_completed_at TEXT,
   completed_at TEXT,                        -- top-level: all stages done
+  purge_authorized_at TEXT,                 -- NULL quarantines legacy unverified requests
+  purge_authority TEXT,                     -- admin_bearer_v1 for newly authenticated requests
   notes TEXT,
   FOREIGN KEY (contributor_id) REFERENCES contributors(contributor_id)
 );

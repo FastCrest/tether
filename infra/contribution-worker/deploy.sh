@@ -21,6 +21,7 @@ BUCKET_NAME="reflex-curate"
 DOCUMENTED_WORKER_URL="https://reflex-contributions.fastcrest.workers.dev"
 REVOKE_MIGRATION="./migrations/2026-05-05-revoke-cascade-stages.sql"
 AUTH_MIGRATION="./migrations/2026-08-28-contributor-auth-v1.sql"
+PURGE_AUTHORITY_MIGRATION="./migrations/2026-10-24-revoke-purge-authority.sql"
 
 if ! command -v wrangler >/dev/null 2>&1; then
     info "Installing Wrangler 4 globally..."
@@ -277,12 +278,15 @@ if [ -z "$existing_upload_columns" ]; then
     wrangler d1 execute "$DB_NAME" --remote --file ./schema.sql
     verify_contributor_auth_schema
     verify_columns revoke_requests "$(d1_columns revoke_requests)" "${revoke_columns[@]}"
+    verify_columns revoke_requests "$(d1_columns revoke_requests)" purge_authorized_at purge_authority
     ok "Fresh schema applied and contributor-auth shape verified"
 else
     info "Existing D1 detected; schema.sql will not be re-applied"
     apply_additive_migration \
         "revoke cascade" revoke_requests "$REVOKE_MIGRATION" "${revoke_columns[@]}"
     apply_contributor_auth_migration
+    apply_additive_migration \
+        "purge authority" revoke_requests "$PURGE_AUTHORITY_MIGRATION" purge_authorized_at purge_authority
 fi
 
 secret_list=$(wrangler secret list)
@@ -302,6 +306,11 @@ else
     UPLOAD_CAPABILITY_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
     printf '%s\n' "$UPLOAD_CAPABILITY_SECRET" | wrangler secret put UPLOAD_CAPABILITY_SECRET
     ok "UPLOAD_CAPABILITY_SECRET generated and set"
+fi
+
+if ! grep -q '"name": "MAINTENANCE_TOKEN"' <<<"$secret_list"; then
+    err "Set MAINTENANCE_TOKEN in this Worker and its recovery coordinator before deploying"
+    exit 1
 fi
 
 info "Deploying Worker only after D1 verification..."

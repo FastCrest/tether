@@ -29,8 +29,26 @@ Sibling workers (each in its own folder under `infra/`):
 - `GET  /v1/revoke/cascade-status/:request_id` — owner/admin-only state read; never advances it
 - `GET  /v1/contributors/:id/stats` — authenticated, owner-only totals
 
-Timed revoke stages advance through the private Cloudflare cron trigger every
-five minutes. Public `GET` requests never perform a tombstone or R2 deletion.
+### Safe maintenance (`Authorization: Bearer <MAINTENANCE_TOKEN>`)
+- `POST /internal/maintenance` — reconcile stale upload attempts and prune expired nonces
+
+The recovery coordinator invokes maintenance through a Worker service binding
+using a dedicated token. The token cannot call admin routes and is never the
+admin bearer. Maintenance returns counts and `purges_executed: 0`; a failed
+subtask fails the call so the coordinator can report/retry it. The scheduled
+handler runs exactly the same safe housekeeping, even if a cron is accidentally
+restored. This Worker has no configured cron; the existing recovery coordinator
+owns scheduling. Public `GET` requests never perform a tombstone or R2 deletion.
+
+Revoke cascades require explicit authenticated admin execution. New requests
+created using the admin bearer record `purge_authorized_at` and
+`purge_authority=admin_bearer_v1`. Historical requests have NULL authority and
+are quarantined; even `/admin/cascade-execute` returns HTTP 409 without changing
+the request, upload rows or stored objects. The tracked migration must never
+backfill that authority from old notes or timestamps. There is no endpoint to
+upgrade a historical request: verify the contributor's actual request separately
+before creating a new admin-authenticated request. `scope=future_only` blocks
+new contributions while retaining existing stored objects.
 
 ## Storage
 
@@ -178,9 +196,12 @@ wrangler d1 execute reflex-contributions \
   --file=./migrations/2026-05-05-revoke-cascade-stages.sql --remote
 wrangler d1 execute reflex-contributions \
   --file=./migrations/2026-08-28-contributor-auth-v1.sql --remote
+wrangler d1 execute reflex-contributions \
+  --file=./migrations/2026-10-24-revoke-purge-authority.sql --remote
 
 # 4. Set secrets
 wrangler secret put ADMIN_TOKEN          # 32+ hex chars
+wrangler secret put MAINTENANCE_TOKEN    # distinct random token, shared only with recovery coordinator
 wrangler secret put SLACK_WEBHOOK_URL    # optional
 
 # 5. Deploy
