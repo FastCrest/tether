@@ -207,6 +207,7 @@ def test_atomic_publication_preserves_concurrently_created_empty_directory(tmp_p
 
 
 def test_applied_preprocessing_records_real_objects_not_webli_defaults():
+    pytest.importorskip("torchvision")
     from torchvision.transforms import CenterCrop, Compose, InterpolationMode, Normalize, Resize
 
     transform = Compose(
