@@ -32,3 +32,11 @@ service = "reflex-contributions"
 
 # Set MAINTENANCE_TRIGGER_TOKEN to the contribution Worker's MAINTENANCE_TOKEN.
 # Maintenance never runs the combined legacy purge scheduler.
+
+[[durable_objects.bindings]]
+name = "CAPTURE"
+class_name = "RecoveryCapture"
+
+[[migrations]]
+tag = "recovery-capture-v3"
+new_sqlite_classes = ["RecoveryCapture"]

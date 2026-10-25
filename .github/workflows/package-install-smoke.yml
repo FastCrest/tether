@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   package-smoke:
     name: wheel install smoke (ubuntu py3.12)
@@ -36,7 +39,10 @@ jobs:
           WHEEL="$(ls dist/fastcrest_tether-*.whl)"
           python -m venv /tmp/tether-base-smoke
           /tmp/tether-base-smoke/bin/python -m pip install --upgrade pip
-          /tmp/tether-base-smoke/bin/python -m pip install "$WHEEL"
+          /tmp/tether-base-smoke/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          /tmp/tether-base-smoke/bin/python -c 'import importlib.metadata as m; print("torch==" + m.version("torch"))' > /tmp/tether-base-cpu-constraints.txt
+          /tmp/tether-base-smoke/bin/python -m pip install -c /tmp/tether-base-cpu-constraints.txt "$WHEEL"
+          /tmp/tether-base-smoke/bin/python -m pip check
           TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
             /tmp/tether-base-smoke/bin/tether --help >/tmp/tether-help.txt
           TETHER_SKIP_ONBOARDING=1 TETHER_HOME=/tmp/tether-base-home \
@@ -65,7 +71,10 @@ jobs:
           WHEEL="$(ls dist/fastcrest_tether-*.whl)"
           python -m venv /tmp/tether-serve-smoke
           /tmp/tether-serve-smoke/bin/python -m pip install --upgrade pip
-          /tmp/tether-serve-smoke/bin/python -m pip install "${WHEEL}[serve]"
+          /tmp/tether-serve-smoke/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          /tmp/tether-serve-smoke/bin/python -c 'import importlib.metadata as m; print("torch==" + m.version("torch"))' > /tmp/tether-serve-cpu-constraints.txt
+          /tmp/tether-serve-smoke/bin/python -m pip install -c /tmp/tether-serve-cpu-constraints.txt "${WHEEL}[serve,onnx]"
+          /tmp/tether-serve-smoke/bin/python -m pip check
           TETHER_SKIP_ONBOARDING=1 TETHER_NO_UPGRADE_CHECK=1 TETHER_OFFLINE=1 \
           TETHER_HOME=/tmp/tether-serve-home \
             /tmp/tether-serve-smoke/bin/tether smoke --offline --json \

@@ -9,19 +9,26 @@ so ORT-TRT EP can find libnvinfer.so.10 + CUDA libs. Tests verify:
 - Linux + TETHER_NO_LD_LIBRARY_PATH_PATCH=1 → opt-out respected
 - macOS / Windows → no-op regardless of paths
 """
+
 from __future__ import annotations
 
 import os
 import sys
+import sysconfig
 from unittest.mock import patch
+
+import pytest
 
 # Re-import the patch helper directly (NOT the side-effect at module load).
 # This lets us test in isolation with mocked filesystem + env state.
 from tether import _patch_ld_library_path
 
 
-def _run_with(env=None, exists_paths=None, platform="linux"):
+def _run_with(env=None, exists_paths=None, platform="linux", families=(12,)):
     """Run _patch_ld_library_path() with mocked env + filesystem + platform."""
+    # Resolve the host interpreter's build metadata before pretending it is
+    # Linux. Python 3.13 otherwise imports a nonexistent linux/darwin sysconfig.
+    sysconfig.get_paths()
     env = env or {}
     exists_paths = set(exists_paths or [])
 
@@ -29,6 +36,9 @@ def _run_with(env=None, exists_paths=None, platform="linux"):
         patch.dict(os.environ, env, clear=True),
         patch.object(sys, "platform", platform),
         patch("os.path.isdir", side_effect=lambda p: p in exists_paths),
+        # The fixtures model one known CUDA family; never infer it from the
+        # runner's optional torch/CUDA installation (CPU CI has none).
+        patch("tether._gpu_loader.cuda_families", return_value=set(families)),
     ):
         _patch_ld_library_path()
         return os.environ.get("LD_LIBRARY_PATH", "")
@@ -119,3 +129,15 @@ def test_multiple_paths_prepended_in_order():
     assert cublas in parts
     # tensorrt_libs comes before nvidia/cudnn/lib in the candidate list
     assert parts.index(trt) < parts.index(cudnn)
+
+
+@pytest.mark.parametrize("families", [(), (12, 13)])
+def test_unknown_or_mixed_cuda_family_preserves_loader_path(families):
+    py_lib = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    trt_path = f"{sys.prefix}/lib/{py_lib}/site-packages/tensorrt_libs"
+    result = _run_with(
+        env={"LD_LIBRARY_PATH": "/existing/lib"},
+        exists_paths=[trt_path],
+        families=families,
+    )
+    assert result == "/existing/lib"

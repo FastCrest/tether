@@ -1,0 +1,33 @@
+name: Worker security and recovery
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  workers:
+    name: Worker authentication and recovery tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Contribution authentication and purge safety
+        run: node --test infra/contribution-worker/test/*.test.js
+      - name: Retired upload routes
+        run: node --test infra/data-worker/test/*.test.js
+      - name: License authentication and deployment
+        run: node --test infra/license-worker/test/*.test.js
+      - name: Backup and offline recovery
+        run: node --test infra/recovery-worker/test.mjs

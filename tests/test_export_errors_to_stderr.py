@@ -19,19 +19,18 @@ This test pins:
 3. The matching diagnostic improvement in modal_test_gr00t.py logs BOTH
    stderr + stdout on subprocess failure.
 """
+
 from __future__ import annotations
 
-import sys
 
-import pytest
-
-
-def test_err_console_defined_and_writes_to_stderr():
-    """`err_console` exists in cli.py and is a rich.Console with stderr=True."""
+def test_err_console_defined_and_writes_to_stderr(capsys):
+    """The encoding-safe wrapper still sends actual diagnostics to stderr."""
     from tether.cli import err_console
-    # The Console object exposes its target file; check it's stderr.
-    # rich.Console stores the file as `file` attribute when constructed.
-    assert err_console.file is sys.stderr
+
+    err_console.print("export-stderr-routing-probe", markup=False)
+    captured = capsys.readouterr()
+    assert "export-stderr-routing-probe" in captured.err
+    assert "export-stderr-routing-probe" not in captured.out
 
 
 def test_cli_export_routes_errors_to_stderr_via_err_console():
@@ -49,13 +48,13 @@ def test_cli_export_routes_errors_to_stderr_via_err_console():
     # MUST route their error message via err_console (stderr), not console
     # (stdout). Catches regressions where future contributors copy-paste
     # an error path without thinking about subprocess wrappers.
-    assert "err_console.print(f\"[red]{exc}[/red]\", markup=False)" in src, (
+    assert 'err_console.print(f"[red]{exc}[/red]", markup=False)' in src, (
         "Expected at least one err_console.print(...) for an ImportError "
         "in cli.export — was the 2026-05-22 stderr fix reverted?"
     )
 
     # The "Missing monolithic dep" message specifically must go to stderr.
-    assert "err_console.print(f\"Missing monolithic dep: {exc}\"" in src
+    assert 'err_console.print(f"Missing monolithic dep: {exc}"' in src
 
 
 def test_no_stdout_error_paints_remain_in_cli():
