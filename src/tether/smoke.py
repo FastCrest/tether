@@ -333,6 +333,16 @@ def _stop_process(process: subprocess.Popen[str] | None) -> int | None:
     return process.returncode
 
 
+def _exit_hint(returncode: int | None) -> str:
+    if returncode == -signal.SIGKILL:
+        return (
+            ": SIGKILL means the process was killed from outside, most often by the out-of-memory "
+            "killer during model load or a TensorRT engine build. Check "
+            "`dmesg | grep -i 'killed process'` and `free -m`; on a Jetson use an FP16 export"
+        )
+    return ""
+
+
 def _wait_for_health(
     process: subprocess.Popen[str],
     base_url: str,
@@ -345,7 +355,7 @@ def _wait_for_health(
         if process.poll() is not None:
             raise SmokeError(
                 "server exited before /health was ready "
-                f"(exit_code={process.returncode})"
+                f"(exit_code={process.returncode}){_exit_hint(process.returncode)}"
             )
         try:
             return _read_json_url(f"{base_url}/health", timeout_s=1.0)
