@@ -80,3 +80,37 @@ def test_audit_inventory_keeps_cpu_version_and_every_third_party_dependency() ->
             SimpleNamespace(metadata={"Name": "httpx"}, version="0.28.1"),
         ]
     ) == ["httpx==0.28.1", "torch==2.8.0"]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "reflex-contributions.fastcrest.workers.dev",
+        "reflex-data.fastcrest.workers.dev",
+        b"REFLEX-CONTRIBUTIONS.FASTCREST.WORKERS.DEV.",
+    ],
+)
+def test_unit_tests_cannot_resolve_live_contribution_services(host) -> None:
+    import socket
+
+    with pytest.raises(RuntimeError, match="injected contribution transport"):
+        socket.getaddrinfo(host, 443)
+
+
+def test_unit_tests_can_still_resolve_loopback() -> None:
+    import socket
+
+    assert socket.getaddrinfo("127.0.0.1", 8080)
+
+
+def test_contribution_default_transport_is_blocked_before_proxy_or_http() -> None:
+    from tether.contributor_auth import _default_transport
+
+    with pytest.raises(RuntimeError, match="injected contribution transport"):
+        _default_transport(
+            "POST",
+            "https://reflex-contributions.fastcrest.workers.dev/v1/contributors/register",
+            b"{}",
+            {},
+            1.0,
+        )
