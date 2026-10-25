@@ -696,3 +696,47 @@ test("an existing durable checkpoint always rearms its missing alarm", async () 
     "complete",
   );
 });
+
+test("missing durable binding cannot prevent the independent AccSync attempt", async () => {
+  const fixture = environment();
+  delete fixture.env.CAPTURE;
+  const response = await worker.fetch(
+    request("/run-backups", "POST"),
+    fixture.env,
+  );
+  assert.equal(response.status, 500);
+  assert.equal(fixture.env.ACCSYNC_BACKUP.calls, 1);
+  const result = await response.json();
+  assert.equal(result.jobs.find((j) => j.project === "accsync").success, true);
+});
+test("duplicate inventory keys and unsupported schema fail before publication", async () => {
+  const duplicate = environment(2, 0);
+  duplicate.env.objects[1].key = duplicate.env.objects[0].key;
+  assert.equal(
+    (await started(duplicate)).lastError,
+    "source_inventory_order_changed",
+  );
+  const unsupported = environment(),
+    prepare = unsupported.env.DB.prepare;
+  unsupported.env.DB.prepare = (query) =>
+    query.includes("sqlite_schema")
+      ? {
+          async all() {
+            return {
+              results: [
+                {
+                  type: "view",
+                  name: "unexpected",
+                  tbl_name: "unexpected",
+                  sql: "CREATE VIEW unexpected AS SELECT 1",
+                },
+              ],
+            };
+          },
+        }
+      : prepare(query);
+  assert.equal(
+    (await started(unsupported)).lastError,
+    "source_schema_unsupported",
+  );
+});

@@ -264,6 +264,13 @@ export class Capture {
       )
         throw Error("inventory_object_capacity_exceeded");
       const entries = objectIdentity(page.objects);
+      let lastKey = job.lastKey;
+      for (const entry of entries) {
+        if (lastKey !== undefined && entry.key <= lastKey)
+          throw Error("source_inventory_order_changed");
+        lastKey = entry.key;
+      }
+      job.lastKey = lastKey;
       const descriptor = await immutableJSON(
         env,
         job.prefix + "inventory/" + number(job.inventoryPages) + ".json",
@@ -283,6 +290,19 @@ export class Capture {
         job.phase = "rows";
         job.capturedAt = new Date().toISOString();
         job.schema = await schema(env);
+        const tableNames = job.schema
+          .filter((item) => item.type === "table")
+          .map((item) => item.name);
+        if (
+          tableNames.length !== TABLES.length ||
+          TABLES.some((name) => !tableNames.includes(name)) ||
+          job.schema.some(
+            (item) =>
+              !["table", "index"].includes(item.type) ||
+              !TABLES.includes(item.tbl_name),
+          )
+        )
+          throw Error("source_schema_unsupported");
         if (encoder.encode(JSON.stringify(job.schema)).length > 65536)
           throw Error("schema_capacity_exceeded");
       } else {

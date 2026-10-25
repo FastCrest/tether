@@ -221,14 +221,14 @@ function durable(env) {
 }
 async function coordinate(env, origin) {
   const settled = await Promise.allSettled([
-    durable(env)
-      .fetch("https://capture.internal/start?maintenance=1&origin=" + origin, {
-        method: "POST",
-      })
-      .then((r) => {
-        if (!r.ok) throw Error("capture_start_failed");
-        return r.json();
-      }),
+    (async () => {
+      const response = await durable(env).fetch(
+        "https://capture.internal/start?maintenance=1&origin=" + origin,
+        { method: "POST" },
+      );
+      if (!response.ok) throw Error("capture_start_failed");
+      return response.json();
+    })(),
     serviceJob(env, "accsync", origin, () =>
       invoke(env.ACCSYNC_BACKUP, env.ACCSYNC_BACKUP_TRIGGER_TOKEN, "/backup"),
     ),
