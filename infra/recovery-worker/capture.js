@@ -188,8 +188,10 @@ export class Capture {
   }
   async start(origin, maintenance) {
     const previous = await this.storage.get("job");
-    if (previous && !["complete", "failed"].includes(previous.phase))
+    if (previous && !["complete", "failed"].includes(previous.phase)) {
+      await this.storage.setAlarm(Date.now() + 1000);
       return previous;
+    }
     const startedAt = new Date().toISOString(),
       id =
         startedAt.replace(/[-:]/g, "").replace(/\.\d{3}/, "") +
@@ -220,8 +222,10 @@ export class Capture {
       attempts: 0,
       lastError: null,
     };
-    await this.storage.put("job", job);
+    // Write-ahead alarm: once a new checkpoint exists, an alarm is already
+    // durable. A crash before the checkpoint is created has no accepted job.
     await this.storage.setAlarm(Date.now() + 1000);
+    await this.storage.put("job", job);
     return job;
   }
   async descriptor(job, kind, value) {

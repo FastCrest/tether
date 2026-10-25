@@ -665,10 +665,13 @@ test("status-write failure after completion retries publication status without r
   };
   await assert.rejects(fixture.instance.alarm(), /temporary_status_failure/);
   assert.equal((await fixture.state.get("job")).phase, "complete");
+  const completed = await fixture.state.get("job");
+  await new Promise((resolve) => setTimeout(resolve, 15));
   await fixture.instance.alarm();
   const first = await (
     await worker.fetch(request("/status"), fixture.env)
   ).json();
+  assert.equal(first.jobs.tether.lastSuccess.finishedAt, completed.finishedAt);
   await new Promise((resolve) => setTimeout(resolve, 5));
   await worker.fetch(request("/advance", "POST"), fixture.env);
   const second = await (
@@ -677,5 +680,19 @@ test("status-write failure after completion retries publication status without r
   assert.equal(
     first.jobs.tether.lastSuccess.finishedAt,
     second.jobs.tether.lastSuccess.finishedAt,
+  );
+});
+
+test("an existing durable checkpoint always rearms its missing alarm", async () => {
+  const fixture = environment();
+  const engine = new Capture(fixture.state, fixture.env);
+  const original = await engine.start("manual", false);
+  fixture.state.alarm = null;
+  const resumed = await engine.start("manual", false);
+  assert.equal(resumed.id, original.id);
+  assert.ok(fixture.state.alarm);
+  assert.equal(
+    (await drain(fixture.instance, fixture.state)).phase,
+    "complete",
   );
 });
