@@ -8,7 +8,7 @@ import pytest
 from tether.diagnostics import check_model_load as load
 from tether.smoke import SmokeError, _exit_hint, _wait_for_health
 
-GB = 1024 ** 3
+GB = 1024**3
 
 
 def export(tmp_path, weight_bytes):
@@ -36,7 +36,9 @@ def test_unreadable_memory_still_warns_not_passes(monkeypatch, tmp_path):
     assert result.status == "warn" and "cannot read available memory" in result.actual
 
 
-def test_fp32_export_that_would_oom_a_jetson_engine_build_warns_with_fp16_advice(monkeypatch, tmp_path):
+def test_fp32_export_that_would_oom_a_jetson_engine_build_warns_with_fp16_advice(
+    monkeypatch, tmp_path
+):
     # The observed case: 1.6 GB of weights on an 8 GB board with about 5 GB free.
     monkeypatch.setattr(load, "_available_bytes", lambda: int(5 * GB))
     monkeypatch.setattr(load, "_is_jetson", lambda: True)
