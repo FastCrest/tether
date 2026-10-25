@@ -1,4 +1,4 @@
-const TABLES = ["contributors", "uploads", "daily_uploads", "revoke_requests"];
+const TABLES = ["contributors", "uploads", "daily_uploads", "revoke_requests", "contributor_keys", "contributor_nonces"];
 const encoder = new TextEncoder();
 const hash = async (bytes) =>
   Array.from(

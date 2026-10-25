@@ -1,7 +1,7 @@
 # Tether contribution recovery
 
 The contribution application still uses legacy Reflex resource names. This
-separate Worker backs up its four D1 tables and complete R2 object inventory.
+separate Worker backs up its six D1 tables, including contributor keys and replay nonces, and complete R2 object inventory.
 It never advances revocations or writes to the source bucket or database.
 
 The daily 10:15 UTC coordinator independently runs this backup and the AccSync
@@ -53,3 +53,9 @@ creating files, uses private permissions, verifies the restored contents, and
 never connects to production. AccSync audio verification requires ffmpeg on PATH.
 Preserve any incomplete local output for inspection; do not start application
 workers or replay provider operations from a restore.
+
+The upload-auth rollout adds contributor_keys and contributor_nonces. New
+snapshots cover all six tables; restore.py accepts both the earlier four-table
+and the current six-table format. The live upload protocol is the existing
+Contributor Authentication v1 implementation from main, deployed with its
+tracked additive migration and upload-capability secret.

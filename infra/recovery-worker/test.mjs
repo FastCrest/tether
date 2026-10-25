@@ -41,7 +41,7 @@ test("changing source prevents snapshot publication", async () => {
         };
       },
       async batch() {
-        return Array.from({ length: 4 }, () => ({ results: [] }));
+        return Array.from({ length: 6 }, () => ({ results: [] }));
       },
     },
     BACKUPS: {

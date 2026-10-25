@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Restore a checksum-pinned backup to NEW local files. Never connects to production."""
+
 import base64
 import hashlib
 import json
@@ -25,12 +26,17 @@ def restore(snapshot_file, expected_sha256, target):
     snapshot = json.loads(raw)
     if snapshot.get("version") != 1 or snapshot.get("complete") is not True:
         raise ValueError("Incomplete or unsupported snapshot")
-    expected_tables = {"contributors", "uploads", "daily_uploads", "revoke_requests"}
-    if set(snapshot["tables"]) != expected_tables:
+    legacy_tables = {"contributors", "uploads", "daily_uploads", "revoke_requests"}
+    auth_tables = legacy_tables | {"contributor_keys", "contributor_nonces"}
+    expected_tables = set(snapshot["tables"])
+    if expected_tables not in (legacy_tables, auth_tables):
         raise ValueError("Unexpected table set")
     target = pathlib.Path(target)
     target.mkdir(mode=0o700, exist_ok=False)
-    quote = lambda value: '"' + value.replace('"', '""') + '"'
+
+    def quote(value):
+        return '"' + value.replace('"', '""') + '"'
+
     with sqlite3.connect(target / "metadata.sqlite") as db:
         db.execute("PRAGMA foreign_keys=OFF")
         for item in snapshot["schema"]:
@@ -43,8 +49,13 @@ def restore(snapshot_file, expected_sha256, target):
         for name, rows in snapshot["tables"].items():
             for row in rows:
                 db.execute(
-                    "INSERT INTO " + quote(name) + " (" + ",".join(map(quote, row))
-                    + ") VALUES (" + ",".join("?" for _ in row) + ")",
+                    "INSERT INTO "
+                    + quote(name)
+                    + " ("
+                    + ",".join(map(quote, row))
+                    + ") VALUES ("
+                    + ",".join("?" for _ in row)
+                    + ")",
                     list(row.values()),
                 )
         for item in snapshot["schema"]:
@@ -70,10 +81,13 @@ def restore(snapshot_file, expected_sha256, target):
         mapping.append({"key": item["key"], "file": name, "sha256": item["sha256"]})
     (target / "object-map.json").write_text(json.dumps(mapping, indent=2))
     return {
-        "verified": True, "tables": len(expected_tables),
+        "verified": True,
+        "tables": len(expected_tables),
         "rows": sum(len(rows) for rows in snapshot["tables"].values()),
-        "objects": len(mapping), "sourceSnapshotAt": snapshot["capturedAt"],
-        "productionModified": False, "revocationsExecuted": False,
+        "objects": len(mapping),
+        "sourceSnapshotAt": snapshot["capturedAt"],
+        "productionModified": False,
+        "revocationsExecuted": False,
     }
 
 
