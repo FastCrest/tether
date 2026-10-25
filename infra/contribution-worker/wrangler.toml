@@ -5,7 +5,9 @@ compatibility_date = "2026-05-01"
 # Cascade status GETs are read-only. This private scheduler hook is the only
 # non-admin path that advances elapsed revoke stages.
 [triggers]
-crons = ["*/5 * * * *"]
+# Legacy pending requests have no verified caller identity. Review and reauthorize
+# them before restoring automatic purge. Recovery jobs have a separate Worker.
+crons = []
 
 # D1 binding for contributor metadata + upload tracking + revoke cascade.
 # Fill in `database_id` after `wrangler d1 create reflex-contributions`.

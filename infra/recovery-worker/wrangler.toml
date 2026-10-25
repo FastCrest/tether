@@ -1,0 +1,27 @@
+name = "tether-contributions-backup"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+account_id = "2b45c94ca0597bd2d1a71f8755078349"
+
+[triggers]
+crons = ["15 10 * * *"]
+
+[[r2_buckets]]
+binding = "SOURCE"
+bucket_name = "reflex-curate"
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "tether-contributions-backups"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "reflex-contributions"
+database_id = "39cc37c0-524c-4a7a-921e-76cc44cb1494"
+
+[[services]]
+binding = "ACCSYNC_BACKUP"
+service = "accsync-voice-backup"
+
+# Set RECOVERY_TOKEN and ACCSYNC_BACKUP_TRIGGER_TOKEN with wrangler secret put.
+# Never copy backup credentials into the contribution application Worker.
