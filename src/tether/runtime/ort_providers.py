@@ -297,6 +297,24 @@ def provider_runtime_details(plan: OrtProviderPlan, session: Any) -> dict[str, A
     }
 
 
+# Exports whose graph already carries its own precision. A mixed-FP16 export keeps FP32
+# "islands" on purpose (fp16_convert.py); trt_fp16_enable lets TensorRT run those islands in
+# FP16 too. Measured on an A10G with TensorRT 10.14 (SmolVLA mixed FP16, 8 cases): with the flag,
+# action cosine to the FP32 reference fell to 0.32-0.56; without it, min 0.99997.
+_TYPED_PRECISIONS = {"mixed_float16", "float16"}
+
+
+def export_precision(export_dir: str | Path) -> str | None:
+    """`precision` from the export's tether_config.json, or None when absent or unreadable."""
+    import json
+
+    try:
+        value = json.loads((Path(export_dir) / "tether_config.json").read_text()).get("precision")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value if isinstance(value, str) else None
+
+
 def build_ort_provider_plan(
     export_dir: str | Path,
     *,
@@ -337,7 +355,8 @@ def build_ort_provider_plan(
         overrides = dict(overrides or {})
         opts: dict[str, Any] = {
             "device_id": 0,
-            "trt_fp16_enable": True,
+            # FP32 exports: let TensorRT pick FP16 kernels. Typed exports: respect the graph.
+            "trt_fp16_enable": export_precision(export_path) not in _TYPED_PRECISIONS,
             "trt_max_workspace_size": (overrides["trt_max_workspace_size"]
                                        if "trt_max_workspace_size" in overrides
                                        else _workspace_bytes(trt_workspace_bytes)),
