@@ -1,0 +1,283 @@
+{
+ "source": "rtsm==0.3.0 wheel, `rtsm --bag rgbd_dataset_freiburg1_desk.bag --bag-speed 1.0`, Modal A10G app ap-lqHanagrSE06sT2FPAHGYZ, 2026-10-26 05:02-05:04 UTC; GET /sessions then /search/semantic?query=keyboard&top_k=3, bodies verbatim, t_wall = recorder time.time() before the /sessions call; bridge_live = RtsmBridge(max_age_s=5.0) run live in the same poll",
+ "records": {
+  "before_first_pose": {
+   "t_wall": 1792990946.5858073,
+   "sessions": {
+    "live": null,
+    "sessions": [],
+    "enabled": true
+   },
+   "semantic": {
+    "date": "Mon, 26 Oct 2026 05:02:26 GMT",
+    "body": {
+     "query": "keyboard",
+     "robot_pose": null,
+     "results": []
+    }
+   },
+   "bridge_live": {
+    "status": "no_pose",
+    "detail": "RTSM has not received a robot pose",
+    "frame_changed": false,
+    "target": null,
+    "rejected": [],
+    "pose_age": null
+   }
+  },
+  "during_bag": {
+   "t_wall": 1792990993.557194,
+   "sessions": {
+    "live": "20261026-050303_e1_desk.bag",
+    "sessions": [
+     {
+      "key": "20261026-050303_e1_desk.bag",
+      "session_id": "desk.bag",
+      "epoch": 1,
+      "source": "bag",
+      "started_wall_utc": 1792990983.6785934,
+      "started_sensor_ns": 1305031453359683589,
+      "ended_wall_utc": null,
+      "end_reason": null,
+      "aligned_to": null,
+      "merged_into": null,
+      "merged_from": [],
+      "pinned": false,
+      "last_served_wall_utc": null,
+      "counters": {
+       "frames": 11,
+       "keyframes": 4,
+       "objects": 0,
+       "confirmed": 0,
+       "refinements": 0,
+       "corrections_applied": 0,
+       "objects_demoted_by_corrections": 0,
+       "tracking_gaps": 0,
+       "announced_only": 0
+      },
+      "persisted": false,
+      "persist_error": null,
+      "n_timeline": 1,
+      "n_alias": 0,
+      "discarded_predecessor": null,
+      "live": true
+     }
+    ],
+    "enabled": true
+   },
+   "semantic": {
+    "date": "Mon, 26 Oct 2026 05:03:12 GMT",
+    "body": {
+     "query": "keyboard",
+     "robot_pose": {
+      "xyz": [
+       0.82221919298172,
+       -0.10332494229078293,
+       1.5782808065414429
+      ],
+      "quaternion_xyzw": [
+       0.8939018845558167,
+       0.2819240689277649,
+       -0.07564982771873474,
+       -0.34019896388053894
+      ],
+      "timestamp": 1305031456.7276933,
+      "frame_epoch": 1,
+      "sensor_ts_ns": 1305031456727693391,
+      "pose_clock": "sender",
+      "age_s": 0.009,
+      "stale": false,
+      "stale_after_s": 0.5,
+      "writes_accepted": 102,
+      "sensor_ts_regressions": 0,
+      "rejected_writes": 0,
+      "rejected_by_reason": {
+       "older_epoch": 0,
+       "epochless_into_epoch": 0
+      }
+     },
+     "results": [
+      {
+       "id": "08d4405b0c4b4184",
+       "score": 0.058,
+       "confirmed": true,
+       "stability": 0.681,
+       "xyz_world": [
+        0.8806787133216858,
+        1.7141917943954468,
+        0.8382400274276733
+       ],
+       "last_seen_wall_utc": 1792990986.0254977
+      },
+      {
+       "id": "4d0488958be64fcb",
+       "score": 0.0565,
+       "confirmed": true,
+       "stability": 0.699,
+       "xyz_world": [
+        0.11869176477193832,
+        0.09070474654436111,
+        0.8037793636322021
+       ],
+       "last_seen_wall_utc": 1792990991.7604315
+      },
+      {
+       "id": "7ddea5e15a424bc4",
+       "score": 0.048,
+       "confirmed": true,
+       "stability": 0.799,
+       "xyz_world": [
+        0.08203280717134476,
+        0.5875478982925415,
+        0.7881456613540649
+       ],
+       "last_seen_wall_utc": 1792990991.763789
+      }
+     ]
+    }
+   },
+   "bridge_live": {
+    "status": "ok",
+    "detail": "",
+    "frame_changed": false,
+    "target": {
+     "id": "4d0488958be64fcb",
+     "xyz": [
+      0.11869176477193832,
+      0.09070474654436111,
+      0.8037793636322021
+     ],
+     "epoch": 1,
+     "age": 1.8206069469451904
+    },
+    "rejected": [
+     [
+      "08d4405b0c4b4184",
+      "stale"
+     ]
+    ],
+    "pose_age": 0.030132623000003946
+   }
+  },
+  "after_bag": {
+   "t_wall": 1792991089.568119,
+   "sessions": {
+    "live": "20261026-050303_e1_desk.bag",
+    "sessions": [
+     {
+      "key": "20261026-050303_e1_desk.bag",
+      "session_id": "desk.bag",
+      "epoch": 1,
+      "source": "bag",
+      "started_wall_utc": 1792990983.6785934,
+      "started_sensor_ns": 1305031453359683589,
+      "ended_wall_utc": null,
+      "end_reason": null,
+      "aligned_to": null,
+      "merged_into": null,
+      "merged_from": [],
+      "pinned": false,
+      "last_served_wall_utc": null,
+      "counters": {
+       "frames": 59,
+       "keyframes": 20,
+       "objects": 0,
+       "confirmed": 0,
+       "refinements": 0,
+       "corrections_applied": 0,
+       "objects_demoted_by_corrections": 0,
+       "tracking_gaps": 0,
+       "announced_only": 0
+      },
+      "persisted": false,
+      "persist_error": null,
+      "n_timeline": 1,
+      "n_alias": 0,
+      "discarded_predecessor": null,
+      "live": true
+     }
+    ],
+    "enabled": true
+   },
+   "semantic": {
+    "date": "Mon, 26 Oct 2026 05:04:49 GMT",
+    "body": {
+     "query": "keyboard",
+     "robot_pose": {
+      "xyz": [
+       0.9453426599502563,
+       -0.0038465578109025955,
+       1.288741111755371
+      ],
+      "quaternion_xyzw": [
+       0.8977665305137634,
+       0.2745237648487091,
+       -0.09500234574079514,
+       -0.3310989737510681
+      ],
+      "timestamp": 1305031473.196069,
+      "frame_epoch": 1,
+      "sensor_ts_ns": 1305031473196069171,
+      "pose_clock": "sender",
+      "age_s": 47.588,
+      "stale": true,
+      "stale_after_s": 0.5,
+      "writes_accepted": 586,
+      "sensor_ts_regressions": 0,
+      "rejected_writes": 0,
+      "rejected_by_reason": {
+       "older_epoch": 0,
+       "epochless_into_epoch": 0
+      }
+     },
+     "results": [
+      {
+       "id": "5203097bf360402e",
+       "score": 0.1164,
+       "confirmed": true,
+       "stability": 0.887,
+       "xyz_world": [
+        0.7383233904838562,
+        0.9387010931968689,
+        0.7702459096908569
+       ],
+       "last_seen_wall_utc": 1792991034.4385095
+      },
+      {
+       "id": "fb10f796e2104c04",
+       "score": 0.1159,
+       "confirmed": true,
+       "stability": 0.921,
+       "xyz_world": [
+        0.7772557139396667,
+        0.8964866399765015,
+        0.8122509121894836
+       ],
+       "last_seen_wall_utc": 1792991026.9764712
+      },
+      {
+       "id": "2ea4c78e42eb4e1e",
+       "score": 0.1116,
+       "confirmed": true,
+       "stability": 0.927,
+       "xyz_world": [
+        -0.04921860620379448,
+        0.8472216725349426,
+        0.8016029000282288
+       ],
+       "last_seen_wall_utc": 1792991010.3897843
+      }
+     ]
+    }
+   },
+   "bridge_live": {
+    "status": "pose_stale",
+    "detail": "pose age 47.609 s, stale=True",
+    "frame_changed": false,
+    "target": null,
+    "rejected": [],
+    "pose_age": 47.60931242199998
+   }
+  }
+ }
+}
