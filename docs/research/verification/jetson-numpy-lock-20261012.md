@@ -136,3 +136,14 @@ PYTHONPATH="$PWD/src:/Users/romirjain/dev/.sol-out/tether-mcpdeps:/Users/romirja
 The full output is retained at `/private/tmp/tether-numpy-pytest-final.log`.
 SHA-256: `5592687e4a138918cd37d3da699be66caf8ecd474ff637e7e7624e82347323c8`.
 Changes remain uncommitted; HEAD is still `e196b79`.
+
+## Correction, 2026-10-26
+
+VERIFIED: the change this note describes never reached `main`. PR #357 merged
+as `40f892e`, and that commit, like its branch head `dcb3951`, adds only this
+file (`git show --stat 40f892e`). `pyproject.toml` still caps NumPy below 2 on
+aarch64 with no `eval-local` architecture marker. No eval-local refusal exists,
+no workflow runs `uv lock --check`, and `uv.lock` was last changed in #326. At
+`432923b`, `uv lock --check` still fails on the conflict named above, LeRobot
+0.6.1's `numpy>=2.0,<2.3` against the aarch64 cap. The v0.13.0 changelog has no
+#357 entry for this reason.
