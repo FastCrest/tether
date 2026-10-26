@@ -57,6 +57,7 @@ def test_python310_refuses_before_optional_imports_and_preserves_argument_errors
 
 def test_linux_aarch64_refuses_before_optional_imports(tmp_path, monkeypatch):
     monkeypatch.setattr(exporter.sys, "platform", "linux")
+    monkeypatch.setattr(exporter.sys, "version_info", (3, 12, 0))
     monkeypatch.setattr(exporter.platform, "machine", lambda: "aarch64")
     with pytest.raises(ValueError, match="Linux aarch64"):
         exporter.export_rtsm_siglip(tmp_path / "export")

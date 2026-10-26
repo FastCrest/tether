@@ -52,11 +52,15 @@ def test_cuda12_serving_cohort_cannot_float_to_cuda13(extra):
         assert Version("13.0.0") not in requirements[name].specifier
     assert Version("2.8.0") in requirements["torch"].specifier
     assert Version("2.10.0") not in requirements["torch"].specifier
+    # Explicit python_version: the GPU cohort needs ORT 1.25.1's Python 3.11 floor.
     assert requirements["torch"].marker.evaluate(
-        {"sys_platform": "linux", "platform_machine": "x86_64"}
+        {"sys_platform": "linux", "platform_machine": "x86_64", "python_version": "3.12"}
     )
     assert not requirements["torch"].marker.evaluate(
-        {"sys_platform": "darwin", "platform_machine": "arm64"}
+        {"sys_platform": "linux", "platform_machine": "x86_64", "python_version": "3.10"}
+    )
+    assert not requirements["torch"].marker.evaluate(
+        {"sys_platform": "darwin", "platform_machine": "arm64", "python_version": "3.12"}
     )
     if extra == "gpu":
         assert "tensorrt" not in requirements
