@@ -338,7 +338,8 @@ def _exit_hint(returncode: int | None) -> str:
         return (
             ": SIGKILL means the process was killed from outside, most often by the out-of-memory "
             "killer during model load or a TensorRT engine build. Check "
-            "`dmesg | grep -i 'killed process'` and `free -m`; on a Jetson use an FP16 export"
+            "`dmesg | grep -i 'killed process'` and `free -m`; on a Jetson add swap for the one-time "
+            "engine build or serve with CUDA"
         )
     return ""
 

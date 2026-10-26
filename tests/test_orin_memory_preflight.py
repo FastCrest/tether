@@ -36,15 +36,22 @@ def test_unreadable_memory_still_warns_not_passes(monkeypatch, tmp_path):
     assert result.status == "warn" and "cannot read available memory" in result.actual
 
 
-def test_fp32_export_that_would_oom_a_jetson_engine_build_warns_with_fp16_advice(
-    monkeypatch, tmp_path
-):
+def test_exports_that_would_oom_a_jetson_engine_build_warn_with_swap_advice(monkeypatch, tmp_path):
     # The observed case: 1.6 GB of weights on an 8 GB board with about 5 GB free.
     monkeypatch.setattr(load, "_available_bytes", lambda: int(5 * GB))
     monkeypatch.setattr(load, "_is_jetson", lambda: True)
     result = load._run(export(tmp_path, int(1.6 * GB)))
     assert result.status == "warn"
-    assert "engine build" in result.expected and "FP16" in result.remediation
+    assert "engine build" in result.expected and "swap" in result.remediation
+    # Halving the file with FP16 does not make the build fit (12.6 GB measured on x86).
+    import json
+
+    mixed = tmp_path / "mixed"
+    mixed.mkdir()
+    export(mixed, int(0.83 * GB))
+    (mixed / "tether_config.json").write_text(json.dumps({"precision": "mixed_float16"}))
+    assert load._run(str(mixed)).status == "warn"
+    assert load.trt_build_peak_bytes(int(0.83 * GB), reduced_precision=True) > 10 * GB
 
 
 def test_same_export_on_a_workstation_or_with_ample_memory_passes(monkeypatch, tmp_path):
@@ -63,7 +70,7 @@ def test_model_that_cannot_even_load_still_fails(monkeypatch, tmp_path):
 
 
 def test_sigkill_exit_is_explained_and_other_exits_are_unchanged():
-    assert "out-of-memory" in _exit_hint(-signal.SIGKILL) and "FP16" in _exit_hint(-signal.SIGKILL)
+    assert "out-of-memory" in _exit_hint(-signal.SIGKILL) and "swap" in _exit_hint(-signal.SIGKILL)
     assert _exit_hint(1) == "" and _exit_hint(None) == ""
 
 

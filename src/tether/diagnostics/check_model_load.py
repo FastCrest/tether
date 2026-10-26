@@ -15,12 +15,29 @@ from . import Check, CheckResult, register
 CHECK_ID = "check_model_load"
 GH_ISSUE = "https://github.com/huggingface/lerobot/issues/414"
 
-# Heuristic, not a measurement: the TensorRT execution provider parses the full weights and then
-# builds an engine, so its peak is a multiple of the file size, well above ORT's 1.4x session
-# footprint. One observed point: a 1.6 GB FP32 export was killed by the kernel out-of-memory killer
-# during the engine build on an 8 GB Jetson Orin Nano (2026-10-21, tester bundle). Replace this with
-# a measured factor when one exists.
-TRT_BUILD_FACTOR = 4.0
+# TensorRT engine-build peak host memory, fitted to native TensorRT 10.14 builds of SmolVLA on an
+# x86 A10G (2026-10-25): 14.2 GB FP32 / 10 baked steps, 12.6 GB mixed FP16 / 10 steps, 9.6 GB FP32 /
+# 1 step. That is ~2x the file for the ONNX parse plus ~23 bytes per parameter in the builder, plus
+# the workspace and CUDA context. Same model as Studio's preflight. Not yet measured on a Jetson; a
+# 1.6 GB FP32 build was OOM-killed on an 8 GB Orin Nano (2026-10-21, tester bundle).
+PARSE_FACTOR = 2.0
+BUILDER_BYTES_PER_PARAMETER = 23.0
+WORKSPACE_AND_CONTEXT_BYTES = (1 << 30) + 600 * 1024 * 1024
+
+
+def _is_reduced_precision(export_dir: Path) -> bool:
+    import json
+
+    try:
+        precision = json.loads((export_dir / "tether_config.json").read_text()).get("precision")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return precision in {"mixed_float16", "float16", "fp16"}
+
+
+def trt_build_peak_bytes(file_bytes: int, *, reduced_precision: bool) -> int:
+    parameters = file_bytes / (2 if reduced_precision else 4)
+    return int(file_bytes * PARSE_FACTOR + parameters * BUILDER_BYTES_PER_PARAMETER + WORKSPACE_AND_CONTEXT_BYTES)
 
 
 def _available_bytes() -> int | None:
@@ -136,19 +153,20 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             github_issue=GH_ISSUE,
         )
 
-    trt_build_gb = (total_bytes * TRT_BUILD_FACTOR) / (1024 ** 3)
+    trt_build_gb = trt_build_peak_bytes(total_bytes, reduced_precision=_is_reduced_precision(p)) / (1024 ** 3)
     if _is_jetson() and trt_build_gb > available_gb * 0.8:
         return CheckResult(
             check_id=CHECK_ID,
             name="Model load",
             status="warn",
-            expected=f"TensorRT engine build peak (heuristic ~{TRT_BUILD_FACTOR:.0f}x weights) fits in available RAM",
+            expected="TensorRT engine build peak (measured model: 2x parse + ~23 B/parameter) fits in available RAM",
             actual=f"~{trt_build_gb:.1f}GB estimated build peak vs {available_gb:.1f}GB available",
             remediation=(
-                "The model loads, but building a TensorRT engine needs several times the weight size "
-                "and a Jetson shares one memory pool. A 1.6GB FP32 export was killed by the "
-                "out-of-memory killer during the engine build on an 8GB Orin Nano. Export FP16 "
-                "(about half the size), free memory, or build the engine on a larger machine."
+                "The model loads, but a TensorRT engine build needs far more host memory than the "
+                "weights, and a Jetson shares one memory pool. A 1.6GB FP32 export was killed by the "
+                "out-of-memory killer during the engine build on an 8GB Orin Nano; an FP16 copy still "
+                "peaked at 12.6GB on a desktop GPU. Add swap for the one-time build (the engine is "
+                "cached afterwards), free memory, or serve with CUDA instead of TensorRT."
             ),
             duration_ms=0.0,
             github_issue=GH_ISSUE,
