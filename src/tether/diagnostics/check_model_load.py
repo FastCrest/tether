@@ -18,8 +18,15 @@ GH_ISSUE = "https://github.com/huggingface/lerobot/issues/414"
 # TensorRT engine-build peak host memory, fitted to native TensorRT 10.14 builds of SmolVLA on an
 # x86 A10G (2026-10-25): 14.2 GB FP32 / 10 baked steps, 12.6 GB mixed FP16 / 10 steps, 9.6 GB FP32 /
 # 1 step. That is ~2x the file for the ONNX parse plus ~23 bytes per parameter in the builder, plus
-# the workspace and CUDA context. Same model as Studio's preflight. Not yet measured on a Jetson; a
-# 1.6 GB FP32 build was OOM-killed on an 8 GB Orin Nano (2026-10-21, tester bundle).
+# the workspace and CUDA context. Same model as Studio's preflight. First Jetson points, Orin Nano
+# Super 8 GB, JetPack 6 (L4T 36.4.3), ORT 1.24.0, tester runs:
+# - SigLIP 372 MB encoder, TensorRT FP16 build: model 4.6 GB, measured process peak 4.2 GB
+#   (board 5.4 of 7.6 GB), 152 s (2026-10-26). One tactic was skipped on a 367 MB CUDA allocation
+#   with 5.9 GB available.
+# - SmolVLA 1.6 GB FP32: model 14.0 GB, killed with 4.5 GB resident and all 12.3 GB of swap used,
+#   so at least 16.8 GB (2026-10-21).
+# On a Jetson the GPU shares RAM, and TensorRT's CUDA allocations cannot be swapped: swap only
+# helps the host side of the build. Two points do not refit the coefficients.
 PARSE_FACTOR = 2.0
 BUILDER_BYTES_PER_PARAMETER = 23.0
 WORKSPACE_AND_CONTEXT_BYTES = (1 << 30) + 600 * 1024 * 1024
@@ -204,11 +211,13 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             expected="TensorRT engine build peak (measured model: 2x parse + ~23 B/parameter) fits in available RAM",
             actual=f"~{trt_build_gb:.1f}GB estimated build peak vs {build_budget_gb:.1f}GB available RAM + free swap",
             remediation=(
-                "The model loads, but a TensorRT engine build needs far more host memory than the "
-                "weights, and a Jetson shares one memory pool. A 1.6GB FP32 export was killed by the "
-                "out-of-memory killer during the engine build on an 8GB Orin Nano; an FP16 copy still "
-                "peaked at 12.6GB on a desktop GPU. Add swap for the one-time build (the engine is "
-                "cached afterwards), free memory, or serve with CUDA instead of TensorRT."
+                "The model loads, but a TensorRT engine build needs far more memory than the "
+                "weights, and a Jetson shares one memory pool. A 1.6GB FP32 export was killed during "
+                "the engine build on an 8GB Orin Nano even with 12GB of swap; an FP16 copy still "
+                "peaked at 12.6GB on a desktop GPU. Swap helps only the host side of the one-time "
+                "build (the engine is cached afterwards): TensorRT's GPU allocations come from free "
+                "RAM and cannot swap. Free memory, use a smaller export, or serve with CUDA instead "
+                "of TensorRT."
             ),
             duration_ms=0.0,
             github_issue=GH_ISSUE,
