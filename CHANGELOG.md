@@ -1,6 +1,105 @@
 # Changelog
 
-## Unreleased
+## v0.13.0 — 2026-10-26
+
+First release since v0.12.0 (2026-06-10). It contains breaking changes; read the first section before upgrading.
+
+### Breaking and behaviour changes
+
+- **Breaking:** `tether serve --transport zmq` refuses to start on a non-loopback host without CURVE and a control token (#255). The CLI `--host` default is `0.0.0.0`, so a bare `--transport zmq` now exits. **Migration:** pass `--zmq-server-cert`, `--zmq-client-cert-dir` and `--zmq-control-token` (or `TETHER_ZMQ_CONTROL_TOKEN`), or bind locally with `--host 127.0.0.1`, or accept the risk on an isolated lab network with `--zmq-insecure-ok`.
+- **Breaking:** the SDK ZMQ server (`PolicyServer`, `create_zmq_server`) now binds `127.0.0.1` by default (was `*`) and `ping`/`kill` are disabled unless a control token is set (#309). **Migration:** pass `host=`, `curve_*` and `control_token=`, or `allow_insecure=True` (logs a warning).
+- **Breaking:** Pro licenses must be signed v2; unsigned v1 licenses are rejected unconditionally, and `serve --pro` loads the license and checks a signed heartbeat (#312). **Migration:** request a v2 license and pass `--pro-license <path>` or set `TETHER_PRO_LICENSE`. `--pro` is refused with `--ros2`, `--mcp` and non-HTTP transports.
+- **Breaking:** contribution uploads need a signed contributor registration, and the legacy unauthenticated data-worker routes (`/v1/episodes/upload`, `/upload-url`, `/v1/contributor/{hash}/stats`, `/v1/stats`) return 410 (#322). **Migration:** upgrade the client; it enrols on first upload. Old clients cannot upload.
+- **Breaking:** `tether go` on a Jetson whose board model is not a supported profile now exits 2 instead of guessing AGX Orin and downloading a model (#364). **Migration:** pass `--device-class orin_nano`, `agx_orin` or `thor` only if the board matches.
+- **Breaking:** explicit TensorRT is enforced. When the plan puts TensorRT first and the session does not run on it, strict serving raises instead of quietly serving on CUDA (#363). **Migration:** fix the TensorRT install, or pass `--no-strict-providers` to accept fallback. `[serve]` is unchanged (it never installed an ORT build); choose `[serve,onnx]` or `[serve,gpu]`, not both.
+- **Breaking (install):** `[gpu]` is pinned to one CUDA 12 cohort: `onnxruntime-gpu>=1.25.1,<1.26`, CUDA 12.8 / cuDNN 9.10 / cuBLAS 12.8, `tensorrt-cu12==10.14.1.48.post1` (x86_64 Linux), `torch>=2.8,<2.9` on x86_64 Linux (#363). `[gpu-min]` is the same without TensorRT. **Migration:** use an isolated serving environment; do not combine with CUDA 13 or a CPU `onnxruntime`.
+- **Breaking (install):** the `[monolithic]` stack moves to LeRobot 0.6.1 with transformers 5.5.4 (was LeRobot 0.5.1 and transformers 5.3.0), plus draccus 0.11.6, diffusers 0.39.0 and `torch>=2.8` (#355). LeRobot 0.6.1 needs Python >= 3.12. **Migration:** rebuild the export environment. Resuming a trainer checkpoint written under LeRobot 0.5.1 is refused (#360); restart that run.
+- **Behaviour change:** TensorRT no longer forces `trt_fp16_enable` on for `mixed_float16` and `float16` exports (#384). TensorRT names cached engines by precision, so existing mixed-FP16 exports rebuild once on the next serve. **Migration:** none for most users; pass `trt_fp16_enable=True` in provider options to restore the old behaviour (explicit options still win).
+- **Behaviour change:** the A2C2 default success-skip threshold is now an inert sentinel (1.01, was 0.90), so A2C2 applies at high latency by default (#313). **Migration:** set `success_threshold` in `[0.0, 1.0)` to restore the request-health gate.
+- **Behaviour change:** `tether finetune` builds exactly one `--policy.path` for pretrained policies (no `--policy.type`) and rejects duplicate or legacy policy selectors in extra arguments (#310). **Migration:** remove `--policy.type`/`--policy.path` from `--extra-args`.
+- **Behaviour change:** monolithic exports and the unified `tether_config.json` reader refuse unsupported or custom layouts instead of guessing (#315). **Migration:** re-export with this release; exports missing `tether_config.json` raise `FileNotFoundError`.
+- **Behaviour change:** velocity limits now compose with position and effort clamping, and each emitted action becomes the next row's velocity reference, so chunks that used to pass a violated-joint check can now be clamped or rejected (#303, #307).
+
+### Serving/runtime
+
+- `tether serve` runs non-batched `predict_async()` and the legacy batch worker in a bounded inference executor. When it is full, requests return an `inference_executor_full` error. New flags `--inference-executor-workers` and `--inference-executor-queue`; executor running/queued/capacity/rejected metrics are exported, labelled `prod`/`a`/`b` per policy slot. A generic ORT I/O Binding path binds constant denoise inputs once per chunk (#250).
+- Record writing moved to a background worker with a bounded queue, so a slow disk no longer stalls `/act` (#218). A writer registered at exit now drains its queue on interpreter exit, covering startup crashes and `sys.exit()` (#304).
+- Every HTTP response carries `X-Reflex-Request-ID` (UUID4), also recorded on the OTel act span as `tether.request_id` (#220).
+- `/act` records now carry the real per-request cache decision for decomposed pi0.5 (`evidence.cache.status` was `n/a` on every record). The Grafana "Cache hit rate (5m)" panel and `tether replay --diff cache` now see real values (#339).
+- `tether_episode_cache_bytes_total` now emits when `cache_level="episode"` is used, and re-inserting the same `(episode_id, lang_hash)` no longer double-counts bytes (#258).
+- Temporal VLA cache safety policy and adaptive action chunking (AAC) added to the RTC adapter (55c8b4be). `--adaptive-action-chunking` computes an RTC horizon per request; `--adaptive-action-chunking-canary` records the decision and applies the base horizon (#254). Decisions, signals and the applied vs recommended horizon go to JSONL records, OTel spans and bounded Prometheus metrics (#253). `scripts/calibrate_adaptive_chunking.py` recommends thresholds from JSONL/JSONL.gz pilot traces (#253).
+- Live 2-policy serving now runs the post-swap monitor and rollback handler: a clamp-rate or safety-violation trip rolls the new policy back. `PolicyCrashTracker.force_drain()` / `clear_forced_drain()` are added, kept separate from crash counts. Options include `--rollback-sensitivity` and `--post-swap-baseline-clamp-rate` (#301).
+- Shadow rollout: `tether serve --shadow-policy <export>` mirrors sampled `/act` requests (`--shadow-sample`, default 1.0) to a candidate on a bounded background queue (`--shadow-queue-size`, default 32). Overload records `shadow_queue_full` and never blocks `/act` (61571874, 9f9878a2).
+- Realtime proof: `tether bench realtime` writes a serving certificate (round-trip p95, jitter, deadline and control-budget misses, `/act` errors) from a deploy-proof packet (87ba8906). `--execution-cert` adds an action execution certificate with stale-action window, chunk-boundary delta and velocity-discontinuity limits (ed346cac). RTC execution telemetry feeds it (bfe5c365). Synthetic HTTP chunks are not treated as consumer-executed, so execution certification fails without consumer evidence; certificate latency keeps raw values, so 50.04 ms no longer rounds into a 50 ms limit (#363, #364).
+- `tether chat` can run the proof chain (prove, bench realtime, execution cert, promote) with deterministic tool wiring (a17ef2c2, caf3f038).
+
+### Safety
+
+- `ActionGuard` enforces effort limits, velocity deltas across chunks, and workspace bounds only where `workspace_indices` names the axes (#248).
+- A position or effort violation on one joint no longer switches velocity clamping off for every later joint (#303).
+- Velocity enforcement composes with same-joint position and effort clamping, and every finite emitted action is the next row's velocity reference in clamp and reject modes (#307).
+- Hold instead of zero, required units and the `/act` latch (#352) are described under ActionGuard below.
+
+### Security
+
+- ZMQ: optional CurveZMQ server/client auth (`--zmq-server-cert`, `--zmq-client-cert-dir`) and a control token for `ping`/`kill` (#249). Non-loopback binds require both (#255). CURVE key length is validated and token comparison is constant-time. The SDK defaults to loopback (#309). See Breaking above.
+- `lxml>=6.1.0` is required by the `safety` extra; with 6.0.4 a user-selected URDF could resolve a local-file external entity through `yourdfpy` (#326).
+- Pro licensing: signed v2 licenses bound to hardware, nonce-bound signed heartbeats, bounded verified cache, exact deadline admission (#312). See Breaking above.
+- Contribution upload: signed contributor registration, request binding, key rotation, authenticated quota/stats, idempotent reservations, crash-safe revoke and purge, atomic manifest generation per queued episode (#322). Legacy routes return 410. See Breaking above.
+- Mixed-FP16 conversion cleanup no longer deletes other models' weights: only `.bin`/`.data` files named after the destination stem are removed (data-loss fix, #226).
+
+### Export
+
+- **TensorRT FP16 flag follows export precision (#384).** `build_ort_provider_plan` used to set `trt_fp16_enable` unconditionally. A mixed-FP16 export keeps FP32 islands on purpose, and letting TensorRT run them in FP16 broke SmolVLA actions on an A10G with TensorRT 10.14 (8 cases, cosine to the FP32 reference 0.32-0.56, max abs 3.6). The default now reads `precision` from `tether_config.json`: off for `mixed_float16` and `float16`, on otherwise. Caller-supplied options still win. With the flag off the same cases measured cosine min 0.99997, 5.5x faster than the CUDA EP. Added `tether.runtime.ort_providers.export_precision(export_dir)`.
+- `tether export-precision` writes a separate, smaller mixed-FP16 export from an existing export. It keeps public I/O and FP32 normalisation/rotary maths, and publishes only after explicit `--validation-inputs` cases pass `--max-abs-threshold` and `--cos-threshold`. On the pinned SmolVLA graph the file shrank from 1,645,562,606 to 833,138,249 bytes; worst absolute error over 8 cases was 0.0037 and minimum cosine 0.999999 (#365). See docs/precision-conversion.md.
+- `tether export-rtsm-siglip` exports the pooled SigLIP image encoder for RTSM (new `siglip-export` extra, Python >= 3.11). It records the actual preprocessing (`pretrained` or `rtsm-local`, which differ materially and are never interchanged) and checkpoint identity, and measures CPU parity on generated images (`--samples` 3 to 32, `--seed`) (#365). RTSM query helpers now preserve server envelopes, refuse malformed responses and send `radius_m`.
+- pi0 and pi0.5 monolithic export parity restored. The `create_causal_mask` shim returned `None` unconditionally, discarding the block-causal mask built by `denoise_step`; it now returns an already-prepared 4D mask unchanged. OpenVLA export-parity harness added (#340). Pad-free bool masks for pi0/pi0.5, an OpenVLA monolithic exporter, GR00T fixes, and SnapFlow bool `F.pad` conversion landed with the round-2 parity merge (#351).
+- Decomposed exports gain a unified `tether_config.json` schema (Export Config v1): strict validation, atomic writes, safe legacy normalisation, artifact path/digest checks and explicit layout classification across all exporters. GR00T raw action dimensions, DreamZero config-only metadata and stale-manifest cleanup were fixed (#315).
+- Verification loads real artifacts: the optimized verification arm loads the declared, integrity-checked ONNX artifacts, rejects backends that lose conditioning instead of falling back, and preserves camera masks (#317).
+- `trt_build.build_engine` raises `RuntimeError` when `trtexec` is missing instead of returning an engine path it never wrote; `build_all` no longer lists phantom engines (#338).
+- Jetson: `_repair_exported_onnx` now deletes `reduction="none"` from every `ScatterND` (including `If`/`Loop` subgraphs) so TensorRT 10.3-10.7 (JetPack 6.x) accepts VLA exports instead of dropping to CUDA. On a real SmolVLA export the stripped graph is bit-identical on ORT CPU over 8 seeds (#363).
+- Export caches record the torch and onnxruntime versions and warn when they differ on load (#219).
+- `tether validate` reports cosine similarity next to max/mean error. Pass/fail criteria are unchanged (#217).
+- Export paths raise clear errors for SmolVLA export-patch failures and refuse an unqualified monolithic stack before `torch.export` (#256).
+
+### Doctor/Jetson
+
+- **TensorRT build memory warning (#383).** On a Jetson, `tether doctor` (`check_model_load`) warns before a TensorRT engine build that would exceed available RAM plus free swap. The estimate is fitted to native TensorRT 10.14 SmolVLA builds on an x86 A10G (14.2 GB FP32 / 10 steps, 12.6 GB mixed FP16, 9.6 GB FP32 / 1 step): about 2x the file for the parse, 23 bytes per parameter in the builder, plus about 1.6 GB of workspace and CUDA context. It is not measured on a Jetson, and a 1.6 GB FP32 export was OOM-killed on an 8 GB Orin Nano. The warning covers mixed-FP16 exports too and advises adding swap for the one-time build or serving with CUDA. It fires only when a build would actually happen (`TETHER_TRT_EP` not off, the TensorRT provider installed, no engine in `.ort_trt/engines`).
+- The doctor reads `MemAvailable` from `/proc/meminfo` when `psutil` is not installed, instead of skipping the memory check. The smoke health wait now reports an exit by SIGKILL (-9) as a likely out-of-memory kill and gives the same swap advice (#383).
+- `tether doctor` no longer prints "no CUDA detected" on a healthy Jetson. Hardware checks no longer depend on `nvidia-smi` (Tegra boards do not ship it), TensorRT is found when installed through apt, and detection moved to `tether.jetson` (#341).
+- Board identity comes from the device-tree model, not RAM size or tegrastats, so an Orin Nano Super is no longer classified as AGX Orin. Unsupported boards are refused before any download (#364; breaking, above). Doctor no longer overwrites its export path and finds system-installed CUDA libraries (#363).
+- `install.sh` (Jetson) maps the L4T release in `/etc/nv_tegra_release` to JetPack. Every L4T 36.4.x (JetPack 6.1/6.2/6.2.1) uses the cu126 index, so `--jetpack 6.2` no longer selects cu129. JetPack 5, 6.0 and unknown releases are refused. It installs `[jetson]` instead of `[serve]`, pins `onnxruntime-gpu==1.24.0`, and stops if the Jetson torch or onnxruntime-gpu install fails instead of continuing on CPU (#363).
+- Installer hints name the published `latest-arm64` image tag instead of the unpublished `latest-jetpack` (#251).
+
+### Training/eval
+
+- `tether finetune --dataset-root` accepts a raw local LeRobot v3 dataset for ACT (from scratch) and SmolVLA LoRA. Listing reads `meta/` only; review and launch run a full check (every row, shard placement, safe image paths, decoded video frame count and duration) and a SHA-256 over every retained file, re-verified at launch. New flags `--dataset-content-sha256` and `--dataset-features` (#354).
+- Verified local SmolVLA datasets from a completed `verified-moments-v1` export are admitted through normal preflight with `--dataset-root` and `--dataset-manifest-sha256`. Missing local files or malformed receipts fail before any Hub metadata lookup (#347).
+- Local Diffusion, VQ-BeT and TDMPC recipes are admitted with state binding, unsupported local devices are refused with a named reason (VQ-BeT needs explicit CPU on LeRobot 0.6.1), and resume outputs are rebound to the reviewed job directory (#360). Admission supports state and camera observations only.
+- Preflight no longer reads a stray `./config.json` for from-scratch runs (`_fetch_base_config("")` returned the cwd file). Dataset floors fall back to `cfg.policy`, and an ACT episode floor of 50 is advisory (#348).
+- SnapFlow training runs exactly the requested step count: finite dataloaders re-iterate epoch by epoch, an empty epoch fails closed with no success checkpoint, and global steps stay monotonic (#311).
+- `tether train finetune` forwards `--policy.path` once for pretrained policies and `--policy.type` only from scratch (#310; behaviour change, above).
+- The Modal finetune entry point exposes `save_freq` and `log_freq` (default 0 keeps LeRobot's 20000/200), so runs under 20k steps can write more than one checkpoint and metric point (#337).
+- `tether eval --suite aloha` runs a local ACT ALOHA evaluator with legacy-checkpoint migration, Wilson confidence intervals and a case-identity receipt. Flags include `--env-task` (default `AlohaTransferCube-v0`), `--device cpu|cuda|mps`, `--eval-python` and `--eval-timeout` (#350).
+- `tether verify` captures real paired evaluation evidence instead of hard-coded sentinels. Actions, teacher drift, latency, velocity, safety, memory (strict 10 Hz sampling) and device attribution come from typed runtime evidence, native and optimized arms run in separate processes, and seeds are paired. Missing, sparse or late evidence is rejected (#324).
+- `tether eval` / `verify` accept `--checkpoint-kind`, `--checkpoint-revision`, `--adapter-base`, `--processor-checkpoint` and `--task-indices` for LoRA adapters and matched evaluation.
+- LeRobot 0.5.1 to 0.6.1 port for the exporter, golden reference, local-dataset admission and GPU-qualified pi0/pi0.5, with draccus 0.11.6 (removes the GPL-3.0+ `pyyaml-include`). One constant, `QUALIFIED_LEROBOT_VERSION`, drives the exporter gate and dataset admission (#355).
+
+### CLI
+
+- New proof workflow: `tether prove <export>` writes a deploy-proof packet (offline package smoke included; `--no-strict-providers` allows fallback), `tether promote <packet>` returns promote/block/rollback with `--profile` and `--candidate-active`, `tether profiles list|show|init` manages gate profiles (`ci-default`, `lab-shadow`, `warehouse-safe`, `contact-strict`), `tether policy diff` and `tether policy shadow-gate` (alias `tether rollout gate`) compare recorded runs and gate shadow rollouts (8adc6151, 3f47fbac, d434f87a, 28654815, 8e5f1022, ba1f00a3, d8b11ba0).
+- `tether release assure` checks release evidence; hidden `tether publish-latency` renders realtime certificates into a README latency table (#257).
+- CLI logging uses `rich.logging.RichHandler`, giving coloured levels (#259).
+- Console output is encoding-safe: redirected Windows output no longer aborts an export on a Unicode character (#364).
+- The MCP server exposes a `version://current` resource and `tether mcp --version` prints the package version (#153).
+
+### RTSM
+
+- **RTSM bridge (#385).** `tether.integrations.rtsm_bridge.RtsmBridge.locate(query)` queries RTSM 0.3.0 (`/search/semantic` or `/search/label`) and returns a typed `RtsmLookup`: the best confirmed hit seen within `max_age_s` on Tether's clock, with the robot pose in the same frame, or an explicit status (`empty`, `none_qualify` with per-hit reasons, `no_pose`, `epochless`, `pose_stale`, `frame_transition`, `sessions_unavailable`, `clock_skew`). Malformed bodies raise `ValueError` through strict pydantic models.
+- Each lookup reads `GET /sessions` before and after the search. RTSM 0.3.0 can pair an epoch N+1 pose with epoch N objects in one response; hits count as being in the pose's frame only when both reads name the same live session and its epoch equals the pose's. `RtsmLookup.frame` exposes `(session_key, epoch)` and `frame_changed` is computed on every status, refusals included.
+- Clock skew is bounded with the HTTP `Date` header (allowing for 1 s truncation plus uvicorn's header refresh) and ages are measured against the latest clock the bounds allow, so accepted skew can make a hit look older, never younger. Lookups are serialised, share one deadline across the three requests, and cap bodies at 8 MiB.
+- Open gap: map resets and clock-rebase restarts keep `frame_epoch` in RTSM 0.3.0 and the pending reset is not visible over REST, so the bracket does not catch every reset. See docs/rtsm-bridge.md. Tests include three responses recorded from RTSM 0.3.0 on the TUM fr1/desk bag; no hardware run.
+- RTSM query helpers (connector) preserve envelopes, send `radius_m`, and refuse malformed responses (#365).
 
 ### Optional chunk lateness and age expiry
 

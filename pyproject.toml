@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastcrest-tether"
-version = "0.12.0"
+version = "0.13.0"
 description = "FastCrest Tether — edge-to-cloud robotics + edge AI deploy CLI. Optimize, deploy, verify any VLA across Jetson, RTX, Apple Silicon, AMD. Standalone or wired to FastCrest Cloud."
 readme = "README.md"
 license = "BUSL-1.1"
