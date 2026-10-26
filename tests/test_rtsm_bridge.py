@@ -1,12 +1,14 @@
 """RTSM bridge gating against fake responses shaped like rtsm 0.3.0 (85b94e6).
 
 Shapes follow rtsm/api/server.py (semantic_search, label_search, sessions_list)
-and rtsm/stores/working_memory.py (_robot_pose_payload). No RTSM server runs here.
+and rtsm/stores/working_memory.py (_robot_pose_payload). The last tests replay
+responses recorded from a real rtsm 0.3.0 run (see the fixture's source).
 """
 
 from __future__ import annotations
 
 import email.utils
+import itertools
 import json
 import math
 from copy import deepcopy
@@ -24,13 +26,15 @@ LIVE = "20261025-120000_e2_abcd"
 
 
 def pose(epoch: Any = 2, **overrides: Any) -> dict[str, Any]:
+    # pose_clock "server": timestamp is RTSM's time.time() at the write, so
+    # timestamp + age_s is RTSM's clock at response time (here: NOW).
     body = {
         "xyz": [0.1, 0.2, 0.3],
         "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
         "timestamp": NOW - 0.05,
         "frame_epoch": epoch,
         "sensor_ts_ns": 123,
-        "pose_clock": "sender",
+        "pose_clock": "server",
         "age_s": 0.05,
         "stale": False,
         "stale_after_s": 2.0,
@@ -41,6 +45,11 @@ def pose(epoch: Any = 2, **overrides: Any) -> dict[str, Any]:
     }
     body.update(overrides)
     return body
+
+
+def sender_pose(**overrides: Any) -> dict[str, Any]:
+    # A sender's own clock (a phone, or bag time): says nothing about RTSM's clock.
+    return pose(pose_clock="sender", timestamp=1305031456.7, **overrides)
 
 
 def hit(oid: str = "obj_1", **overrides: Any) -> dict[str, Any]:
@@ -63,15 +72,24 @@ def sessions(key: str | None = LIVE, epoch: int = 2, enabled: bool = True) -> di
     return {"enabled": enabled, "live": key, "sessions": listed}
 
 
+def date(t: float) -> str:
+    return email.utils.formatdate(t, usegmt=True)
+
+
 class FakeRtsm:
+    """Stands in for requests.Session against one RTSM server."""
+
     def __init__(self) -> None:
         self.search: Any = {"query": "mug", "robot_pose": pose(), "results": [hit()]}
         self.sessions: list[Any] = [sessions(), sessions()]
-        self.date: str | None = email.utils.formatdate(NOW, usegmt=True)
+        self.date: str | None = date(NOW)
         self.status = 200
+        self.raw_search: bytes | None = None
         self.calls: list[tuple[str, Any]] = []
 
-    def get(self, url: str, params: Any = None, timeout: float | None = None) -> requests.Response:
+    def get(
+        self, url: str, params: Any = None, timeout: float | None = None, stream: bool = False
+    ) -> requests.Response:
         path = url.removeprefix("http://rtsm.invalid")
         self.calls.append((path, params))
         resp = requests.Response()
@@ -79,19 +97,22 @@ class FakeRtsm:
         if path == "/sessions":
             body = self.sessions.pop(0) if len(self.sessions) > 1 else self.sessions[0]
             resp.status_code = 200
+            resp._content = json.dumps(body).encode()
         else:
-            body = self.search
             resp.status_code = self.status
+            resp._content = (
+                self.raw_search if self.raw_search is not None else json.dumps(self.search).encode()
+            )
+        setattr(resp, "_content_consumed", True)
         if self.date is not None:
             resp.headers["Date"] = self.date
-        resp._content = json.dumps(body).encode()
         return resp
 
 
 @pytest.fixture
 def rtsm(monkeypatch: pytest.MonkeyPatch) -> FakeRtsm:
     fake = FakeRtsm()
-    monkeypatch.setattr(rtsm_bridge.requests, "get", fake.get)
+    monkeypatch.setattr(rtsm_bridge.requests, "Session", lambda: fake)
     monkeypatch.setattr(rtsm_bridge.time, "time", lambda: NOW)
     return fake
 
@@ -108,7 +129,9 @@ def test_fresh_confirmed_hit_becomes_target_in_pose_frame(rtsm: FakeRtsm) -> Non
     assert out.target.xyz_world == (1.0, 2.0, 0.5)
     assert out.target.frame_epoch == out.robot_pose.frame_epoch == 2
     assert out.target.session_key == out.robot_pose.session_key == LIVE
-    assert out.target.last_seen_age_s == pytest.approx(1.0)
+    assert out.frame == (LIVE, 2)
+    assert out.target.clock_source == "pose"
+    assert out.target.last_seen_age_s == pytest.approx(1.0, abs=0.002)
     assert out.target.endpoint == "/search/semantic"
     assert out.target.base_url == "http://rtsm.invalid"
     assert out.robot_pose.xyz == (0.1, 0.2, 0.3)
@@ -122,7 +145,7 @@ def test_fresh_confirmed_hit_becomes_target_in_pose_frame(rtsm: FakeRtsm) -> Non
 def test_target_age_advances_on_our_monotonic_clock(rtsm: FakeRtsm) -> None:
     target = bridge().locate("mug").target
     assert target is not None
-    assert target.age_s(target.fetched_at_mono + 4.0) == pytest.approx(5.0)
+    assert target.age_s(target.fetched_at_mono + 4.0) == pytest.approx(5.0, abs=0.002)
 
 
 def test_label_mode_uses_label_endpoint_and_keeps_matched_label(rtsm: FakeRtsm) -> None:
@@ -140,7 +163,7 @@ def test_label_mode_uses_label_endpoint_and_keeps_matched_label(rtsm: FakeRtsm) 
         ({"last_seen_wall_utc": None}, "no_last_seen"),
         ({"last_seen_wall_utc": 0.0}, "no_last_seen"),
         ({"last_seen_wall_utc": NOW - 5.01}, "stale"),
-        ({"last_seen_wall_utc": NOW + 2.5}, "future_last_seen"),
+        ({"last_seen_wall_utc": NOW + 0.5}, "future_last_seen"),
     ],
 )
 def test_unqualified_hits_are_rejected_with_reason(
@@ -152,12 +175,6 @@ def test_unqualified_hits_are_rejected_with_reason(
     assert out.target is None and out.candidates == ()
     assert [(r.object_id, r.reason) for r in out.rejected] == [("bad", reason)]
     assert out.robot_pose is not None
-
-
-def test_small_future_last_seen_within_skew_counts_as_age_zero(rtsm: FakeRtsm) -> None:
-    rtsm.search["results"] = [hit(last_seen_wall_utc=NOW + 0.5)]
-    out = bridge().locate("mug")
-    assert out.target is not None and out.target.last_seen_age_s == 0.0
 
 
 def test_best_qualifying_hit_wins_and_order_is_preserved(rtsm: FakeRtsm) -> None:
@@ -185,6 +202,82 @@ def test_empty_results_are_explicit(rtsm: FakeRtsm) -> None:
     assert out.robot_pose is not None  # the frame was still verified
 
 
+# ---- clocks ----
+
+
+def test_sender_clock_gates_on_the_oldest_age_date_allows(rtsm: FakeRtsm) -> None:
+    # Only Date bounds RTSM's clock: up to 1 s truncation + 1 s staleness ahead.
+    rtsm.search["robot_pose"] = sender_pose()
+    out = bridge().locate("mug")
+    assert out.target is not None and out.target.clock_source == "date"
+    assert out.target.last_seen_age_s == pytest.approx(3.0)
+    rtsm.search["results"] = [hit(last_seen_wall_utc=NOW - 3.01)]
+    assert bridge().locate("mug").status == "none_qualify"
+
+
+def test_rtsm_ahead_within_tolerance_cannot_make_old_hits_fresh(rtsm: FakeRtsm) -> None:
+    # Review finding: RTSM 2.9 s ahead (accepted), object seen 5.5 s ago on
+    # RTSM's clock. Ages measured on our clock alone would read 2.6 s.
+    ahead = 2.9
+    rtsm.date = date(NOW + ahead)
+    rtsm.search["robot_pose"] = sender_pose()
+    rtsm.search["results"] = [hit(last_seen_wall_utc=NOW + ahead - 5.5)]
+    out = bridge().locate("mug")
+    assert out.status == "none_qualify" and out.rejected[0].reason == "stale"
+
+
+def test_server_pose_clock_measures_skew_to_the_millisecond(rtsm: FakeRtsm) -> None:
+    ahead = 1.9  # within max_clock_skew_s; the pose clock pins it to 1 ms
+    rtsm.date = date(NOW + ahead)
+    rtsm.search["robot_pose"] = pose(timestamp=NOW + ahead - 0.05)
+    rtsm.search["results"] = [
+        hit("old", last_seen_wall_utc=NOW + ahead - 5.01),
+        hit("ok", last_seen_wall_utc=NOW + ahead - 4.9),
+    ]
+    out = bridge().locate("mug")
+    assert out.target is not None and out.target.object_id == "ok"
+    assert out.target.clock_source == "pose"
+    assert out.target.last_seen_age_s == pytest.approx(4.9, abs=0.002)
+    assert [(r.object_id, r.reason) for r in out.rejected] == [("old", "stale")]
+
+
+def test_server_tagged_stamp_that_contradicts_date_is_ignored(rtsm: FakeRtsm) -> None:
+    # RTSM's ZeroMQ path tags a sender's wall stamp "server"; Date wins.
+    rtsm.search["robot_pose"] = pose(timestamp=NOW - 100.0)
+    out = bridge().locate("mug")
+    assert out.target is not None and out.target.clock_source == "date"
+
+
+@pytest.mark.parametrize("offset", [-4.5, 3.0])
+def test_clock_skew_refuses(rtsm: FakeRtsm, offset: float) -> None:
+    rtsm.date = date(NOW + offset)
+    assert bridge().locate("mug").status == "clock_skew"
+
+
+def test_date_header_truncation_is_not_skew(rtsm: FakeRtsm) -> None:
+    # Date drops the fraction: 2.5 s behind reads as 3 s behind, and RTSM may
+    # still be within 2 s of us.
+    rtsm.date = date(NOW - 2.5)
+    assert bridge().locate("mug").status == "ok"
+
+
+def test_missing_date_header_refuses(rtsm: FakeRtsm) -> None:
+    rtsm.date = None
+    assert bridge().locate("mug").status == "clock_skew"
+
+
+@pytest.mark.parametrize(
+    "value", ["not a date", "Mon, 26 Oct 2026 05:03:12 -0000", "Mon, 26 Oct 2026 05:03:12 +0200"]
+)
+def test_malformed_date_header_raises(rtsm: FakeRtsm, value: str) -> None:
+    rtsm.date = value
+    with pytest.raises(ValueError, match="Date"):
+        bridge().locate("mug")
+
+
+# ---- frames ----
+
+
 def test_pose_epoch_ahead_of_live_session_is_a_frame_transition(rtsm: FakeRtsm) -> None:
     # RTSM writes the new-epoch pose at receive time, before the pipeline
     # freezes the old epoch's objects; the hits are still epoch 2.
@@ -203,7 +296,9 @@ def test_live_session_change_during_query_is_a_frame_transition(
     rtsm: FakeRtsm, after: dict[str, Any]
 ) -> None:
     rtsm.sessions = [sessions(), after]
-    assert bridge().locate("mug").status == "frame_transition"
+    out = bridge().locate("mug")
+    assert out.status == "frame_transition"
+    assert out.frame == (after["live"], after["sessions"][0]["epoch"])
 
 
 def test_frame_change_between_lookups_is_flagged(rtsm: FakeRtsm) -> None:
@@ -218,14 +313,39 @@ def test_frame_change_between_lookups_is_flagged(rtsm: FakeRtsm) -> None:
     assert b.locate("mug").frame_changed is False
 
 
-def test_refused_lookup_does_not_consume_the_frame_change(rtsm: FakeRtsm) -> None:
+@pytest.mark.parametrize(
+    "robot_pose,status",
+    [
+        (pose(epoch=3, stale=True), "pose_stale"),
+        (pose(epoch=4), "frame_transition"),
+        (None, "no_pose"),
+    ],
+)
+def test_refusals_report_a_frame_change(rtsm: FakeRtsm, robot_pose: Any, status: str) -> None:
+    # Review finding: a consumer holding an epoch-2 target must be told to
+    # drop it even when the lookup that saw the new frame is refused.
+    b = bridge()
+    assert b.locate("mug").status == "ok"
+    rtsm.sessions = [sessions(key="k3", epoch=3)]
+    rtsm.search["robot_pose"] = robot_pose
+    out = b.locate("mug")
+    assert out.status == status
+    assert out.frame_changed is True and out.frame == ("k3", 3)
+    if out.robot_pose is not None:
+        assert out.robot_pose.frame_epoch == 3 and out.robot_pose.session_key == "k3"
+    rtsm.search["robot_pose"] = pose(epoch=3)
+    after = b.locate("mug")
+    assert after.status == "ok" and after.frame_changed is False
+
+
+def test_epoch_going_backwards_is_a_new_frame(rtsm: FakeRtsm) -> None:
+    # Epochs only rise within one RTSM process; lower means RTSM restarted.
     b = bridge()
     b.locate("mug")
-    rtsm.sessions = [sessions(key="k3", epoch=3)]
-    rtsm.search["robot_pose"] = pose(epoch=3, stale=True)
-    assert b.locate("mug").status == "pose_stale"
-    rtsm.search["robot_pose"] = pose(epoch=3)
-    assert b.locate("mug").frame_changed is True
+    rtsm.sessions = [sessions(key="restarted_e1", epoch=1)]
+    rtsm.search["robot_pose"] = pose(epoch=1)
+    out = b.locate("mug")
+    assert out.status == "ok" and out.frame_changed is True
 
 
 @pytest.mark.parametrize(
@@ -234,7 +354,7 @@ def test_refused_lookup_does_not_consume_the_frame_change(rtsm: FakeRtsm) -> Non
         (None, "no_pose"),
         (pose(epoch=None), "epochless"),
         (pose(stale=True), "pose_stale"),
-        (pose(age_s=1.5), "pose_stale"),
+        (pose(age_s=1.5, timestamp=NOW - 1.5), "pose_stale"),
     ],
 )
 def test_pose_gates(rtsm: FakeRtsm, robot_pose: Any, status: str) -> None:
@@ -248,25 +368,11 @@ def test_pose_gates(rtsm: FakeRtsm, robot_pose: Any, status: str) -> None:
 )
 def test_sessions_unavailable_refuses(rtsm: FakeRtsm, payload: dict[str, Any]) -> None:
     rtsm.sessions = [payload]
-    assert bridge().locate("mug").status == "sessions_unavailable"
+    out = bridge().locate("mug")
+    assert out.status == "sessions_unavailable" and out.frame is None
 
 
-@pytest.mark.parametrize("offset", [-3.5, 3.0])
-def test_clock_skew_refuses(rtsm: FakeRtsm, offset: float) -> None:
-    rtsm.date = email.utils.formatdate(NOW + offset, usegmt=True)
-    assert bridge().locate("mug").status == "clock_skew"
-
-
-def test_date_header_truncation_is_not_skew(rtsm: FakeRtsm) -> None:
-    # Date drops the fraction: 2.5 s behind reads as 3 s behind, and RTSM may
-    # still be within 2 s of us. Recorded same-host runs read up to -1.8 s.
-    rtsm.date = email.utils.formatdate(NOW - 2.5, usegmt=True)
-    assert bridge().locate("mug").status == "ok"
-
-
-def test_missing_date_header_refuses(rtsm: FakeRtsm) -> None:
-    rtsm.date = None
-    assert bridge().locate("mug").status == "clock_skew"
+# ---- malformed input and transport ----
 
 
 @pytest.mark.parametrize(
@@ -276,6 +382,7 @@ def test_missing_date_header_refuses(rtsm: FakeRtsm) -> None:
         lambda b: b["robot_pose"].update(xyz=[0.0, 0.0]),
         lambda b: b["robot_pose"].update(xyz=[math.nan, 0.0, 0.0]),
         lambda b: b["robot_pose"].update(quaternion_xyzw=[0.0, 0.0, 0.0, 0.0]),
+        lambda b: b["robot_pose"].update(quaternion_xyzw=[0.0, 0.0, 0.0, 7.0]),
         lambda b: b["robot_pose"].update(frame_epoch=True),
         lambda b: b["robot_pose"].update(frame_epoch="2"),
         lambda b: b["robot_pose"].update(age_s=-1.0),
@@ -299,7 +406,19 @@ def test_malformed_search_body_raises(rtsm: FakeRtsm, mutate: Any) -> None:
 )
 def test_non_envelope_search_body_raises(rtsm: FakeRtsm, body: Any) -> None:
     rtsm.search = body
-    with pytest.raises(ValueError, match="results"):
+    with pytest.raises(ValueError, match="malformed RTSM"):
+        bridge().locate("mug")
+
+
+def test_invalid_json_raises(rtsm: FakeRtsm) -> None:
+    rtsm.raw_search = b"{not json"
+    with pytest.raises(ValueError):
+        bridge().locate("mug")
+
+
+def test_oversized_body_raises(rtsm: FakeRtsm) -> None:
+    rtsm.raw_search = b" " * (rtsm_bridge._MAX_BODY_BYTES + 1)
+    with pytest.raises(ValueError, match="exceeds"):
         bridge().locate("mug")
 
 
@@ -318,16 +437,17 @@ def test_malformed_sessions_body_raises(rtsm: FakeRtsm, payload: Any) -> None:
         bridge().locate("mug")
 
 
-def test_malformed_date_header_raises(rtsm: FakeRtsm) -> None:
-    rtsm.date = "not a date"
-    with pytest.raises(ValueError, match="Date"):
-        bridge().locate("mug")
-
-
 def test_http_failure_propagates(rtsm: FakeRtsm) -> None:
     rtsm.status = 503
     with pytest.raises(requests.HTTPError):
         bridge().locate("mug")
+
+
+def test_whole_lookup_has_one_deadline(rtsm: FakeRtsm, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticks = itertools.count(0.0, 1.0)  # each clock read advances 1 s
+    monkeypatch.setattr(rtsm_bridge.time, "monotonic", lambda: next(ticks))
+    with pytest.raises(TimeoutError, match="exceeded 2.5 s"):
+        bridge(timeout_s=2.5).locate("mug")
 
 
 @pytest.mark.parametrize(
@@ -337,6 +457,13 @@ def test_http_failure_propagates(rtsm: FakeRtsm) -> None:
 def test_invalid_configuration_is_refused(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         bridge(**kwargs)
+
+
+@pytest.mark.parametrize("top_k", [0, -1, True, 1.5])
+def test_invalid_top_k_is_refused(rtsm: FakeRtsm, top_k: Any) -> None:
+    with pytest.raises(ValueError, match="top_k"):
+        bridge().locate("mug", top_k=top_k)
+    assert rtsm.calls == []
 
 
 def test_upstream_client_parses_the_same_fields(rtsm: FakeRtsm) -> None:
@@ -382,5 +509,14 @@ def test_recorded_rtsm_responses(
     assert (out.target and out.target.object_id) == target
     if target is not None:
         assert out.target is not None and out.robot_pose is not None
+        # A bag pose carries bag time ("sender"), so only Date bounds the clock.
+        assert out.target.clock_source == "date"
         assert out.target.frame_epoch == out.robot_pose.frame_epoch == 1
         assert [(r.object_id, r.reason) for r in out.rejected] == [("08d4405b0c4b4184", "stale")]
+
+
+def test_server_pose_clock_refuses_skew_date_alone_would_accept(rtsm: FakeRtsm) -> None:
+    # 2.9 s ahead: Date alone allows [2, 4] (could be 2 s), the pose clock says 2.9.
+    rtsm.date = date(NOW + 2.9)
+    rtsm.search["robot_pose"] = pose(timestamp=NOW + 2.9 - 0.05)
+    assert bridge().locate("mug").status == "clock_skew"
