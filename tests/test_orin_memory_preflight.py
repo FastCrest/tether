@@ -37,8 +37,10 @@ def test_unreadable_memory_still_warns_not_passes(monkeypatch, tmp_path):
 
 
 def test_exports_that_would_oom_a_jetson_engine_build_warn_with_swap_advice(monkeypatch, tmp_path):
-    # The observed case: 1.6 GB of weights on an 8 GB board with about 5 GB free.
+    # The observed case: 1.6 GB of weights on an 8 GB board with about 5 GB free, no swap.
     monkeypatch.setattr(load, "_available_bytes", lambda: int(5 * GB))
+    monkeypatch.setattr(load, "_swap_free_bytes", lambda: 0)
+    monkeypatch.setattr(load, "_trt_build_pending", lambda export_dir: True)
     monkeypatch.setattr(load, "_is_jetson", lambda: True)
     result = load._run(export(tmp_path, int(1.6 * GB)))
     assert result.status == "warn"
@@ -57,11 +59,47 @@ def test_exports_that_would_oom_a_jetson_engine_build_warn_with_swap_advice(monk
 def test_same_export_on_a_workstation_or_with_ample_memory_passes(monkeypatch, tmp_path):
     path = export(tmp_path, int(1.6 * GB))
     monkeypatch.setattr(load, "_available_bytes", lambda: int(5 * GB))
+    monkeypatch.setattr(load, "_swap_free_bytes", lambda: 0)
+    monkeypatch.setattr(load, "_trt_build_pending", lambda export_dir: True)
     monkeypatch.setattr(load, "_is_jetson", lambda: False)
     assert load._run(path).status == "pass"
     monkeypatch.setattr(load, "_is_jetson", lambda: True)
     monkeypatch.setattr(load, "_available_bytes", lambda: int(40 * GB))
     assert load._run(path).status == "pass"
+
+
+def test_swap_counts_for_the_build_and_no_build_means_no_warning(monkeypatch, tmp_path):
+    path = export(tmp_path, int(1.6 * GB))
+    monkeypatch.setattr(load, "_available_bytes", lambda: int(5 * GB))
+    monkeypatch.setattr(load, "_is_jetson", lambda: True)
+    monkeypatch.setattr(load, "_trt_build_pending", lambda export_dir: True)
+    monkeypatch.setattr(load, "_swap_free_bytes", lambda: 16 * GB)  # the advised swap file
+    assert load._run(path).status == "pass"
+    monkeypatch.setattr(load, "_swap_free_bytes", lambda: 0)
+    monkeypatch.setattr(
+        load, "_trt_build_pending", lambda export_dir: False
+    )  # cached engine or no TensorRT
+    assert load._run(path).status == "pass"
+
+
+def test_build_pending_reads_the_switch_and_the_engine_cache(monkeypatch, tmp_path):
+    import onnxruntime
+
+    monkeypatch.setattr(
+        onnxruntime,
+        "get_available_providers",
+        lambda: ["TensorrtExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.delenv("TETHER_TRT_EP", raising=False)
+    assert load._trt_build_pending(tmp_path) is True
+    monkeypatch.setenv("TETHER_TRT_EP", "0")
+    assert load._trt_build_pending(tmp_path) is False
+    monkeypatch.delenv("TETHER_TRT_EP")
+    (tmp_path / ".ort_trt" / "engines").mkdir(parents=True)
+    (tmp_path / ".ort_trt" / "engines" / "x_fp16.engine").write_bytes(b"e")
+    assert load._trt_build_pending(tmp_path) is False
+    monkeypatch.setattr(onnxruntime, "get_available_providers", lambda: ["CPUExecutionProvider"])
+    assert load._trt_build_pending(tmp_path / "other") is False
 
 
 def test_model_that_cannot_even_load_still_fails(monkeypatch, tmp_path):

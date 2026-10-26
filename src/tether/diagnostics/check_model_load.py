@@ -25,6 +25,44 @@ BUILDER_BYTES_PER_PARAMETER = 23.0
 WORKSPACE_AND_CONTEXT_BYTES = (1 << 30) + 600 * 1024 * 1024
 
 
+def _swap_free_bytes() -> int:
+    """Free swap, which a one-time TensorRT build can use; 0 when unreadable."""
+    try:
+        import psutil
+
+        return int(psutil.swap_memory().free)
+    except ImportError:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii") as meminfo:
+            for line in meminfo:
+                if line.startswith("SwapFree:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def _trt_build_pending(export_dir: Path) -> bool:
+    """Whether serving this export would build a TensorRT engine now.
+
+    False when TensorRT is switched off (TETHER_TRT_EP=0), its execution provider is not
+    installed, or an engine is already cached next to the export (no build happens then).
+    """
+    import os
+
+    if os.environ.get("TETHER_TRT_EP", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    try:
+        import onnxruntime
+
+        if "TensorrtExecutionProvider" not in onnxruntime.get_available_providers():
+            return False
+    except ImportError:
+        return False
+    return not any((export_dir / ".ort_trt" / "engines").glob("*.engine"))
+
+
 def _is_reduced_precision(export_dir: Path) -> bool:
     import json
 
@@ -32,7 +70,8 @@ def _is_reduced_precision(export_dir: Path) -> bool:
         precision = json.loads((export_dir / "tether_config.json").read_text()).get("precision")
     except (OSError, ValueError, AttributeError):
         return False
-    return precision in {"mixed_float16", "float16", "fp16"}
+    # Not "fp16": decomposed exports carry that label over FP32 ONNX files.
+    return precision in {"mixed_float16", "float16"}
 
 
 def trt_build_peak_bytes(file_bytes: int, *, reduced_precision: bool) -> int:
@@ -59,7 +98,9 @@ def _available_bytes() -> int | None:
 
 
 def _is_jetson() -> bool:
-    return Path("/etc/nv_tegra_release").exists()
+    from tether.jetson import is_jetson
+
+    return is_jetson()
 
 
 def _run(model_path: str, **kwargs) -> CheckResult:
@@ -154,13 +195,14 @@ def _run(model_path: str, **kwargs) -> CheckResult:
         )
 
     trt_build_gb = trt_build_peak_bytes(total_bytes, reduced_precision=_is_reduced_precision(p)) / (1024 ** 3)
-    if _is_jetson() and trt_build_gb > available_gb * 0.8:
+    build_budget_gb = available_gb + _swap_free_bytes() / (1024 ** 3)
+    if _is_jetson() and _trt_build_pending(p) and trt_build_gb > build_budget_gb * 0.8:
         return CheckResult(
             check_id=CHECK_ID,
             name="Model load",
             status="warn",
             expected="TensorRT engine build peak (measured model: 2x parse + ~23 B/parameter) fits in available RAM",
-            actual=f"~{trt_build_gb:.1f}GB estimated build peak vs {available_gb:.1f}GB available",
+            actual=f"~{trt_build_gb:.1f}GB estimated build peak vs {build_budget_gb:.1f}GB available RAM + free swap",
             remediation=(
                 "The model loads, but a TensorRT engine build needs far more host memory than the "
                 "weights, and a Jetson shares one memory pool. A 1.6GB FP32 export was killed by the "

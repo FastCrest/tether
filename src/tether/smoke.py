@@ -334,7 +334,8 @@ def _stop_process(process: subprocess.Popen[str] | None) -> int | None:
 
 
 def _exit_hint(returncode: int | None) -> str:
-    if returncode == -signal.SIGKILL:
+    kill = getattr(signal, "SIGKILL", None)  # absent on Windows
+    if kill is not None and returncode == -kill:
         return (
             ": SIGKILL means the process was killed from outside, most often by the out-of-memory "
             "killer during model load or a TensorRT engine build. Check "
