@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Jetson dependency lock and local evaluation
+
+- `uv.lock` resolves again and pytest CI runs `uv lock --check` with uv 0.11.2. The fix described for #357 never reached `main` (its merge carried only the research note); this lands it on current `main`.
+- The Jetson NumPy <2 ABI cap stays. LeRobot dependencies are excluded on aarch64 across `native`, `monolithic`, `lerobot` and `rtc`. `eval-local` matches its documented Linux x86-64 host contract; setup and runtime checks refuse Jetson with desktop/cloud guidance.
+- `siglip-export` is excluded on aarch64 for the same reason (its onnx cohort needs NumPy >=2), and `tether export-rtsm-siglip` refuses Linux aarch64 before any import. Export on the host and copy the encoder to the device.
+- Generic `[gpu]`/`[gpu-min]` dependencies carry ORT 1.25.1's Python 3.11 floor. The bootstrap installer refuses them on Python 3.10 with upgrade/Jetson guidance; direct pip installs skip them. The Jetson wheel path still supports Python 3.10.
+- `[so100]` uses `feetech-servo-sdk`, the distribution that provides the existing `scservo_sdk` import (`scservo-sdk` does not exist on PyPI).
+
 ## v0.13.0 — 2026-10-26
 
 First release since v0.12.0 (2026-06-10). It contains breaking changes; read the first section before upgrading.

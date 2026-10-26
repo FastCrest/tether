@@ -232,6 +232,18 @@ if [ -z "$EXTRAS" ]; then
 fi
 echo
 
+# Generic PyPI ORT >=1.25.1 has no Python 3.10 release. Jetson uses its
+# separate wheel index and the [serve]/[jetson] path instead.
+if [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 11 ]; then
+  case ",$EXTRAS," in
+    *,gpu,*|*,gpu-min,*)
+      fail "The [gpu] and [gpu-min] extras require Python 3.11+ for onnxruntime-gpu >=1.25.1."
+      note "Upgrade Python on desktop GPU hosts; use --jetson on JetPack devices."
+      exit 1
+      ;;
+  esac
+fi
+
 # -- Ensure pip is available --------------------------------------------------
 if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
   warn "pip not available for $PYTHON — trying to bootstrap via ensurepip"

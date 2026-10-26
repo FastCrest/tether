@@ -147,3 +147,26 @@ no workflow runs `uv lock --check`, and `uv.lock` was last changed in #326. At
 `432923b`, `uv lock --check` still fails on the conflict named above, LeRobot
 0.6.1's `numpy>=2.0,<2.3` against the aarch64 cap. The v0.13.0 changelog has no
 #357 entry for this reason.
+
+## Landed, 2026-10-26
+
+The uncommitted change was recovered from the stash `WIP on uv-lock-numpy-aarch64`
+and reapplied to `main` at `08b6b4f` (v0.13.0). Two differences from the note
+above:
+
+- `main` moved `[gpu]` to the pinned CUDA 12 cohort in #363. The Python 3.11
+  markers are now added to those pins, and the `tensorrt-cu13-libs` metadata
+  entry is dropped because nothing requires cu13 any more.
+- `siglip-export` (#365, added after this note) needs NumPy >=2 through
+  `onnx==1.23.2` -> `ml-dtypes>=0.5.4`. It now excludes aarch64 like the LeRobot
+  extras, and `export_rtsm_siglip` refuses Linux aarch64 before importing.
+
+VERIFIED: `uv lock` resolves 311 packages; `uv lock --check` passes with a fresh
+cache. `uv pip compile` at Python 3.12:
+- Linux x86-64: eval-local resolves lerobot 0.6.1 with NumPy 2.2.6;
+  siglip-export resolves open-clip-torch 3.3.0 with NumPy 2.5.4.
+- Linux aarch64: both extras resolve NumPy 1.26.4 without LeRobot or open-clip.
+- macOS arm64 (deployment target 14.0, which onnxruntime 1.30 needs):
+  siglip-export resolves.
+
+UNKNOWN, as before: NumPy 2 compatibility on a Jetson.
