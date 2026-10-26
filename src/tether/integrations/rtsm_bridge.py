@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypeVar
 
-import requests
+import requests  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 Status = Literal[
