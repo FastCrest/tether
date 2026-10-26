@@ -212,17 +212,27 @@ def test_mixed_fp16_exports_keep_their_fp32_islands_under_tensorrt(tmp_path):
     # trt_fp16_enable on a mixed-FP16 SmolVLA export gave action cosine 0.32-0.56 on an A10G.
     import json
 
-    for precision, expected in (("mixed_float16", False), ("float16", False), ("float32", True), (None, True)):
+    for precision, expected in (
+        ("mixed_float16", False),
+        ("float16", False),
+        ("float32", True),
+        (None, True),
+    ):
         export = tmp_path / str(precision)
         export.mkdir()
         if precision is not None:
             (export / "tether_config.json").write_text(json.dumps({"precision": precision}))
         plan = providers.build_ort_provider_plan(
-            export, device="cuda", available_providers=[TRT, CUDA, CPU], requested_providers=[TRT, CUDA]
+            export,
+            device="cuda",
+            available_providers=[TRT, CUDA, CPU],
+            requested_providers=[TRT, CUDA],
         )
         assert plan.providers[0][1]["trt_fp16_enable"] is expected, precision
     explicit = providers.build_ort_provider_plan(
-        tmp_path / "mixed_float16", device="cuda", available_providers=[TRT, CUDA, CPU],
+        tmp_path / "mixed_float16",
+        device="cuda",
+        available_providers=[TRT, CUDA, CPU],
         requested_providers=[(TRT, {"trt_fp16_enable": True}), CUDA],
     )
     assert explicit.providers[0][1]["trt_fp16_enable"] is True
