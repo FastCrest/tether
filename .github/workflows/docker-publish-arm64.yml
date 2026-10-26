@@ -35,7 +35,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # QEMU enables cross-arch emulation so we can build linux/arm64
       # binaries on the x86 GitHub runner. Slow but free.
