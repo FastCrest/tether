@@ -15,6 +15,93 @@ from . import Check, CheckResult, register
 CHECK_ID = "check_model_load"
 GH_ISSUE = "https://github.com/huggingface/lerobot/issues/414"
 
+# TensorRT engine-build peak host memory, fitted to native TensorRT 10.14 builds of SmolVLA on an
+# x86 A10G (2026-10-25): 14.2 GB FP32 / 10 baked steps, 12.6 GB mixed FP16 / 10 steps, 9.6 GB FP32 /
+# 1 step. That is ~2x the file for the ONNX parse plus ~23 bytes per parameter in the builder, plus
+# the workspace and CUDA context. Same model as Studio's preflight. Not yet measured on a Jetson; a
+# 1.6 GB FP32 build was OOM-killed on an 8 GB Orin Nano (2026-10-21, tester bundle).
+PARSE_FACTOR = 2.0
+BUILDER_BYTES_PER_PARAMETER = 23.0
+WORKSPACE_AND_CONTEXT_BYTES = (1 << 30) + 600 * 1024 * 1024
+
+
+def _swap_free_bytes() -> int:
+    """Free swap, which a one-time TensorRT build can use; 0 when unreadable."""
+    try:
+        import psutil
+
+        return int(psutil.swap_memory().free)
+    except ImportError:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii") as meminfo:
+            for line in meminfo:
+                if line.startswith("SwapFree:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def _trt_build_pending(export_dir: Path) -> bool:
+    """Whether serving this export would build a TensorRT engine now.
+
+    False when TensorRT is switched off (TETHER_TRT_EP=0), its execution provider is not
+    installed, or an engine is already cached next to the export (no build happens then).
+    """
+    import os
+
+    if os.environ.get("TETHER_TRT_EP", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    try:
+        import onnxruntime
+
+        if "TensorrtExecutionProvider" not in onnxruntime.get_available_providers():
+            return False
+    except ImportError:
+        return False
+    return not any((export_dir / ".ort_trt" / "engines").glob("*.engine"))
+
+
+def _is_reduced_precision(export_dir: Path) -> bool:
+    import json
+
+    try:
+        precision = json.loads((export_dir / "tether_config.json").read_text()).get("precision")
+    except (OSError, ValueError, AttributeError):
+        return False
+    # Not "fp16": decomposed exports carry that label over FP32 ONNX files.
+    return precision in {"mixed_float16", "float16"}
+
+
+def trt_build_peak_bytes(file_bytes: int, *, reduced_precision: bool) -> int:
+    parameters = file_bytes / (2 if reduced_precision else 4)
+    return int(file_bytes * PARSE_FACTOR + parameters * BUILDER_BYTES_PER_PARAMETER + WORKSPACE_AND_CONTEXT_BYTES)
+
+
+def _available_bytes() -> int | None:
+    """Available RAM: psutil when installed, else the kernel's MemAvailable. None if neither."""
+    try:
+        import psutil
+
+        return int(psutil.virtual_memory().available)
+    except ImportError:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii") as meminfo:
+            for line in meminfo:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _is_jetson() -> bool:
+    from tether.jetson import is_jetson
+
+    return is_jetson()
+
 
 def _run(model_path: str, **kwargs) -> CheckResult:
     p = Path(model_path)
@@ -73,17 +160,15 @@ def _run(model_path: str, **kwargs) -> CheckResult:
     total_bytes += sum(f.stat().st_size for f in p.glob("*.data"))  # external weights variant
     estimated_mem_gb = (total_bytes * 1.4) / (1024 ** 3)
 
-    # Available memory check (psutil optional — skip if absent)
-    try:
-        import psutil
-        available_gb = psutil.virtual_memory().available / (1024 ** 3)
-    except ImportError:
+    # Available memory check. Without psutil, Linux (including Jetson) still reports MemAvailable.
+    available_bytes = _available_bytes()
+    if available_bytes is None:
         return CheckResult(
             check_id=CHECK_ID,
             name="Model load",
             status="warn",
-            expected=f"~{estimated_mem_gb:.1f}GB needed; psutil to verify available RAM",
-            actual="psutil not installed — cannot verify available memory",
+            expected=f"~{estimated_mem_gb:.1f}GB needed; available RAM readable",
+            actual="cannot read available memory (no psutil and no /proc/meminfo)",
             remediation=(
                 "pip install psutil to enable memory headroom checks. Without it, doctor "
                 "reports model size but can't verify it fits."
@@ -91,6 +176,7 @@ def _run(model_path: str, **kwargs) -> CheckResult:
             duration_ms=0.0,
             github_issue=GH_ISSUE,
         )
+    available_gb = available_bytes / (1024 ** 3)
 
     if estimated_mem_gb > available_gb * 0.8:  # require 20% headroom
         return CheckResult(
@@ -103,6 +189,26 @@ def _run(model_path: str, **kwargs) -> CheckResult:
                 f"Model needs ~{estimated_mem_gb:.1f}GB but only {available_gb:.1f}GB free. "
                 f"Either: (a) export FP16 (`tether export --fp16`, ~50% smaller), "
                 f"(b) close other processes, or (c) deploy to a larger host."
+            ),
+            duration_ms=0.0,
+            github_issue=GH_ISSUE,
+        )
+
+    trt_build_gb = trt_build_peak_bytes(total_bytes, reduced_precision=_is_reduced_precision(p)) / (1024 ** 3)
+    build_budget_gb = available_gb + _swap_free_bytes() / (1024 ** 3)
+    if _is_jetson() and _trt_build_pending(p) and trt_build_gb > build_budget_gb * 0.8:
+        return CheckResult(
+            check_id=CHECK_ID,
+            name="Model load",
+            status="warn",
+            expected="TensorRT engine build peak (measured model: 2x parse + ~23 B/parameter) fits in available RAM",
+            actual=f"~{trt_build_gb:.1f}GB estimated build peak vs {build_budget_gb:.1f}GB available RAM + free swap",
+            remediation=(
+                "The model loads, but a TensorRT engine build needs far more host memory than the "
+                "weights, and a Jetson shares one memory pool. A 1.6GB FP32 export was killed by the "
+                "out-of-memory killer during the engine build on an 8GB Orin Nano; an FP16 copy still "
+                "peaked at 12.6GB on a desktop GPU. Add swap for the one-time build (the engine is "
+                "cached afterwards), free memory, or serve with CUDA instead of TensorRT."
             ),
             duration_ms=0.0,
             github_issue=GH_ISSUE,

@@ -9,6 +9,17 @@ Tether’s real LIBERO evaluator loads the checkpoint named on the command line.
 - Enough GPU memory for SmolVLA, the LoRA adapter, observations, and the LIBERO simulator
 - `MUJOCO_GL=osmesa` and `PYOPENGL_PLATFORM=osmesa`
 
+Jetson/aarch64 is unsupported for `eval-local`, including with Python 3.12+.
+The setup script refuses it before installing anything; the CLI readiness check
+also refuses it. Direct `pip install 'fastcrest-tether[eval-local]'` on aarch64
+skips the extra's dependencies because package extras cannot express a custom
+installer error. Use `[jetson]` on the device and evaluate on a Linux x86-64
+NVIDIA GPU host. LeRobot's NumPy >=2 requirement conflicts with the retained
+Jetson NumPy <2 ABI cap. The `native`, `monolithic`, `lerobot`, and `rtc` extras
+also skip LeRobot on aarch64. See the
+[dependency investigation](research/verification/jetson-numpy-lock-20261012.md)
+for wheel evidence and limits.
+
 Run `scripts/setup_libero_eval_linux.sh`. On Debian or Ubuntu it installs the required compiler, FFmpeg, EGL, GL and OSMesa system packages. It then creates `.venv-eval-linux`, installs Tether's `eval-local` dependencies, and checks out LIBERO commit `8f1084e3132a39270c3a13ebe37270a43ece2a01`. The script prints the resolved PyTorch, CUDA and GPU versions. It does not start a cloud instance.
 
 On another Linux distribution, install equivalents for `build-essential`, `cmake`, `ffmpeg`, `git`, `libegl1`, `libgl1`, `libglib2.0-0`, `libglvnd0`, `libosmesa6` and `libosmesa6-dev` before running the script.

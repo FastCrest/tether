@@ -22,8 +22,8 @@ Usage:
 """
 import time
 
-# scservo_sdk is the SO-ARM 100 motor SDK. Hardware-only; not pip-installable
-# in CI/test envs without the arm hardware. Guard the import so that pure-Python
+# scservo_sdk is provided by feetech-servo-sdk via the [so100] extra.
+# Guard the optional import so that pure-Python
 # constants (PAN_ID / LIFT_ID / ...) and class definitions below remain
 # importable. Calibration code can introspect motor-id constants without
 # pulling the SDK; construction of `SOArmHardware()` raises a clear error

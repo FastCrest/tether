@@ -183,6 +183,12 @@ serve with CUDA without installing TensorRT:
 pip install 'fastcrest-tether[serve,gpu-min]'   # ORT-CUDA without TensorRT
 ```
 
+The generic `[gpu]` and `[gpu-min]` extras require Python 3.11+ because
+ONNX Runtime GPU 1.25.1 has that Python floor. `install.sh` refuses these extras
+on older Python before installation. Direct pip installs on Python 3.10 skip
+the GPU dependencies; upgrade Python to use them. JetPack Python 3.10 uses the
+separate Jetson installation path and Jetson AI Lab wheels.
+
 Or disable the `LD_LIBRARY_PATH` patch (e.g. if it conflicts with another env-aware tool):
 
 ```bash

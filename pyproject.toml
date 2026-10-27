@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastcrest-tether"
-version = "0.12.0"
+version = "0.13.0"
 description = "FastCrest Tether — edge-to-cloud robotics + edge AI deploy CLI. Optimize, deploy, verify any VLA across Jetson, RTX, Apple Silicon, AMD. Standalone or wired to FastCrest Cloud."
 readme = "README.md"
 license = "BUSL-1.1"
@@ -25,13 +25,11 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
-    # numpy upper bound is Jetson-only — JetPack ships bundled CUDA libs
-    # compiled against numpy 1.x ABI; numpy 2.x's ABI break corrupts ORT +
-    # JAX wheels on aarch64. On x86_64 (Modal A100, customer desktops) +
-    # arm64 (M-series Mac dev hosts) numpy 2.x is fine, AND the
-    # [monolithic] extra's lerobot==0.6.1 dep REQUIRES numpy>=2.0 — pinning
-    # numpy<2 globally makes lerobot uninstallable on Modal (caught by the
-    # 2026-05-20 lift #4 smoke fire). Split via PEP-508 platform marker.
+    # Keep NumPy 1.x for the JetPack/Jetson Zoo stack. New wheel metadata
+    # alone does not prove NumPy 2 ABI compatibility; see
+    # docs/research/verification/jetson-numpy-lock-20261012.md.
+    # LeRobot requires NumPy >=2, so its extras exclude aarch64 even when
+    # users upgrade JetPack's Python. Export/evaluate on a desktop host.
     "numpy>=1.24.0,<2.0; platform_machine == 'aarch64'",
     "numpy>=1.24.0; platform_machine != 'aarch64'",
     "pyyaml>=6.0",
@@ -72,14 +70,17 @@ dependencies = [
 # Standalone RTSM pooled image encoder. Keep this CPU export environment
 # separate from GPU serving: CPU and GPU ORT distributions share module files.
 # Exact encoder dependencies are the measured numerical-export cohort.
+# onnx 1.23.2 needs NumPy >=2 (via ml-dtypes), so like LeRobot this extra
+# excludes aarch64, where NumPy stays <2. Export on the host; the device
+# consumes the exported encoder.
 siglip-export = [
-    "open-clip-torch==3.3.0; python_version >= '3.11'",
-    "timm==1.0.30; python_version >= '3.11'",
-    "torch==2.10.0; python_version >= '3.11'",
-    "torchvision==0.25.0; python_version >= '3.11'",
-    "onnx==1.23.2; python_version >= '3.11'",
-    "onnxruntime==1.30.0; python_version >= '3.11'",
-    "Pillow>=10; python_version >= '3.11'",
+    "open-clip-torch==3.3.0; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "timm==1.0.30; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "torch==2.10.0; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "torchvision==0.25.0; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "onnx==1.23.2; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "onnxruntime==1.30.0; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "Pillow>=10; python_version >= '3.11' and platform_machine != 'aarch64'",
 ]
 # CPU inference runtime (onnx is a core dep now). Use this for CPU-only boxes.
 onnx = ["onnxruntime>=1.17.0"]
@@ -91,24 +92,27 @@ onnx = ["onnxruntime>=1.17.0"]
 # torch 2.8.0 metadata pins the same CUDA 12.8/cuDNN 9.10 libraries.
 # Keep the torch bound local to serving; export environments can use newer torch.
 # These are dependency compatibility bounds, not device qualification.
+# Generic GPU extras require Python >=3.11 (ORT 1.25.1's floor).
+# install.sh refuses older Python before installation; direct pip installs
+# skip these dependencies. JetPack Python 3.10 uses the separate Jetson index.
 gpu = [
-    "onnxruntime-gpu>=1.25.1,<1.26",
-    "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-cuda-runtime-cu12==12.8.90.*",
-    "nvidia-cudnn-cu12==9.10.2.21.*",
-    "nvidia-cublas-cu12==12.8.4.1.*",
-    "cuda-toolkit==12.8.1; sys_platform == 'linux'",
-    "tensorrt-cu12==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "tensorrt-cu12-libs==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "tensorrt-cu12-bindings==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnxruntime-gpu>=1.25.1,<1.26; python_version >= '3.11'",
+    "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
+    "nvidia-cuda-runtime-cu12==12.8.90.*; python_version >= '3.11'",
+    "nvidia-cudnn-cu12==9.10.2.21.*; python_version >= '3.11'",
+    "nvidia-cublas-cu12==12.8.4.1.*; python_version >= '3.11'",
+    "cuda-toolkit==12.8.1; sys_platform == 'linux' and python_version >= '3.11'",
+    "tensorrt-cu12==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
+    "tensorrt-cu12-libs==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
+    "tensorrt-cu12-bindings==10.14.1.48.post1; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
 ]
 # CUDA EP without the TensorRT download. Use an isolated serving environment.
 gpu-min = [
-    "onnxruntime-gpu>=1.25.1,<1.26",
-    "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-cuda-runtime-cu12==12.8.90.*",
-    "nvidia-cudnn-cu12==9.10.2.21.*",
-    "nvidia-cublas-cu12==12.8.4.1.*",
+    "onnxruntime-gpu>=1.25.1,<1.26; python_version >= '3.11'",
+    "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
+    "nvidia-cuda-runtime-cu12==12.8.90.*; python_version >= '3.11'",
+    "nvidia-cudnn-cu12==9.10.2.21.*; python_version >= '3.11'",
+    "nvidia-cublas-cu12==12.8.4.1.*; python_version >= '3.11'",
 ]
 # HTTP/transports only. Choose exactly one runtime: [serve,onnx] for CPU
 # or [serve,gpu] for the CUDA 12 cohort. CPU and GPU ORT share module files
@@ -143,13 +147,14 @@ comply = []
 # that's why it's a separate extra, not a base dep.
 #
 # lerobot 0.6.x requires Python >=3.12. Jetson (JetPack 6) ships 3.10,
-# so we gate lerobot behind a version marker — pip skips it on 3.10/3.11
+# so we gate lerobot behind version and architecture markers. pip skips it
+# on 3.10/3.11 and aarch64, including upgraded JetPack Python.
 # instead of hard-failing with ResolutionImpossible. Native parity
 # verification should be run on a Python 3.12+ host.
 native = [
     "transformers==5.5.4",
-    "lerobot==0.6.1; python_version >= '3.12'",
-    "draccus==0.11.6; python_version >= '3.12'",
+    "lerobot==0.6.1; python_version >= '3.12' and platform_machine != 'aarch64'",
+    "draccus==0.11.6; python_version >= '3.12' and platform_machine != 'aarch64'",
     "num2words",
     "accelerate>=1.14,<2",
     "diffusers==0.39.0",
@@ -165,8 +170,8 @@ native = [
 # (Python 3.12+) and `tether serve` the resulting ONNX on the Jetson
 # with `pip install 'fastcrest-tether[serve]'` only.
 monolithic = [
-    "lerobot==0.6.1; python_version >= '3.12'",
-    "draccus==0.11.6; python_version >= '3.12'",
+    "lerobot==0.6.1; python_version >= '3.12' and platform_machine != 'aarch64'",
+    "draccus==0.11.6; python_version >= '3.12' and platform_machine != 'aarch64'",
     "transformers==5.5.4",
     # onnx-diagnostic's export patches reference a torch 2.8+ symbol;
     # _require_monolithic_deps refuses older torch with the same floor.
@@ -188,20 +193,22 @@ eval = [
     "gymnasium",
     "h5py",
 ]
+# Linux x86-64 only. The setup script refuses Jetson/aarch64 before any
+# install; PEP 508 markers skip these dependencies for direct pip installs.
 # Spell out the SmolVLA dependencies (LeRobot's transformers-dep extra,
 # >=5.4,<5.6) at the exact qualified transformers.
 eval-local = [
-    "transformers==5.5.4; python_version >= '3.12' and sys_platform == 'linux'",
-    "num2words>=0.5.14,<0.6; python_version >= '3.12' and sys_platform == 'linux'",
-    "accelerate>=1.14,<2; python_version >= '3.12' and sys_platform == 'linux'",
-    "lerobot==0.6.1; python_version >= '3.12' and sys_platform == 'linux'",
-    "draccus==0.11.6; python_version >= '3.12' and sys_platform == 'linux'",
-    "peft; python_version >= '3.12' and sys_platform == 'linux'",
-    "mujoco==3.3.2; sys_platform == 'linux'",
-    "robosuite==1.4.1; sys_platform == 'linux'",
-    "bddl==1.0.1; sys_platform == 'linux'",
-    "opencv-python-headless; sys_platform == 'linux'",
-    "h5py; sys_platform == 'linux'",
+    "transformers==5.5.4; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "num2words>=0.5.14,<0.6; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "accelerate>=1.14,<2; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "lerobot==0.6.1; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "draccus==0.11.6; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "peft; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "mujoco==3.3.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "robosuite==1.4.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "bddl==1.0.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "opencv-python-headless; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "h5py; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 dev = ["pytest>=8.0", "ruff>=0.4.0", "mypy>=1.10", "httpx>=0.24.0", "pytest-asyncio>=0.23", "pyarrow>=15"]
 # MCP server — exposes Tether as a Model Context Protocol tool surface so
@@ -232,11 +239,12 @@ tracing = [
 # lerobot 0.6.x requires Python >=3.12 (we skip on 3.10/3.11 to avoid pip's
 # ResolutionImpossible; users on JetPack 6 Python 3.10 can still construct an
 # adapter + run the conversion math, they just can't open a serial bus until
-# they upgrade to Python 3.12 or install scservo_sdk directly via the [so100]
-# extra).
+# they install scservo_sdk directly via the [so100] extra). LeRobot remains
+# excluded on aarch64 with Python 3.12+ because
+# its NumPy >=2 requirement conflicts with the Jetson ABI cap.
 lerobot = [
-    "lerobot==0.6.1; python_version >= '3.12'",
-    "draccus==0.11.6; python_version >= '3.12'",
+    "lerobot==0.6.1; python_version >= '3.12' and platform_machine != 'aarch64'",
+    "draccus==0.11.6; python_version >= '3.12' and platform_machine != 'aarch64'",
 ]
 # SO-100 hardware extra — installs the scservo_sdk Python package on the
 # Raspberry Pi / host wired to the arm. Separate from [lerobot] because the
@@ -244,7 +252,7 @@ lerobot = [
 # the full LeRobot stack. The two extras compose: `pip install
 # 'fastcrest-tether[so100,lerobot]'` gives you both code paths.
 so100 = [
-    "scservo-sdk>=0.0.4",
+    "feetech-servo-sdk>=1.0.0,<2",
 ]
 # Real-Time Chunking adapter (B.3). Pulls in lerobot's RTC module so
 # `tether serve --rtc` can wrap inference with the canonical RTCProcessor.
@@ -252,10 +260,10 @@ so100 = [
 # RTC-enabled deployments. Skeleton + config validation work without this
 # extra; only the actual processor construction needs it.
 #
-# lerobot 0.6.x requires Python >=3.12 (skipped on 3.10/3.11).
+# lerobot 0.6.x requires Python >=3.12 and NumPy >=2 (excluded on aarch64).
 rtc = [
-    "lerobot==0.6.1; python_version >= '3.12'",
-    "draccus==0.11.6; python_version >= '3.12'",
+    "lerobot==0.6.1; python_version >= '3.12' and platform_machine != 'aarch64'",
+    "draccus==0.11.6; python_version >= '3.12' and platform_machine != 'aarch64'",
 ]
 # Curate format-converter extras. Phase 1 ships LeRobot v3 + HDF5 with the
 # core install (parquet via pyarrow which huggingface_hub already pulls; h5py
@@ -391,6 +399,7 @@ markers = [
 ]
 
 [tool.uv]
+required-version = "==0.11.2"
 # The CPU encoder export and CUDA 12 serving cohorts need separate environments.
 conflicts = [
     [{ extra = "siglip-export" }, { extra = "gpu" }],
