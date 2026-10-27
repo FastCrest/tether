@@ -721,6 +721,88 @@ def _strip_default_scatternd_reduction(graph: Any) -> int:
     return stripped
 
 
+def _split_to_sequence_to_split(graph: Any, shape_graph: Any) -> int:
+    """Rewrite ``SplitToSequence`` whose only consumers are ``SequenceAt`` with
+    constant positions into one ``Split``; return how many were rewritten.
+
+    torch.onnx.export with ``optimize=False`` (the pi0.5 expert, see
+    ``_export_pi05_expert_pass``) lowers ``torch.split``/``chunk`` this way
+    (370 in the pi0.5 expert). Neither TensorRT's parser nor the CUDA EP takes
+    SplitToSequence, so ORT 1.25 runs it on the CPU and SequenceAt on the CUDA
+    EP. Because CUDA shares TensorRT's device, the TensorRT EP's
+    MemcpyTransformer (first in provider order) claims each CPU->GPU sequence
+    copy and inserts a TensorRT ``MemcpyFromHost``, whose kernel copies only
+    tensors: the first run fails with ``Unsupported type proto value case:0``
+    (``Memcpy_token_961``; measured on L4, 370 such copies). On CUDA EP alone
+    it runs but costs 740 host round trips per call. ``Split`` is the same
+    computation on plain tensors. Groups this cannot prove equivalent (non-constant split or
+    positions, unknown axis length, other consumers) are left unchanged.
+    """
+    import numpy as np
+    import onnx
+    from onnx import helper, numpy_helper
+
+    consts: dict[str, np.ndarray] = {}
+    for node in graph.node:
+        if node.op_type == "Constant" and node.attribute and node.attribute[0].name == "value":
+            consts[node.output[0]] = numpy_helper.to_array(node.attribute[0].t)
+    for init in graph.initializer:  # small inline ones only; never read weight files
+        if init.data_location != onnx.TensorProto.EXTERNAL and len(init.dims) <= 1:
+            consts[init.name] = numpy_helper.to_array(init)
+    shapes: dict[str, list] = {}
+    for vi in list(shape_graph.value_info) + list(shape_graph.input) + list(shape_graph.output):
+        dims = vi.type.tensor_type.shape.dim
+        shapes[vi.name] = [d.dim_value if d.HasField("dim_value") else None for d in dims]
+    consumers: dict[str, list] = {}
+    for node in graph.node:
+        for name in node.input:
+            consumers.setdefault(name, []).append(node)
+    graph_outputs = {o.name for o in graph.output}
+
+    replace: dict[int, list] = {}  # id(original node) -> replacement nodes
+    rewritten = 0
+    for node in graph.node:
+        if node.op_type != "SplitToSequence" or node.domain not in ("", "ai.onnx"):
+            continue
+        seq = node.output[0]
+        users = consumers.get(seq, [])
+        if seq in graph_outputs or not users or any(u.op_type != "SequenceAt" for u in users):
+            continue
+        if len(node.input) < 2 or node.input[1] not in consts:
+            continue  # keepdims-only form (no split input) is not rewritten
+        if any(u.input[1] not in consts for u in users):
+            continue
+        axis = next((a.i for a in node.attribute if a.name == "axis"), 0)
+        shape = shapes.get(node.input[0])
+        if not shape or shape[axis] is None:
+            continue
+        length = shape[axis]
+        split = consts[node.input[1]].astype(np.int64)
+        if split.ndim == 0:  # scalar: equal chunks, the last may be shorter
+            size = int(split)
+            sizes = [size] * (length // size) + ([length % size] if length % size else [])
+        else:
+            sizes = [int(v) for v in split]
+        if sum(sizes) != length:
+            continue
+        rewritten += 1
+        outs = [f"{seq}__split_{i}" for i in range(len(sizes))]
+        sizes_name = f"{seq}__split_sizes"
+        replace[id(node)] = [
+            helper.make_node("Constant", [], [sizes_name], name=f"{node.name}__sizes",
+                             value=numpy_helper.from_array(np.asarray(sizes, np.int64))),
+            helper.make_node("Split", [node.input[0], sizes_name], outs, name=node.name, axis=axis),
+        ]
+        for user in users:
+            position = int(consts[user.input[1]]) % len(sizes)
+            replace[id(user)] = [helper.make_node("Identity", [outs[position]], [user.output[0]], name=user.name)]
+    if rewritten:
+        new_nodes = [new for node in graph.node for new in replace.get(id(node), [node])]
+        graph.ClearField("node")
+        graph.node.extend(new_nodes)
+    return rewritten
+
+
 def _repair_exported_onnx(onnx_path: Path) -> int:
     """Post-export repairs every exporter runs on its ``torch.onnx.export`` output.
 
@@ -796,6 +878,10 @@ def _repair_exported_onnx(onnx_path: Path) -> int:
     if fixes > 0:
         model.graph.ClearField("node")
         model.graph.node.extend(new_nodes)
+    split_rewrites = _split_to_sequence_to_split(model.graph, shape_info.graph)
+    if split_rewrites:
+        logger.info("rewrote %d SplitToSequence+SequenceAt groups to Split", split_rewrites)
+        fixes += split_rewrites
     stripped = _strip_default_scatternd_reduction(model.graph)
     for function in model.functions:
         stripped += _strip_default_scatternd_reduction(function)

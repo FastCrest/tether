@@ -149,7 +149,7 @@ def test_decomposed_server_applies_guard_and_clamps(tmp_path, monkeypatch):
     lim = _limits(7, position_min=[-1.0] * 7, position_max=[1.0] * 7)
     server = _decomposed(tmp_path, monkeypatch, chunk, lim)
     server._action_mean = server._action_std = None
-    result = server.predict_from_base64(image_b64=None, instruction="x", state=None)
+    result = server.predict_from_base64(image_b64=None, instruction="x", state=[0.0] * 8)
     assert np.allclose(result["actions"], 1.0)
     assert result["safety_violations"] > 0
 
@@ -157,7 +157,7 @@ def test_decomposed_server_applies_guard_and_clamps(tmp_path, monkeypatch):
 def test_decomposed_server_nan_first_chunk_is_guard_stop(tmp_path, monkeypatch):
     chunk = np.full((1, 50, 32), np.nan, dtype=np.float32)
     server = _decomposed(tmp_path, monkeypatch, chunk, _limits(7))
-    result = server.predict_from_base64(image_b64=None, instruction="x", state=None)
+    result = server.predict_from_base64(image_b64=None, instruction="x", state=[0.0] * 8)
     assert result["error"] == "guard_stop"
     assert "actions" not in result
 

@@ -144,7 +144,8 @@ def test_pi05_decomposed_exporter_writer_records_action_units(tmp_path):
         decomposed._write_decomposed_export_result(
             model_id="org/pi05", output_dir=tmp_path, num_steps=10, target="desktop",
             student_checkpoint=None, variant="default", past_kv_names=[],
-            chunk_size=50, action_dim=7, export_mode=ExportMode.SEQUENTIAL,
+            chunk_size=50, action_dim=7, max_action_dim=32, state_in_prompt=True,
+            export_mode=ExportMode.SEQUENTIAL,
             export_mode_reason="test",
         )
     assert load_tether_config(tmp_path)["action_units"] == FRANKA_UNITS

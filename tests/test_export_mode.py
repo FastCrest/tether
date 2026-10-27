@@ -215,7 +215,8 @@ def test_pi05_decomposed_sequential_reuses_single_policy(monkeypatch, tmp_path):
         assert policy_arg is policy
         pass_order.append("prefix")
         write_test_onnx(output_dir / "vlm_prefix.onnx", action_dim=32)
-        return {"chunk_size": 50, "action_dim": 32, "prefix_seq_len": 968}
+        return {"chunk_size": 50, "action_dim": 32, "prefix_seq_len": 968,
+                "output_action_dim": 7, "state_in_prompt": True, "source_dtype": "bfloat16"}
 
     def fake_expert_pass(**kwargs):
         assert kwargs["policy"] is policy
@@ -243,6 +244,11 @@ def test_pi05_decomposed_sequential_reuses_single_policy(monkeypatch, tmp_path):
     assert pass_order == ["prefix", "expert"]
     assert result["export_mode"] == "sequential"
     assert cfg["export_mode"] == "sequential"
+    # Runtime contract: real action dim to slice to, padded graph dim, prompt state.
+    assert cfg["action_dim"] == 7
+    assert cfg["decomposed"]["max_action_dim"] == 32
+    assert cfg["decomposed"]["state_in_prompt"] is True
+    assert cfg["source_dtype"] == "bfloat16"
 
 
 def test_pi05_policy_load_receives_exact_immutable_revision(monkeypatch):
@@ -362,7 +368,9 @@ def test_write_decomposed_result_records_export_mode(tmp_path):
         variant="default",
         past_kv_names=["past_k_0", "past_v_0"],
         chunk_size=50,
-        action_dim=32,
+        action_dim=7,
+        max_action_dim=32,
+        state_in_prompt=True,
         export_mode=ExportMode.PARALLEL,
         export_mode_reason="test reason",
     )
@@ -372,3 +380,29 @@ def test_write_decomposed_result_records_export_mode(tmp_path):
     assert cfg["export_mode"] == "parallel"
     assert cfg["export_mode_reason"] == "test reason"
     assert cfg["model_revision"] == "deadbeef"
+
+
+def _contract_policy(*, state_proj=False, proprio_memory=None):
+    cfg = SimpleNamespace(output_features={"action": SimpleNamespace(shape=(7,))}, max_action_dim=32,
+                          dtype="bfloat16")
+    if proprio_memory is not None:
+        cfg.use_proprioceptive_memory = proprio_memory
+    model = SimpleNamespace(state_proj=object()) if state_proj else SimpleNamespace()
+    return SimpleNamespace(config=cfg, model=model)
+
+
+@pytest.mark.parametrize("kwargs, state_in_prompt", [
+    ({}, True),                         # stock pi0.5 (LeRobot include_state_in_prompt default)
+    ({"proprio_memory": False}, True),
+    ({"proprio_memory": True}, False),  # LeRobot: include_state_in_prompt=not use_proprioceptive_memory
+    ({"state_proj": True}, False),      # state-out student
+])
+def test_pi05_runtime_contract_reads_policy(kwargs, state_in_prompt):
+    contract = decomposed._pi05_runtime_contract(_contract_policy(**kwargs))
+    assert contract == {"output_action_dim": 7, "state_in_prompt": state_in_prompt, "source_dtype": "bfloat16"}
+
+
+def test_pi05_runtime_contract_requires_action_feature():
+    policy = SimpleNamespace(config=SimpleNamespace(output_features={}), model=SimpleNamespace())
+    with pytest.raises(ValueError, match="output_features"):
+        decomposed._pi05_runtime_contract(policy)

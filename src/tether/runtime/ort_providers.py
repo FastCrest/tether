@@ -230,6 +230,34 @@ def onnx_has_scatternd_reduction(onnx_path: str | Path | None) -> bool:
     return False
 
 
+_SEQUENCE_OPS = {"SplitToSequence", "SequenceAt", "SequenceConstruct", "SequenceInsert",
+                 "SequenceErase", "SequenceLength", "SequenceEmpty", "ConcatFromSequence"}
+
+
+def onnx_has_sequence_ops(onnx_path: str | Path | None) -> bool:
+    """Return True for ONNX graphs that carry tensor sequences.
+
+    With ORT 1.25, SplitToSequence runs on the CPU and SequenceAt on the CUDA
+    EP; the TensorRT EP's MemcpyTransformer treats CUDA nodes as its own device
+    and inserts a TensorRT ``MemcpyFromHost`` for each sequence, a kernel that
+    copies tensors only. The session builds (13 minutes of engine compilation
+    for the pi0.5 expert on L4) and the first run fails with
+    ``Unsupported type proto value case:0`` (2026-10-27).
+    Exports from this Tether rewrite the pattern to Split
+    (``exporters.monolithic._split_to_sequence_to_split``), so a hit means an
+    export made before that fix.
+    """
+    if onnx_path is None or not Path(onnx_path).exists():
+        return False
+    try:
+        import onnx
+        model = onnx.load(str(onnx_path), load_external_data=False)
+    except Exception as exc:
+        logger.debug("TRT sequence preflight skipped for %s: %s", onnx_path, exc)
+        return False
+    return any(node.op_type in _SEQUENCE_OPS for node in model.graph.node)
+
+
 def _jetson_memory_bytes() -> int | None:
     """Physical shared RAM only on a positively identified Jetson, not every arm64 host."""
     if not Path("/etc/nv_tegra_release").is_file():
@@ -304,15 +332,40 @@ def provider_runtime_details(plan: OrtProviderPlan, session: Any) -> dict[str, A
 _TYPED_PRECISIONS = {"mixed_float16", "float16"}
 
 
-def export_precision(export_dir: str | Path) -> str | None:
-    """`precision` from the export's tether_config.json, or None when absent or unreadable."""
+# Checkpoints trained in bfloat16 whose FP32 export TensorRT must not lower to FP16/BF16. Measured
+# on an L4 with TensorRT 10.14 (pi0.5 LIBERO expert, 24 paired chunks vs LeRobot eager): FP16 action
+# cosine 0.079, BF16 0.988 (min 0.89), FP32/TF32 0.999992 at 442 ms p50 vs 461 ms on CUDA EP.
+_NO_REDUCED_PRECISION_SOURCES = {"bfloat16"}
+
+
+def _export_config_str(export_dir: str | Path, key: str) -> str | None:
     import json
 
     try:
-        value = json.loads((Path(export_dir) / "tether_config.json").read_text()).get("precision")
+        value = json.loads((Path(export_dir) / "tether_config.json").read_text()).get(key)
     except (OSError, ValueError, AttributeError):
         return None
     return value if isinstance(value, str) else None
+
+
+def export_precision(export_dir: str | Path) -> str | None:
+    """`precision` from the export's tether_config.json, or None when absent or unreadable."""
+    return _export_config_str(export_dir, "precision")
+
+
+def trt_fp16_default(export_dir: str | Path) -> bool:
+    """Whether TensorRT may pick FP16 kernels for this export by default.
+
+    No for typed exports (the graph carries its own precision) and for FP32 exports of
+    bfloat16-trained checkpoints (``source_dtype``), which TensorRT's reduced precision breaks.
+    """
+    if export_precision(export_dir) in _TYPED_PRECISIONS:
+        return False
+    source = _export_config_str(export_dir, "source_dtype")
+    if source in _NO_REDUCED_PRECISION_SOURCES:
+        logger.info("TensorRT FP16 off for %s: source_dtype=%s export runs FP32/TF32", export_dir, source)
+        return False
+    return True
 
 
 def build_ort_provider_plan(
@@ -355,8 +408,9 @@ def build_ort_provider_plan(
         overrides = dict(overrides or {})
         opts: dict[str, Any] = {
             "device_id": 0,
-            # FP32 exports: let TensorRT pick FP16 kernels. Typed exports: respect the graph.
-            "trt_fp16_enable": export_precision(export_path) not in _TYPED_PRECISIONS,
+            # FP32 exports: let TensorRT pick FP16 kernels, unless the graph is typed or the
+            # checkpoint is bf16-trained (see trt_fp16_default).
+            "trt_fp16_enable": trt_fp16_default(export_path),
             "trt_max_workspace_size": (overrides["trt_max_workspace_size"]
                                        if "trt_max_workspace_size" in overrides
                                        else _workspace_bytes(trt_workspace_bytes)),
@@ -416,6 +470,7 @@ def build_ort_provider_plan(
     dump_ep_context = _as_bool(os.environ.get("TETHER_TRT_DUMP_EP_CONTEXT"), default=False)
     blackwell = gpu_is_blackwell()
     scatternd_reduction = onnx_has_scatternd_reduction(onnx_path)
+    sequence_ops = onnx_has_sequence_ops(onnx_path)
     large_external_data = onnx_has_large_external_data(onnx_path)
 
     providers: list[Any] = []
@@ -435,6 +490,12 @@ def build_ort_provider_plan(
             "ScatterND reduction unsupported by TensorRT EP (exports made before "
             "the reduction='none' strip must be re-exported)"
         )
+    elif sequence_ops:
+        disabled_reason = (
+            "tensor-sequence ops (SplitToSequence/SequenceAt) cross TensorRT EP partitions and "
+            "fail at run time on a TensorRT MemcpyFromHost; re-export to get plain Split"
+        )
+        logger.warning("TensorRT EP disabled for %s: %s", onnx_path, disabled_reason)
     elif large_external_data:
         disabled_reason = (
             "large external-data ONNX; TensorRT EP/ORT graph optimizer can "

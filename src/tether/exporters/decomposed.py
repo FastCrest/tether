@@ -213,7 +213,10 @@ def _export_pi05_decomposed_sequential(
         variant=variant,
         past_kv_names=past_kv_names,
         chunk_size=int(prefix_meta["chunk_size"]),
-        action_dim=int(prefix_meta["action_dim"]),
+        action_dim=int(prefix_meta["output_action_dim"]),
+        max_action_dim=int(prefix_meta["action_dim"]),
+        state_in_prompt=bool(prefix_meta["state_in_prompt"]),
+        source_dtype=prefix_meta.get("source_dtype"),
         export_mode=ExportMode.SEQUENTIAL,
         export_mode_reason=export_mode_reason,
         per_step_expert=per_step_expert,
@@ -258,7 +261,10 @@ def _export_pi05_decomposed_parallel(
         variant=variant,
         past_kv_names=past_kv_names,
         chunk_size=int(prefix_meta["chunk_size"]),
-        action_dim=int(prefix_meta["action_dim"]),
+        action_dim=int(prefix_meta["output_action_dim"]),
+        max_action_dim=int(prefix_meta["action_dim"]),
+        state_in_prompt=bool(prefix_meta["state_in_prompt"]),
+        source_dtype=prefix_meta.get("source_dtype"),
         export_mode=ExportMode.PARALLEL,
         export_mode_reason=export_mode_reason,
         per_step_expert=per_step_expert,
@@ -478,6 +484,7 @@ def _export_pi05_prefix_pass(
         "action_dim": int(action_dim),
         "prefix_seq_len": _prefix_seq_len(),
         "prefix_cast_fixes": int(prefix_fixes),
+        **_pi05_runtime_contract(policy),
     }
 
 
@@ -620,7 +627,10 @@ def _write_decomposed_export_result(
     past_kv_names: list[str],
     chunk_size: int,
     action_dim: int,
+    max_action_dim: int,
+    state_in_prompt: bool,
     export_mode: ExportMode,
+    source_dtype: str | None = None,
     export_mode_reason: str,
     per_step_expert: bool = False,
 ) -> dict[str, Any]:
@@ -638,6 +648,9 @@ def _write_decomposed_export_result(
         "action_dim": action_dim,
         "opset": 19,
         "export_kind": "decomposed_onnx",
+        # Checkpoint dtype; the graph itself is FP32. Runtimes use it to keep TensorRT
+        # from lowering bf16-trained weights to FP16 (ort_providers.trt_fp16_default).
+        "source_dtype": source_dtype,
         "export_mode": export_mode.value,
         "export_mode_reason": export_mode_reason,
         "decomposed": {
@@ -649,6 +662,11 @@ def _write_decomposed_export_result(
             "past_kv_tensor_names": past_kv_names,
             "variant": variant,
             "expert_takes_state": variant == "state_out",
+            # Padded action/noise dim of the ONNX graphs; `action_dim` above is
+            # the dataset's real dim the runtime slices to.
+            "max_action_dim": max_action_dim,
+            # Prompt carries the discretized state (LeRobot pi0.5 default).
+            "state_in_prompt": state_in_prompt,
             # When True, expert_denoise.onnx takes (x_t, t, past_kv) → v_t
             # and the runtime drives the Euler loop in Python. Default False
             # preserves the baked-loop shape (noise → actions, single call).
@@ -704,6 +722,33 @@ def _write_decomposed_export_result(
         "num_steps": num_steps,
         "paligemma_layers": PI05_PALIGEMMA_LAYERS,
         "export_mode": export_mode.value,
+    }
+
+
+def _pi05_runtime_contract(policy) -> dict[str, Any]:
+    """Facts the runtime needs that only the policy knows.
+
+    ``output_action_dim``: the dataset's action dim, which LeRobot slices the
+    padded ``max_action_dim`` chunk to (``PI05Policy.predict_action_chunk``).
+    ``source_dtype``: the checkpoint's configured dtype (pi0.5: "bfloat16").
+    ``state_in_prompt``: whether the policy's preprocessor writes the
+    discretized state into the prompt. LeRobot's pi0.5 does unless the config
+    sets ``use_proprioceptive_memory`` (processor_pi05.py); state-out students
+    (a ``state_proj`` input path) use ``Pi05PrepareTokenizerStateOutStep``,
+    which omits it.
+    """
+    cfg = policy.config
+    action_feature = (getattr(cfg, "output_features", None) or {}).get("action")
+    if action_feature is None:
+        raise ValueError("pi0.5 policy config has no output_features['action']; cannot record its action dim")
+    state_elsewhere = hasattr(policy.model, "state_proj") or bool(
+        getattr(cfg, "use_proprioceptive_memory", False)
+    )
+    dtype = getattr(cfg, "dtype", None)
+    return {
+        "output_action_dim": int(action_feature.shape[0]),
+        "state_in_prompt": not state_elsewhere,
+        "source_dtype": str(dtype) if dtype is not None else None,
     }
 
 
