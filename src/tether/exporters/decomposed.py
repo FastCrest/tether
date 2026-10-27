@@ -216,6 +216,7 @@ def _export_pi05_decomposed_sequential(
         action_dim=int(prefix_meta["output_action_dim"]),
         max_action_dim=int(prefix_meta["action_dim"]),
         state_in_prompt=bool(prefix_meta["state_in_prompt"]),
+        source_dtype=prefix_meta.get("source_dtype"),
         export_mode=ExportMode.SEQUENTIAL,
         export_mode_reason=export_mode_reason,
         per_step_expert=per_step_expert,
@@ -263,6 +264,7 @@ def _export_pi05_decomposed_parallel(
         action_dim=int(prefix_meta["output_action_dim"]),
         max_action_dim=int(prefix_meta["action_dim"]),
         state_in_prompt=bool(prefix_meta["state_in_prompt"]),
+        source_dtype=prefix_meta.get("source_dtype"),
         export_mode=ExportMode.PARALLEL,
         export_mode_reason=export_mode_reason,
         per_step_expert=per_step_expert,
@@ -628,6 +630,7 @@ def _write_decomposed_export_result(
     max_action_dim: int,
     state_in_prompt: bool,
     export_mode: ExportMode,
+    source_dtype: str | None = None,
     export_mode_reason: str,
     per_step_expert: bool = False,
 ) -> dict[str, Any]:
@@ -645,6 +648,9 @@ def _write_decomposed_export_result(
         "action_dim": action_dim,
         "opset": 19,
         "export_kind": "decomposed_onnx",
+        # Checkpoint dtype; the graph itself is FP32. Runtimes use it to keep TensorRT
+        # from lowering bf16-trained weights to FP16 (ort_providers.trt_fp16_default).
+        "source_dtype": source_dtype,
         "export_mode": export_mode.value,
         "export_mode_reason": export_mode_reason,
         "decomposed": {
@@ -724,6 +730,7 @@ def _pi05_runtime_contract(policy) -> dict[str, Any]:
 
     ``output_action_dim``: the dataset's action dim, which LeRobot slices the
     padded ``max_action_dim`` chunk to (``PI05Policy.predict_action_chunk``).
+    ``source_dtype``: the checkpoint's configured dtype (pi0.5: "bfloat16").
     ``state_in_prompt``: whether the policy's preprocessor writes the
     discretized state into the prompt. LeRobot's pi0.5 does unless the config
     sets ``use_proprioceptive_memory`` (processor_pi05.py); state-out students
@@ -737,9 +744,11 @@ def _pi05_runtime_contract(policy) -> dict[str, Any]:
     state_elsewhere = hasattr(policy.model, "state_proj") or bool(
         getattr(cfg, "use_proprioceptive_memory", False)
     )
+    dtype = getattr(cfg, "dtype", None)
     return {
         "output_action_dim": int(action_feature.shape[0]),
         "state_in_prompt": not state_elsewhere,
+        "source_dtype": str(dtype) if dtype is not None else None,
     }
 
 

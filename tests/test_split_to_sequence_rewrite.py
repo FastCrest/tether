@@ -83,3 +83,26 @@ def test_provider_plan_refuses_trt_for_sequence_graphs(tmp_path, monkeypatch):
     _repair_exported_onnx(path)
     plan = ort_providers.build_ort_provider_plan(tmp_path, available_providers=available, onnx_path=path)
     assert ort_providers.provider_name(plan.providers[0]) == "TensorrtExecutionProvider"
+
+
+@pytest.mark.parametrize("config, fp16", [
+    ({}, True),                                    # FP32 export, unknown source: unchanged default
+    ({"source_dtype": "float32"}, True),
+    ({"source_dtype": "bfloat16"}, False),         # pi0.5: FP16 cos 0.079, BF16 0.988 on L4
+    ({"precision": "mixed_float16"}, False),       # typed graph
+])
+def test_trt_fp16_default_respects_source_dtype(tmp_path, monkeypatch, config, fp16):
+    import json
+
+    from tether.runtime import ort_providers
+
+    monkeypatch.setattr(ort_providers, "gpu_is_blackwell", lambda: False)
+    (tmp_path / "tether_config.json").write_text(json.dumps(config))
+    path = tmp_path / "m.onnx"
+    onnx.save(_model(1024, [0]), path)
+    _repair_exported_onnx(path)
+    plan = ort_providers.build_ort_provider_plan(
+        tmp_path, available_providers=["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+        onnx_path=path)
+    assert plan.providers[0][0] == "TensorrtExecutionProvider"
+    assert plan.providers[0][1]["trt_fp16_enable"] is fp16

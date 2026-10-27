@@ -216,7 +216,7 @@ def test_pi05_decomposed_sequential_reuses_single_policy(monkeypatch, tmp_path):
         pass_order.append("prefix")
         write_test_onnx(output_dir / "vlm_prefix.onnx", action_dim=32)
         return {"chunk_size": 50, "action_dim": 32, "prefix_seq_len": 968,
-                "output_action_dim": 7, "state_in_prompt": True}
+                "output_action_dim": 7, "state_in_prompt": True, "source_dtype": "bfloat16"}
 
     def fake_expert_pass(**kwargs):
         assert kwargs["policy"] is policy
@@ -248,6 +248,7 @@ def test_pi05_decomposed_sequential_reuses_single_policy(monkeypatch, tmp_path):
     assert cfg["action_dim"] == 7
     assert cfg["decomposed"]["max_action_dim"] == 32
     assert cfg["decomposed"]["state_in_prompt"] is True
+    assert cfg["source_dtype"] == "bfloat16"
 
 
 def test_pi05_policy_load_receives_exact_immutable_revision(monkeypatch):
@@ -382,7 +383,8 @@ def test_write_decomposed_result_records_export_mode(tmp_path):
 
 
 def _contract_policy(*, state_proj=False, proprio_memory=None):
-    cfg = SimpleNamespace(output_features={"action": SimpleNamespace(shape=(7,))}, max_action_dim=32)
+    cfg = SimpleNamespace(output_features={"action": SimpleNamespace(shape=(7,))}, max_action_dim=32,
+                          dtype="bfloat16")
     if proprio_memory is not None:
         cfg.use_proprioceptive_memory = proprio_memory
     model = SimpleNamespace(state_proj=object()) if state_proj else SimpleNamespace()
@@ -397,7 +399,7 @@ def _contract_policy(*, state_proj=False, proprio_memory=None):
 ])
 def test_pi05_runtime_contract_reads_policy(kwargs, state_in_prompt):
     contract = decomposed._pi05_runtime_contract(_contract_policy(**kwargs))
-    assert contract == {"output_action_dim": 7, "state_in_prompt": state_in_prompt}
+    assert contract == {"output_action_dim": 7, "state_in_prompt": state_in_prompt, "source_dtype": "bfloat16"}
 
 
 def test_pi05_runtime_contract_requires_action_feature():

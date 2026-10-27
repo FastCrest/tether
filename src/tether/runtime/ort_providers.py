@@ -332,15 +332,40 @@ def provider_runtime_details(plan: OrtProviderPlan, session: Any) -> dict[str, A
 _TYPED_PRECISIONS = {"mixed_float16", "float16"}
 
 
-def export_precision(export_dir: str | Path) -> str | None:
-    """`precision` from the export's tether_config.json, or None when absent or unreadable."""
+# Checkpoints trained in bfloat16 whose FP32 export TensorRT must not lower to FP16/BF16. Measured
+# on an L4 with TensorRT 10.14 (pi0.5 LIBERO expert, 24 paired chunks vs LeRobot eager): FP16 action
+# cosine 0.079, BF16 0.988 (min 0.89), FP32/TF32 0.999992 at 442 ms p50 vs 461 ms on CUDA EP.
+_NO_REDUCED_PRECISION_SOURCES = {"bfloat16"}
+
+
+def _export_config_str(export_dir: str | Path, key: str) -> str | None:
     import json
 
     try:
-        value = json.loads((Path(export_dir) / "tether_config.json").read_text()).get("precision")
+        value = json.loads((Path(export_dir) / "tether_config.json").read_text()).get(key)
     except (OSError, ValueError, AttributeError):
         return None
     return value if isinstance(value, str) else None
+
+
+def export_precision(export_dir: str | Path) -> str | None:
+    """`precision` from the export's tether_config.json, or None when absent or unreadable."""
+    return _export_config_str(export_dir, "precision")
+
+
+def trt_fp16_default(export_dir: str | Path) -> bool:
+    """Whether TensorRT may pick FP16 kernels for this export by default.
+
+    No for typed exports (the graph carries its own precision) and for FP32 exports of
+    bfloat16-trained checkpoints (``source_dtype``), which TensorRT's reduced precision breaks.
+    """
+    if export_precision(export_dir) in _TYPED_PRECISIONS:
+        return False
+    source = _export_config_str(export_dir, "source_dtype")
+    if source in _NO_REDUCED_PRECISION_SOURCES:
+        logger.info("TensorRT FP16 off for %s: source_dtype=%s export runs FP32/TF32", export_dir, source)
+        return False
+    return True
 
 
 def build_ort_provider_plan(
@@ -383,8 +408,9 @@ def build_ort_provider_plan(
         overrides = dict(overrides or {})
         opts: dict[str, Any] = {
             "device_id": 0,
-            # FP32 exports: let TensorRT pick FP16 kernels. Typed exports: respect the graph.
-            "trt_fp16_enable": export_precision(export_path) not in _TYPED_PRECISIONS,
+            # FP32 exports: let TensorRT pick FP16 kernels, unless the graph is typed or the
+            # checkpoint is bf16-trained (see trt_fp16_default).
+            "trt_fp16_enable": trt_fp16_default(export_path),
             "trt_max_workspace_size": (overrides["trt_max_workspace_size"]
                                        if "trt_max_workspace_size" in overrides
                                        else _workspace_bytes(trt_workspace_bytes)),
