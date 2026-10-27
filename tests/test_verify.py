@@ -560,7 +560,8 @@ def test_parity_cert_writes_json_and_optional_signature(tmp_path):
     assert cert["target"] == "orin"
     assert cert["artifacts"]["PARITY.md"]["sha256"]
     assert cert["signature"]["key_id"] == "test-key"
-    verify_parity_cert_signature(cert)
+    trusted = [Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes_raw()]
+    verify_parity_cert_signature(cert, trusted_keys=trusted)
 
     unsigned = build_parity_cert(verdict, parity_md_path=parity_md)
     assert "signature" not in unsigned
@@ -647,7 +648,8 @@ def test_cli_verify_writes_signed_parity_cert(monkeypatch, tmp_path):
     cert = json.loads((out / "parity.cert.json").read_text())
     assert cert["signature"]["key_id"] == "test-key"
     assert (out / "parity.cert.sig").exists()
-    verify_parity_cert_signature(cert)
+    trusted = [Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes_raw()]
+    verify_parity_cert_signature(cert, trusted_keys=trusted)
 
 
 def test_cli_verify_fail(monkeypatch, tmp_path):
@@ -680,3 +682,45 @@ def test_cli_verify_unsupported_suite(monkeypatch):
     runner = typer_testing.CliRunner()
     result = runner.invoke(app, ["verify", "/fake/export", "--eval", "simpler"])
     assert result.exit_code == 2, result.output
+
+
+def test_parity_cert_resigned_by_attacker_is_rejected():
+    """Editing a cert and re-signing with another key must not verify (key pinning)."""
+    from tether.parity_cert import ParityCertError, sign_parity_cert, verify_parity_cert_signature
+
+    owner = Ed25519PrivateKey.generate()
+    attacker = Ed25519PrivateKey.generate()
+    seed_b64 = lambda k: base64.b64encode(k.private_bytes_raw()).decode("ascii")  # noqa: E731
+    trusted = [owner.public_key().public_bytes_raw()]
+
+    cert = sign_parity_cert({"verdict": "FAIL", "passed": False}, signing_key=seed_b64(owner))
+    verify_parity_cert_signature(cert, trusted_keys=trusted)
+
+    forged = sign_parity_cert({"verdict": "PASS", "passed": True}, signing_key=seed_b64(attacker))
+    with pytest.raises(ParityCertError, match="untrusted key"):
+        verify_parity_cert_signature(forged, trusted_keys=trusted)
+
+    tampered = dict(cert, verdict="PASS", passed=True)
+    with pytest.raises(ParityCertError, match="verification failed"):
+        verify_parity_cert_signature(tampered, trusted_keys=trusted)
+
+    with pytest.raises(ParityCertError, match="no trusted public keys"):
+        verify_parity_cert_signature(cert, trusted_keys=[])
+
+
+def test_load_trusted_public_key_forms(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from tether.parity_cert import ParityCertError, load_ed25519_public_key
+
+    pub = Ed25519PrivateKey.generate().public_key()
+    raw = pub.public_bytes_raw()
+    b64 = base64.b64encode(raw).decode("ascii")
+    pem = pub.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    (tmp_path / "k.pem").write_bytes(pem)
+    monkeypatch.setenv("TETHER_TEST_PUB", b64)
+
+    assert load_ed25519_public_key(b64) == raw
+    assert load_ed25519_public_key(f"file:{tmp_path / 'k.pem'}") == raw
+    assert load_ed25519_public_key("env:TETHER_TEST_PUB") == raw
+    with pytest.raises(ParityCertError):
+        load_ed25519_public_key(base64.b64encode(b"short").decode("ascii"))

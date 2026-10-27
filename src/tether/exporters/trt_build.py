@@ -22,6 +22,43 @@ def check_trtexec() -> bool:
         return False
 
 
+def trtexec_supports_strongly_typed() -> bool:
+    """True when this trtexec accepts ``--stronglyTyped`` (TensorRT 9+; JetPack 6.0 ships 8.6)."""
+    try:
+        result = subprocess.run(["trtexec", "--help"], capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return "--stronglyTyped" in (result.stdout or "") + (result.stderr or "")
+
+
+def onnx_carries_reduced_precision(onnx_path: Path) -> bool:
+    """True when the ONNX graph already stores FP16/BF16 tensors (e.g. a mixed-FP16 export).
+
+    Such a graph keeps deliberate FP32 islands (normalisation, rotary maths).
+    Building it with ``--fp16`` lets TensorRT run those islands in FP16 too, the
+    failure #384 fixed on the ORT path (SmolVLA cosine 0.32-0.56 on an A10G).
+    Weights are not loaded; an unreadable file returns False and trtexec reports it.
+    """
+    try:
+        import onnx
+        from onnx import TensorProto
+
+        model = onnx.load(str(onnx_path), load_external_data=False)
+    except Exception:  # noqa: BLE001
+        return False
+    reduced = {TensorProto.FLOAT16, TensorProto.BFLOAT16}
+    graph = model.graph
+    if any(init.data_type in reduced for init in graph.initializer):
+        return True
+    for value in [*graph.input, *graph.output, *graph.value_info]:
+        if value.type.tensor_type.elem_type in reduced:
+            return True
+    return any(
+        node.op_type == "Cast" and any(a.name == "to" and a.i in reduced for a in node.attribute)
+        for node in graph.node
+    )
+
+
 def check_tensorrt_python() -> bool:
     """Check if TensorRT Python bindings are available."""
     try:
@@ -89,6 +126,17 @@ def build_engine(
     # Precision
     if precision == "fp8":
         cmd.append("--fp8")
+    elif onnx_carries_reduced_precision(onnx_path):
+        # The graph's own types are the precision plan; never let TRT override them.
+        if trtexec_supports_strongly_typed():
+            cmd.append("--stronglyTyped")
+        else:
+            logger.warning(
+                "%s already stores FP16 tensors but this trtexec has no --stronglyTyped "
+                "(TensorRT < 9); building without --fp16 so the FP32 islands stay FP32. "
+                "Upgrade TensorRT for a strongly typed build.",
+                onnx_path.name,
+            )
     else:
         cmd.append("--fp16")
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import json
 import shutil
 from pathlib import Path
@@ -69,6 +71,7 @@ def collect_evidence(
     verify_dir: str | Path,
     audit_log: str | Path | None = None,
     actionguard: str | Path | None = None,
+    trusted_keys: Iterable[bytes] = (),
 ) -> EvidenceCollection:
     verify = Path(verify_dir)
     if not verify.exists():
@@ -90,9 +93,12 @@ def collect_evidence(
     cert_error = ""
     if parity_cert_path.exists():
         parity_cert = _load_json(parity_cert_path)
-        if isinstance(parity_cert.get("signature"), dict):
+        trusted = list(trusted_keys)
+        if isinstance(parity_cert.get("signature"), dict) and not trusted:
+            cert_error = "signature not verified: no trusted public key supplied"
+        elif isinstance(parity_cert.get("signature"), dict):
             try:
-                verify_parity_cert_signature(parity_cert)
+                verify_parity_cert_signature(parity_cert, trusted_keys=trusted)
                 cert_valid = True
             except Exception as exc:  # noqa: BLE001
                 cert_valid = False

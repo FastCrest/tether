@@ -5943,6 +5943,11 @@ def comply_export(
         help="Optional Ed25519 private key: env:VAR, file:path, PEM, or base64 32-byte seed.",
     ),
     key_id: str = typer.Option("", "--key-id", help="Signing key identifier embedded in conformity.json."),
+    trusted_key: list[str] = typer.Option(
+        [], "--trusted-key",
+        help="Trusted Ed25519 public key (env:VAR, file:path, PEM, or base64 raw key); repeatable. "
+        "Signatures by any other key fail.",
+    ),
     no_env_sbom: bool = typer.Option(
         False, "--no-env-sbom",
         help="Only include Tether/artifact components in the SBOM, not the full Python environment.",
@@ -5953,6 +5958,7 @@ def comply_export(
     try:
         from tether.comply.export import export_conformity_bundle
         from tether.comply.schemas import DeploymentMetadata
+        from tether.parity_cert import load_trusted_public_keys
 
         result = export_conformity_bundle(
             verify_dir=verify_dir,
@@ -5972,6 +5978,7 @@ def comply_export(
             signing_key=signing_key,
             key_id=key_id,
             include_environment_sbom=not no_env_sbom,
+            trusted_keys=load_trusted_public_keys(trusted_key),
         )
     except Exception as exc:  # noqa: BLE001
         err_console.print(f"[red]Comply export failed: {exc}[/red]")
@@ -6011,12 +6018,25 @@ def comply_sbom(
 def comply_verify_bundle(
     bundle_dir: str = typer.Argument(help="Directory produced by `tether comply export`."),
     require_signature: bool = typer.Option(False, "--require-signature"),
+    trusted_key: list[str] = typer.Option(
+        [], "--trusted-key",
+        help="Trusted Ed25519 public key (env:VAR, file:path, PEM, or base64 raw key); repeatable. "
+        "Signatures by any other key fail.",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit raw verification result JSON."),
 ) -> None:
     """Verify a conformity bundle's signature, parity cert, and artifact hashes."""
     from tether.comply.export import verify_conformity_bundle
+    from tether.parity_cert import ParityCertError, load_trusted_public_keys
 
-    result = verify_conformity_bundle(bundle_dir, require_signature=require_signature)
+    try:
+        trusted = load_trusted_public_keys(trusted_key)
+    except ParityCertError as exc:
+        err_console.print(f"[red]Invalid --trusted-key: {exc}[/red]")
+        raise typer.Exit(2)
+    result = verify_conformity_bundle(
+        bundle_dir, require_signature=require_signature, trusted_keys=trusted
+    )
     if output_json:
         print(json.dumps(result, indent=2, sort_keys=True))
     elif result["passed"]:
