@@ -321,6 +321,9 @@ def _require_monolithic_deps() -> None:
         missing.append(f"lerobot=={QUALIFIED_LEROBOT_VERSION} ({e})")
 
     for mod_name, pip_name in [
+        # onnx-diagnostic imports onnxruntime but does not declare it; [monolithic]
+        # can't add it because CPU onnxruntime clashes with onnxruntime-gpu.
+        ("onnxruntime", "onnxruntime>=1.17.0 or onnxruntime-gpu (e.g. fastcrest-tether[monolithic,onnx])"),
         ("onnx_diagnostic", "onnx-diagnostic>=0.9"),
         ("onnxscript", "onnxscript>=0.1"),
         ("optree", "optree"),

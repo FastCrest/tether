@@ -10,6 +10,7 @@ import base64
 import json
 import platform
 from pathlib import Path
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from cryptography.exceptions import InvalidSignature
@@ -171,26 +172,77 @@ def sign_parity_cert(
     return signed
 
 
-def verify_parity_cert_signature(cert: dict[str, Any]) -> None:
-    """Verify a cert's embedded signature. Raises ``ParityCertError`` on fail."""
-    sig_block = cert.get("signature")
-    if not isinstance(sig_block, dict):
-        raise ParityCertError("Parity cert has no signature block.")
-    if sig_block.get("alg") != "Ed25519":
-        raise ParityCertError(f"Unsupported signature alg: {sig_block.get('alg')!r}")
+def load_ed25519_public_key(ref: str) -> bytes:
+    """Load a trusted Ed25519 public key as raw 32 bytes.
+
+    Accepts the same reference forms as signing keys (``env:VAR``,
+    ``file:path``, an existing path, or raw text) holding a PEM/DER public key
+    or the base64 raw key, i.e. the ``public_key_b64`` value of a signature block.
+    """
+    raw = _read_signing_key(ref).strip()
+    for loader in (serialization.load_pem_public_key, serialization.load_der_public_key):
+        try:
+            key = loader(raw)
+        except ValueError:
+            continue
+        if not isinstance(key, Ed25519PublicKey):
+            raise ParityCertError("Trusted key is not an Ed25519 public key.")
+        return key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     try:
-        public_key = Ed25519PublicKey.from_public_bytes(
-            base64.b64decode(str(sig_block["public_key_b64"]), validate=True)
-        )
+        key_bytes = base64.b64decode(raw, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise ParityCertError(
+            "Trusted key must be PEM, DER, or base64-encoded 32-byte Ed25519 public key."
+        ) from exc
+    if len(key_bytes) != 32:
+        raise ParityCertError("Trusted key must be a 32-byte Ed25519 public key.")
+    return key_bytes
+
+
+def load_trusted_public_keys(refs: Iterable[str]) -> list[bytes]:
+    """Load every trusted-key reference; see :func:`load_ed25519_public_key`."""
+    return [load_ed25519_public_key(ref) for ref in refs if ref]
+
+
+def verify_ed25519_signature_block(
+    document: dict[str, Any],
+    *,
+    trusted_keys: Iterable[bytes],
+    label: str,
+) -> None:
+    """Verify ``document["signature"]`` against a caller-pinned key set.
+
+    The key embedded in the block only selects which trusted key signed; it is
+    never trusted on its own, otherwise anyone could edit a document and re-sign
+    it with their own key. Raises ``ParityCertError`` on any failure.
+    """
+    trusted = {bytes(k) for k in trusted_keys}
+    if not trusted:
+        raise ParityCertError(f"{label}: no trusted public keys supplied; cannot verify signature.")
+    sig_block = document.get("signature")
+    if not isinstance(sig_block, dict):
+        raise ParityCertError(f"{label} has no signature block.")
+    if sig_block.get("alg") != "Ed25519":
+        raise ParityCertError(f"{label}: unsupported signature alg: {sig_block.get('alg')!r}")
+    try:
+        key_bytes = base64.b64decode(str(sig_block["public_key_b64"]), validate=True)
+        public_key = Ed25519PublicKey.from_public_bytes(key_bytes)
         signature = base64.b64decode(str(sig_block["sig"]), validate=True)
     except Exception as exc:  # noqa: BLE001
-        raise ParityCertError(f"Malformed parity cert signature block: {exc}") from exc
+        raise ParityCertError(f"{label}: malformed signature block: {exc}") from exc
+    if key_bytes not in trusted:
+        raise ParityCertError(f"{label}: signed by an untrusted key.")
 
-    payload = {k: v for k, v in cert.items() if k != "signature"}
+    body = {k: v for k, v in document.items() if k != "signature"}
     try:
-        public_key.verify(signature, canonical_json_bytes(payload))
+        public_key.verify(signature, canonical_json_bytes(body))
     except InvalidSignature as exc:
-        raise ParityCertError("Parity cert signature verification failed.") from exc
+        raise ParityCertError(f"{label}: signature verification failed.") from exc
+
+
+def verify_parity_cert_signature(cert: dict[str, Any], *, trusted_keys: Iterable[bytes]) -> None:
+    """Verify a cert's signature against ``trusted_keys``. Raises ``ParityCertError``."""
+    verify_ed25519_signature_block(cert, trusted_keys=trusted_keys, label="Parity cert")
 
 
 def write_parity_cert(
@@ -227,7 +279,10 @@ __all__ = [
     "build_parity_cert",
     "canonical_json_bytes",
     "load_ed25519_private_key",
+    "load_ed25519_public_key",
+    "load_trusted_public_keys",
     "sign_parity_cert",
+    "verify_ed25519_signature_block",
     "verify_parity_cert_signature",
     "write_parity_cert",
 ]

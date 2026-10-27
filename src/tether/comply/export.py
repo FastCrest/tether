@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import json
 from pathlib import Path
 from typing import Any
@@ -295,6 +297,7 @@ def export_conformity_bundle(
     signing_key: str = "",
     key_id: str = "",
     include_environment_sbom: bool = True,
+    trusted_keys: Iterable[bytes] = (),
 ) -> dict[str, Any]:
     out = Path(out_dir)
     artifacts_dir = out / "artifacts"
@@ -307,6 +310,7 @@ def export_conformity_bundle(
         verify_dir=verify_dir,
         audit_log=audit_log,
         actionguard=actionguard,
+        trusted_keys=trusted_keys,
     )
     evidence = collection.to_dict()
     copied_artifacts = copy_source_artifacts(collection, artifacts_dir)
@@ -367,7 +371,14 @@ def export_conformity_bundle(
     }
 
 
-def verify_conformity_bundle(bundle_dir: str | Path, *, require_signature: bool = False) -> dict[str, Any]:
+def verify_conformity_bundle(
+    bundle_dir: str | Path,
+    *,
+    require_signature: bool = False,
+    trusted_keys: Iterable[bytes] = (),
+) -> dict[str, Any]:
+    """Check manifest hashes and signatures. Signatures only count against ``trusted_keys``."""
+    trusted = list(trusted_keys)
     root = Path(bundle_dir)
     issues: list[str] = []
     conformity_path = root / CONFORMITY_JSON
@@ -383,7 +394,7 @@ def verify_conformity_bundle(bundle_dir: str | Path, *, require_signature: bool 
 
     if "signature" in conformity:
         try:
-            verify_payload_signature(conformity)
+            verify_payload_signature(conformity, trusted_keys=trusted)
         except Exception as exc:  # noqa: BLE001
             issues.append(f"conformity signature invalid: {exc}")
     elif require_signature:
@@ -407,7 +418,7 @@ def verify_conformity_bundle(bundle_dir: str | Path, *, require_signature: bool 
         try:
             cert = json.loads(parity_cert_path.read_text())
             if isinstance(cert.get("signature"), dict):
-                verify_parity_cert_signature(cert)
+                verify_parity_cert_signature(cert, trusted_keys=trusted)
         except Exception as exc:  # noqa: BLE001
             issues.append(f"parity cert invalid: {exc}")
     else:

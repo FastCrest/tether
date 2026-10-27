@@ -275,3 +275,66 @@ def test_cli_refuses_invalid_decomposed_precision_before_download(
     assert "Supported precision" in result.stderr
     download.assert_not_called()
     assert not output.exists()
+
+
+def _onnx_with_initializer(path: Path, dtype: int) -> Path:
+    import numpy as np
+    import onnx
+    from onnx import helper, numpy_helper
+
+    np_dtype = {onnx.TensorProto.FLOAT: np.float32, onnx.TensorProto.FLOAT16: np.float16}[dtype]
+    weight = numpy_helper.from_array(np.ones((2, 2), dtype=np_dtype), name="w")
+    node = helper.make_node("MatMul", ["x", "w"], ["y"])
+    graph = helper.make_graph(
+        [node], "g",
+        [helper.make_tensor_value_info("x", dtype, [2, 2])],
+        [helper.make_tensor_value_info("y", dtype, [2, 2])],
+        initializer=[weight],
+    )
+    onnx.save(helper.make_model(graph), str(path))
+    return path
+
+
+@pytest.mark.parametrize("strongly_typed_available", [True, False])
+def test_trt_builder_never_adds_fp16_to_a_reduced_precision_graph(
+    tmp_path, monkeypatch, strongly_typed_available
+):
+    import onnx
+
+    onnx_path = _onnx_with_initializer(tmp_path / "mixed.onnx", onnx.TensorProto.FLOAT16)
+    assert trt_build.onnx_carries_reduced_precision(onnx_path)
+    hardware = replace(get_hardware_profile("desktop"), trt_precision="fp16")
+    output = tmp_path / "model.trt"
+    seen = []
+    monkeypatch.setattr(trt_build, "check_trtexec", lambda: True)
+    monkeypatch.setattr(trt_build, "trtexec_supports_strongly_typed", lambda: strongly_typed_available)
+
+    def run(cmd, **kwargs):
+        seen.extend(cmd)
+        output.write_bytes(b"engine")
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(trt_build.subprocess, "run", run)
+    trt_build.build_engine(onnx_path, output, hardware)
+    assert "--fp16" not in seen
+    assert ("--stronglyTyped" in seen) is strongly_typed_available
+
+
+def test_trt_builder_keeps_fp16_for_fp32_graph(tmp_path, monkeypatch):
+    import onnx
+
+    onnx_path = _onnx_with_initializer(tmp_path / "fp32.onnx", onnx.TensorProto.FLOAT)
+    assert not trt_build.onnx_carries_reduced_precision(onnx_path)
+    hardware = replace(get_hardware_profile("desktop"), trt_precision="fp16")
+    output = tmp_path / "model.trt"
+    seen = []
+    monkeypatch.setattr(trt_build, "check_trtexec", lambda: True)
+
+    def run(cmd, **kwargs):
+        seen.extend(cmd)
+        output.write_bytes(b"engine")
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(trt_build.subprocess, "run", run)
+    trt_build.build_engine(onnx_path, output, hardware)
+    assert "--fp16" in seen and "--stronglyTyped" not in seen

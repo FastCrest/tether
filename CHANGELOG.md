@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Signature trust and TensorRT precision
+
+- **Breaking (security):** parity-cert and conformity-bundle signatures are now checked only against keys the verifier trusts. Before, verification used the public key embedded in the document, so anyone could edit a cert and re-sign it with their own key and it still passed. `verify_parity_cert_signature` and `verify_payload_signature` take a required `trusted_keys`, and with no trusted key a signature fails rather than passing. **Migration:** pass the signer's public key with `tether comply verify-bundle --trusted-key <env:VAR|file:path|PEM|base64>` (repeatable) and `tether comply export --trusted-key ...`. The base64 form is the signature block's `public_key_b64`. Without a trusted key, `comply export` records the parity cert as "signature not verified" instead of valid.
+- TensorRT engines built by `trtexec` no longer receive `--fp16` when the ONNX already stores FP16/BF16 tensors (a `tether export-precision` mixed export). They build `--stronglyTyped` on TensorRT 9+, or without `--fp16` on older TensorRT, so FP32 islands stay FP32. This is the trtexec counterpart of #384. FP32 graphs still get `--fp16` when FP16 is requested; their accuracy on Orin is not yet measured.
+- The monolithic export's dependency check now names `onnxruntime`, which `onnx-diagnostic` imports without declaring. Install `fastcrest-tether[monolithic,onnx]` or `onnxruntime-gpu`.
+
 ### Jetson dependency lock and local evaluation
 
 - `uv.lock` resolves again and pytest CI runs `uv lock --check` with uv 0.11.2. The fix described for #357 never reached `main` (its merge carried only the research note); this lands it on current `main`.

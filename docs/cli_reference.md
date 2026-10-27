@@ -406,7 +406,8 @@ tether comply export \
   --signing-key env:TETHER_SIGNING_KEY \
   --key-id acme-prod-2026-06
 
-tether comply verify-bundle ./eu_conformity_bundle --require-signature
+tether comply verify-bundle ./eu_conformity_bundle --require-signature \
+  --trusted-key file:./signer_public.pem
 ```
 
 The export writes:
@@ -435,7 +436,7 @@ eu_conformity_bundle/
 |---|---|
 | `tether comply export` | Build the full conformity evidence bundle |
 | `tether comply sbom` | Generate a standalone CycloneDX-style SBOM |
-| `tether comply verify-bundle` | Verify conformity signature, parity cert, and artifact hashes |
+| `tether comply verify-bundle` | Verify conformity signature, parity cert, and artifact hashes; signatures only count against `--trusted-key` keys |
 | `tether comply gaps` | Print or write the customer-owned gap report |
 
 Tether Comply does not declare a robot compliant. It produces signed evidence

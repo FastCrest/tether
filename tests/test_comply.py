@@ -13,6 +13,11 @@ def _seed_b64() -> str:
     return base64.b64encode(Ed25519PrivateKey.generate().private_bytes_raw()).decode("ascii")
 
 
+def _pub_b64(seed_b64: str) -> str:
+    key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(seed_b64))
+    return base64.b64encode(key.public_key().public_bytes_raw()).decode("ascii")
+
+
 def _write_verify_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     (path / "PARITY.md").write_text("# Tether Action-Parity Verification\n\n**Verdict: PASS**\n")
@@ -102,6 +107,7 @@ def test_comply_export_writes_signed_verifiable_bundle(tmp_path):
     audit = _write_audit_log(tmp_path / "audit.jsonl")
     guard = _write_actionguard(tmp_path / "safety_config.json")
     out = tmp_path / "bundle"
+    seed = _seed_b64()
 
     result = export_conformity_bundle(
         verify_dir=verify_dir,
@@ -114,7 +120,7 @@ def test_comply_export_writes_signed_verifiable_bundle(tmp_path):
             manufacturer="Acme Robotics",
             vulnerability_contact="security@acme.example",
         ),
-        signing_key=_seed_b64(),
+        signing_key=seed,
         key_id="test-key",
         include_environment_sbom=False,
     )
@@ -138,8 +144,14 @@ def test_comply_export_writes_signed_verifiable_bundle(tmp_path):
     assert conformity["evidence"]["actionguard"]["joint_count"] == 2
     assert conformity["artifact_manifest"]
 
-    verification = verify_conformity_bundle(out, require_signature=True)
+    trusted = [base64.b64decode(_pub_b64(seed))]
+    verification = verify_conformity_bundle(out, require_signature=True, trusted_keys=trusted)
     assert verification["passed"], verification
+
+    # Not trusted, or no trust configured: a signed bundle must not verify.
+    other = [base64.b64decode(_pub_b64(_seed_b64()))]
+    assert not verify_conformity_bundle(out, require_signature=True, trusted_keys=other)["passed"]
+    assert not verify_conformity_bundle(out, require_signature=True)["passed"]
 
 
 def test_comply_cli_export_and_verify(tmp_path, monkeypatch):
@@ -150,7 +162,8 @@ def test_comply_cli_export_and_verify(tmp_path, monkeypatch):
     audit = _write_audit_log(tmp_path / "audit.jsonl")
     guard = _write_actionguard(tmp_path / "safety_config.json")
     out = tmp_path / "bundle"
-    monkeypatch.setenv("TETHER_COMPLY_TEST_KEY", _seed_b64())
+    seed = _seed_b64()
+    monkeypatch.setenv("TETHER_COMPLY_TEST_KEY", seed)
 
     runner = typer_testing.CliRunner()
     export_result = runner.invoke(
@@ -176,6 +189,16 @@ def test_comply_cli_export_and_verify(tmp_path, monkeypatch):
     assert export_result.exit_code == 0, export_result.output
     assert "evidence bundle exported" in export_result.output
 
-    verify_result = runner.invoke(app, ["comply", "verify-bundle", str(out), "--require-signature"])
+    verify_result = runner.invoke(
+        app,
+        ["comply", "verify-bundle", str(out), "--require-signature", "--trusted-key", _pub_b64(seed)],
+    )
     assert verify_result.exit_code == 0, verify_result.output
     assert "PASS" in verify_result.output
+
+    untrusted = runner.invoke(
+        app,
+        ["comply", "verify-bundle", str(out), "--require-signature", "--trusted-key", _pub_b64(_seed_b64())],
+    )
+    assert untrusted.exit_code == 1
+    assert "untrusted key" in untrusted.output
