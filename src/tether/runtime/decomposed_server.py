@@ -147,6 +147,7 @@ class Pi05DecomposedServer:
         self.max_action_dim: int = DEFAULT_MAX_ACTION_DIM
         self.camera_resolution: int = DEFAULT_CAMERA_RESOLUTION
         self.lang_seq_len: int = DEFAULT_LANG_SEQ_LEN
+        self.state_in_prompt: bool = True  # set from config.decomposed during load
 
     @property
     def ready(self) -> bool:
@@ -203,6 +204,17 @@ class Pi05DecomposedServer:
         self.max_action_dim = int(
             decomposed_block.get("max_action_dim", DEFAULT_MAX_ACTION_DIM)
         )
+        # Whether the prompt carries the discretized state, as LeRobot's
+        # Pi05PrepareStateTokenizerProcessorStep does for stock pi0.5. The
+        # exporter records it from the policy (state-out students and
+        # proprioceptive-memory configs carry state elsewhere). Exports written
+        # before the field existed: only state-out (expert_takes_state) dropped
+        # it; LeRobot 0.6.1, which those exports were built with, has no
+        # proprioceptive-memory mode.
+        if "state_in_prompt" in decomposed_block:
+            self.state_in_prompt = bool(decomposed_block["state_in_prompt"])
+        else:
+            self.state_in_prompt = not bool(decomposed_block.get("expert_takes_state", False))
 
         import onnxruntime as ort
         from tether.runtime.ort_providers import (
@@ -317,6 +329,7 @@ class Pi05DecomposedServer:
         # actions and the robot flails (LIBERO success-rate ~0%; caught
         # 2026-04-26 N=50 fire before fix shipped).
         self._load_normalizer_stats()
+        self.action_dim = self._resolve_action_dim(self.action_dim, decomposed_block)
 
         # Apply ActionGuard if a safety config was provided.
         # Fail closed: a requested safety config that cannot be armed stops
@@ -333,6 +346,29 @@ class Pi05DecomposedServer:
 
         self._ready = True
         logger.info("Pi05DecomposedServer ready")
+
+    def _resolve_action_dim(self, config_dim: int, decomposed_block: dict[str, Any]) -> int:
+        """The dataset's action dim, which LeRobot slices the padded chunk to
+        (``config.output_features["action"].shape[0]``).
+
+        Exports that record ``decomposed.max_action_dim`` write the real dim as
+        ``action_dim``. Older exports wrote the padded ``max_action_dim`` there;
+        for those the action normalizer stats, fit on the real dim, give it.
+        """
+        stats_dim = None if self._action_mean is None else int(self._action_mean.shape[0])
+        if stats_dim is None or stats_dim == config_dim:
+            return config_dim
+        if "max_action_dim" not in decomposed_block and config_dim == self.max_action_dim:
+            logger.warning(
+                "tether_config action_dim=%d is the padded max_action_dim (export predates "
+                "decomposed.max_action_dim); returning the normalizer's %d action dims",
+                config_dim, stats_dim,
+            )
+            return stats_dim
+        raise ValueError(
+            f"tether_config action_dim={config_dim} disagrees with the action normalizer "
+            f"stats ({stats_dim} dims); the export and its normalizer come from different policies"
+        )
 
     def _load_normalizer_stats(self) -> None:
         """Load state/action MEAN_STD normalizer stats. Needed because the
@@ -360,8 +396,11 @@ class Pi05DecomposedServer:
             if teacher_ref:
                 try:
                     from huggingface_hub import snapshot_download
+                    # Same revision the export was built from, not the repo head.
+                    revision = self.config.get("model_revision") if teacher_ref == self.config.get("model_id") else None
                     teacher_path = snapshot_download(
                         teacher_ref,
+                        revision=revision,
                         allow_patterns=[
                             "policy_preprocessor*",
                             "policy_postprocessor*",
@@ -498,6 +537,9 @@ class Pi05DecomposedServer:
         for cand in candidates:
             try:
                 tok = AutoTokenizer.from_pretrained(cand)
+                # PaliGemma's GemmaTokenizer defaults to LEFT padding; LeRobot's
+                # pi0.5 TokenizerProcessorStep pads right.
+                tok.padding_side = "right"
                 self._tokenizer = tok
                 logger.info(
                     "Pi05DecomposedServer tokenizer loaded from %r "
@@ -635,12 +677,14 @@ class Pi05DecomposedServer:
             img_pad = np.full_like(img_base, -1.0)
             mask_pad = np.zeros_like(mask_base)
 
-            # 2. Tokenize instruction
+            # 2. Normalize state; tokenize the instruction (with the
+            # discretized state when the export's processor puts it there).
+            state_norm = self._normalize_state(state)
             self._ensure_tokenizer()
-            lang_tokens, lang_masks = self._tokenize(instruction)
+            lang_tokens, lang_masks = self._tokenize(instruction, state_norm)
 
             # 3. State pad
-            state_arr = self._prep_state(state)
+            state_arr = self._pad_state(state_norm)
 
             # 4. Inference path — single-sample (default) or BID multi-sample.
             bid_telemetry: dict[str, Any] | None = None
@@ -886,9 +930,13 @@ class Pi05DecomposedServer:
     def _prep_image(
         self, image: np.ndarray | None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Resize/pad an HxWx3 uint8 image to (1, 3, R, R) float32 [0, 1] +
-        a (1,) bool mask. When image is None, returns a -1 padding image +
-        zero mask (signals "missing camera" to the model)."""
+        """HxWx3 uint8 image -> (1, 3, R, R) float32 in [-1, 1] + a (1,) bool
+        mask, exactly as LeRobot's ``PI05Policy._preprocess_images``: scale to
+        [0, 1], ``resize_with_pad_torch`` (bilinear, align_corners=False, no
+        antialias, clamp, centered zero pad), then ``* 2 - 1`` for SigLIP. The
+        exported prefix graph feeds images straight into ``embed_prefix``, so
+        this scaling is the runtime's job. When image is None, returns a -1
+        padding image + zero mask (LeRobot's empty-camera convention)."""
         R = self.camera_resolution
         if image is None:
             img = np.full((1, 3, R, R), -1.0, dtype=np.float32)
@@ -900,47 +948,46 @@ class Pi05DecomposedServer:
                 f"image must be HxWx3 uint8, got shape {image.shape}"
             )
 
-        # Resize-with-pad to RxR (preserves aspect; pads short side).
-        from PIL import Image
-        h, w = image.shape[:2]
-        if h > w:
-            pad = (h - w) // 2
-            image = np.pad(
-                image, [(0, 0), (pad, h - w - pad), (0, 0)], mode="constant",
-            )
-        elif w > h:
-            pad = (w - h) // 2
-            image = np.pad(
-                image, [(pad, w - h - pad), (0, 0), (0, 0)], mode="constant",
-            )
-        pil = Image.fromarray(image)
-        pil = pil.resize((R, R), Image.BILINEAR)
-        resized = np.asarray(pil)
+        img = image.astype(np.float32) / np.float32(255.0)
+        if img.shape[:2] != (R, R):
+            img = _resize_with_pad(img, R, R)
+        chw = img.transpose(2, 0, 1) * np.float32(2.0) - np.float32(1.0)
+        return np.ascontiguousarray(chw[np.newaxis, ...]), np.ones((1,), dtype=bool)
 
-        # CHW + add batch dim + normalize to [0, 1]
-        chw = resized.astype(np.float32).transpose(2, 0, 1) / 255.0
-        return chw[np.newaxis, ...], np.ones((1,), dtype=bool)
+    def _tokenize(
+        self, instruction: str, state_norm: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Tokenize the prompt to lang_seq_len; returns (tokens, masks).
 
-    def _tokenize(self, instruction: str) -> tuple[np.ndarray, np.ndarray]:
-        """Tokenize the instruction to lang_seq_len; returns (tokens, masks).
+        Builds the same prompt as LeRobot's pi0.5 preprocessor
+        (``Pi05PrepareStateTokenizerProcessorStep`` in
+        ``lerobot/policies/pi05/processor_pi05.py``)::
 
-        For pi05 state-out exports the model expects the prompt formatted as
-        ``"Task: <instruction>;\\nAction: "`` (per Pi05PrepareTokenizerStateOutStep
-        in src/tether/distill/pi05_state_out_processor.py). Without this
-        wrapper the lang_tokens distribution diverges from training and the
-        model emits garbage actions even with correct state-norm + action-denorm.
-        Caught 2026-04-26 LIBERO N=50 = 0% with denorm-only fix.
+            "Task: <instruction>, State: <ints>;\\nAction: "
 
-        For non-state-out exports, the same format is harmless (the teacher
-        uses the same Task/Action wrapper; state-out's only difference is
-        omitting ", State: ..." from the prompt — already absent here since
-        we don't append state to lang).
+        where ``<ints>`` is the NORMALIZED state discretized into 256 bins over
+        [-1, 1] (``np.digitize(state, linspace(-1, 1, 257)[:-1]) - 1``). The
+        state segment is left out only when the export says the policy carries
+        state elsewhere (``state_in_prompt=False``: state-out students, see
+        ``Pi05PrepareTokenizerStateOutStep``, and proprioceptive-memory
+        configs). Dropping it for a stock pi0.5 checkpoint conditions the model
+        on a prompt it never saw in training.
 
-        Pads with 0 tokens + zero mask when the formatted prompt is shorter
-        than lang_seq_len; truncates when longer.
+        Right-padded with zero mask to lang_seq_len, truncated when longer, as
+        LeRobot's ``TokenizerProcessorStep(padding_side="right")``.
         """
         cleaned = (instruction or "").strip().replace("_", " ").replace("\n", " ")
-        prompt = f"Task: {cleaned};\nAction: "
+        if self.state_in_prompt:
+            if state_norm is None:
+                raise ValueError(
+                    "this pi0.5 export puts the discretized state in the prompt; "
+                    "the request must include state"
+                )
+            bins = np.linspace(-1, 1, 256 + 1)[:-1]
+            discretized = np.digitize(state_norm, bins=bins) - 1
+            prompt = f"Task: {cleaned}, State: {' '.join(map(str, discretized))};\nAction: "
+        else:
+            prompt = f"Task: {cleaned};\nAction: "
         encoded = self._tokenizer(
             prompt,
             padding="max_length",
@@ -952,38 +999,67 @@ class Pi05DecomposedServer:
         masks = encoded["attention_mask"].astype(bool)
         return tokens, masks
 
-    def _prep_state(self, state: list[float] | None) -> np.ndarray:
-        """Normalize + pad the state vector to max_action_dim (typically 32 for pi05).
+    def _normalize_state(self, state: list[float] | None) -> np.ndarray | None:
+        """(state - state_mean) / (state_std + 1e-8) in float32 on the real
+        state dims, as LeRobot's MEAN_STD NormalizerProcessorStep. Returns the
+        unpadded vector, or None when no state was sent."""
+        if state is None:
+            return None
+        arr = np.asarray(state, dtype=np.float32).flatten()
+        # Without this the model sees raw eef coordinates (e.g., 0.5 m)
+        # instead of zero-mean standardized inputs.
+        if self._state_mean is not None and self._state_std is not None:
+            n = min(arr.shape[0], self._state_mean.shape[0])
+            arr = arr.copy()
+            arr[:n] = (arr[:n] - self._state_mean[:n]) / (self._state_std[:n] + np.float32(1e-8))
+        return arr
 
-        Apply order: normalize the REAL-DIM portion (state - state_mean) /
-        (state_std + eps), then zero-pad up to max_action_dim. The normalizer
-        was fit on the real state dim (7 for LIBERO franka, etc.); padding
-        with zeros AFTER normalization keeps zeros zero-mean, which the
-        model treats as "no signal" for the unused DOFs.
+    def _pad_state(self, state_norm: np.ndarray | None) -> np.ndarray:
+        """Zero-pad the normalized state to max_action_dim (typically 32 for
+        pi05); zeros after normalization read as "no signal" for unused DOFs.
 
         Returns (1, max_action_dim) float32.
         """
-        if state is None:
+        if state_norm is None:
             return np.zeros((1, self.max_action_dim), dtype=np.float32)
-        arr = np.asarray(state, dtype=np.float32).flatten()
-
-        # Normalize the leading real-dim portion. Without this the model
-        # sees raw eef coordinates (e.g., 0.5 m) instead of zero-mean
-        # standardized inputs and predicts garbage actions.
-        if self._state_mean is not None and self._state_std is not None:
-            n = min(arr.shape[0], self._state_mean.shape[0])
-            arr_norm = arr.copy()
-            arr_norm[:n] = (arr[:n] - self._state_mean[:n]) / (self._state_std[:n] + 1e-8)
-            arr = arr_norm
-
-        if arr.shape[0] > self.max_action_dim:
-            arr = arr[: self.max_action_dim]
-        elif arr.shape[0] < self.max_action_dim:
+        arr = state_norm[: self.max_action_dim]
+        if arr.shape[0] < self.max_action_dim:
             arr = np.concatenate([
                 arr, np.zeros(self.max_action_dim - arr.shape[0], dtype=np.float32),
             ])
         return arr[np.newaxis, ...]
 
+
+
+def _bilinear_axis(n_in: int, n_out: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Source indices + weights of torch's bilinear interpolation along one
+    axis (align_corners=False, no antialias; ``area_pixel_compute_source_index``)."""
+    # float32 scale, (dst + 0.5) promoted to double, one rounding back to float32.
+    scale = np.float64(np.float32(n_in / n_out))
+    src = (scale * (np.arange(n_out, dtype=np.float64) + 0.5) - 0.5).astype(np.float32)
+    src = np.maximum(src, np.float32(0.0))
+    i0 = src.astype(np.int64)
+    i1 = np.minimum(i0 + 1, n_in - 1)
+    w1 = src - i0.astype(np.float32)
+    return i0, i1, w1
+
+
+def _resize_with_pad(img: np.ndarray, height: int, width: int) -> np.ndarray:
+    """NumPy port of LeRobot/openpi ``resize_with_pad_torch`` for an HxWxC
+    float32 image in [0, 1]: aspect-preserving bilinear resize, clamp to
+    [0, 1], centered zero padding to (height, width)."""
+    cur_h, cur_w = img.shape[:2]
+    ratio = max(cur_w / width, cur_h / height)
+    new_h, new_w = int(cur_h / ratio), int(cur_w / ratio)
+    y0, y1, wy = _bilinear_axis(cur_h, new_h)
+    x0, x1, wx = _bilinear_axis(cur_w, new_w)
+    wy, wx = wy[:, None, None], wx[None, :, None]
+    top = img[y0][:, x0] * (1 - wx) + img[y0][:, x1] * wx
+    bottom = img[y1][:, x0] * (1 - wx) + img[y1][:, x1] * wx
+    resized = np.clip(top * (1 - wy) + bottom * wy, 0.0, 1.0).astype(np.float32)
+    pad_h0, rem_h = divmod(height - new_h, 2)
+    pad_w0, rem_w = divmod(width - new_w, 2)
+    return np.pad(resized, [(pad_h0, pad_h0 + rem_h), (pad_w0, pad_w0 + rem_w), (0, 0)])
 
 __all__ = [
     "DEFAULT_CAMERA_RESOLUTION",

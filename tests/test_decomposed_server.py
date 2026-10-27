@@ -46,6 +46,7 @@ def _make_export_dir(
     export_kind: str = "decomposed_onnx",
     action_dim: int = 7,
     chunk_size: int = 50,
+    decomposed: dict | None = None,
 ) -> Path:
     """Build a minimal export dir with a tether_config.json."""
     p = tmp_path / "export"
@@ -74,7 +75,7 @@ def _make_export_dir(
             "inputs": [{"name": "noise", "dtype": "float32", "shape": [1, chunk_size, 32]}],
             "outputs": [{"name": "actions", "dtype": "float32", "shape": [1, chunk_size, 32]}],
         },
-        "decomposed": {
+        "decomposed": decomposed if decomposed is not None else {
             "vlm_prefix_onnx": "vlm_prefix.onnx",
             "expert_denoise_onnx": "expert_denoise.onnx",
             "max_action_dim": 32,
@@ -278,7 +279,7 @@ def test_predict_handles_missing_image(tmp_path, monkeypatch):
     camera convention used by SmolVLA training)."""
     server = _build_loaded_server(tmp_path, monkeypatch)
     result = server.predict_from_base64(
-        image_b64=None, instruction="x", state=None,
+        image_b64=None, instruction="x", state=[0.0] * 8,
     )
     # Doesn't error -- pads + still returns actions
     assert "actions" in result
@@ -338,7 +339,7 @@ def test_predict_state_truncated_when_too_long(tmp_path, monkeypatch):
 def test_predict_from_base64_async_returns_same_shape(tmp_path, monkeypatch):
     server = _build_loaded_server(tmp_path, monkeypatch)
     result = asyncio.run(server.predict_from_base64_async(
-        image_b64=_make_b64_image(), instruction="x", state=None,
+        image_b64=_make_b64_image(), instruction="x", state=[0.0] * 8,
     ))
     assert "actions" in result
     assert len(result["actions"]) == 50
@@ -355,9 +356,9 @@ def test_run_batch_returns_one_result_per_request(tmp_path, monkeypatch):
             self.state = state
 
     requests = [
-        _Req(_make_b64_image(), "x", None),
-        _Req(_make_b64_image(), "y", None),
-        _Req(_make_b64_image(), "z", None),
+        _Req(_make_b64_image(), "x", [0.0] * 8),
+        _Req(_make_b64_image(), "y", [0.0] * 8),
+        _Req(_make_b64_image(), "z", [0.0] * 8),
     ]
     results = asyncio.run(server.run_batch(requests))
     assert len(results) == 3
@@ -413,7 +414,7 @@ def test_prep_image_resizes_to_camera_resolution(tmp_path, monkeypatch):
     img, mask = server._prep_image(arr)
     assert img.shape == (1, 3, DEFAULT_CAMERA_RESOLUTION, DEFAULT_CAMERA_RESOLUTION)
     assert img.dtype == np.float32
-    assert (img >= 0.0).all() and (img <= 1.0).all()
+    assert (img >= -1.0).all() and (img <= 1.0).all()  # SigLIP range, as LeRobot
     assert mask.tolist() == [True]
 
 
@@ -430,3 +431,131 @@ def test_prep_image_rejects_non_3channel(tmp_path, monkeypatch):
     bad = np.zeros((100, 100), dtype=np.uint8)  # 2D
     with pytest.raises(ValueError, match="HxWx3"):
         server._prep_image(bad)
+
+
+# ---------------------------------------------------------------------------
+# LeRobot pi0.5 input/output contract (prompt state, padding, images, action dim)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTokenizer(_StubTokenizer):
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def __call__(self, instruction, **kwargs):
+        self.prompts.append(instruction)
+        return super().__call__(instruction, **kwargs)
+
+
+def _server_with(tmp_path, monkeypatch, *, action_dim=7, decomposed=None, stats=None):
+    p = _make_export_dir(tmp_path, action_dim=action_dim, decomposed=decomposed)
+    if stats is not None:
+        from safetensors.numpy import save_file
+        save_file({k: np.asarray(v, np.float32) for k, v in stats.items()},
+                  str(p / "policy_preprocessor_step_2_normalizer_processor.safetensors"))
+    stub = _StubInference()
+    monkeypatch.setattr(
+        "tether.runtime.pi05_decomposed_server.Pi05DecomposedInference",
+        lambda **kwargs: stub,
+    )
+    server = Pi05DecomposedServer(p)
+    server.load()
+    server._tokenizer = _RecordingTokenizer()
+    return server
+
+
+_BASE_BLOCK = {"vlm_prefix_onnx": "vlm_prefix.onnx", "expert_denoise_onnx": "expert_denoise.onnx"}
+
+
+def test_prompt_carries_discretized_normalized_state_like_lerobot(tmp_path, monkeypatch):
+    """LeRobot pi0.5 (processor_pi05.py) builds 'Task: ..., State: <256-bin ints>;\\nAction: '
+    from the NORMALIZED state. Expected ints computed by hand from
+    digitize(x, linspace(-1, 1, 257)[:-1]) - 1."""
+    server = _server_with(
+        tmp_path, monkeypatch,
+        decomposed={**_BASE_BLOCK, "max_action_dim": 32, "state_in_prompt": True},
+        stats={"observation.state.mean": [1.0] * 5, "observation.state.std": [2.0] * 5},
+    )
+    # normalized: (x - 1) / 2 -> [0.0, 0.5, -1.0, 1.0, -2.0]
+    result = server.predict_from_base64(
+        image_b64=_make_b64_image(), instruction="pick_up the\ncup", state=[1.0, 2.0, -1.0, 3.0, -3.0],
+    )
+    assert "actions" in result, result
+    assert server._tokenizer.prompts == ["Task: pick up the cup, State: 128 192 0 255 -1;\nAction: "]
+
+
+def test_legacy_export_without_field_puts_state_in_prompt(tmp_path, monkeypatch):
+    server = _server_with(tmp_path, monkeypatch, decomposed={**_BASE_BLOCK, "max_action_dim": 32})
+    server.predict_from_base64(image_b64=_make_b64_image(), instruction="x", state=[0.0, 0.0])
+    assert server._tokenizer.prompts == ["Task: x, State: 128 128;\nAction: "]
+
+
+@pytest.mark.parametrize("block", [
+    {**_BASE_BLOCK, "max_action_dim": 32, "state_in_prompt": False},
+    {**_BASE_BLOCK, "max_action_dim": 32, "expert_takes_state": True},  # legacy state-out export
+])
+def test_state_out_exports_keep_state_out_of_prompt(tmp_path, monkeypatch, block):
+    server = _server_with(tmp_path, monkeypatch, decomposed=block)
+    server.predict_from_base64(image_b64=_make_b64_image(), instruction="x", state=[0.3, 0.1])
+    assert server._tokenizer.prompts == ["Task: x;\nAction: "]
+
+
+def test_state_in_prompt_export_refuses_missing_state(tmp_path, monkeypatch):
+    server = _server_with(tmp_path, monkeypatch, decomposed={**_BASE_BLOCK, "state_in_prompt": True})
+    result = server.predict_from_base64(image_b64=_make_b64_image(), instruction="x", state=None)
+    assert "must include state" in result["error"]
+
+
+def test_tokenizer_pads_right_like_lerobot(tmp_path, monkeypatch):
+    """PaliGemma's tokenizer defaults to left padding; LeRobot pads right."""
+    from types import SimpleNamespace
+    import transformers
+
+    loaded = SimpleNamespace(padding_side="left", vocab_size=1)
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: loaded)
+    server = _server_with(tmp_path, monkeypatch)
+    server._tokenizer = None
+    server._ensure_tokenizer()
+    assert server._tokenizer.padding_side == "right"
+
+
+def test_prep_image_matches_lerobot_resize_with_pad_and_siglip_range(tmp_path, monkeypatch):
+    """Reference: LeRobot resize_with_pad_torch (bilinear, align_corners=False,
+    centered zero pad) then *2-1. A 2x4 image to 2x2 keeps aspect -> 1x2
+    content row, one pad row on the bottom (divmod(1, 2) = (0, 1)).
+    torch bilinear 4->2 samples src x = (d + 0.5) * 2 - 0.5 = 0.5, 2.5."""
+    server = _build_loaded_server(tmp_path, monkeypatch)
+    server.camera_resolution = 2
+    img = np.zeros((2, 4, 3), dtype=np.uint8)
+    img[0, :, 0] = [0, 100, 200, 250]
+    img[1, :, 0] = [50, 150, 250, 0]
+    out, mask = server._prep_image(img)
+    assert out.shape == (1, 3, 2, 2) and out.dtype == np.float32 and mask.tolist() == [True]
+    # y: 2->1, src y = 0.5 -> rows averaged; x: src 0.5 and 2.5
+    row = (img[0, :, 0].astype(np.float32) + img[1, :, 0]) / 2 / 255
+    expected = np.array([(row[0] + row[1]) / 2, (row[2] + row[3]) / 2]) * 2 - 1
+    np.testing.assert_allclose(out[0, 0, 0], expected, atol=1e-6)
+    np.testing.assert_allclose(out[0, 0, 1], [-1.0, -1.0])  # zero pad -> -1
+    np.testing.assert_allclose(out[0, 1], [[-1.0, -1.0], [-1.0, -1.0]])  # black channel
+    assert out.min() >= -1.0 and out.max() <= 1.0
+
+
+def test_legacy_padded_action_dim_returns_dataset_action_dim(tmp_path, monkeypatch):
+    """Exports before decomposed.max_action_dim wrote action_dim=32 (padded).
+    LeRobot slices to output_features['action'] (7); the normalizer stats say 7."""
+    server = _server_with(
+        tmp_path, monkeypatch, action_dim=32, decomposed=dict(_BASE_BLOCK),
+        stats={"action.mean": [0.0] * 7, "action.std": [1.0] * 7},
+    )
+    assert server.action_dim == 7
+    result = server.predict_from_base64(image_b64=_make_b64_image(), instruction="x", state=[0.0])
+    assert result["action_dim"] == 7
+    assert np.asarray(result["actions"]).shape == (50, 7)
+
+
+def test_action_dim_disagreeing_with_normalizer_fails_load(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="disagrees with the action normalizer"):
+        _server_with(
+            tmp_path, monkeypatch, action_dim=6, decomposed={**_BASE_BLOCK, "max_action_dim": 32},
+            stats={"action.mean": [0.0] * 7, "action.std": [1.0] * 7},
+        )
