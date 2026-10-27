@@ -211,3 +211,43 @@ def test_modal_parent_command_names_dataset_processor_checkpoint(tmp_path):
     )
     command = captured[0]
     assert command[command.index("--preprocessor-ref") + 1] == "org/candidate"
+
+
+@pytest.mark.parametrize("machine", ["aarch64", "arm64"])
+def test_local_readiness_refuses_jetson_before_loading_torch(monkeypatch, machine):
+    from tether.eval import local_runner
+
+    monkeypatch.setattr(local_runner.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(local_runner.platform, "machine", lambda: machine)
+    monkeypatch.setattr(local_runner.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setitem(sys.modules, "torch", None)
+    readiness = local_runner.check_local_readiness()
+    assert not readiness["ready"]
+    assert "Jetson/aarch64 is unsupported" in readiness["reason"]
+    assert "NumPy" in readiness["reason"]
+    assert "desktop/cloud" in readiness["reason"]
+
+
+@pytest.mark.parametrize("machine", ["aarch64", "arm64"])
+def test_eval_setup_refuses_jetson_before_any_install(tmp_path, machine):
+    import os
+    from pathlib import Path
+
+    uname = tmp_path / "uname"
+    uname.write_text(
+        '#!/bin/sh\nif [ "$1" = "-s" ]; then echo Linux; else echo ' + machine + "; fi\n"
+    )
+    uname.chmod(0o755)
+    script = Path(__file__).parent.parent / "scripts/setup_libero_eval_linux.sh"
+    # With only uname on PATH, reaching any driver, package or uv operation fails.
+    result = subprocess.run(
+        ["/bin/bash", str(script)],
+        env={**os.environ, "PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "eval-local requires Linux x86-64" in result.stderr
+    assert "Jetson/aarch64 is unsupported" in result.stderr
+    assert "NumPy" in result.stderr
+    assert "command not found" not in result.stderr

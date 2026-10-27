@@ -126,3 +126,32 @@ def test_import_reflex_idempotent_across_processes():
     rc, stdout, stderr = _run_in_subprocess(snippet)
     assert rc == 0, f"stderr={stderr!r}"
     assert "OK" in stdout
+
+
+@pytest.mark.parametrize("extra", ["gpu", "gpu-min"])
+def test_bootstrap_refuses_generic_gpu_on_python310_before_pip(tmp_path, extra):
+    uname = tmp_path / "uname"
+    uname.write_text('#!/bin/sh\nif [ "$1" = "-s" ]; then echo Linux; else echo x86_64; fi\n')
+    uname.chmod(0o755)
+    python = tmp_path / "python3.10"
+    python.write_text(
+        '#!/bin/sh\ncase "$2" in\n'
+        "  *version_info.major*version_info.minor*) echo 3.10.12 ;;\n"
+        "  *version_info.major*) echo 3 ;;\n"
+        "  *version_info.minor*) echo 10 ;;\n"
+        '  *) echo "unexpected Python operation" >&2; exit 99 ;;\n'
+        "esac\n"
+    )
+    python.chmod(0o755)
+    script = Path(__file__).parent.parent / "install.sh"
+    result = subprocess.run(
+        ["/bin/bash", str(script), "--extras", f"serve,{extra}"],
+        env={**os.environ, "PATH": str(tmp_path) + ":/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert "require Python 3.11+" in result.stdout
+    assert "use --jetson" in result.stdout
+    assert "unexpected Python operation" not in result.stderr

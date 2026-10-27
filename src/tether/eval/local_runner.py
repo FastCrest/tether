@@ -27,6 +27,17 @@ def check_local_readiness() -> dict:
             "reason": "Local LIBERO evaluation is supported on Linux with an NVIDIA GPU.",
             "missing": missing,
         }
+    if platform.machine() != "x86_64":
+        return {
+            "ready": False,
+            "reason": (
+                "eval-local requires Linux x86-64; Jetson/aarch64 is unsupported. "
+                "Run evaluation on a desktop/cloud NVIDIA GPU host and use [jetson] "
+                "on the device. The Jetson NumPy <2 ABI cap conflicts with "
+                "LeRobot's NumPy >=2 requirement."
+            ),
+            "missing": missing,
+        }
     if missing:
         return {
             "ready": False,

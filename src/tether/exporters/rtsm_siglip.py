@@ -12,6 +12,7 @@ import importlib.metadata
 import json
 import math
 import os
+import platform
 import shutil
 import sys
 import tempfile
@@ -155,6 +156,12 @@ def export_rtsm_siglip(
     if sys.version_info < (3, 11):
         raise ValueError(
             "SigLIP export requires Python 3.11 or newer for its CPU ONNX Runtime cohort"
+        )
+    if sys.platform == "linux" and platform.machine() == "aarch64":
+        raise ValueError(
+            "SigLIP export is unsupported on Linux aarch64 (Jetson): its onnx cohort needs "
+            "NumPy >=2, which conflicts with the Jetson NumPy <2 ABI cap. Export on a desktop "
+            "or cloud host and copy the encoder to the device."
         )
 
     import numpy as np

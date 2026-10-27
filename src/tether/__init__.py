@@ -8,7 +8,7 @@ binary still work via a backwards-compat shim through v0.13.x (removed in
 v0.14.0). See CHANGELOG.md v0.12.0 for the migration guide.
 """
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 # Mirror legacy REFLEX_* env vars to TETHER_* before any other module reads
 # os.environ. Idempotent; opt out via TETHER_NO_ENV_COMPAT=1. Removed in
