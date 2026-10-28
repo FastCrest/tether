@@ -670,6 +670,76 @@ class RtcAdapter:
         return stats
 
 
+class RtcStream:
+    """One client's RTC carry-forward: adapter, lock and replay memo.
+
+    The lock is held by ``/act`` from guidance planning to chunk commit, so
+    two in-flight requests on one stream cannot both plan against the same
+    leftover. ``replay`` answers an exact retry of the report that produced
+    the last chunk (a lost response) with that chunk instead of a 409.
+    """
+
+    def __init__(self, adapter: RtcAdapter):
+        import asyncio
+
+        self.adapter = adapter
+        self.lock = asyncio.Lock()
+        self._last_report: tuple[str, int] | None = None
+        self._last_body: bytes | None = None
+
+    def replay(self, chunk_id: str | None, actions_executed: int | None) -> bytes | None:
+        if chunk_id is None or self._last_report != (chunk_id, actions_executed):
+            return None
+        return self._last_body
+
+    def remember(self, chunk_id: str | None, actions_executed: int | None, body: bytes) -> None:
+        self._last_report = None if chunk_id is None else (chunk_id, int(actions_executed))
+        self._last_body = body
+
+
+class RtcStreams:
+    """RTC state keyed by ``episode_id``: one stream per robot/episode.
+
+    Never shared across keys. Least-recently-used idle streams are evicted
+    beyond ``max_streams`` (an evicted stream's next report gets 409 and its
+    client starts over with an estimate).
+    """
+
+    def __init__(self, factory: Any, max_streams: int = 64):
+        from collections import OrderedDict
+
+        self._factory = factory
+        self._streams: OrderedDict[str, RtcStream] = OrderedDict()
+        self.max_streams = max_streams
+
+    def for_episode(self, episode_id: str | None) -> RtcStream:
+        if not episode_id:
+            raise RtcRequestError(
+                422, "rtc_episode_required",
+                "--rtc keeps one carry-forward per stream; send episode_id "
+                "(one per robot and episode) so streams never mix",
+            )
+        stream = self._streams.get(episode_id)
+        if stream is None:
+            adapter = self._factory()
+            adapter.reset(episode_id=episode_id)
+            stream = RtcStream(adapter)
+            self._streams[episode_id] = stream
+            for key in list(self._streams):
+                if len(self._streams) <= self.max_streams:
+                    break
+                if key != episode_id and not self._streams[key].lock.locked():
+                    del self._streams[key]
+        self._streams.move_to_end(episode_id)
+        return stream
+
+    def __len__(self) -> int:
+        return len(self._streams)
+
+    def __contains__(self, episode_id: object) -> bool:
+        return episode_id in self._streams
+
+
 def _ceil_actions(seconds: float, hz: float) -> int:
     """Actions executed in ``seconds`` at ``hz``, rounded up as LeRobot does
     (``math.ceil(latency / time_per_action)``); 1e-6 rounding first keeps
@@ -693,6 +763,8 @@ __all__ = [
     "RtcAdapter",
     "RtcPlan",
     "RtcRequestError",
+    "RtcStream",
+    "RtcStreams",
     "RtcAdapterConfig",
     "LatencyTracker",
     "RtcCompatiblePolicy",

@@ -1919,7 +1919,7 @@ class TetherServer:
 
 
 try:
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field, StrictInt
 
     class PredictRequest(BaseModel):
         image: str | None = None  # base64 encoded -- the primary/agentview camera
@@ -1931,8 +1931,8 @@ try:
         session_id: str | None = None
         # RTC (--rtc): index of the next unexecuted action of the chunk the
         # server returned as `chunk_id`. Sent together; both optional.
-        actions_executed: int | None = None
-        chunk_id: str | None = None
+        actions_executed: StrictInt | None = Field(default=None, ge=0, le=4096)
+        chunk_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{1,64}$")
 
     class HealthResponse(BaseModel):
         status: str
@@ -2500,49 +2500,50 @@ def create_app(
             server.embodiment_guard.limits.units,  # type: ignore[attr-defined]
         )
 
-    # Attach the RTC adapter (B.3) if --rtc was passed: /act plans guidance
-    # from it before predict and commits the returned chunk after. No-op when
-    # rtc_config is None or disabled.
+    # Attach RTC (B.3) if --rtc was passed: one carry-forward per stream
+    # (episode_id), never shared across robots. /act plans guidance from the
+    # stream's adapter before predict and commits the returned chunk after,
+    # under the stream's lock. No-op when rtc_config is None or disabled.
     server.rtc_adapter = None  # type: ignore[attr-defined]
+    server.rtc_streams = None  # type: ignore[attr-defined]
     if rtc_config is not None and getattr(rtc_config, "enabled", False):
         # Reject 1-NFE + RTC at config-time per the per-step-expert-export
         # research sidecar (Lens 2 FM-4/FM-6). RTC's guidance-weight formula
         # has tau=1-time=0 → division by zero at the only step when num_steps=1.
-        from .rtc_adapter import assert_rtc_compatible_with_num_steps
+        from .rtc_adapter import RtcAdapter, RtcStreams, assert_rtc_compatible_with_num_steps
         _num_steps = (
             _monolithic_cfg.get("num_denoising_steps")
             or _monolithic_cfg.get("decomposed", {}).get("num_steps")
         )
         assert_rtc_compatible_with_num_steps(_num_steps)
-        from .rtc_adapter import RtcAdapter
-        # The adapter keeps its own record of the last returned chunk (the
-        # leftover source); the buffer only serves in-process integrations
-        # that pop actions themselves, so build a chunk-sized one if absent.
-        _buf = getattr(server, "_action_buffer", None)
-        if _buf is None:
-            from tether.runtime.buffer import ActionChunkBuffer
-            _chunk = (
-                getattr(server, "chunk_size", None)
-                or getattr(server, "action_horizon", None)
-                or _monolithic_cfg.get("chunk_size")
-                or _monolithic_cfg.get("decomposed", {}).get("chunk_size")
-                or 50
-            )
-            _buf = ActionChunkBuffer(
-                capacity=int(_chunk),
-                control_hz=execute_hz or rtc_config.execute_hz,
-                max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
-            )
-            server._action_buffer = _buf  # type: ignore[attr-defined]
-        # No try/except: an adapter that cannot be built must stop startup,
-        # not leave --rtc serving unguided chunks.
-        server.rtc_adapter = RtcAdapter(  # type: ignore[attr-defined]
-            policy=server,
-            action_buffer=_buf,
-            config=rtc_config,
+        from tether.runtime.buffer import ActionChunkBuffer
+        _chunk = int(
+            getattr(server, "chunk_size", None)
+            or getattr(server, "action_horizon", None)
+            or _monolithic_cfg.get("chunk_size")
+            or _monolithic_cfg.get("decomposed", {}).get("chunk_size")
+            or 50
         )
+
+        def _new_rtc_adapter() -> RtcAdapter:
+            # Each stream gets its own buffer: in-process integrations that
+            # pop actions must not see another stream's chunks.
+            return RtcAdapter(
+                policy=server,
+                action_buffer=ActionChunkBuffer(
+                    capacity=_chunk,
+                    control_hz=execute_hz or rtc_config.execute_hz,
+                    max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
+                ),
+                config=rtc_config,
+            )
+
+        # Build one now: an adapter that cannot be built must stop startup,
+        # not leave --rtc serving unguided chunks.
+        _new_rtc_adapter()
+        server.rtc_streams = RtcStreams(_new_rtc_adapter)  # type: ignore[attr-defined]
         logger.info(
-            "RTC adapter armed — execution_horizon=%d schedule=%s",
+            "RTC armed (per-episode streams) — execution_horizon=%d schedule=%s",
             rtc_config.rtc_execution_horizon,
             rtc_config.prefix_attention_schedule,
         )
@@ -3577,6 +3578,35 @@ def create_app(
 
     @app.post("/act")
     async def act(request: PredictRequest, _auth: None = Depends(_require_api_key)):
+        _streams = getattr(server, "rtc_streams", None)
+        if _streams is None:
+            return await _act_body(request, None)
+        from fastapi.responses import Response
+        from .rtc_adapter import RtcRequestError
+        try:
+            _stream = _streams.for_episode(request.episode_id)
+        except RtcRequestError as _rtc_exc:
+            return JSONResponse(status_code=_rtc_exc.status, content=_rtc_exc.as_response())
+        # Serialise plan -> predict -> commit per stream; other streams run.
+        async with _stream.lock:
+            _cached = _stream.replay(request.chunk_id, request.actions_executed)
+            if _cached is not None:
+                # Exact retry of the report that produced the last chunk (lost
+                # response): answer with that chunk, run no new inference.
+                return Response(
+                    content=_cached, media_type="application/json",
+                    headers={"X-Tether-RTC-Replay": "true"},
+                )
+            _before = _stream.adapter._last_chunk_id
+            _resp = await _act_body(request, _stream.adapter)
+            if (
+                getattr(_resp, "status_code", 0) == 200
+                and _stream.adapter._last_chunk_id != _before
+            ):
+                _stream.remember(request.chunk_id, request.actions_executed, bytes(_resp.body))
+            return _resp
+
+    async def _act_body(request: Any, _rtc: Any):
         if not _paid_license_admitted(server):
             return JSONResponse(
                 status_code=503,
@@ -3649,18 +3679,6 @@ def create_app(
                 "tether.image_bytes", len(request.image) if request.image else 0
             )
 
-            # RTC episode-boundary reset (B.3). Runs BEFORE predict so the
-            # latency tracker + carry-forward state are fresh for the new
-            # episode's first chunk. No-op when adapter absent or episode
-            # unchanged.
-            _rtc = getattr(server, "rtc_adapter", None)
-            if (
-                _rtc is not None
-                and request.episode_id is not None
-                and request.episode_id != _rtc._active_episode_id
-            ):
-                _rtc.reset(episode_id=request.episode_id)
-                span.set_attribute("tether.rtc.episode_reset", True)
             if _rtc is not None and request.episode_id:
                 span.set_attribute("tether.rtc.episode_id", request.episode_id)
 

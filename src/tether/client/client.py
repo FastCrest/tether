@@ -162,6 +162,12 @@ def _classify_response(resp: httpx.Response) -> TetherClientError | None:
     return TetherClientError(msg, status_code=resp.status_code, body=body)
 
 
+def _not_retryable(resp: httpx.Response) -> bool:
+    """A 4xx other than 408/429 is the request's fault: resending it unchanged
+    gets the same answer (e.g. a stale RTC chunk_id returns 409 every time)."""
+    return 400 <= resp.status_code < 500 and resp.status_code not in (408, 429)
+
+
 # ---- Sync client ----------------------------------------------------------
 
 class TetherClient:
@@ -228,7 +234,7 @@ class TetherClient:
             err = _classify_response(resp)
             if err is None:
                 return resp
-            if isinstance(err, (TetherAuthError, TetherValidationError)):
+            if isinstance(err, (TetherAuthError, TetherValidationError)) or _not_retryable(resp):
                 raise err
             if isinstance(err, TetherServerDegradedError) and not self.retry_on_degraded:
                 raise err
@@ -343,10 +349,17 @@ class _EpisodeProxy:
         report = {}
         if actions_executed is not None and self._last_chunk_id is not None:
             report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
-        result = self._client.act(
-            image=image, instruction=instruction, state=state, episode_id=self._episode_id,
-            **report,
-        )
+        try:
+            result = self._client.act(
+                image=image, instruction=instruction, state=state, episode_id=self._episode_id,
+                **report,
+            )
+        except TetherClientError as exc:
+            if exc.status_code == 409:
+                # The server no longer holds that chunk (e.g. evicted); report
+                # nothing next time so it falls back to a labelled estimate.
+                self._last_chunk_id = None
+            raise
         self._last_chunk_id = result.get("chunk_id") if isinstance(result, dict) else None
         return result
 
@@ -406,7 +419,7 @@ class TetherAsyncClient:
             err = _classify_response(resp)
             if err is None:
                 return resp
-            if isinstance(err, (TetherAuthError, TetherValidationError)):
+            if isinstance(err, (TetherAuthError, TetherValidationError)) or _not_retryable(resp):
                 raise err
             if isinstance(err, TetherServerDegradedError) and not self.retry_on_degraded:
                 raise err
@@ -491,9 +504,16 @@ class _AsyncEpisodeProxy:
         report = {}
         if actions_executed is not None and self._last_chunk_id is not None:
             report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
-        result = await self._client.act(
-            image=image, instruction=instruction, state=state, episode_id=self._episode_id,
-            **report,
-        )
+        try:
+            result = await self._client.act(
+                image=image, instruction=instruction, state=state, episode_id=self._episode_id,
+                **report,
+            )
+        except TetherClientError as exc:
+            if exc.status_code == 409:
+                # The server no longer holds that chunk (e.g. evicted); report
+                # nothing next time so it falls back to a labelled estimate.
+                self._last_chunk_id = None
+            raise
         self._last_chunk_id = result.get("chunk_id") if isinstance(result, dict) else None
         return result
