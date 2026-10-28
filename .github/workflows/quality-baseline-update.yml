@@ -277,7 +277,7 @@ jobs:
           echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable validation evidence
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.validation.outputs.artifact_id }}
           path: ${{ runner.temp }}/validation-evidence

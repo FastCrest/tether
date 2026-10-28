@@ -217,13 +217,13 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Download payload by server-assigned artifact id
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ needs.produce.outputs.artifact_id }}
           path: receipt-payload
 
       - name: Download named provenance manifest
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: parity-receipt-manifest-${{ github.sha }}
           path: receipt-manifest
