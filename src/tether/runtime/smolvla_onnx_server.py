@@ -12,6 +12,7 @@ config["model_type"] without case analysis in the endpoints.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -47,9 +48,13 @@ def tokenize_smolvla_instruction(
         "dropped_tokens": max(0, full - max_length),
     }
     if report["truncated"]:
+        # The instruction is request data of unbounded size: log a short prefix and
+        # a digest, never the whole string.
         logger.warning(
             "SmolVLA instruction truncated from %d to %d tokens (LeRobot does the same, "
-            "silently): %r", full, max_length, instruction,
+            "silently): %d chars, sha256 %s, starts %r", full, max_length, len(instruction),
+            hashlib.sha256(instruction.encode("utf-8", "replace")).hexdigest()[:12],
+            instruction[:80],
         )
     return enc["input_ids"].astype(np.int64), enc["attention_mask"].astype(np.bool_), report
 
@@ -271,6 +276,18 @@ class SmolVLAOnnxServer:
                     tok, instruction, lang_len
                 )
                 language["source"] = "tokenizer"
+            elif self._strict_providers:
+                # Strict mode (the default) never acts on an instruction it could not
+                # read; zero tokens would run the policy with no task at all.
+                return {
+                    "error": (
+                        "SmolVLA tokenizer is unavailable, so the instruction cannot be "
+                        "tokenized; refusing to act on empty language tokens. Re-export with "
+                        "the bundled tokenizer, send lang_tokens/lang_masks, or run with "
+                        "--no-strict-providers to accept the labelled zero-token fallback."
+                    ),
+                    "language": {"source": "unavailable", "truncated": None},
+                }
             else:
                 lang_tokens = np.zeros((1, lang_len), dtype=np.int64)
                 lang_masks = np.ones((1, lang_len), dtype=np.bool_)

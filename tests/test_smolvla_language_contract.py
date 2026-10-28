@@ -99,3 +99,49 @@ def test_language_contract_follows_the_lerobot_config():
     assert contract["tokenizer_ref"] == cfg.vlm_model_name
     assert contract["padding_side"] == "right" and contract["truncation"] is True
     assert contract["append_newline"] is True
+
+
+def _unloaded_server(tmp_path, *, strict: bool):
+    from unittest.mock import MagicMock
+
+    from tether.runtime.smolvla_onnx_server import SmolVLAOnnxServer
+
+    srv = SmolVLAOnnxServer(str(tmp_path), strict_providers=strict)
+    srv._ready = True
+    srv._session = MagicMock()
+    srv._session.run.return_value = [np.zeros((1, 50, 32), np.float32)]
+    srv._input_names = ["lang_tokens", "lang_masks", "state", "noise"]
+    srv._lang_len = 48
+    srv._tokenizer_unavailable = True  # tokenizer failed to load
+    return srv
+
+
+def test_strict_server_refuses_to_act_on_an_instruction_it_cannot_tokenize(tmp_path):
+    srv = _unloaded_server(tmp_path, strict=True)
+    out = srv.predict(instruction="pick up the red cup")
+    assert "error" in out and "actions" not in out
+    assert "tokenizer" in out["error"]
+    srv._session.run.assert_not_called()
+
+
+def test_non_strict_server_proceeds_only_with_the_visible_label(tmp_path):
+    srv = _unloaded_server(tmp_path, strict=False)
+    out = srv.predict(instruction="pick up the red cup")
+    assert out["language"]["source"] == "unavailable-zero-tokens"
+    assert "actions" in out
+
+
+def test_truncation_warning_does_not_log_the_unbounded_instruction(caplog):
+    import hashlib
+    import logging
+
+    tok = _tokenizer()
+    instruction = " ".join([LONG] * 200)  # far beyond 48 tokens and the log cap
+    with caplog.at_level(logging.WARNING, logger="tether.runtime.smolvla_onnx_server"):
+        _, _, report = tokenize_smolvla_instruction(tok, instruction, 48)
+    assert report["truncated"] is True
+    (record,) = [r for r in caplog.records if "truncated" in r.getMessage()]
+    message = record.getMessage()
+    assert len(message) < 400
+    assert instruction not in message
+    assert hashlib.sha256(instruction.encode()).hexdigest()[:12] in message
