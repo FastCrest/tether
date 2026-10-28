@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
 
+from tests.sys_modules import swap_modules
 from tether import __version__
 from tether.cli import _skip_blocking_onboarding, app
 
@@ -55,7 +56,7 @@ def _invoke_go_with_export_cache(tmp_path, monkeypatch, export_mock):
 
     with (
         patch("tether.exporters.monolithic.export_monolithic", export_mock),
-        patch.dict("sys.modules", {"tether.runtime.server": server}),
+        swap_modules({"tether.runtime.server": server}),
     ):
         return runner.invoke(
             app,
@@ -872,7 +873,7 @@ def test_go_export_cache_accepts_current_torch_and_ort_versions(tmp_path, monkey
     _seed_go_export_cache(tmp_path, meta)
     export_mock = Mock(side_effect=_fake_export)
 
-    with patch.dict("sys.modules", _fake_runtime_modules()):
+    with swap_modules(_fake_runtime_modules()):
         result = _invoke_go_with_export_cache(tmp_path, monkeypatch, export_mock)
 
     assert result.exit_code == 1
@@ -894,7 +895,7 @@ def test_go_export_cache_rebuilds_when_torch_version_changes(tmp_path, monkeypat
     )
     export_mock = Mock(side_effect=_fake_export)
 
-    with patch.dict("sys.modules", _fake_runtime_modules()):
+    with swap_modules(_fake_runtime_modules()):
         result = _invoke_go_with_export_cache(tmp_path, monkeypatch, export_mock)
 
     assert result.exit_code == 1
@@ -919,7 +920,7 @@ def test_go_export_cache_rebuilds_when_ort_version_changes(tmp_path, monkeypatch
     )
     export_mock = Mock(side_effect=_fake_export)
 
-    with patch.dict("sys.modules", _fake_runtime_modules()):
+    with swap_modules(_fake_runtime_modules()):
         result = _invoke_go_with_export_cache(tmp_path, monkeypatch, export_mock)
 
     assert result.exit_code == 1
@@ -939,7 +940,7 @@ def test_go_export_cache_rebuilds_legacy_meta_without_runtime_versions(tmp_path,
     )
     export_mock = Mock(side_effect=_fake_export)
 
-    with patch.dict("sys.modules", _fake_runtime_modules()):
+    with swap_modules(_fake_runtime_modules()):
         result = _invoke_go_with_export_cache(tmp_path, monkeypatch, export_mock)
 
     assert result.exit_code == 1
