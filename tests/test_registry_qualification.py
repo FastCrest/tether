@@ -2,6 +2,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 from tether.registry.models import list_families
 from tether.registry.qualification import (
     FAMILY_QUALIFICATIONS,
@@ -102,3 +104,67 @@ def test_training_status_follows_measured_task_gain():
         assert str(facts["training"]).startswith("qualified") == gain, family
         if training["trains"] and training["loads"] and not gain:
             assert facts["training"].startswith("trains-and-loads"), family
+
+
+_REPO = Path(__file__).resolve().parents[1]
+_EVIDENCE_ROOT = _REPO / "docs" / "evidence" / "parity"
+
+
+def _export_evidence():
+    for family, facts in FAMILY_QUALIFICATIONS.items():
+        export = (facts.get("evidence") or {}).get("export")
+        if export is not None:
+            yield family, export
+
+
+def test_every_cited_export_receipt_is_committed_and_hashes_to_its_claim():
+    """Open each receipt the registry cites: its bytes must hash to receipt_sha256,
+    its campaign SHA256SUMS must list that digest, and its own fields must agree
+    with the evidence entry (family, verdict, scope, producer commit, model)."""
+    import hashlib
+    import json
+
+    cited = list(_export_evidence())
+    assert cited
+    for family, export in cited:
+        path = _REPO / export["receipt"]
+        assert path.is_relative_to(_EVIDENCE_ROOT) and path.is_file(), (family, export["receipt"])
+        data = path.read_bytes()
+        assert hashlib.sha256(data).hexdigest() == export["receipt_sha256"], family
+        campaign = path.relative_to(_EVIDENCE_ROOT).parts[0]
+        sums = {}
+        for line in (_EVIDENCE_ROOT / campaign / "SHA256SUMS").read_text().splitlines():
+            digest, _, name = line.partition("  ")
+            sums[name] = digest
+        assert sums[path.relative_to(_EVIDENCE_ROOT / campaign).as_posix()] == export["receipt_sha256"], family
+        receipt = json.loads(data)
+        assert receipt["family"] == family
+        assert receipt["verdict"] == export["verdict"] == "passed", family
+        assert receipt["external_acceptance"] == "recorded", family
+        assert receipt["execution"]["scope"] == export["scope"], family
+        assert receipt["implementation"]["tether_commit"] == export["tether_commit"], family
+        model = receipt["model"]
+        assert f"{model['source']}@{model['revision']}" == export["model"], family
+        if "condition" in export:
+            key, _, value = export["condition"].partition("=")
+            assert (receipt.get("environment") or {}).get(key) == value, family
+
+
+def test_smolvla_producer_commit_is_pinned_by_an_evidence_tag():
+    """main allows only squash/rebase merges, so a branch commit is not in main's
+    history. The SmolVLA receipt's producer commit must be reachable through a
+    permanent tag that the registry cites next to the receipt sha256."""
+    import subprocess
+
+    export = qualification_for("smolvla")["evidence"]["export"]
+    assert export["tether_commit_tag"] == "evidence/smolvla-parity-0b85acd"
+    try:
+        resolved = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", export["tether_commit_tag"] + "^{commit}"],
+            check=False, cwd=_REPO, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pytest.skip("git is unavailable")
+    if resolved.returncode != 0:
+        pytest.skip(f"tag {export['tether_commit_tag']} is not fetched in this checkout")
+    assert resolved.stdout.strip() == export["tether_commit"]

@@ -1,0 +1,295 @@
+{
+  "execution": {
+    "active_ort_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cpu_fallback_disabled": true,
+    "platform_system": "Linux",
+    "requested_provider": "CUDAExecutionProvider",
+    "scope": "linux-cuda"
+  },
+  "export_identity": {
+    "artifact_sha256": "081914f436b51597d412cba84c2ea221e47583c0090a2966909370fa356454d6",
+    "artifacts": [
+      {
+        "path": "VERIFICATION.md",
+        "sha256": "e3a0c8f042dae469a5ccab1aba43ec0df711408ec6d294c35e54513c5eaa75c4",
+        "size_bytes": 1231
+      },
+      {
+        "path": "model.onnx",
+        "sha256": "d62b056613aedb36be433535e60011e05a7c2700cf66068feeb33605a1b22a66",
+        "size_bytes": 16179008
+      },
+      {
+        "path": "model.onnx.data",
+        "sha256": "4d1e009370a2952ae386d1bf7e51adf8aa9f8e480b7bff2cb61559eaa068f9ef",
+        "size_bytes": 1630174489
+      },
+      {
+        "path": "tether_config.json",
+        "sha256": "86fdeea367ee8f454ae1bf3220df1dce2d4531bed47e96c01b837273383ced5c",
+        "size_bytes": 3606
+      },
+      {
+        "path": "tokenizer/chat_template.jinja",
+        "sha256": "830005085ddd94cec605b6e21b885b28ffad6e3f82ee6a212c523533e8f04f01",
+        "size_bytes": 403
+      },
+      {
+        "path": "tokenizer/tokenizer.json",
+        "sha256": "2500f374cdc89040032a7d8437b6ed0fe745667b1194c17914d062ee31701605",
+        "size_bytes": 3548471
+      },
+      {
+        "path": "tokenizer/tokenizer_config.json",
+        "sha256": "fd87e003eef34b916fce3386cfe07c513a56c5bdc7b83e2c7da93cad2efee9c3",
+        "size_bytes": 838
+      }
+    ],
+    "file_count": 7,
+    "hash_contract": "studio-training-artifacts-v1",
+    "kind": "smolvla-monolithic-onnx",
+    "revision": "ba4d0202c21762a6ce8dfad60fabed75123ac616",
+    "schema": 1,
+    "size_bytes": 1649908046,
+    "source": "smolvla-monolithic-export",
+    "symlink_policy": "excluded"
+  },
+  "external_acceptance": "recorded",
+  "family": "smolvla",
+  "implementation": {
+    "tether_commit": "ba4d0202c21762a6ce8dfad60fabed75123ac616"
+  },
+  "kind": "smolvla-reference-shared-input-export-parity",
+  "limitations": [
+    "This receipt proves parity only for the exact hashed ONNX artifact, exact model revision, exact Tether commit, provider and shared input recorded here.",
+    "It does not establish task success, training support, hardware deployment readiness or physical safety.",
+    "first_* and full_* are the worst case over every listed case; the error distribution pools every element of every case's padded 32-dim action chunk."
+  ],
+  "metrics": {
+    "cases": [
+      {
+        "first_cosine": 0.9999999999999586,
+        "first_max_abs": 4.470348358154297e-07,
+        "full_cosine": 0.9999999999999083,
+        "full_max_abs": 9.5367431640625e-07,
+        "index": 0,
+        "input_seed": 42,
+        "instruction": "put both the alphabet soup and the tomato sauce in the basket",
+        "noise_seed": 99,
+        "real_tokens": 13,
+        "reference_abs_max": 1.7687873840332031,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 9.5367431640625e-07
+      },
+      {
+        "first_cosine": 0.999999999999969,
+        "first_max_abs": 4.172325134277344e-07,
+        "full_cosine": 0.9999999999999601,
+        "full_max_abs": 6.556510925292969e-07,
+        "index": 1,
+        "input_seed": 43,
+        "instruction": "put both the cream cheese box and the butter in the basket",
+        "noise_seed": 100,
+        "real_tokens": 13,
+        "reference_abs_max": 2.2625203132629395,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 6.556510925292969e-07
+      },
+      {
+        "first_cosine": 0.999999999999966,
+        "first_max_abs": 2.5331974029541016e-07,
+        "full_cosine": 0.9999999999998812,
+        "full_max_abs": 7.078051567077637e-07,
+        "index": 2,
+        "input_seed": 44,
+        "instruction": "turn on the stove and put the moka pot on it",
+        "noise_seed": 101,
+        "real_tokens": 13,
+        "reference_abs_max": 1.87095046043396,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 7.078051567077637e-07
+      },
+      {
+        "first_cosine": 0.9999999999999838,
+        "first_max_abs": 3.5762786865234375e-07,
+        "full_cosine": 0.999999999999775,
+        "full_max_abs": 4.5299530029296875e-06,
+        "index": 3,
+        "input_seed": 45,
+        "instruction": "put the black bowl in the bottom drawer of the cabinet and close it",
+        "noise_seed": 102,
+        "real_tokens": 15,
+        "reference_abs_max": 3.2986087799072266,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 4.5299530029296875e-06
+      },
+      {
+        "first_cosine": 0.9999999999999905,
+        "first_max_abs": 1.7881393432617188e-07,
+        "full_cosine": 0.9999999999998839,
+        "full_max_abs": 1.430511474609375e-06,
+        "index": 4,
+        "input_seed": 46,
+        "instruction": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+        "noise_seed": 103,
+        "real_tokens": 22,
+        "reference_abs_max": 2.6334476470947266,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 1.430511474609375e-06
+      },
+      {
+        "first_cosine": 0.9999999999999372,
+        "first_max_abs": 5.960464477539062e-07,
+        "full_cosine": 0.9999999999998946,
+        "full_max_abs": 9.5367431640625e-07,
+        "index": 5,
+        "input_seed": 47,
+        "instruction": "pick up the book and place it in the back compartment of the caddy",
+        "noise_seed": 104,
+        "real_tokens": 16,
+        "reference_abs_max": 1.8528871536254883,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 9.5367431640625e-07
+      },
+      {
+        "first_cosine": 0.9999999999999146,
+        "first_max_abs": 3.5762786865234375e-07,
+        "full_cosine": 0.9999999999998688,
+        "full_max_abs": 6.556510925292969e-07,
+        "index": 6,
+        "input_seed": 48,
+        "instruction": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+        "noise_seed": 105,
+        "real_tokens": 20,
+        "reference_abs_max": 1.0745400190353394,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 6.556510925292969e-07
+      },
+      {
+        "first_cosine": 0.9999999999999777,
+        "first_max_abs": 4.76837158203125e-07,
+        "full_cosine": 0.9999999999998351,
+        "full_max_abs": 1.0132789611816406e-06,
+        "index": 7,
+        "input_seed": 49,
+        "instruction": "put both the alphabet soup and the cream cheese box in the basket",
+        "noise_seed": 106,
+        "real_tokens": 14,
+        "reference_abs_max": 1.3317753076553345,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 1.0132789611816406e-06
+      },
+      {
+        "first_cosine": 0.9999999999999617,
+        "first_max_abs": 8.344650268554688e-07,
+        "full_cosine": 0.999999999999888,
+        "full_max_abs": 1.2516975402832031e-06,
+        "index": 8,
+        "input_seed": 50,
+        "instruction": "put both moka pots on the stove",
+        "noise_seed": 107,
+        "real_tokens": 9,
+        "reference_abs_max": 1.8187835216522217,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 1.2516975402832031e-06
+      },
+      {
+        "first_cosine": 0.9999999999999791,
+        "first_max_abs": 1.7881393432617188e-07,
+        "full_cosine": 0.9999999999999203,
+        "full_max_abs": 7.152557373046875e-07,
+        "index": 9,
+        "input_seed": 51,
+        "instruction": "put the yellow and white mug in the microwave and close it",
+        "noise_seed": 108,
+        "real_tokens": 14,
+        "reference_abs_max": 1.4660770893096924,
+        "serve_tokenization_equals_lerobot": true,
+        "serve_truncated": false,
+        "unpadded_action_max_abs": 7.152557373046875e-07
+      }
+    ],
+    "error_distribution": {
+      "elements": 16000,
+      "frac_at_or_above_tolerance": 0.0,
+      "max": 4.5299530029296875e-06,
+      "mean": 1.0069836571346969e-07,
+      "p50": 5.21540641784668e-08,
+      "p95": 4.027038812637275e-07,
+      "p99": 8.344650268554688e-07,
+      "tolerance": 0.1
+    },
+    "first_cosine": 0.9999999999999146,
+    "first_max_abs": 8.344650268554688e-07,
+    "full_cosine": 0.999999999999775,
+    "full_max_abs": 4.5299530029296875e-06
+  },
+  "model": {
+    "revision": "c83c3163b8ca9b7e67c509fffd9121e66cb96205",
+    "source": "lerobot/smolvla_base"
+  },
+  "schema": 1,
+  "shared_input": {
+    "export_shape": [
+      1,
+      50,
+      32
+    ],
+    "input_seed": 42,
+    "noise_seed": 99,
+    "num_steps": 10,
+    "reference_shape": [
+      1,
+      50,
+      32
+    ],
+    "sha256": "52e5939d7419fea53452731c2a7926abcef634b58fcadcd5bfbede54670ab722"
+  },
+  "subject_context": {
+    "environment": {
+      "NVIDIA_TF32_OVERRIDE": "0"
+    },
+    "error_distribution_unpadded_action_dims": {
+      "elements": 3000,
+      "frac_at_or_above_tolerance": 0.0,
+      "max": 4.5299530029296875e-06,
+      "mean": 3.142732505997022e-07,
+      "p50": 2.384185791015625e-07,
+      "p95": 8.344650268554688e-07,
+      "p99": 1.2516975402832031e-06,
+      "tolerance": 0.1
+    },
+    "export_semantics": "sample_actions-euler-baked",
+    "exporter": "tether-smolvla-monolithic",
+    "graph_lang_len": 48,
+    "instructions_refused_exceed_graph_lang_len": [],
+    "metric_aggregation": "worst-case-over-cases",
+    "reference_device": "cpu-fp32",
+    "reference_lang_len": 48,
+    "runtime_versions": {
+      "lerobot": "0.6.1",
+      "numpy": "2.2.6",
+      "onnxruntime": "1.23.2",
+      "torch": "2.11.0",
+      "transformers": "5.5.4"
+    },
+    "unpadded_action_dim": 6
+  },
+  "thresholds": {
+    "maximum_absolute_error_exclusive": 0.1,
+    "minimum_cosine": 0.999
+  },
+  "verdict": "passed"
+}

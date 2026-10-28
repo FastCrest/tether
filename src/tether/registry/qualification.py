@@ -14,10 +14,10 @@ import copy
 # non-zero success count for the qualified arm. tests/test_registry_qualification.py
 # fails when a status and its evidence disagree in either direction.
 # Literal strings only: Studio reads this dict by AST (backend/tether_registry.py).
-# Studio paths are relative to the Tether Studio repository. Studio binds each
-# receipt to Tether pin 432923b (tether_private/qualification/committed_parity.py
-# BOUND_PRODUCERS); a later Tether pin needs Studio's export-path equality proof
-# re-run before the receipt binds there.
+# Each "receipt" is a byte-for-byte copy under docs/evidence/parity/, and the tests
+# check its hash. "studio_receipt" is the same file's path in the Tether Studio repo.
+# Studio binds receipts to a Tether pin (tether_private/qualification/
+# committed_parity.py BOUND_PRODUCERS); a new pin needs Studio's export-path proof.
 
 
 FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
@@ -73,10 +73,13 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
                 ),
             },
             "export": {
-                "receipt": "modal volume parity-gpu-receipts:smolvla-c83c3163-lang48-20261028/smolvla/smolvla-export-parity-receipt.json",
+                "receipt": "docs/evidence/parity/smolvla-c83c3163-lang48-20261028/smolvla/smolvla-export-parity-receipt.json",
+                "modal_volume": "parity-gpu-receipts:smolvla-c83c3163-lang48-20261028/smolvla/",
                 "receipt_sha256": "1890e3062c9e76dc95d788711657a7afd65fd5dd3f23c57a94ffe994e3c597a4",
                 "model": "lerobot/smolvla_base@c83c3163b8ca9b7e67c509fffd9121e66cb96205",
                 "tether_commit": "0b85acd85f11fb47a736c65c0b1ff76ae077349f",
+                # main is squash/rebase only; this tag keeps the producer commit reachable.
+                "tether_commit_tag": "evidence/smolvla-parity-0b85acd",
                 "verdict": "passed",
                 "scope": "linux-cuda",
             },
@@ -114,7 +117,8 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         ],
         "evidence": {
             "export": {
-                "receipt": "tether_private/qualification/parity_evidence/2026-10-12/pi0/pi0-export-parity-receipt.json",
+                "receipt": "docs/evidence/parity/2026-10-12/pi0/pi0-export-parity-receipt.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-10-12/pi0/pi0-export-parity-receipt.json",
                 "receipt_sha256": "9dc91d12a8df9024f761ff56d16c20abe50d00b6ee4c6068d9be0ea9d3886488",
                 "model": "lerobot/pi0_base@26b99b9439acb1e352439e34ee9c67af0d76efa3",
                 "tether_commit": "b7223069a4817f043f0cb15f1ba0d65ef2475763",
@@ -142,7 +146,8 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         ],
         "evidence": {
             "export": {
-                "receipt": "tether_private/qualification/parity_evidence/2026-10-12/pi05/pi05-export-parity-receipt.json",
+                "receipt": "docs/evidence/parity/2026-10-12/pi05/pi05-export-parity-receipt.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-10-12/pi05/pi05-export-parity-receipt.json",
                 "receipt_sha256": "628b05ab0b00fa3073ec30a15d28a44630f83c248149b684bd613c32e8e05c66",
                 "model": "lerobot/pi05_base@a538eb273274eb30f126a118f39dbc0ee212c883",
                 "tether_commit": "b7223069a4817f043f0cb15f1ba0d65ef2475763",
@@ -172,7 +177,8 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         ],
         "evidence": {
             "export": {
-                "receipt": "tether_private/qualification/parity_evidence/2026-09-18/groot/groot-export-parity-receipt-strict-tf32.json",
+                "receipt": "docs/evidence/parity/2026-09-18/groot/groot-export-parity-receipt-strict-tf32.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-09-18/groot/groot-export-parity-receipt-strict-tf32.json",
                 "receipt_sha256": "a34fcf84471c7842192d35c9af8975984840aa2b97f530424ca1c9d132d21d0e",
                 "model": "nvidia/GR00T-N1.6-3B@d0814e7ecb19202e7c8468b46098b0b7ef3a6d61",
                 "tether_commit": "4cf9854a72ca9c97ec6a7a398f4246650b001d2a",
@@ -201,7 +207,8 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
         ],
         "evidence": {
             "export": {
-                "receipt": "tether_private/qualification/parity_evidence/2026-09-18/openvla/openvla-export-parity-receipt.json",
+                "receipt": "docs/evidence/parity/2026-09-18/openvla/openvla-export-parity-receipt.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-09-18/openvla/openvla-export-parity-receipt.json",
                 "receipt_sha256": "99ab67d70343153c9dbec5a0f9509b7e4c22ee3a24b4262502d14ca41f8b2430",
                 "model": "openvla/openvla-7b@47a0ec7fc4ec123775a391911046cf33cf9ed83f",
                 "tether_commit": "6e84101136dcaa6204983956b80418796430504a",

@@ -69,11 +69,12 @@ image = (
     .env({"HF_HOME": HF_CACHE_PATH, "TRANSFORMERS_CACHE": f"{HF_CACHE_PATH}/transformers"})
 )
 
+# onnxruntime-gpu==1.23.2: the version the committed receipts record, so a rerun reproduces them.
 # cudnn + cublas alone is not enough: ORT fails to create the CUDA EP without
 # the CUDA runtime (verified 2026-09-18 on the pi0 harness).
 gpu_image = (
     image.pip_install(
-        "onnxruntime-gpu>=1.20,<1.24",
+        "onnxruntime-gpu==1.23.2",
         "nvidia-cuda-runtime-cu12>=12.0,<13.0",
         "nvidia-cublas-cu12>=12.0,<13.0",
         "nvidia-cudnn-cu12>=9.0,<10.0",
@@ -81,7 +82,7 @@ gpu_image = (
         "nvidia-curand-cu12>=10.0,<11.0",
         extra_options="--no-deps",
     )
-    .pip_install("onnxruntime-gpu>=1.20,<1.24")
+    .pip_install("onnxruntime-gpu==1.23.2")
     .env({
         "LD_LIBRARY_PATH": (
             "/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:"

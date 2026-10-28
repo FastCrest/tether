@@ -1,0 +1,103 @@
+{
+  "execution": {
+    "active_ort_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cpu_fallback_disabled": true,
+    "platform_system": "Linux",
+    "requested_provider": "CUDAExecutionProvider",
+    "scope": "linux-cuda"
+  },
+  "export_identity": {
+    "artifact_sha256": "1689a96b97e537190f1b90d8c10324010bc632d889cd5173a6ebe1088c2ce09e",
+    "artifacts": [
+      {
+        "path": "VERIFICATION.md",
+        "sha256": "f67e7d5cd42f5e00eaa44da46360eb8bcc3ed708d0143567e0f8fdd42a9eb983",
+        "size_bytes": 1221
+      },
+      {
+        "path": "model.onnx",
+        "sha256": "fbc8a34a9ae1b2102b86ee3abd532947a88957b1dbbc98db003e17b199a1499e",
+        "size_bytes": 14134775
+      },
+      {
+        "path": "model.onnx.data",
+        "sha256": "07ed2f9c57151ffdefe475ce4f10b3a84a5cae6e54a9121ac7c120a2f9bd264e",
+        "size_bytes": 12519931904
+      },
+      {
+        "path": "tether-export-provenance.json",
+        "sha256": "c8c56ce5abaea5b70deb8ed693d9f6514662f678c1c66495b5d7d3b891de82c2",
+        "size_bytes": 258
+      },
+      {
+        "path": "tether_config.json",
+        "sha256": "e9d75469b6cb010ee9cbda4c20e1eb613defd696c10955229f3a0adcd082066e",
+        "size_bytes": 3242
+      },
+      {
+        "path": "tokenizer/tokenizer.json",
+        "sha256": "37685356c1f8070a38ddeb515a6be63b23424444dae15966bfe5fa12ce8d51cd",
+        "size_bytes": 34387119
+      },
+      {
+        "path": "tokenizer/tokenizer_config.json",
+        "sha256": "247bcda99f6d66d445d620af53a340a1e2f665fbe8b659fbd5bce9e5ac688e77",
+        "size_bytes": 503
+      }
+    ],
+    "file_count": 7,
+    "hash_contract": "studio-training-artifacts-v1",
+    "kind": "pi0-monolithic-onnx",
+    "revision": "b7223069a4817f043f0cb15f1ba0d65ef2475763",
+    "schema": 1,
+    "size_bytes": 12568459022,
+    "source": "pi0-monolithic-export",
+    "symlink_policy": "excluded"
+  },
+  "external_acceptance": "recorded",
+  "family": "pi0",
+  "implementation": {
+    "tether_commit": "b7223069a4817f043f0cb15f1ba0d65ef2475763"
+  },
+  "kind": "pi0-reference-shared-input-export-parity",
+  "limitations": [
+    "This receipt proves parity only for the exact hashed ONNX artifact, exact model revision, exact Tether commit, provider and shared input recorded here.",
+    "It does not establish task success, training support, hardware deployment readiness or physical safety."
+  ],
+  "metrics": {
+    "first_cosine": 0.9999998549063452,
+    "first_max_abs": 0.00032916292548179626,
+    "full_cosine": 0.9999997271438269,
+    "full_max_abs": 0.0006915926933288574
+  },
+  "model": {
+    "revision": "26b99b9439acb1e352439e34ee9c67af0d76efa3",
+    "source": "lerobot/pi0_base"
+  },
+  "schema": 1,
+  "shared_input": {
+    "export_shape": [
+      1,
+      50,
+      32
+    ],
+    "input_seed": 42,
+    "noise_seed": 99,
+    "num_steps": 10,
+    "reference_shape": [
+      1,
+      50,
+      32
+    ],
+    "sha256": "3c6faef05ad69ecf058a5db76f3d77d3b79c04c47f65d1eef1e4dd52ef0065c5"
+  },
+  "subject_context": {},
+  "thresholds": {
+    "maximum_absolute_error_exclusive": 0.1,
+    "minimum_cosine": 0.999
+  },
+  "verdict": "passed"
+}
