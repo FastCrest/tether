@@ -169,6 +169,8 @@ def make_client(policy, device, rtc_config, export_dir):
         import torch
 
         server.policy = policy
+        if not os.environ.get("RTC_EVIDENCE_TRAINABLE_PARAMS"):
+            server._freeze_policy()  # what SmolVLANativeServer.load does
         server.preprocessor = lambda batch: {
             **batch,
             "observation.language.tokens": torch.tensor([[1, 5, 9, 13]]),

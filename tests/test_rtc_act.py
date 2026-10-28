@@ -281,3 +281,33 @@ class TestNormalizeActions:
         server = Pi05DecomposedServer(tmp_path, device="cpu")
         x = np.ones((3, 7), np.float32)
         np.testing.assert_array_equal(server.normalize_actions(x), x)
+
+
+class TestFrozenPolicy:
+    def test_load_leaves_no_parameter_requiring_grad(self, tmp_path):
+        from tether.runtime.smolvla_native import SmolVLANativeServer
+
+        server = SmolVLANativeServer(_smolvla_export(tmp_path), device="cpu")
+        tiny.install(server, tiny.build_policy(seed=3))
+        server.load()
+        assert not any(p.requires_grad for p in server.policy.parameters())
+        assert not server.policy.training
+
+    def test_rtc_output_is_bit_identical_with_frozen_parameters(self, tmp_path):
+        """Freezing removes LeRobot's parameter graph, not any arithmetic."""
+        from tether.runtime.rtc_guidance import RtcGuidance
+        from tether.runtime.smolvla_native import SmolVLANativeServer
+
+        server = SmolVLANativeServer(_smolvla_export(tmp_path), device="cpu")
+        tiny.install(server, tiny.build_policy(seed=4))
+        server.load()
+        left = np.random.default_rng(0).standard_normal((7, tiny.ACTION_DIM)).astype(np.float32)
+        g = RtcGuidance(3, 8, left)
+
+        def run(trainable):
+            server.policy.requires_grad_(trainable)
+            torch.manual_seed(11)
+            return np.asarray(server.predict(state=[0.0] * 8, instruction="pick", rtc=g)["actions"])
+
+        trainable, frozen = run(True), run(False)
+        np.testing.assert_array_equal(trainable, frozen)

@@ -57,9 +57,9 @@ inference (processed units). Seam jump = ‖new[d] − old[idx+d]‖ at the swit
   rtc 2362 / 2300 / 3278 / 3315 / 3328 ms; prefix error off 5.79 mean, rtc
   0.0043 mean (max 0.012). VERIFIED.
 
-## Where RTC's latency overhead comes from
+## Where RTC's latency overhead came from (fixed 2026-10-28, see below)
 
-RTC as served adds 17-27 % mean latency on MPS and 17 % on CPU. The
+RTC as first served adds 17-27 % mean latency on MPS and 17 % on CPU. The
 `mps-nograd` run isolates it (delay 6, 100 chunks each):
 
 | arm | latency ms | prefix error mean |
@@ -74,6 +74,34 @@ denoiser inside `enable_grad` (`modeling_rtc.py` L212-213), recording the whole
 expert forward for a gradient that is the identity. Tether serves LeRobot
 unmodified per owner decision (a); removing this cost needs an owner decision
 (patch/upstream fix vs. keep). Not changed in this branch.
+
+Correction 2026-10-28: that conclusion was wrong. The graph is recorded only
+because the policy's parameters still had `requires_grad=True`; `v_t` is
+computed before `x_t.requires_grad_(True)`, so with frozen parameters there is
+nothing to record. No LeRobot patch is needed (re-measured below).
+
+### 2026-10-28 re-measurement with frozen parameters (supersedes the tables above for latency)
+
+`SmolVLANativeServer.load` now calls `eval()` and `requires_grad_(False)`
+(`_freeze_policy`). Receipts `mps-frozen.json`, `cpu-frozen.json`; same script,
+off vs rtc, latency ms mean / p50 / p95 / p99 / max:
+
+| device, delay | off | rtc | mean overhead |
+|---|---|---|---|
+| MPS, 3 | 207.7 / 169.1 / 271.1 / 282.8 / 286.7 | 234.8 / 221.8 / 321.6 / 333.9 / 349.6 | +13 % |
+| MPS, 6 | 223.3 / 248.2 / 276.3 / 301.0 / 305.3 | 229.1 / 254.1 / 274.2 / 279.6 / 281.4 | +2.6 % |
+| MPS, 10 | 211.7 / 205.7 / 274.4 / 287.4 / 305.0 | 210.3 / 175.6 / 270.1 / 278.7 / 282.5 | -0.7 % |
+| CPU, 6 (30 chunks) | 1482.5 / 1478.9 / 1508.7 / 1526.7 / 1533.5 | 1490.3 / 1492.7 / 1506.0 / 1510.6 / 1511.9 | +0.5 % |
+
+VERIFIED: with frozen parameters the RTC overhead falls to within run-to-run
+noise at MPS delays 6/10 and on CPU (it was +17-27 % MPS, +17 % CPU). The MPS
+delay-3 pair still differs by +13 % mean; its off arm ran faster than the warm-up
+p50 (169 vs 181 ms), so this is UNKNOWN between MPS jitter and residual cost;
+p95/p99 at delays 6/10 show no overhead. Prefix error is unchanged (rtc 0.0033 /
+0.0035 / 0.0044 mean vs off 5.0 / 5.8 / 6.2). At delay 10 both arms starved
+(off 15, rtc 6 actions) on latency spikes. `tests/test_rtc_act.py::TestFrozenPolicy`
+asserts no parameter requires grad after load and bit-identical RTC output
+trainable vs frozen on matched seeds.
 
 ## Identity vs VJP (the paper's correction)
 

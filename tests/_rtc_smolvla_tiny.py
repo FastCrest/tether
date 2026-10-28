@@ -83,6 +83,7 @@ def install(server, policy=None) -> None:
 
     def load():
         server.policy = policy if policy is not None else build_policy()
+        server._freeze_policy()
         server.preprocessor = _preprocessor
         server.postprocessor = postprocessor()
         server._device = "cpu"

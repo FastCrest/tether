@@ -103,6 +103,19 @@ class SmolVLANativeServer:
         # postprocessor can be inverted for the leftover conversion.
         self._rtc_required = False
 
+    def _freeze_policy(self) -> None:
+        """Inference hygiene: eval mode and no parameter gradients.
+
+        LeRobot 0.6.1's RTCProcessor.denoise_step calls the denoiser inside
+        torch.enable_grad() before x_t.requires_grad_(True)
+        (modeling_rtc.py L212-219). With trainable parameters autograd records
+        the whole expert forward for a gradient that is the identity; frozen
+        parameters leave nothing to record, and the correction still equals
+        the weighted error because x1_t depends on x_t directly.
+        """
+        self.policy.eval()
+        self.policy.requires_grad_(False)
+
     # ---- RTC (LeRobot's own RTCProcessor) -------------------------------
 
     def rtc_guidance_support(self) -> str | None:
@@ -200,8 +213,8 @@ class SmolVLANativeServer:
         self._device = device
 
         self.policy = SmolVLAPolicy.from_pretrained(self.model_id)
-        self.policy.eval()
         self.policy.to(dtype=torch.float32).to(device)
+        self._freeze_policy()
 
         # Swap RMSNorm for DecomposedRMSNorm (TRT-compat for downstream export)
         self._swap_rmsnorm()

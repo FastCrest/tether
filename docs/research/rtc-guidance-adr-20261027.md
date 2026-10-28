@@ -109,13 +109,17 @@ stop start-up; the old `except` that logged and served without RTC is gone.
 
 ## Known costs and open items
 
-- **LeRobot's identity guidance still builds an autograd graph.** It calls the
-  denoiser inside `torch.enable_grad()`, so the expert forward is recorded even
-  though the gradient is the identity. Measured on MPS (SmolVLA, random
-  weights, delay 6): off 239 ms, RTC as served 280 ms (+17 %), same arithmetic
-  without `enable_grad` 211 ms with the same prefix error. Removing it means not
-  using LeRobot's `denoise_step` unmodified (owner decision needed) or an
-  upstream fix.
+- **RTC latency overhead (corrected 2026-10-28).** The 2026-10-27 entry here
+  said LeRobot's `enable_grad` graph costs +17-27 % and that removing it needs a
+  LeRobot patch. **That was wrong.** In `modeling_rtc.py` L212-219 `v_t` is
+  computed inside `enable_grad` but before `x_t.requires_grad_(True)`, so autograd
+  records the denoiser only because the policy's parameters had
+  `requires_grad=True`. `SmolVLANativeServer.load` now calls `eval()` and
+  `requires_grad_(False)`; the correction still equals the error (x1_t depends
+  on x_t directly) and RTC output is bit-identical (test). Re-measured overhead:
+  MPS +2.6 % / -0.7 % mean at delays 6 / 10, CPU +0.5 %; MPS delay 3 +13 % mean
+  is unresolved jitter vs residual (verification doc). pi0.5 RTC runs in ONNX
+  (no torch parameters); Tether has no torch pi0.5 serving path to fix.
 - `inference_delay` rounds up (`ceil(p95 latency × execute_hz)`) as LeRobot does.
 - Padded action dims: like LeRobot, the leftover is zero-padded to the model's
   action width, so the guided prefix also pulls padded dims toward 0.
