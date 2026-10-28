@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Real-time chunking over HTTP `/act`
+
+- `tether serve --rtc` now applies RTC guidance inside the denoise loop. It is served on SmolVLA native (`TETHER_NATIVE=1`) and pi0.5 per-step expert exports, and refused at startup on every other runtime. The guidance is LeRobot 0.6.1's identity-Jacobian correction, not the RTC paper's VJP; responses label it `rtc.guidance: "lerobot_identity_jacobian"`.
+- With `--rtc`, every `/act` must carry `episode_id`; state is kept per episode and never shared between robots (422 `rtc_episode_required` otherwise). Clients report `actions_executed` (a strict int in [0, chunk length]) with the `chunk_id` of the previous response (lowercase hex, at most 64 characters). An exact retry of a report returns the same chunk with `X-Tether-RTC-Replay: true`. A stale `chunk_id` gets 409; a client that sends neither field gets a leftover estimated from wall-clock time and labelled `leftover_source: "estimated"`.
+- The Python client no longer retries 4xx responses other than 408/429, and an episode proxy drops its stored `chunk_id` after a 409.
+- **Breaking:** `RtcAdapterConfig.strict_policy_kwargs` is removed. The adapter always refuses a policy that rejects the RTC kwargs; it never falls back to plain inference. **Migration:** drop the keyword.
+
 ### Signature trust and TensorRT precision
 
 - **Breaking (security):** parity-cert and conformity-bundle signatures are now checked only against keys the verifier trusts. Before, verification used the public key embedded in the document, so anyone could edit a cert and re-sign it with their own key and it still passed. `verify_parity_cert_signature` and `verify_payload_signature` take a required `trusted_keys`, and with no trusted key a signature fails rather than passing. **Migration:** pass the signer's public key with `tether comply verify-bundle --trusted-key <env:VAR|file:path|PEM|base64>` (repeatable) and `tether comply export --trusted-key ...`. The base64 form is the signature block's `public_key_b64`. Without a trusted key, `comply export` records the parity cert as "signature not verified" instead of valid.

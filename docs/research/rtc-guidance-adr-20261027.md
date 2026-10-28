@@ -80,6 +80,23 @@ matters on a trained policy is UNKNOWN until task-success evidence exists
 | C. Server-side action queue / streaming `/act` | Rejected | Changes `/act` from request-response to a stream; larger. |
 | D. RTC only on the ZMQ transport | Rejected | Leaves HTTP, the stated gap, unsolved. |
 
+**Correction 2026-10-28 (independent review, PR #392).** As first written the
+carry-forward was server-global: two clients without `episode_id` shared one
+leftover, an episode-less request inherited the last episode's leftover, and
+concurrent `/act` calls could both plan against the same chunk (VERIFIED by the
+reviewer's spikes and by failing-first tests in `tests/test_rtc_streams.py`).
+Now:
+- State is per stream: with `--rtc` every `/act` must carry `episode_id`
+  (422 `rtc_episode_required`), and each episode has its own adapter and
+  buffer (`RtcStreams`, LRU-capped at 64 idle streams).
+- Plan -> predict -> commit is serialised per stream by an `asyncio.Lock`;
+  other streams run concurrently.
+- An exact retry of the report that produced the last chunk returns that chunk
+  (`X-Tether-RTC-Replay: true`) instead of 409. The Python client no longer
+  retries non-408/429 4xx, and its episode proxy drops a chunk id that got 409.
+- `actions_executed` is a strict int in [0, 4096] (and <= chunk length);
+  `chunk_id` is lowercase hex, at most 64 characters.
+
 ### D3. Leftover units
 
 | Option | Verdict | Why |
@@ -121,6 +138,17 @@ stop start-up; the old `except` that logged and served without RTC is gone.
   was a single-pair artefact: an interleaved 6x ABAB run gives pooled rtc 204.0
   vs off 212.8 ms (verification doc, 2026-10-28). pi0.5 RTC runs in ONNX
   (no torch parameters); Tether has no torch pi0.5 serving path to fix.
+- **pi0.5 startup refusals (2026-10-28).** `rtc_guidance_support()` now also
+  refuses the similarity fast path, BID and A2C2, and the A2C2/BID setters raise
+  once RTC is required; before, a misconfigured server started and failed every
+  request. The served inference is always built with `cache_level="prefix"`, so
+  the action cache cannot be on.
+- **TensorRT IOBinding (2026-10-28).** The CPU fix bound past_kv to host memory
+  unless the first provider was CUDA, so a TensorRT-first session would copy
+  ~140 MB host->device per Euler step (reasoned from code; base `cb586a7`
+  always bound `"cuda"`). `iobinding_device()` now pins to `"cuda"` for CUDA or
+  TensorRT sessions and host memory otherwise. That TensorRT consumes CUDA
+  OrtValues is ASSERTED (ORT docs); not measured on a GPU in this pass.
 - `inference_delay` rounds up (`ceil(p95 latency × execute_hz)`) as LeRobot does.
 - Padded action dims: like LeRobot, the leftover is zero-padded to the model's
   action width, so the guided prefix also pulls padded dims toward 0.
