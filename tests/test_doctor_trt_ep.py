@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.sys_modules import swap_modules
 from tether.cli import _check_trt_ep_load_chain
 
 
@@ -88,7 +89,7 @@ def test_all_libs_loadable_runs_full_chain(add_capture):
     with (
         patch("ctypes.CDLL", fake_cdll),
         patch("os.path.exists", return_value=True),  # all libs "found" in candidate dirs
-        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+        swap_modules({"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
 
@@ -114,7 +115,7 @@ def test_library_lookup_failure_does_not_suppress_empirical_probe(add_capture):
     with (
         patch("ctypes.CDLL", side_effect=load),
         patch("os.path.exists", return_value=False),
-        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+        swap_modules({"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
     nvinfer = _result_for(calls, "libnvinfer.so.10")
@@ -132,7 +133,7 @@ def test_system_libraries_work_without_pip_files(add_capture):
     with (
         patch("ctypes.CDLL", return_value=MagicMock()) as load,
         patch("os.path.exists", return_value=False),
-        patch.dict("sys.modules", {"onnxruntime": fake_ort}),
+        swap_modules({"onnxruntime": fake_ort}),
     ):
         _check_trt_ep_load_chain(fake_add)
     assert all(
@@ -156,7 +157,7 @@ def test_mixed_family_diagnostics_do_not_preload_but_keep_probe(add_capture):
     with (
         patch("tether._gpu_loader.cuda_families", return_value={12, 13}),
         patch("ctypes.CDLL") as load,
-        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+        swap_modules({"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
     load.assert_not_called()
@@ -198,7 +199,7 @@ def test_trt_ep_not_in_available_providers(add_capture):
     with (
         patch("ctypes.CDLL", return_value=MagicMock()),
         patch("os.path.exists", return_value=True),
-        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+        swap_modules({"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
 
@@ -225,7 +226,7 @@ def test_session_creates_but_trt_ep_falls_back(add_capture):
     with (
         patch("ctypes.CDLL", return_value=MagicMock()),
         patch("os.path.exists", return_value=True),
-        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+        swap_modules({"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
 
@@ -250,7 +251,7 @@ def test_session_creation_throws(add_capture):
     with (
         patch("ctypes.CDLL", return_value=MagicMock()),
         patch("os.path.exists", return_value=True),
-        patch.dict("sys.modules", {"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
+        swap_modules({"onnxruntime": fake_ort, "onnx": _fake_onnx_module()}),
     ):
         _check_trt_ep_load_chain(fake_add)
 
