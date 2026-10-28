@@ -80,7 +80,7 @@ siglip-export = [
     "open-clip-torch==3.3.0; python_version >= '3.11' and platform_machine != 'aarch64'",
     "timm==1.0.30; python_version >= '3.11' and platform_machine != 'aarch64'",
     "torch==2.10.0; python_version >= '3.11' and platform_machine != 'aarch64'",
-    "torchvision==0.25.0; python_version >= '3.11' and platform_machine != 'aarch64'",
+    "torchvision==0.29.1; python_version >= '3.11' and platform_machine != 'aarch64'",
     "onnx==1.23.2; python_version >= '3.11' and platform_machine != 'aarch64'",
     "onnxruntime==1.30.0; python_version >= '3.11' and platform_machine != 'aarch64'",
     "Pillow>=10; python_version >= '3.11' and platform_machine != 'aarch64'",
