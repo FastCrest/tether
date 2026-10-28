@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.sys_modules import swap_modules
 from tether.runtime.fast_inference.runtime import FastKernelsPolicyRuntime
 
 
@@ -64,7 +65,7 @@ def test_fallback_on_triton_import():
                return_value=(True, "")), \
          patch("tether.kernels._shape_whitelist.validate_shape_signature",
                return_value=(True, "")), \
-         patch.dict("sys.modules", {"triton": None}):
+         swap_modules({"triton": None}):
         import builtins
         original_import = builtins.__import__
 
@@ -107,6 +108,7 @@ def test_is_active_false_on_fallback():
 def test_cli_fast_kernels_flag_exists():
     """The --fast-kernels flag is recognized by the CLI."""
     from typer.testing import CliRunner
+
     from tether.cli import app
 
     runner = CliRunner()
@@ -122,6 +124,7 @@ def test_cli_fast_kernels_rejects_with_policy_b():
     not our custom message. We just verify the combination is rejected (exit != 0).
     """
     from typer.testing import CliRunner
+
     from tether.cli import app
 
     runner = CliRunner()

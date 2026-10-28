@@ -15,14 +15,17 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from tests.export_config_factory import write_test_export_config
 import torch
 
+from tests.export_config_factory import write_test_export_config
+from tests.sys_modules import swap_modules
+from tether.export_config import build_producer_config, load_tether_config, write_tether_config
 from tether.exporters.vlm_prefix_exporter import (
     DEFAULT_VLM_KV_DIM,
     _update_vlm_manifest,
 )
-from tether.export_config import build_producer_config, load_tether_config, write_tether_config
+from tether.models.heads.expert_stack import ExpertGQALayer, ExpertStack
+from tether.runtime.server import TetherServer
 from tether.runtime.vlm_components import (
     HIDDEN_SIZE,
     MAX_STATE_DIM,
@@ -30,10 +33,7 @@ from tether.runtime.vlm_components import (
     assemble_prefix,
     pad_state,
 )
-from tether.models.heads.expert_stack import ExpertGQALayer, ExpertStack
 from tether.runtime.vlm_orchestrator import VLMPrefixOrchestrator
-from tether.runtime.server import TetherServer
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -692,7 +692,7 @@ class TestOrchestratorGracefulDegradation:
 
         fake_ort = MagicMock()
         fake_ort.InferenceSession.side_effect = mock_session_init
-        with patch.dict("sys.modules", {"onnxruntime": fake_ort}):
+        with swap_modules({"onnxruntime": fake_ort}):
             with patch.object(
                 VLMPrefixOrchestrator, "_load_tokenizer_and_processor"
             ):
@@ -774,7 +774,7 @@ class TestOrchestratorFullPipeline:
 
         fake_ort = MagicMock()
         fake_ort.InferenceSession.side_effect = mock_ort_init
-        with patch.dict("sys.modules", {"onnxruntime": fake_ort}):
+        with swap_modules({"onnxruntime": fake_ort}):
             with patch.object(VLMPrefixOrchestrator, "_load_tokenizer_and_processor"):
                 orch = VLMPrefixOrchestrator(tmp_path, config)
                 orch._tokenizer = mock_tokenizer
