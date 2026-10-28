@@ -279,6 +279,22 @@ class TestEpisode:
         assert all(eid == ep.episode_id for eid in episode_ids)
         assert ep.call_count == 3
 
+    def test_episode_reports_executed_actions_against_last_chunk(self):
+        bodies = []
+
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"actions": [[0.0]], "chunk_id": f"c{len(bodies)}"})
+
+        with _client_with_handler(handler) as c:
+            with c.episode() as ep:
+                ep.act(instruction="x", actions_executed=3)  # no chunk yet: not sent
+                ep.act(instruction="x", actions_executed=4)
+                ep.act(instruction="x")  # no report: old-client body
+        assert "actions_executed" not in bodies[0]
+        assert bodies[1]["actions_executed"] == 4 and bodies[1]["chunk_id"] == "c1"
+        assert "actions_executed" not in bodies[2] and "chunk_id" not in bodies[2]
+
     def test_episode_explicit_id_used(self):
         episode_ids = []
 

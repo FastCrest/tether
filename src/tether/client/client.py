@@ -268,6 +268,8 @@ class TetherClient:
         instruction: str = "",
         state: list[float] | None = None,
         episode_id: str | None = None,
+        actions_executed: int | None = None,
+        chunk_id: str | None = None,
     ) -> dict[str, Any]:
         """POST /act. Returns the parsed response dict.
 
@@ -278,6 +280,10 @@ class TetherClient:
         - `guard_violations`: list of strings if B.6 ActionGuard clamped anything
         - `guard_clamped`: bool flag mirroring guard_violations
         - `inference_mode`: "monolithic" / "decomposed" / etc.
+        - `chunk_id` + `rtc`: with `tether serve --rtc`. Send the next call's
+          `actions_executed` (index of the next unexecuted action of that
+          chunk) with this `chunk_id` so the server guides from the exact
+          leftover; without them it estimates from wall-clock time.
         """
         body = {
             "image": encode_image(image),
@@ -285,6 +291,8 @@ class TetherClient:
             "state": state,
             "episode_id": episode_id,
         }
+        if actions_executed is not None or chunk_id is not None:
+            body.update(actions_executed=actions_executed, chunk_id=chunk_id)
         resp = self._request_with_retry("POST", "/act", json=body)
         return resp.json()
 
@@ -310,6 +318,7 @@ class _EpisodeProxy:
         self._episode_id = episode_id
         self._closed = False
         self._call_count = 0
+        self._last_chunk_id: str | None = None
 
     @property
     def episode_id(self) -> str:
@@ -324,13 +333,22 @@ class _EpisodeProxy:
         image: Any = None,
         instruction: str = "",
         state: list[float] | None = None,
+        actions_executed: int | None = None,
     ) -> dict[str, Any]:
+        """``actions_executed``: how many actions of the previous response's
+        chunk ran (RTC servers); paired with that response's ``chunk_id``."""
         if self._closed:
             raise TetherClientError("episode context already closed")
         self._call_count += 1
-        return self._client.act(
+        report = {}
+        if actions_executed is not None and self._last_chunk_id is not None:
+            report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
+        result = self._client.act(
             image=image, instruction=instruction, state=state, episode_id=self._episode_id,
+            **report,
         )
+        self._last_chunk_id = result.get("chunk_id") if isinstance(result, dict) else None
+        return result
 
 
 # ---- Async client ---------------------------------------------------------
@@ -418,6 +436,8 @@ class TetherAsyncClient:
         instruction: str = "",
         state: list[float] | None = None,
         episode_id: str | None = None,
+        actions_executed: int | None = None,
+        chunk_id: str | None = None,
     ) -> dict[str, Any]:
         body = {
             "image": encode_image(image),
@@ -425,6 +445,8 @@ class TetherAsyncClient:
             "state": state,
             "episode_id": episode_id,
         }
+        if actions_executed is not None or chunk_id is not None:
+            body.update(actions_executed=actions_executed, chunk_id=chunk_id)
         resp = await self._request_with_retry("POST", "/act", json=body)
         return resp.json()
 
@@ -444,6 +466,7 @@ class _AsyncEpisodeProxy:
         self._episode_id = episode_id
         self._closed = False
         self._call_count = 0
+        self._last_chunk_id: str | None = None
 
     @property
     def episode_id(self) -> str:
@@ -458,10 +481,19 @@ class _AsyncEpisodeProxy:
         image: Any = None,
         instruction: str = "",
         state: list[float] | None = None,
+        actions_executed: int | None = None,
     ) -> dict[str, Any]:
+        """``actions_executed``: how many actions of the previous response's
+        chunk ran (RTC servers); paired with that response's ``chunk_id``."""
         if self._closed:
             raise TetherClientError("episode context already closed")
         self._call_count += 1
-        return await self._client.act(
+        report = {}
+        if actions_executed is not None and self._last_chunk_id is not None:
+            report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
+        result = await self._client.act(
             image=image, instruction=instruction, state=state, episode_id=self._episode_id,
+            **report,
         )
+        self._last_chunk_id = result.get("chunk_id") if isinstance(result, dict) else None
+        return result
