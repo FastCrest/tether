@@ -1,8 +1,10 @@
 """Day 3 tests for RTC adapter (B.3) — prev_chunk_left_over carry-forward.
 
-Day 3 scope: ActionChunkBuffer.peek_all() snapshot, merge_and_update
-captures the snapshot BEFORE push_chunk wipes it, predict_chunk_with_rtc
-reads it on the next call. reset() already clears it (Day 1 ✓).
+Scope: the leftover is the unexecuted tail of the chunk last returned to the
+client, sliced at the client's ``actions_executed`` report (or a labelled
+wall-clock estimate), validated against ``chunk_id``, and converted into the
+policy's normalized action space before guidance. ``peek_all`` stays covered
+for in-process buffer integrations.
 """
 from __future__ import annotations
 
@@ -22,6 +24,9 @@ class _RecordingPolicy:
     def __init__(self, action_shape=(50, 7)):
         self.action_shape = action_shape
         self.calls: list[dict] = []
+
+    def normalize_actions(self, actions):
+        return actions
 
     def predict_action_chunk(self, **kwargs):
         self.calls.append(dict(kwargs))
@@ -83,89 +88,139 @@ class TestPeekAll:
 
 
 # ---------------------------------------------------------------------------
-# merge_and_update carry-forward
+# Leftover = returned chunk sliced at the client's report
 # ---------------------------------------------------------------------------
 
 
-class TestMergeCarryForward:
-    def test_first_merge_no_carry_state(self):
-        """Buffer empty → snapshot is None → _prev_chunk_left_over stays None."""
+def _chunk(n=10, d=7, base=0.0):
+    return (base + np.arange(n * d, dtype=np.float32)).reshape(n, d)
+
+
+class TestLeftoverFromReport:
+    def test_no_previous_chunk_means_no_leftover(self):
         adapter = _adapter(_RecordingPolicy())
-        actions = np.zeros((50, 7), dtype=np.float32)
-        adapter.merge_and_update(actions, elapsed_time=0.05)
-        assert adapter._prev_chunk_left_over is None
+        plan = adapter.plan_guidance()
+        assert plan.guidance.prev_chunk_left_over is None
+        assert plan.leftover_source == "none"
+        assert plan.telemetry()["applied"] is False
 
-    def test_second_merge_captures_first_chunk(self):
-        """After first merge, buffer has 50 actions. Second merge should
-        snapshot those 50 (or capacity-limited count) BEFORE push wipes."""
+    def test_client_report_slices_returned_chunk(self):
         adapter = _adapter(_RecordingPolicy(), capacity=10)
-        adapter.merge_and_update(
-            np.arange(50 * 7, dtype=np.float32).reshape(50, 7),
-            elapsed_time=0.05,
-        )
-        # Buffer now holds the first 10 actions of chunk 1 (capacity=10)
-        # No pops happened — second merge snapshots all 10 before wipe
-        adapter.merge_and_update(
-            np.full((50, 7), 99.0, dtype=np.float32),  # second chunk
-            elapsed_time=0.05,
-        )
-        assert adapter._prev_chunk_left_over is not None
-        assert adapter._prev_chunk_left_over.shape == (10, 7)
-        # Snapshot should be from chunk 1 (zeros 0..69), NOT chunk 2 (99s)
-        assert adapter._prev_chunk_left_over[0, 0] == 0.0  # first action of chunk 1
+        cid = adapter.merge_and_update(_chunk(), elapsed_time=0.05)
+        plan = adapter.plan_guidance(actions_executed=4, chunk_id=cid)
+        np.testing.assert_array_equal(plan.guidance.prev_chunk_left_over, _chunk()[4:])
+        assert plan.leftover_source == "client"
+        assert plan.actions_executed == 4
+        assert plan.telemetry()["leftover_len"] == 6
 
-    def test_merge_after_pops_captures_remaining(self):
-        """If the robot has popped 4 actions from a 10-cap buffer, the
-        snapshot should hold the remaining 6."""
+    def test_unpopped_buffer_is_not_the_leftover(self):
+        """Regression: HTTP /act never pops the buffer, so peek_all() returned
+        the whole previous chunk as leftover. The report now decides."""
         adapter = _adapter(_RecordingPolicy(), capacity=10)
-        adapter.merge_and_update(
-            np.arange(10 * 7, dtype=np.float32).reshape(10, 7),
-            elapsed_time=0.05,
-        )
-        # Pop 4
-        for _ in range(4):
-            adapter.buffer.pop_next()
-        assert adapter.buffer.size == 6
+        cid = adapter.merge_and_update(_chunk(), elapsed_time=0.05)
+        assert adapter.buffer.peek_all().shape == (10, 7)  # nothing popped
+        plan = adapter.plan_guidance(actions_executed=7, chunk_id=cid)
+        assert plan.guidance.prev_chunk_left_over.shape == (3, 7)
 
-        adapter.merge_and_update(
-            np.zeros((10, 7), dtype=np.float32),
-            elapsed_time=0.05,
-        )
-        assert adapter._prev_chunk_left_over.shape == (6, 7)
+    def test_fully_executed_chunk_has_no_leftover(self):
+        adapter = _adapter(_RecordingPolicy())
+        cid = adapter.merge_and_update(_chunk(), elapsed_time=0.05)
+        plan = adapter.plan_guidance(actions_executed=10, chunk_id=cid)
+        assert plan.guidance.prev_chunk_left_over is None
+        assert plan.leftover_source == "client"
 
-    def test_carry_forward_is_passed_to_next_predict(self):
-        """The snapshot from merge N is consumed by predict N+1."""
-        policy = _RecordingPolicy()
-        adapter = _adapter(policy, capacity=10)
+    def test_estimate_without_report_is_labelled(self):
+        adapter = _adapter(_RecordingPolicy())  # execute_hz=100
+        adapter.merge_and_update(_chunk(), elapsed_time=0.05, now=100.0)
+        plan = adapter.plan_guidance(now=100.03)  # 30 ms → 3 actions
+        assert plan.leftover_source == "estimated"
+        assert plan.actions_executed == 3
+        np.testing.assert_array_equal(plan.guidance.prev_chunk_left_over, _chunk()[3:])
 
-        # Cycle 1: predict (no carry yet) + merge (now has carry)
-        adapter.predict_chunk_with_rtc({"image": "x"})
-        assert policy.calls[0]["prev_chunk_left_over"] is None  # first call
-        adapter.merge_and_update(
-            np.arange(10 * 7, dtype=np.float32).reshape(10, 7),
-            elapsed_time=0.05,
-        )
-        assert adapter._prev_chunk_left_over is None  # buffer was empty pre-push
+    def test_estimate_is_capped_at_chunk_length(self):
+        adapter = _adapter(_RecordingPolicy())
+        adapter.merge_and_update(_chunk(), elapsed_time=0.05, now=0.0)
+        plan = adapter.plan_guidance(now=5.0)
+        assert plan.actions_executed == 10
+        assert plan.guidance.prev_chunk_left_over is None
 
-        # Cycle 2: predict (now has carry from cycle 1) + merge
-        adapter.predict_chunk_with_rtc({"image": "y"})
-        # Cycle 2's predict still sees None because buffer was empty when
-        # merge 1 ran; the carry shows up on cycle 3.
-        assert policy.calls[1]["prev_chunk_left_over"] is None
+    def test_chunk_ids_are_unique_per_chunk(self):
+        adapter = _adapter(_RecordingPolicy())
+        a = adapter.merge_and_update(_chunk(), elapsed_time=0.05)
+        b = adapter.merge_and_update(_chunk(), elapsed_time=0.05)
+        assert a != b and len(a) == 16
 
-        adapter.merge_and_update(
-            np.full((10, 7), 5.0, dtype=np.float32),
-            elapsed_time=0.05,
-        )
-        # NOW snapshot captures chunk-1 (which is in buffer pre-push)
-        assert adapter._prev_chunk_left_over is not None
-        assert adapter._prev_chunk_left_over[0, 0] == 0.0  # chunk 1 first action
 
-        # Cycle 3: predict sees the carry from cycle 2's snapshot
-        adapter.predict_chunk_with_rtc({"image": "z"})
-        assert policy.calls[2]["prev_chunk_left_over"] is not None
-        assert policy.calls[2]["prev_chunk_left_over"].shape == (10, 7)
+class TestReportValidation:
+    def _adapter_with_chunk(self):
+        adapter = _adapter(_RecordingPolicy())
+        return adapter, adapter.merge_and_update(_chunk(), elapsed_time=0.05)
 
+    @pytest.mark.parametrize("kwargs", [{"actions_executed": 2}, {"chunk_id": "abc"}])
+    def test_fields_must_come_together(self, kwargs):
+        from tether.runtime.rtc_adapter import RtcRequestError
+        adapter, _ = self._adapter_with_chunk()
+        with pytest.raises(RtcRequestError) as exc:
+            adapter.plan_guidance(**kwargs)
+        assert exc.value.status == 422 and exc.value.code == "rtc_report_incomplete"
+
+    def test_stale_chunk_id_is_a_conflict(self):
+        from tether.runtime.rtc_adapter import RtcRequestError
+        adapter, cid = self._adapter_with_chunk()
+        adapter.merge_and_update(_chunk(base=1.0), elapsed_time=0.05)
+        with pytest.raises(RtcRequestError) as exc:
+            adapter.plan_guidance(actions_executed=1, chunk_id=cid)
+        assert exc.value.status == 409 and exc.value.code == "rtc_chunk_mismatch"
+
+    def test_report_before_any_chunk_is_a_conflict(self):
+        from tether.runtime.rtc_adapter import RtcRequestError
+        adapter = _adapter(_RecordingPolicy())
+        with pytest.raises(RtcRequestError) as exc:
+            adapter.plan_guidance(actions_executed=0, chunk_id="abc")
+        assert exc.value.status == 409
+
+    @pytest.mark.parametrize("n", [-1, 11])
+    def test_out_of_range_count_is_refused(self, n):
+        from tether.runtime.rtc_adapter import RtcRequestError
+        adapter, cid = self._adapter_with_chunk()
+        with pytest.raises(RtcRequestError) as exc:
+            adapter.plan_guidance(actions_executed=n, chunk_id=cid)
+        assert exc.value.status == 422 and exc.value.code == "rtc_actions_executed_invalid"
+
+    def test_reset_invalidates_old_chunk_id(self):
+        from tether.runtime.rtc_adapter import RtcRequestError
+        adapter, cid = self._adapter_with_chunk()
+        adapter.reset(episode_id="ep-2")
+        with pytest.raises(RtcRequestError):
+            adapter.plan_guidance(actions_executed=1, chunk_id=cid)
+
+
+class TestLeftoverUnits:
+    class _AffinePolicy(_RecordingPolicy):
+        """Processed = normalized * 2 + 1; normalize is its exact inverse."""
+
+        def normalize_actions(self, actions):
+            return (np.asarray(actions) - 1.0) / 2.0
+
+    def test_leftover_is_converted_to_normalized_space(self):
+        """Regression: the leftover was handed to guidance in processed
+        (denormalized) units while guidance runs in normalized space."""
+        policy = self._AffinePolicy()
+        adapter = _adapter(policy)
+        processed = _chunk() * 2.0 + 1.0
+        cid = adapter.merge_and_update(processed, elapsed_time=0.05)
+        adapter.predict_chunk_with_rtc({"image": "x"}, actions_executed=3, chunk_id=cid)
+        left = policy.calls[0]["prev_chunk_left_over"]
+        np.testing.assert_allclose(left, _chunk()[3:], rtol=0, atol=1e-6)
+        assert left.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# merge_and_update bookkeeping
+# ---------------------------------------------------------------------------
+
+
+class TestMergeBookkeeping:
     def test_chunk_count_increments_on_merge(self):
         adapter = _adapter(_RecordingPolicy())
         assert adapter._chunk_count == 0
@@ -192,48 +247,33 @@ class TestMergeCarryForward:
         adapter.merge_and_update(
             np.zeros((1, 10, 7), dtype=np.float32), elapsed_time=0.05
         )
-        # Buffer should have 10 actions of dim 7 — confirms unwrap worked
         assert adapter.buffer.size == 10
         assert adapter.buffer.peek_all().shape == (10, 7)
+        assert adapter._last_chunk.shape == (10, 7)
 
 
 # ---------------------------------------------------------------------------
-# Reset semantics (Day 1 ✓ — re-tested with carry state populated)
+# Reset semantics
 # ---------------------------------------------------------------------------
 
 
 class TestResetClearsCarry:
-    def test_reset_clears_prev_chunk_left_over(self):
+    def test_reset_clears_carry_state(self):
         adapter = _adapter(_RecordingPolicy(), capacity=10)
-        # Populate _prev_chunk_left_over via two merges
-        adapter.merge_and_update(
-            np.zeros((10, 7), dtype=np.float32), elapsed_time=0.05
-        )
-        adapter.merge_and_update(
-            np.zeros((10, 7), dtype=np.float32), elapsed_time=0.05
-        )
-        assert adapter._prev_chunk_left_over is not None  # carry exists
+        cid = adapter.merge_and_update(_chunk(), elapsed_time=0.05)
+        adapter.plan_guidance(actions_executed=1, chunk_id=cid)
+        assert adapter._prev_chunk_left_over is not None
 
         adapter.reset(episode_id="ep-2")
 
         assert adapter._prev_chunk_left_over is None
+        assert adapter._last_chunk is None
         assert adapter._chunk_count == 0
 
     def test_reset_isolates_episodes(self):
-        """After reset, the next predict gets None even if old chunks
-        were in the buffer."""
         policy = _RecordingPolicy()
         adapter = _adapter(policy, capacity=10)
-        # Populate carry
-        adapter.merge_and_update(
-            np.zeros((10, 7), dtype=np.float32), elapsed_time=0.05
-        )
-        adapter.merge_and_update(
-            np.zeros((10, 7), dtype=np.float32), elapsed_time=0.05
-        )
-        assert adapter._prev_chunk_left_over is not None
-
-        # Reset, then predict — first call of new episode should see None
+        adapter.merge_and_update(_chunk(), elapsed_time=0.05)
         adapter.reset(episode_id="ep-2")
         adapter.predict_chunk_with_rtc({"image": "fresh"})
         assert policy.calls[0]["prev_chunk_left_over"] is None

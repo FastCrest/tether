@@ -45,6 +45,9 @@ class _SyntheticPolicy:
         # Each call returns a unique-valued chunk so carry-forward is testable
         self._call_idx = 0
 
+    def normalize_actions(self, actions):
+        return actions
+
     def predict_action_chunk(self, **kwargs):
         self.calls.append(dict(kwargs))
         if self.latency_s > 0:
@@ -73,9 +76,15 @@ def _adapter(policy, capacity=10, execute_hz=100.0):
     )
 
 
-def _run_cycle(adapter):
-    """One predict + merge cycle. Returns the chunk that was produced."""
-    chunk = adapter.predict_chunk_with_rtc({"image": "x"})
+def _run_cycle(adapter, executed=None):
+    """One predict + merge cycle. Returns the chunk that was produced.
+
+    ``executed`` is the client's report against the previous chunk; None
+    sends no report (wall-clock estimate)."""
+    report = {}
+    if executed is not None and adapter._last_chunk_id is not None:
+        report = {"actions_executed": executed, "chunk_id": adapter._last_chunk_id}
+    chunk = adapter.predict_chunk_with_rtc({"image": "x"}, **report)
     # latency.estimate() was used inside predict; merge_and_update needs
     # an elapsed time too. Use a fixed value for repeatable testing.
     adapter.merge_and_update(chunk, elapsed_time=0.05)
@@ -95,36 +104,33 @@ class TestMultiCycleIntegration:
         assert adapter._chunk_count == 10
 
     def test_carry_forward_evolves_per_cycle(self):
-        """After cycle N, _prev_chunk_left_over reflects what was in the
-        buffer immediately before cycle N's chunk was pushed."""
+        """Cycle N's leftover is the unexecuted tail of chunk N-1, sliced at
+        the client's actions_executed report."""
         policy = _SyntheticPolicy()  # chunks valued 0, 1, 2, ...
         adapter = _adapter(policy, capacity=10)
 
-        _run_cycle(adapter)  # cycle 0: buffer empty pre-merge → carry stays None
+        _run_cycle(adapter)  # cycle 0: no previous chunk → no leftover
         assert adapter._prev_chunk_left_over is None
 
-        _run_cycle(adapter)  # cycle 1: buffer had chunk 0 (all 0.0s) pre-merge
+        _run_cycle(adapter, executed=3)  # leftover = chunk 0[3:]
+        assert adapter._prev_chunk_left_over.shape == (7, 7)
         assert adapter._prev_chunk_left_over[0, 0] == 0.0
 
-        _run_cycle(adapter)  # cycle 2: buffer had chunk 1 (all 1.0s) pre-merge
+        _run_cycle(adapter, executed=4)  # leftover = chunk 1[4:]
+        assert adapter._prev_chunk_left_over.shape == (6, 7)
         assert adapter._prev_chunk_left_over[0, 0] == 1.0
 
-        _run_cycle(adapter)  # cycle 3: buffer had chunk 2 (all 2.0s) pre-merge
-        assert adapter._prev_chunk_left_over[0, 0] == 2.0
-
     def test_carry_forward_passed_to_next_predict(self):
-        """The carry from cycle N's merge becomes cycle N+1's predict input."""
+        """The chunk merged in cycle N is the next predict's leftover."""
         policy = _SyntheticPolicy()
         adapter = _adapter(policy)
 
         _run_cycle(adapter)  # cycle 0
-        _run_cycle(adapter)  # cycle 1 — merge captures chunk 0 as carry
-        _run_cycle(adapter)  # cycle 2 — predict sees chunk 0 in carry
+        _run_cycle(adapter, executed=2)  # cycle 1 — guided by chunk 0[2:]
 
-        # cycle 2's predict call (calls[2]) saw the carry from cycle 1's merge,
-        # which was chunk 0 (all 0.0s)
-        assert policy.calls[2]["prev_chunk_left_over"] is not None
-        assert policy.calls[2]["prev_chunk_left_over"][0, 0] == 0.0
+        assert policy.calls[1]["prev_chunk_left_over"] is not None
+        assert policy.calls[1]["prev_chunk_left_over"][0, 0] == 0.0
+        assert policy.calls[1]["prev_chunk_left_over"].shape == (8, 7)
 
     def test_buffer_replans_count_matches_merges(self):
         adapter = _adapter(_SyntheticPolicy())
@@ -450,12 +456,11 @@ class TestRtcContract:
         adapter.predict_chunk_with_rtc({"image": "x"})
         assert policy.calls[0]["prev_chunk_left_over"] is None
 
-    def test_carry_shape_matches_buffer_capacity(self):
-        """The snapshot shape == (buffer.size_pre_merge, action_dim).
-        With capacity=10 and chunk_size=20, buffer fills to 10 and
-        snapshot is (10, action_dim)."""
+    def test_carry_comes_from_returned_chunk_not_buffer(self):
+        """The leftover is sliced from the full chunk returned to the client,
+        not from the (capacity-capped, never-popped-over-HTTP) buffer."""
         policy = _SyntheticPolicy(chunk_size=20, action_dim=7)
         adapter = _adapter(policy, capacity=10)
-        _run_cycle(adapter)  # buffer fills to 10 (capped)
-        _run_cycle(adapter)  # this merge snapshots the 10
-        assert adapter._prev_chunk_left_over.shape == (10, 7)
+        _run_cycle(adapter)  # buffer caps at 10; the client got 20
+        _run_cycle(adapter, executed=5)
+        assert adapter._prev_chunk_left_over.shape == (15, 7)

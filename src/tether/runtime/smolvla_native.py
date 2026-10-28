@@ -99,6 +99,65 @@ class SmolVLANativeServer:
         self._batches_run = 0
         self._batched_requests = 0
         self._rmsnorm_patches = 0
+        # Set by create_app when --rtc is on; load() then checks that the
+        # postprocessor can be inverted for the leftover conversion.
+        self._rtc_required = False
+
+    # ---- RTC (LeRobot's own RTCProcessor) -------------------------------
+
+    def rtc_guidance_support(self) -> str | None:
+        """None: LeRobot's SmolVLA denoise loop is RTC-aware (euler_integrate)."""
+        return None
+
+    def _action_unnormalizer(self) -> Any:
+        """The postprocessor's single action UnnormalizerProcessorStep.
+
+        Refuses when the postprocessor does anything else to action values
+        (only device moves are allowed), because then processed actions cannot
+        be mapped back into the space the denoiser guides in.
+        """
+        from lerobot.processor import DeviceProcessorStep, UnnormalizerProcessorStep
+
+        steps = list(getattr(self.postprocessor, "steps", []))
+        unnorm = [st for st in steps if isinstance(st, UnnormalizerProcessorStep)]
+        other = [
+            type(st).__name__ for st in steps
+            if not isinstance(st, (UnnormalizerProcessorStep, DeviceProcessorStep))
+        ]
+        if len(unnorm) != 1 or other:
+            raise RuntimeError(
+                "RTC needs the SmolVLA postprocessor to be one action unnormalizer "
+                f"(plus device moves) to convert the leftover; got {[type(st).__name__ for st in steps]}"
+            )
+        return unnorm[0]
+
+    def normalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Processed (unnormalized) actions -> the policy's normalized space,
+        using the postprocessor's own stats (LeRobot's forward transform)."""
+        import torch
+
+        step = self._action_unnormalizer()
+        t = torch.as_tensor(np.asarray(actions, dtype=np.float32))
+        return step._normalize_action(t, inverse=False).detach().cpu().numpy()
+
+    def _ensure_rtc_processor(self, rtc: Any) -> None:
+        """Point LeRobot's policy at an RTCConfig matching this guidance."""
+        from lerobot.configs.types import RTCAttentionSchedule
+        from lerobot.policies.rtc.configuration_rtc import RTCConfig
+
+        cur = self.policy.config.rtc_config
+        want = (RTCAttentionSchedule(rtc.schedule), float(rtc.max_guidance_weight))
+        if (
+            cur is None or not cur.enabled
+            or (cur.prefix_attention_schedule, float(cur.max_guidance_weight)) != want
+        ):
+            self.policy.config.rtc_config = RTCConfig(
+                enabled=True,
+                prefix_attention_schedule=want[0],
+                max_guidance_weight=want[1],
+                execution_horizon=int(rtc.execution_horizon),
+            )
+            self.policy.init_rtc_processor()
 
     def _load_config(self) -> dict[str, Any]:
         p = self.export_dir / "tether_config.json"
@@ -120,10 +179,23 @@ class SmolVLANativeServer:
             transition_to_policy_action,
         )
 
-        # Resolve device
-        if self._requested_device == "cuda" and torch.cuda.is_available():
+        # Resolve device. A CUDA request on a host without CUDA still runs on
+        # CPU (existing behaviour) but says so; MPS must be available if asked.
+        requested = self._requested_device
+        if requested == "cuda" and torch.cuda.is_available():
             device = "cuda"
+        elif requested == "mps":
+            if not torch.backends.mps.is_available():
+                raise RuntimeError("device='mps' requested but torch reports MPS unavailable")
+            device = "mps"
         else:
+            if requested not in ("cpu", "cuda"):
+                raise ValueError(f"SmolVLA native supports cuda, mps or cpu; got {requested!r}")
+            if requested == "cuda":
+                logger.warning(
+                    "SmolVLA native: device='cuda' requested but CUDA is unavailable; "
+                    "running on CPU"
+                )
             device = "cpu"
         self._device = device
 
@@ -156,6 +228,8 @@ class SmolVLANativeServer:
         self.action_dim = int(self.policy.config.max_action_dim)
         self.chunk_size = int(self.policy.config.chunk_size)
         self.num_denoising_steps = int(self.policy.config.num_steps)
+        if self._rtc_required:
+            self._action_unnormalizer()  # refuse now if the leftover can't be converted
 
         # Safety guard (tether guard) composition — re-uses TetherServer logic
         # Fail closed: a requested safety config that cannot be armed stops
@@ -221,8 +295,12 @@ class SmolVLANativeServer:
         instruction: str = "",
         state: list[float] | np.ndarray | None = None,
         noise: np.ndarray | None = None,
+        rtc: Any = None,
     ) -> dict[str, Any]:
         """Run inference via real SmolVLAPolicy.
+
+        ``rtc`` (``tether.runtime.rtc_guidance.RtcGuidance``) routes LeRobot's
+        RTC kwargs into its RTC-aware Euler loop.
 
         Returns the same dict shape as TetherServer.predict so the FastAPI
         `/act` endpoint works unchanged.
@@ -361,9 +439,21 @@ class SmolVLANativeServer:
             if noise_t.ndim == 2:
                 noise_t = noise_t.unsqueeze(0)
 
+        rtc_kwargs: dict[str, Any] = {}
+        if rtc is not None:
+            self._ensure_rtc_processor(rtc)
+            left = rtc.prev_chunk_left_over
+            rtc_kwargs = {
+                "inference_delay": int(rtc.inference_delay),
+                "execution_horizon": int(rtc.execution_horizon),
+                "prev_chunk_left_over": (
+                    None if left is None
+                    else torch.as_tensor(left, dtype=torch.float32, device=self._device)
+                ),
+            }
         with torch.no_grad():
             actions = self.policy.predict_action_chunk(
-                batch_pp, noise=noise_t
+                batch_pp, noise=noise_t, **rtc_kwargs
             )  # [1, chunk, action_dim_trimmed]
 
         # 4) Unnormalize via postprocessor
@@ -450,6 +540,7 @@ class SmolVLANativeServer:
         image_b64: str | None = None,
         instruction: str = "",
         state: list[float] | None = None,
+        rtc: Any = None,
     ) -> dict[str, Any]:
         """Base64 entry point matching TetherServer for FastAPI reuse."""
         import base64
@@ -463,7 +554,7 @@ class SmolVLANativeServer:
                 image = np.array(img)
             except Exception as e:
                 return {"error": f"Failed to decode image: {e}"}
-        return self.predict(image=image, instruction=instruction, state=state)
+        return self.predict(image=image, instruction=instruction, state=state, rtc=rtc)
 
     # Batching stubs (no batching in native mode; predict is sync)
 
@@ -486,9 +577,10 @@ class SmolVLANativeServer:
         image_b64: str | None = None,
         instruction: str = "",
         state: list[float] | None = None,
+        rtc: Any = None,
     ) -> dict[str, Any]:
         return self.predict_from_base64(
-            image_b64=image_b64, instruction=instruction, state=state
+            image_b64=image_b64, instruction=instruction, state=state, rtc=rtc
         )
 
     async def run_batch(self, requests: list) -> list[dict[str, Any]]:
@@ -500,6 +592,7 @@ class SmolVLANativeServer:
                 image_b64=getattr(req, "image", None),
                 instruction=getattr(req, "instruction", "") or "",
                 state=getattr(req, "state", None),
+                rtc=getattr(req, "rtc", None),
             )
             results.append(res)
         return results

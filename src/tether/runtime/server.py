@@ -260,6 +260,13 @@ async def _predict_from_request_async(server: Any, request: Any) -> dict[str, An
     image_wrist = getattr(request, "image_wrist", None)
     if image_wrist is not None and _call_accepts_keyword(predict, "image_wrist_b64"):
         kwargs["image_wrist_b64"] = image_wrist
+    rtc = getattr(request, "rtc", None)
+    if rtc is not None:
+        # create_app's capability gate admits only servers that take it; a
+        # server that does not would silently serve unguided chunks.
+        if not _call_accepts_keyword(predict, "rtc"):
+            raise RuntimeError(f"{type(server).__name__} cannot apply RTC guidance")
+        kwargs["rtc"] = rtc
     return await predict(**kwargs)
 
 
@@ -1922,6 +1929,10 @@ try:
         episode_id: str | None = None  # B.3: triggers RTC reset on change
         request_id: str | None = None
         session_id: str | None = None
+        # RTC (--rtc): index of the next unexecuted action of the chunk the
+        # server returned as `chunk_id`. Sent together; both optional.
+        actions_executed: int | None = None
+        chunk_id: str | None = None
 
     class HealthResponse(BaseModel):
         status: str
@@ -2094,13 +2105,24 @@ def create_app(
                 "chunk expiry requires replan_hz and execute_hz; HTTP /act returns full chunks"
             )
 
-    if rtc_config is not None and getattr(rtc_config, "enabled", False):
-        raise RuntimeError(
-            "RTC serving is not connected to the HTTP /act inference path. "
-            "Start without --rtc. The RTC adapter has unit coverage, but the "
-            "loaded policy must expose a differentiable per-denoise-step "
-            "contract before real-time chunking can be served honestly."
-        )
+    _rtc_enabled = rtc_config is not None and getattr(rtc_config, "enabled", False)
+    if _rtc_enabled:
+        # Combinations RTC cannot be served with honestly, refused before any
+        # export is read. RTC state is one carry-forward per session.
+        _rtc_conflicts = [
+            name for name, bad in (
+                ("--max-batch > 1", int(max_batch) > 1),
+                ("--a2c2-checkpoint", bool(a2c2_checkpoint)),
+                ("--bid-n-candidates", int(bid_n_candidates) > 0),
+                ("--action-similarity-threshold", float(action_similarity_threshold) > 0),
+                ("--policy-b", bool(policy_b_export_dir)),
+            ) if bad
+        ]
+        if _rtc_conflicts:
+            raise RuntimeError(
+                "RTC cannot be combined with " + ", ".join(_rtc_conflicts)
+                + ": each replaces or reuses chunks outside the guided denoise loop."
+            )
 
     try:
         from contextlib import asynccontextmanager
@@ -2388,6 +2410,21 @@ def create_app(
             f"Serving does not support export_kind={_monolithic_cfg.get('export_kind')!r}"
         )
 
+    if _rtc_enabled:
+        _support = getattr(server, "rtc_guidance_support", None)
+        _reason = (
+            _support() if callable(_support)
+            else f"{type(server).__name__} bakes its denoise loop into one call"
+        )
+        if _reason:
+            raise RuntimeError(
+                "RTC guidance needs per-step velocity access inside the denoise "
+                f"loop, which this runtime does not provide: {_reason}. RTC-capable "
+                "runtimes: SmolVLA native (TETHER_NATIVE=1) and pi0.5 decomposed "
+                "per-step expert exports. Start without --rtc."
+            )
+        server._rtc_required = True  # type: ignore[attr-defined]  # load() checks the leftover conversion
+
     # Paid mode is explicit and is validated before the app/lifespan exists.
     # A missing, invalid, revoked, or offline-first license aborts startup.
     if pro_license is not None and not pro:
@@ -2463,11 +2500,9 @@ def create_app(
             server.embodiment_guard.limits.units,  # type: ignore[attr-defined]
         )
 
-    # Attach RTC adapter (B.3) if --rtc was passed. Day-1 scope: construct
-    # the processor + latency tracker; body methods land Day 2-3 of the B.3
-    # sprint. Stored on server.rtc_adapter for the /act handler to dispatch
-    # to once Day 4 wires the replan loop. Skeleton-safe: when rtc_config
-    # is None or rtc_config.enabled is False, this is a no-op.
+    # Attach the RTC adapter (B.3) if --rtc was passed: /act plans guidance
+    # from it before predict and commits the returned chunk after. No-op when
+    # rtc_config is None or disabled.
     server.rtc_adapter = None  # type: ignore[attr-defined]
     if rtc_config is not None and getattr(rtc_config, "enabled", False):
         # Reject 1-NFE + RTC at config-time per the per-step-expert-export
@@ -2479,72 +2514,38 @@ def create_app(
             or _monolithic_cfg.get("decomposed", {}).get("num_steps")
         )
         assert_rtc_compatible_with_num_steps(_num_steps)
-        try:
-            from .rtc_adapter import RtcAdapter
-            # RTC's merge_and_update calls self.buffer.peek_all() to carry
-            # the previous chunk's unexecuted tail forward as inertia. If
-            # action_buffer wasn't initialized via --replan-hz/--execute-hz,
-            # auto-initialize with sensible defaults so RTC actually works.
-            # (Pre-fix this passed action_buffer=None silently, which made
-            # merge_and_update raise per-call → RTC was effectively no-op
-            # under --rtc without explicit replan flags. Caught 2026-04-30
-            # in gate-6 LIBERO smoke for per-step expert export.)
-            _buf = getattr(server, "_action_buffer", None)
-            if _buf is None:
-                # Server (e.g. Pi05DecomposedServer) may not have
-                # configure_replan/_action_buffer wired up. In either case
-                # RTC needs a buffer for merge_and_update's carry-forward,
-                # so build one directly. Use the chunk_size from the loaded
-                # model when available so the buffer can hold a full chunk.
-                from tether.runtime.buffer import ActionChunkBuffer
-                _chunk = (
-                    getattr(server, "chunk_size", None)
-                    or getattr(server, "action_horizon", None)
-                    or _monolithic_cfg.get("chunk_size")
-                    or _monolithic_cfg.get("decomposed", {}).get("chunk_size")
-                    or 50
-                )
-                _buf = ActionChunkBuffer(
-                    capacity=int(_chunk),
-                    control_hz=execute_hz or rtc_config.execute_hz,
-                    max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
-                )
-                # Stash on server too so any other RTC consumer can find it.
-                server._action_buffer = _buf  # type: ignore[attr-defined]
-                logger.info(
-                    "--rtc auto-built ActionChunkBuffer(capacity=%d) — "
-                    "server class %s lacks configure_replan or it wasn't "
-                    "called; pass --replan-hz/--execute-hz to override",
-                    _chunk, type(server).__name__,
-                )
-                if hasattr(server, "configure_replan"):
-                    # If the server DOES support replan, also wire the
-                    # replan tracker for any other code paths that read
-                    # _replan_hz/_execute_hz. Best-effort.
-                    try:
-                        _buf = configure_action_buffer(
-                            server, replan_hz=replan_hz or rtc_config.replan_hz,
-                            execute_hz=execute_hz or rtc_config.execute_hz,
-                            max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "configure_replan call failed (buffer was built "
-                            "directly so RTC still works): %s", e,
-                        )
-            server.rtc_adapter = RtcAdapter(  # type: ignore[attr-defined]
-                policy=server,
-                action_buffer=_buf,
-                config=rtc_config,
+        from .rtc_adapter import RtcAdapter
+        # The adapter keeps its own record of the last returned chunk (the
+        # leftover source); the buffer only serves in-process integrations
+        # that pop actions themselves, so build a chunk-sized one if absent.
+        _buf = getattr(server, "_action_buffer", None)
+        if _buf is None:
+            from tether.runtime.buffer import ActionChunkBuffer
+            _chunk = (
+                getattr(server, "chunk_size", None)
+                or getattr(server, "action_horizon", None)
+                or _monolithic_cfg.get("chunk_size")
+                or _monolithic_cfg.get("decomposed", {}).get("chunk_size")
+                or 50
             )
-            logger.info(
-                "RTC adapter armed — execution_horizon=%d schedule=%s",
-                rtc_config.rtc_execution_horizon,
-                rtc_config.prefix_attention_schedule,
+            _buf = ActionChunkBuffer(
+                capacity=int(_chunk),
+                control_hz=execute_hz or rtc_config.execute_hz,
+                max_lateness_ms=max_lateness_ms, max_age_ms=max_age_ms,
             )
-        except Exception as e:  # noqa: BLE001 — RTC must never crash serve startup
-            logger.error("RTC adapter init failed (RTC disabled): %s", e)
-            server.rtc_adapter = None  # type: ignore[attr-defined]
+            server._action_buffer = _buf  # type: ignore[attr-defined]
+        # No try/except: an adapter that cannot be built must stop startup,
+        # not leave --rtc serving unguided chunks.
+        server.rtc_adapter = RtcAdapter(  # type: ignore[attr-defined]
+            policy=server,
+            action_buffer=_buf,
+            config=rtc_config,
+        )
+        logger.info(
+            "RTC adapter armed — execution_horizon=%d schedule=%s",
+            rtc_config.rtc_execution_horizon,
+            rtc_config.prefix_attention_schedule,
+        )
 
     # Attach JSONL recorder (B.2) if --record was passed. Lazily emits the
     # header on the first /act call. Coexists with OTel tracing — see
@@ -3663,6 +3664,27 @@ def create_app(
             if _rtc is not None and request.episode_id:
                 span.set_attribute("tether.rtc.episode_id", request.episode_id)
 
+            # RTC guidance inputs for this chunk (leftover from the client's
+            # actions_executed report, or a labelled wall-clock estimate).
+            # Clients that do not run RTC may send neither field.
+            _rtc_plan = None
+            _predict_request: Any = request
+            if _rtc is not None:
+                from .rtc_adapter import RtcRequestError
+                try:
+                    _rtc_plan = _rtc.plan_guidance(
+                        actions_executed=request.actions_executed,
+                        chunk_id=request.chunk_id,
+                    )
+                except RtcRequestError as _rtc_exc:
+                    return JSONResponse(
+                        status_code=_rtc_exc.status, content=_rtc_exc.as_response()
+                    )
+                _predict_request = _snapshot_predict_request(request)
+                _predict_request.rtc = _rtc_plan.guidance
+                span.set_attribute("tether.rtc.applied", _rtc_plan.guidance.prev_chunk_left_over is not None)
+                span.set_attribute("tether.rtc.leftover_source", _rtc_plan.leftover_source)
+
             try:
                 # 2-policy mode: route via TwoPolicyDispatcher (overrides the
                 # single-policy PolicyRuntime path). Per ADR
@@ -3760,10 +3782,10 @@ def create_app(
                     if _runtime is None:
                         # Fallback for backends/tests that don't install a runtime —
                         # call the per-request path directly.
-                        result = await _predict_from_request_async(server, request)
+                        result = await _predict_from_request_async(server, _predict_request)
                     else:
                         try:
-                            result = await _runtime.submit(request)
+                            result = await _runtime.submit(_predict_request)
                         except _PRQueueFull:
                             return JSONResponse(
                                 status_code=503,
@@ -3927,24 +3949,6 @@ def create_app(
                 if "error" in result:
                     span.set_attribute("error.type", str(result.get("error", ""))[:200])
 
-            # RTC post-predict carry-state update (B.3). Snapshots buffer +
-            # pushes new chunk + records latency on the adapter's tracker.
-            # No-op when adapter absent OR result has an error OR actions empty.
-            if (
-                _rtc is not None
-                and isinstance(result, dict)
-                and "error" not in result
-                and isinstance(result.get("actions"), list)
-                and result["actions"]
-            ):
-                try:
-                    actions_arr = np.asarray(result["actions"], dtype=np.float32)
-                    latency_s = float(result.get("latency_ms", 0.0)) / 1000.0
-                    _rtc.merge_and_update(actions_arr, elapsed_time=latency_s)
-                    span.set_attribute("tether.rtc.chunk_count", _rtc._chunk_count)
-                except Exception as e:  # noqa: BLE001 — RTC must never break /act
-                    logger.warning("RTC merge_and_update failed: %s", e)
-
             # A2C2 correction hook (Phase 1 a2c2-correction Day 3).
             # Applies a per-step residual correction to the action chunk
             # when latency p95 ≥ threshold. An explicitly configured legacy
@@ -3995,6 +3999,28 @@ def create_app(
                 except Exception as exc:  # noqa: BLE001 — A2C2 must never break /act
                     logger.warning("a2c2_hook.apply_failed: %s", exc)
 
+            # RTC commit (B.3): record the chunk the client will execute —
+            # after every guard/correction — as the next leftover source.
+            if _rtc is not None and isinstance(result, dict) and "error" not in result:
+                _final = result.get("actions")
+                if isinstance(_final, list) and _final:
+                    _final_arr = np.asarray(_final, dtype=np.float32)
+                    _chunk_id = _rtc.merge_and_update(
+                        _final_arr,
+                        elapsed_time=float(result.get("latency_ms", 0.0)) / 1000.0,
+                    )
+                    _rtc_block = _rtc_plan.telemetry()
+                    _rtc_block["chunk_id"] = _chunk_id
+                    _left = _rtc_plan.leftover_processed
+                    _k = min(_rtc_block["inference_delay"], 0 if _left is None else _left.shape[0], _final_arr.shape[0])
+                    if _k > 0:
+                        _rtc_block["prefix_max_abs"] = round(
+                            float(np.max(np.abs(_final_arr[:_k] - _left[:_k]))), 6
+                        )
+                    result["chunk_id"] = _chunk_id
+                    result["rtc"] = _rtc_block
+                    span.set_attribute("tether.rtc.chunk_count", _rtc._chunk_count)
+
             if _rtc is not None and isinstance(result, dict) and "error" not in result:
                 try:
                     _record_rtc_adaptive_signal(
@@ -4004,6 +4030,8 @@ def create_app(
                     )
                     _rtc_stats = _rtc.get_stats() if hasattr(_rtc, "get_stats") else None
                     _rtc_for_record = _rtc_adaptive_record_from_stats(_rtc_stats)
+                    if isinstance(result.get("rtc"), dict):
+                        _rtc_for_record = {**(_rtc_for_record or {}), **result["rtc"]}
                     _action_execution = _action_execution_from_rtc_stats(
                         _rtc_stats,
                         result,

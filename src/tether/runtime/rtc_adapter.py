@@ -1,23 +1,32 @@
-"""RTC adapter — wraps ``lerobot.policies.rtc.RTCProcessor`` for Tether serve.
+"""RTC adapter — Real-Time Chunking state for Tether serve.
 
 Implements Real-Time Chunking (arxiv 2506.07339) so the robot keeps executing
-the tail of one chunk while the next chunk is being computed. Net: 2-3x
-effective throughput on high-latency deployments (Jetson-class).
+the tail of one chunk while the next chunk is being computed.
 
-Status: Day 1+2 of B.3 sprint shipped (construction + predict body).
-Day 3 wires prev_chunk_left_over carry-forward; Day 4 integrates with
-TetherServer's /act handler. Body methods do real work but assume the
-underlying policy supports the lerobot RTC kwargs (inference_delay,
-prev_chunk_left_over) — true for decomposed exports with Python denoise
-loops; monolithic ONNX (loop baked in) ignores the kwargs silently.
+The adapter owns the per-session carry-forward: the last returned chunk, its
+``chunk_id``, the latency estimate and the leftover the next chunk is guided
+toward. It does not own the guidance math. Torch runtimes hand the guidance
+inputs to LeRobot's ``RTCProcessor``; the pi0.5 per-step ONNX loop uses the
+numpy port in ``tether.runtime.rtc_guidance``. Both apply LeRobot 0.6.1's
+identity-Jacobian correction, not the paper's VJP (see that module).
 
-Design: ``reflex_context/reference/deep_dive_lerobot_rtc.md``
-Plan ref: ``reflex_context/features/01_serve/subfeatures/_rtc_a2c2/rtc-adapter_plan.md``
-Goal: ``serve-rtc-wrapper`` (GOALS.yaml, weight 10)
+Leftover contract (HTTP ``/act``):
+
+- The client reports ``actions_executed`` (index of the next unexecuted action
+  of chunk ``chunk_id``). The leftover is ``chunk[actions_executed:]``.
+- Without a report the count is estimated from wall-clock time since the chunk
+  was returned and labelled ``leftover_source="estimated"``.
+- The leftover is converted into the policy's normalized action space with
+  ``policy.normalize_actions`` before guidance; the stored chunk is the one the
+  client receives (after guards), in processed units.
+
+Design: ``docs/research/rtc-guidance-adr-20261027.md``
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
@@ -127,7 +136,6 @@ class RtcAdapterConfig:
     adaptive_high_correction_magnitude: float = 0.20
     adaptive_high_action_delta: float = 0.25
     adaptive_high_latency_ms: float = 120.0
-    strict_policy_kwargs: bool = False
 
     def __post_init__(self) -> None:
         """Validate the Tether-side extras. lerobot's RTCConfig validates
@@ -252,14 +260,55 @@ class LatencyTracker:
 # Policy protocol
 # ──────────────────────────────────────────────────────────────────
 class RtcCompatiblePolicy(Protocol):
-    """Minimum interface an RtcAdapter expects from a policy.
+    """Minimum interface an enabled RtcAdapter expects from a policy.
 
-    Pi05DecomposedInference, Pi0OnnxServer, and SmolVLANativeServer all
-    implement ``predict_action_chunk(**kwargs) -> np.ndarray`` returning
-    shape ``(B, chunk_size, action_dim)``. RTC wraps this call.
+    ``normalize_actions`` maps processed (client-facing) actions back into the
+    normalized space the denoiser works in; the leftover is converted with it.
+    ``predict_action_chunk`` is only used by the in-process
+    ``predict_chunk_with_rtc`` path; HTTP ``/act`` calls the server's predict
+    with ``rtc=RtcGuidance``.
     """
 
+    def normalize_actions(self, actions: np.ndarray) -> np.ndarray: ...
+
     def predict_action_chunk(self, **kwargs: Any) -> np.ndarray: ...
+
+
+class RtcRequestError(ValueError):
+    """A client's ``chunk_id`` / ``actions_executed`` report was refused."""
+
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+
+    def as_response(self) -> dict[str, Any]:
+        return {"error": self.code, "message": str(self)}
+
+
+@dataclass
+class RtcPlan:
+    """Guidance inputs for one chunk plus the telemetry that describes them."""
+
+    guidance: Any  # tether.runtime.rtc_guidance.RtcGuidance
+    leftover_source: str  # "none" | "client" | "estimated"
+    actions_executed: int | None
+    leftover_processed: np.ndarray | None
+
+    def telemetry(self) -> dict[str, Any]:
+        g = self.guidance
+        left = g.prev_chunk_left_over
+        return {
+            "applied": left is not None,
+            "guidance": "lerobot_identity_jacobian",
+            "leftover_source": self.leftover_source,
+            "actions_executed": self.actions_executed,
+            "leftover_len": 0 if left is None else int(left.shape[0]),
+            "inference_delay": int(g.inference_delay),
+            "execution_horizon": int(g.execution_horizon),
+            "schedule": g.schedule,
+            "max_guidance_weight": float(g.max_guidance_weight),
+        }
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -303,6 +352,11 @@ class RtcAdapter:
         if config.enabled:
             require_rtc()
 
+        if config.enabled and not callable(getattr(policy, "normalize_actions", None)):
+            raise ValueError(
+                f"RTC needs {type(policy).__name__}.normalize_actions to convert "
+                "the leftover into the model's normalized action space"
+            )
         self.policy = policy
         self.buffer = action_buffer
         self.config = config
@@ -328,7 +382,11 @@ class RtcAdapter:
 
         self._active_episode_id: str | None = None
         self._chunk_count: int = 0
-        self._prev_chunk_left_over: Any = None  # set in merge_and_update (Day 3)
+        self._prev_chunk_left_over: Any = None  # normalized leftover of the last plan
+        self._last_chunk: np.ndarray | None = None  # processed, as returned
+        self._last_chunk_id: str | None = None
+        self._last_chunk_at: float = 0.0
+        self._last_plan: RtcPlan | None = None
         self._last_action_delta: float | None = None
         self._last_adaptive_signal = AdaptiveChunkSignal()
         self._last_adaptive_decision: AdaptiveChunkDecision | None = None
@@ -355,81 +413,124 @@ class RtcAdapter:
 
     # ---- Public API ---------------------------------------------
 
-    def predict_chunk_with_rtc(self, batch: dict[str, Any]) -> np.ndarray:
-        """Run one inference with RTC guidance applied.
+    def normalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Processed actions → the policy's normalized action space."""
+        fn = getattr(self.policy, "normalize_actions", None)
+        if fn is None:
+            if self.config.enabled:  # construction refuses this; defensive
+                raise RuntimeError("RTC policy has no normalize_actions")
+            fn = np.asarray  # disabled adapter: no guidance runs on it
+        # Always a fresh array: an identity normalizer must not hand the
+        # caller a view of the stored chunk.
+        return np.array(fn(actions), dtype=np.float32, copy=True)
 
-        Steps:
-        1. Estimate p95 latency from the tracker
-        2. Compute actions_consumed = int(latency_s * config.execute_hz)
-           — how many actions of the previous chunk the robot has already
-           executed by the time this inference completes
-        3. Call policy.predict_action_chunk(**batch, inference_delay=N,
-           prev_chunk_left_over=...) — the policy is responsible for
-           applying RTC guidance via lerobot.policies.rtc.RTCProcessor
-           inside its denoising loop (decomposed exports with Python loops
-           support this; monolithic ONNX ignores the kwargs silently)
-        4. Record elapsed wall-clock on the latency tracker so the next
-           call has a fresh estimate
-        5. Return the chunk unchanged (denormalization happens inside the
-           policy's postprocessor)
+    def plan_guidance(
+        self,
+        *,
+        actions_executed: int | None = None,
+        chunk_id: str | None = None,
+        now: float | None = None,
+    ) -> RtcPlan:
+        """Build the guidance inputs for the next chunk.
 
-        Day 2 scope: prev_chunk_left_over is always None (first-chunk
-        behavior). Day 3 wires the carry-forward from
-        ``self._prev_chunk_left_over`` (set by ``merge_and_update``).
+        Validates the client's report against the last chunk this adapter
+        returned. Raises :class:`RtcRequestError` (HTTP status attached) when
+        the report is incomplete, refers to a different chunk, or is out of
+        range. Never guesses past a refused report.
         """
-        # Step 1+2: latency → actions_consumed
-        latency_s = self.latency.estimate()
-        actions_consumed = int(latency_s * self.config.execute_hz)
-        self._last_actions_consumed = actions_consumed
-        adaptive_decision = self._decide_adaptive_horizon(latency_s)
-        logger.debug(
-            "[rtc] predict — latency p%d=%.3fs → %d actions consumed",
-            self.config.latency_percentile, latency_s, actions_consumed,
-        )
+        from tether.runtime.rtc_guidance import RtcGuidance
 
-        # Step 3: call policy with RTC kwargs
-        # `inference_delay` and `prev_chunk_left_over` are the lerobot
-        # RTC contract (see RTCProcessor.denoise_step). Day 3: carry
-        # forward the previous chunk's leftover so guidance has prefix.
-        rtc_kwargs: dict[str, Any] = {
-            "inference_delay": actions_consumed,
-            "prev_chunk_left_over": self._prev_chunk_left_over,
-        }
-        execution_horizon = self.config.rtc_execution_horizon
-        if (
-            adaptive_decision is not None
-            and not self.config.adaptive_chunking_canary
-        ):
-            execution_horizon = adaptive_decision.horizon
-        self._last_execution_horizon = execution_horizon
-        if self.config.enabled:
-            rtc_kwargs["execution_horizon"] = execution_horizon
-
-        t0 = time.monotonic()
-        try:
-            actions = self.policy.predict_action_chunk(**batch, **rtc_kwargs)
-        except TypeError as exc:
-            if self.config.strict_policy_kwargs:
-                raise RuntimeError(
-                    "RTC is enabled, but this policy does not implement the "
-                    "inference_delay, prev_chunk_left_over, and "
-                    "execution_horizon contract. Use a qualified per-step "
-                    "expert export; plain inference would not apply RTC."
-                ) from exc
-            # Policy doesn't accept RTC kwargs — fall back to plain call.
-            # Useful for monolithic-ONNX policies whose forward doesn't
-            # take inference_delay. The chunk we get back is the same
-            # shape; RTC simply has no effect on this call.
-            logger.debug(
-                "[rtc] policy rejected RTC kwargs — falling back to plain call"
+        if (actions_executed is None) != (chunk_id is None):
+            raise RtcRequestError(
+                422, "rtc_report_incomplete",
+                "actions_executed and chunk_id must be sent together",
             )
-            actions = self.policy.predict_action_chunk(**batch)
-        elapsed_s = time.monotonic() - t0
+        if actions_executed is not None and actions_executed < 0:
+            raise RtcRequestError(422, "rtc_actions_executed_invalid",
+                                  "actions_executed must be >= 0")
+        prev = self._last_chunk
+        executed: int | None = None
+        source = "none"
+        if chunk_id is not None:
+            if prev is None or chunk_id != self._last_chunk_id:
+                raise RtcRequestError(
+                    409, "rtc_chunk_mismatch",
+                    f"chunk_id {chunk_id!r} is not the last chunk this session "
+                    f"returned ({self._last_chunk_id!r}); send a new episode_id "
+                    "to start over",
+                )
+            if actions_executed > prev.shape[0]:
+                raise RtcRequestError(
+                    422, "rtc_actions_executed_invalid",
+                    f"actions_executed={actions_executed} exceeds the chunk "
+                    f"length {prev.shape[0]}",
+                )
+            executed, source = int(actions_executed), "client"
+        elif prev is not None:
+            now = time.monotonic() if now is None else now
+            elapsed = max(0.0, now - self._last_chunk_at)
+            executed = min(prev.shape[0], _ceil_actions(elapsed, self.config.execute_hz))
+            source = "estimated"
 
-        # Step 4: feed the latency tracker
-        self.latency.record(elapsed_s)
+        tail = None if prev is None else prev[executed:]
+        if tail is not None and tail.shape[0] == 0:
+            tail = None
+        latency_s = self.latency.estimate()
+        delay = _ceil_actions(latency_s, self.config.execute_hz)
+        self._last_actions_consumed = delay
+        horizon = self.config.rtc_execution_horizon
+        decision = self._decide_adaptive_horizon(latency_s)
+        if decision is not None and not self.config.adaptive_chunking_canary:
+            horizon = decision.horizon
+        self._last_execution_horizon = horizon
+        plan = RtcPlan(
+            guidance=RtcGuidance(
+                inference_delay=delay,
+                execution_horizon=horizon,
+                prev_chunk_left_over=(
+                    None if tail is None else self.normalize_actions(tail)
+                ),
+                schedule=self.config.prefix_attention_schedule,
+                max_guidance_weight=self.config.max_guidance_weight,
+            ),
+            leftover_source=source,
+            actions_executed=executed,
+            leftover_processed=tail,
+        )
+        self._prev_chunk_left_over = plan.guidance.prev_chunk_left_over
+        self._last_plan = plan
+        return plan
 
-        return actions
+    def predict_chunk_with_rtc(
+        self,
+        batch: dict[str, Any],
+        *,
+        actions_executed: int | None = None,
+        chunk_id: str | None = None,
+    ) -> np.ndarray:
+        """In-process RTC call: plan guidance, then call the policy with
+        LeRobot's kwargs (``inference_delay``, ``prev_chunk_left_over`` in
+        normalized space, ``execution_horizon``). Follow with
+        ``merge_and_update`` to record the returned chunk.
+
+        A policy that does not accept the kwargs raises: plain inference would
+        not apply RTC, so there is no fallback.
+        """
+        plan = self.plan_guidance(actions_executed=actions_executed, chunk_id=chunk_id)
+        g = plan.guidance
+        try:
+            return self.policy.predict_action_chunk(
+                **batch,
+                inference_delay=g.inference_delay,
+                prev_chunk_left_over=g.prev_chunk_left_over,
+                execution_horizon=g.execution_horizon,
+            )
+        except TypeError as exc:
+            raise RuntimeError(
+                "This policy does not implement the inference_delay, "
+                "prev_chunk_left_over and execution_horizon contract; plain "
+                "inference would not apply RTC."
+            ) from exc
 
     def record_adaptive_signal(
         self,
@@ -479,41 +580,37 @@ class RtcAdapter:
         elapsed_time: float,
         *,
         t_obs: float | None = None,
-    ) -> None:
-        """Push the new chunk into the action buffer; record inference latency.
+        now: float | None = None,
+    ) -> str:
+        """Record the chunk returned to the client; return its ``chunk_id``.
 
-        Snapshots the buffer's current contents BEFORE push_chunk overwrites
-        them, stashes as ``self._prev_chunk_left_over`` for the NEXT
-        ``predict_chunk_with_rtc`` call. This is the carry-forward that
-        gives RTC its prefix guidance — the new chunk's first N actions
-        get pulled toward the previous chunk's unexecuted tail.
-
-        On the first chunk, the buffer is empty so the snapshot is None;
-        Day 2's "first-chunk-no-guidance" behavior is preserved.
-
-        actions: shape ``(T, action_dim)`` — already denormalized by the policy.
+        ``actions``: ``(T, A)`` or ``(1, T, A)`` in processed units — exactly
+        what the client will execute. The next ``plan_guidance`` slices its
+        leftover from this chunk. Also pushes it into the action buffer for
+        in-process integrations and records the inference latency.
         """
-        # 1. Snapshot the previous chunk's leftover BEFORE we overwrite it.
-        #    push_chunk(overwrite_stale=True) wipes the buffer; capture first.
-        prev_leftover = self.buffer.peek_all()
-
-        # 2. Push the new chunk (replaces stale)
-        # buffer.push_chunk expects 2D; flatten batch dim if present
-        if actions.ndim == 3 and actions.shape[0] == 1:
-            chunk_2d = actions[0]
-        else:
-            chunk_2d = actions
-        self._last_action_delta = overlapping_action_delta(prev_leftover, chunk_2d)
+        chunk_2d = actions[0] if actions.ndim == 3 and actions.shape[0] == 1 else actions
+        chunk_2d = np.asarray(chunk_2d, dtype=np.float32)
+        plan = self._last_plan
+        self._last_action_delta = overlapping_action_delta(
+            None if plan is None else plan.leftover_processed, chunk_2d,
+        )
         self.buffer.push_chunk(chunk_2d, t_obs=t_obs)
-
-        # 3. Stash the snapshot for the NEXT predict call's guidance
-        self._prev_chunk_left_over = prev_leftover
-
-        # 4. Record latency + bump chunk count
-        self.latency.record(elapsed_time)
         self._chunk_count += 1
+        self._last_chunk = chunk_2d.copy()
+        self._last_chunk_at = time.monotonic() if now is None else now
+        self._last_chunk_id = self._chunk_id_for(chunk_2d)
+        self.latency.record(elapsed_time)
         if self.config.enabled and self._last_execution_horizon is None:
             self._last_execution_horizon = self.config.rtc_execution_horizon
+        return self._last_chunk_id
+
+    def _chunk_id_for(self, chunk: np.ndarray) -> str:
+        h = hashlib.sha256()
+        h.update(str(self._active_episode_id).encode())
+        h.update(self._chunk_count.to_bytes(8, "little"))
+        h.update(np.ascontiguousarray(chunk).tobytes())
+        return h.hexdigest()[:16]
 
     def reset(self, episode_id: str | None = None) -> None:
         """Reset RTC state at episode boundary.
@@ -524,6 +621,10 @@ class RtcAdapter:
         self._active_episode_id = episode_id
         self._chunk_count = 0
         self._prev_chunk_left_over = None
+        self._last_chunk = None
+        self._last_chunk_id = None
+        self._last_chunk_at = 0.0
+        self._last_plan = None
         self._last_action_delta = None
         self._last_adaptive_signal = AdaptiveChunkSignal()
         self._last_adaptive_decision = None
@@ -569,6 +670,13 @@ class RtcAdapter:
         return stats
 
 
+def _ceil_actions(seconds: float, hz: float) -> int:
+    """Actions executed in ``seconds`` at ``hz``, rounded up as LeRobot does
+    (``math.ceil(latency / time_per_action)``); 1e-6 rounding first keeps
+    0.08 s x 100 Hz at 8, not 9."""
+    return math.ceil(round(seconds * hz, 6))
+
+
 def _clean_signal_value(value: float | None) -> float | None:
     if value is None:
         return None
@@ -583,6 +691,8 @@ def _clean_signal_value(value: float | None) -> float | None:
 
 __all__ = [
     "RtcAdapter",
+    "RtcPlan",
+    "RtcRequestError",
     "RtcAdapterConfig",
     "LatencyTracker",
     "RtcCompatiblePolicy",

@@ -246,9 +246,9 @@ class TestMergeAndUpdateHook:
         client.post("/act", json={"image": "x"})  # chunk 1
         # Buffer has chunk 1 contents (capacity 10 = full chunk 1)
         client.post("/act", json={"image": "y"})  # chunk 2
-        # _prev_chunk_left_over should now hold chunk 1's snapshot
-        assert server.rtc_adapter._prev_chunk_left_over is not None
-        assert server.rtc_adapter._prev_chunk_left_over.shape == (10, 7)
+        # The adapter keeps the returned chunk as the next leftover source
+        assert server.rtc_adapter._last_chunk is not None
+        assert server.rtc_adapter._last_chunk.shape == (10, 7)
 
     def test_error_result_skips_merge(self):
         """When predict returns {"error": ...}, merge_and_update is skipped."""
