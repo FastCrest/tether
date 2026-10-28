@@ -31,15 +31,16 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
             "Local native LIBERO execution requires Linux and CUDA.",
             (
                 "2026-10-28: export qualified by a Linux-CUDA receipt (A10G, ORT-CUDA 1.23.2, "
-                "CPU fallback disabled) for smolvla_base@c83c3163 over 8 LIBERO-10 "
-                "instructions: worst full cosine 0.99999992, max_abs 2.2e-3 (p99 4.4e-4). "
-                "TF32 accounts for the error: with NVIDIA_TF32_OVERRIDE=0 the same graph "
-                "gives max_abs 3.1e-6."
+                "CPU fallback disabled) for smolvla_base@c83c3163 over all 10 LIBERO-10 "
+                "instructions with LeRobot's 48-token language contract: worst full cosine "
+                "0.99999987, max_abs 3.0e-3 (p99 5.3e-4). TF32 accounts for the error: with "
+                "NVIDIA_TF32_OVERRIDE=0 the byte-identical graph gives max_abs 4.5e-6."
             ),
             (
-                "2026-10-28: the monolithic graph has a static 16-token language input while "
-                "the checkpoint preprocessor pads to 48; 2 of 10 LIBERO-10 instructions "
-                "(20 and 22 tokens) do not fit and were refused, not compared."
+                "2026-10-28: export and serve now tokenize like LeRobot (SmolVLM2 tokenizer, "
+                "newline, right padding, truncation at tokenizer_max_length=48); the earlier "
+                "16-token graph silently cut 2 of 10 LIBERO-10 instructions. The server "
+                "reports truncation beyond 48 instead of hiding it."
             ),
             ("2026-10-28: evaluation corrected from qualified-libero-linux-cuda. Matched "
             "libero_10 n=20 per arm: smolvla_base@c83c3163 0/20 and the "
@@ -72,10 +73,10 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
                 ),
             },
             "export": {
-                "receipt": "modal volume parity-gpu-receipts:smolvla-c83c3163-20261028/smolvla/smolvla-export-parity-receipt.json",
-                "receipt_sha256": "aafcb61db5c917c5bddd469a0289e0b8376532477d0664544995ef781324c87a",
+                "receipt": "modal volume parity-gpu-receipts:smolvla-c83c3163-lang48-20261028/smolvla/smolvla-export-parity-receipt.json",
+                "receipt_sha256": "1890e3062c9e76dc95d788711657a7afd65fd5dd3f23c57a94ffe994e3c597a4",
                 "model": "lerobot/smolvla_base@c83c3163b8ca9b7e67c509fffd9121e66cb96205",
-                "tether_commit": "16b50c63aacdee37d8d4dd40fd812403a4a912ef",
+                "tether_commit": "0b85acd85f11fb47a736c65c0b1ff76ae077349f",
                 "verdict": "passed",
                 "scope": "linux-cuda",
             },
