@@ -118,7 +118,8 @@ stop start-up; the old `except` that logged and served without RTC is gone.
   `requires_grad_(False)`; the correction still equals the error (x1_t depends
   on x_t directly) and RTC output is bit-identical (test). Re-measured overhead:
   MPS +2.6 % / -0.7 % mean at delays 6 / 10, CPU +0.5 %; MPS delay 3 +13 % mean
-  is unresolved jitter vs residual (verification doc). pi0.5 RTC runs in ONNX
+  was a single-pair artefact: an interleaved 6x ABAB run gives pooled rtc 204.0
+  vs off 212.8 ms (verification doc, 2026-10-28). pi0.5 RTC runs in ONNX
   (no torch parameters); Tether has no torch pi0.5 serving path to fix.
 - `inference_delay` rounds up (`ceil(p95 latency × execute_hz)`) as LeRobot does.
 - Padded action dims: like LeRobot, the leftover is zero-padded to the model's

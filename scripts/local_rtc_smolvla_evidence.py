@@ -276,6 +276,7 @@ def run_arm(policy, device, arm, hz, chunks, stride, horizon, export_dir, seed0)
         "starved_actions": starved,
         "delay_actions": dist(delays),
         "latency_ms": dist([x * 1000 for x in latencies]),
+        "_latencies_ms": [x * 1000 for x in latencies],
         "prefix_max_abs": dist(prefix_err),
         "seam_jump_l2": dist(seam_jump),
         "jerk_at_seam": dist(at_seam),
@@ -309,6 +310,8 @@ def main() -> int:
     p.add_argument("--horizon", type=int, default=20)
     p.add_argument("--arms", nargs="+", default=["off", "rtc", "rtc_vjp"])
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--interleave", type=int, default=0,
+                   help="repeat the arms ABAB... this many times per delay (one warm-up)")
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
 
@@ -338,10 +341,25 @@ def main() -> int:
     results = []
     for d in args.delays:
         hz = d / p50
+        if args.interleave:
+            pooled: dict[str, list[float]] = {arm: [] for arm in args.arms}
+            for rep in range(args.interleave):
+                for arm in args.arms:
+                    row = run_arm(policy, args.device, arm, hz, args.chunks, args.stride,
+                                  args.horizon, export_dir, args.seed * 100_000)
+                    pooled[arm].extend(row.pop("_latencies_ms"))
+                    row.update(target_delay=d, execute_hz=round(hz, 3), repeat=rep)
+                    results.append(row)
+                    print(json.dumps({"rep": rep, "arm": arm, "mean_ms": row["latency_ms"]["mean"]}), flush=True)
+            for arm, lat in pooled.items():
+                results.append({"arm": arm, "target_delay": d, "pooled_latency_ms": dist(lat)})
+                print(json.dumps({"pooled": arm, **dist(lat)}), flush=True)
+            continue
         for arm in args.arms:
             t0 = time.perf_counter()
             row = run_arm(policy, args.device, arm, hz, args.chunks, args.stride,
                           args.horizon, export_dir, args.seed * 100_000)
+            row.pop("_latencies_ms")
             row.update(target_delay=d, execute_hz=round(hz, 3), wall_s=round(time.perf_counter() - t0, 1))
             if arm == "rtc_vjp":
                 row["vjp_vs_identity_rel_diff"] = dist(vjp_denoise_step.rel)

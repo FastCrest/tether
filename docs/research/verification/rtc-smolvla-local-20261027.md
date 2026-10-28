@@ -96,7 +96,7 @@ off vs rtc, latency ms mean / p50 / p95 / p99 / max:
 VERIFIED: with frozen parameters the RTC overhead falls to within run-to-run
 noise at MPS delays 6/10 and on CPU (it was +17-27 % MPS, +17 % CPU). The MPS
 delay-3 pair still differs by +13 % mean; its off arm ran faster than the warm-up
-p50 (169 vs 181 ms), so this is UNKNOWN between MPS jitter and residual cost;
+p50 (169 vs 181 ms). Settled below by an interleaved run: MPS jitter, no residual cost;
 p95/p99 at delays 6/10 show no overhead. Prefix error is unchanged (rtc 0.0033 /
 0.0035 / 0.0044 mean vs off 5.0 / 5.8 / 6.2). At delay 10 both arms starved
 (off 15, rtc 6 actions) on latency spikes. `tests/test_rtc_act.py::TestFrozenPolicy`
@@ -121,3 +121,24 @@ RTC latency. Its effect on a trained policy is UNKNOWN.
   schedule × delay × NFE cases.
 - `tests/test_rtc_act.py`: tiny real SmolVLA through `/act`: on matched seeds the
   RTC prefix error is below every RTC-off prefix error across 4 seeds.
+
+### 2026-10-28 MPS delay-3 question, interleaved (settles the +13 %)
+
+Receipt `mps-delay3-interleaved.json`: one warm-up, then off/rtc alternated
+ABAB for 6 repeats x 60 chunks each, frozen parameters, delay 3
+(`--interleave 6`). Per-repeat mean latency, ms:
+
+| repeat | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| off | 232.9 | 243.0 | 163.5 | 223.1 | 250.0 | 164.1 |
+| rtc | 274.3 | 169.3 | 170.6 | 269.7 | 170.6 | 169.2 |
+
+Pooled (n=360 each), mean / p50 / p95 / p99 / max: off 212.8 / 197.9 / 274.6 /
+292.6 / 332.9; rtc 204.0 / 170.6 / 279.2 / 288.1 / 290.8.
+
+VERIFIED: no RTC gap remains (pooled rtc mean is 4 % *lower*). Both arms
+switch between a ~165-170 ms and a ~225-275 ms regime from one repeat to the
+next, independent of arm, so a single off/rtc pair can show ±40 % by chance;
+the earlier +13 % was one such pair. The regime switch is a host/MPS state
+effect (cause UNKNOWN, e.g. GPU clock/power state), not an RTC op, so no
+profiling or fix was needed.
