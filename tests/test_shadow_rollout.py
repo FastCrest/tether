@@ -37,6 +37,7 @@ def _stub_ort_session(value: float):
     inputs = [MagicMock() for _ in input_names]
     for inp, name in zip(inputs, input_names):
         inp.name = name
+        inp.shape = [1, 16] if name in ("lang_tokens", "lang_masks") else [1]  # static, as real exports
     sess.get_inputs.return_value = inputs
     sess.get_providers.return_value = ["CPUExecutionProvider"]
     sess.run.return_value = [np.ones((1, 2, 2), dtype=np.float32) * value]
