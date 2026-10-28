@@ -23,6 +23,37 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def tokenize_smolvla_instruction(
+    tokenizer: Any, instruction: str, max_length: int
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Tokenize exactly like LeRobot's SmolVLA preprocessor, but say when it cut.
+
+    lerobot 0.6.1: ``smolvla_new_line_processor`` appends "\n" when missing,
+    then ``TokenizerProcessorStep`` calls the tokenizer with
+    ``max_length=tokenizer_max_length, truncation=True, padding="max_length",
+    padding_side="right"``. LeRobot truncates silently; the returned report
+    carries ``truncated`` and the untruncated token count instead.
+    """
+    text = instruction if instruction.endswith("\n") else f"{instruction}\n"
+    full = len(tokenizer(text, truncation=False, padding=False)["input_ids"])
+    enc = tokenizer(
+        text, return_tensors="np", padding="max_length", padding_side="right",
+        max_length=max_length, truncation=True,
+    )
+    report = {
+        "tokens": full,
+        "max_tokens": max_length,
+        "truncated": full > max_length,
+        "dropped_tokens": max(0, full - max_length),
+    }
+    if report["truncated"]:
+        logger.warning(
+            "SmolVLA instruction truncated from %d to %d tokens (LeRobot does the same, "
+            "silently): %r", full, max_length, instruction,
+        )
+    return enc["input_ids"].astype(np.int64), enc["attention_mask"].astype(np.bool_), report
+
+
 class SmolVLAOnnxServer:
     """Monolithic SmolVLA ONNX runtime."""
 
@@ -51,6 +82,7 @@ class SmolVLAOnnxServer:
         self._strict_providers = strict_providers
         self._tokenizer: Any = None
         self._tokenizer_unavailable = False
+        self._lang_len: int | None = None
 
     def _find_onnx_path(self) -> Path:
         if self._explicit_onnx_path is not None:
@@ -121,6 +153,17 @@ class SmolVLAOnnxServer:
             self.config = json.loads(cfg_path.read_text())
 
         self._input_names = [i.name for i in self._session.get_inputs()]
+        # The graph's static language length (16 for exports before the
+        # LeRobot-matching fix, tokenizer_max_length=48 after) is the only
+        # length the session accepts; read it rather than assuming one.
+        lang_shape = next(
+            (i.shape for i in self._session.get_inputs() if i.name == "lang_tokens"), None
+        )
+        self._lang_len = (
+            int(lang_shape[1])
+            if lang_shape is not None and len(lang_shape) == 2 and isinstance(lang_shape[1], int)
+            else None
+        )
         from tether.runtime.tokenizers import ensure_offline_tokenizer_bundle
         ensure_offline_tokenizer_bundle(
             self.export_dir,
@@ -213,20 +256,25 @@ class SmolVLAOnnxServer:
             np.asarray(value, dtype=np.bool_).reshape(-1) for value in masks_list[:3]
         ]
 
-        # Lang: tokenize (SmolLM2 vocab ~49152) or use provided tokens
+        # Lang: tokenize like LeRobot's preprocessor, or use provided tokens
+        language: dict[str, Any] = {"source": "provided"}
         if lang_tokens is None:
+            lang_len = self._lang_len or int((self.config.get("language") or {}).get("max_length") or 0)
+            if not lang_len:
+                raise RuntimeError(
+                    "SmolVLA graph has no static lang_tokens length and tether_config.json "
+                    "records no language.max_length; cannot tokenize without guessing."
+                )
             tok = self._get_tokenizer()
             if tok is not None:
-                enc = tok(
-                    instruction or " ",
-                    return_tensors="np", padding="max_length",
-                    max_length=16, truncation=True,
+                lang_tokens, lang_masks, language = tokenize_smolvla_instruction(
+                    tok, instruction, lang_len
                 )
-                lang_tokens = enc["input_ids"].astype(np.int64)
-                lang_masks = enc["attention_mask"].astype(np.bool_)
+                language["source"] = "tokenizer"
             else:
-                lang_tokens = np.zeros((1, 16), dtype=np.int64)
-                lang_masks = np.ones((1, 16), dtype=np.bool_)
+                lang_tokens = np.zeros((1, lang_len), dtype=np.int64)
+                lang_masks = np.ones((1, lang_len), dtype=np.bool_)
+                language = {"source": "unavailable-zero-tokens", "truncated": None}
         if lang_masks is None:
             lang_masks = np.ones_like(lang_tokens, dtype=np.bool_)
 
@@ -284,6 +332,7 @@ class SmolVLAOnnxServer:
             "active_providers": list(self._active_providers),
             "denoising_steps": steps,
             "num_denoising_steps": steps,
+            "language": language,
         }
 
     # --- create_app lifespan compat ---------------------------------------

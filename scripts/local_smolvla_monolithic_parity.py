@@ -188,6 +188,19 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(graph_lang_len, int):
         raise TypeError(f"Expected a static lang_tokens length, got {graph_inputs['lang_tokens']}.")
 
+    # The serve path (SmolVLAOnnxServer) must tokenize every instruction exactly
+    # as the checkpoint's LeRobot preprocessor does, with the export's bundled
+    # tokenizer; each case checks that before comparing actions.
+    from tether.runtime.smolvla_onnx_server import tokenize_smolvla_instruction
+    from tether.runtime.tokenizers import load_export_tokenizer
+
+    export_config = json.loads((onnx_dir / "tether_config.json").read_text())
+    serve_tokenizer = load_export_tokenizer(
+        onnx_dir, export_config, default_ref=cfg.vlm_model_name, allow_remote=False
+    )
+    if serve_tokenizer is None:
+        raise RuntimeError(f"No bundled tokenizer loads from {onnx_dir}.")
+
     state_dim = cfg.input_features["observation.state"].shape[0]
     image_shape = cfg.input_features[CAMERA_KEYS[0]].shape  # (3, H, W)
     shared: dict[str, np.ndarray] = {}
@@ -213,6 +226,18 @@ def main(argv: list[str] | None = None) -> int:
         lang_tokens = batch_pp["observation.language.tokens"]
         lang_masks = batch_pp["observation.language.attention_mask"].bool()
         real_tokens = int(lang_masks.sum())
+        serve_tokens, serve_masks, serve_report = tokenize_smolvla_instruction(
+            serve_tokenizer, instruction, graph_lang_len
+        )
+        serve_equal = (
+            serve_tokens.shape[1] == lang_tokens.shape[1]
+            and np.array_equal(serve_tokens, lang_tokens.cpu().numpy())
+            and np.array_equal(serve_masks, lang_masks.cpu().numpy())
+        )
+        if not serve_equal:
+            raise RuntimeError(
+                f"case {index}: serve tokenization differs from LeRobot's preprocessor for {instruction!r}"
+            )
         if bool(lang_masks[:, graph_lang_len:].any()):
             refused.append({"instruction": instruction, "tokens": real_tokens, "graph_lang_len": graph_lang_len})
             print(f"  case {index}: REFUSED, {real_tokens} tokens > graph length {graph_lang_len}", flush=True)
@@ -254,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
             "index": index,
             "instruction": instruction,
             "real_tokens": real_tokens,
+            "serve_tokenization_equals_lerobot": serve_equal,
+            "serve_truncated": serve_report["truncated"],
             "input_seed": seed,
             "noise_seed": noise_seed,
             "first_cosine": _cosine(reference_np[0, 0], export_np[0, 0]),

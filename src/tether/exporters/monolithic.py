@@ -210,13 +210,36 @@ _TOKENIZER_REFS = {
 _SMOLVLA_EXPORT_PATCH_FAILURES: list[str] = []
 
 
+def smolvla_language_contract(cfg: Any) -> dict[str, Any]:
+    """LeRobot's SmolVLA language preprocessing, as the runtime must repeat it.
+
+    Mirrors lerobot 0.6.1 ``make_smolvla_pre_post_processors``: the
+    ``smolvla_new_line_processor`` appends "\n" when missing, then
+    ``TokenizerProcessorStep`` tokenizes with ``config.vlm_model_name``,
+    right padding and ``truncation=True`` at ``config.tokenizer_max_length``.
+    The graph is static, so padding is always to ``max_length``; LeRobot's
+    ``pad_language_to="longest"`` only differs in masked pad positions.
+    """
+    return {
+        "tokenizer_ref": cfg.vlm_model_name,
+        "max_length": int(cfg.tokenizer_max_length),
+        "padding": "max_length",
+        "padding_side": "right",
+        "truncation": True,
+        "append_newline": True,
+        "reference_pad_language_to": cfg.pad_language_to,
+    }
+
+
 def _quiet_noisy_export_loggers() -> None:
     """Keep streamed export logs readable while preserving warnings/errors."""
     for name in ("onnx_ir", "onnxscript"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
+def _bundle_tokenizer(
+    output_dir: Path, model_type: str, tokenizer_ref: str | None = None
+) -> dict[str, Any]:
     """Best-effort tokenizer bundle for offline serve/bench.
 
     Tokenizer failure should not fail ONNX export: pi0's canonical PaliGemma
@@ -224,7 +247,7 @@ def _bundle_tokenizer(output_dir: Path, model_type: str) -> dict[str, Any]:
     and serve pre-tokenized requests. When bundling succeeds, runtimes load from
     ``export_dir/tokenizer`` with ``local_files_only=True``.
     """
-    tokenizer_ref = _TOKENIZER_REFS.get(model_type)
+    tokenizer_ref = tokenizer_ref or _TOKENIZER_REFS.get(model_type)
     meta: dict[str, Any] = {
         "tokenizer_ref": tokenizer_ref,
         "tokenizer_path": None,
@@ -956,6 +979,12 @@ def export_smolvla_monolithic(
     chunk = cfg.chunk_size
     action_dim = cfg.max_action_dim
     state_dim = getattr(cfg, "max_state_dim", 32)
+    # The language input is static, so it must be as long as LeRobot's own
+    # tokenizer step makes it: make_smolvla_pre_post_processors pads/truncates
+    # to config.tokenizer_max_length (48 at lerobot 0.6.1) with the
+    # config.vlm_model_name tokenizer. The old fixed 16 silently cut longer
+    # instructions (2 of the 10 LIBERO-10 instructions are 20 and 22 tokens).
+    lang_len = int(cfg.tokenizer_max_length)
 
     dummy = dict(
         img_cam1=torch.randn(B, 3, 512, 512, dtype=torch.float32),
@@ -964,8 +993,8 @@ def export_smolvla_monolithic(
         mask_cam1=torch.ones(B, dtype=torch.bool),
         mask_cam2=torch.ones(B, dtype=torch.bool),
         mask_cam3=torch.ones(B, dtype=torch.bool),
-        lang_tokens=torch.randint(0, 49152, (B, 16), dtype=torch.long),
-        lang_masks=torch.ones(B, 16, dtype=torch.bool),
+        lang_tokens=torch.randint(0, 49152, (B, lang_len), dtype=torch.long),
+        lang_masks=torch.ones(B, lang_len, dtype=torch.bool),
         state=torch.randn(B, state_dim, dtype=torch.float32),
         noise=torch.randn(B, chunk, action_dim, dtype=torch.float32),
     )
@@ -998,6 +1027,8 @@ def export_smolvla_monolithic(
     _write_tether_config(
         output_dir, policy.config, num_steps=num_steps,
         model_id=model_id, model_type="smolvla", target=target,
+        tokenizer_ref=cfg.vlm_model_name,
+        extra_metadata={"language": smolvla_language_contract(cfg)},
     )
 
     size_mb = onnx_path.stat().st_size / 1e6
@@ -1181,9 +1212,11 @@ def _write_tether_config(
     model_id: str,
     model_type: str,
     target: str = "desktop",
+    tokenizer_ref: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Write `tether_config.json` + seed a VERIFICATION.md receipt."""
-    tokenizer_meta = _bundle_tokenizer(output_dir, model_type)
+    tokenizer_meta = _bundle_tokenizer(output_dir, model_type, tokenizer_ref)
     tokenizer_artifacts = [
         (path, "tokenizer") for path in tokenizer_meta.pop("_artifact_paths", [])
     ]
@@ -1200,6 +1233,7 @@ def _write_tether_config(
         "export_kind": "monolithic_onnx",
         "notes": _CCM_DISPATCH_RATIONALE if num_steps > 1 else None,
         **tokenizer_meta,
+        **(extra_metadata or {}),
     }
     from tether.export_config import build_producer_config, write_tether_config
 

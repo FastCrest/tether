@@ -108,6 +108,8 @@ def roundtrip_test():
         import onnxruntime as ort
         sess = ort.InferenceSession(str(smol_onnx), providers=["CPUExecutionProvider"])
         rng = np.random.RandomState(11)
+        # SmolVLA exports trace tokenizer_max_length (48) since 2026-10-28; older ones 16.
+        lang_len = next(i.shape[1] for i in sess.get_inputs() if i.name == "lang_tokens")
         ort_inputs = {
             "img_cam1": rng.randn(1, 3, 512, 512).astype(np.float32),
             "img_cam2": rng.randn(1, 3, 512, 512).astype(np.float32),
@@ -115,8 +117,8 @@ def roundtrip_test():
             "mask_cam1": np.ones((1,), dtype=np.bool_),
             "mask_cam2": np.ones((1,), dtype=np.bool_),
             "mask_cam3": np.ones((1,), dtype=np.bool_),
-            "lang_tokens": np.ones((1, 16), dtype=np.int64),
-            "lang_masks": np.ones((1, 16), dtype=np.bool_),
+            "lang_tokens": np.ones((1, lang_len), dtype=np.int64),
+            "lang_masks": np.ones((1, lang_len), dtype=np.bool_),
             "state": np.zeros((1, 32), dtype=np.float32),
             "noise": rng.randn(1, 50, 32).astype(np.float32),
         }
