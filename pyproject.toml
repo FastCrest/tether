@@ -101,7 +101,7 @@ onnx = ["onnxruntime>=1.17.0"]
 gpu = [
     "onnxruntime-gpu>=1.25.1,<1.26; python_version >= '3.11'",
     "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
-    "nvidia-cuda-runtime-cu12==12.8.90.*; python_version >= '3.11'",
+    "nvidia-cuda-runtime-cu12>=12.8.90,<12.9.80; python_version >= '3.11'",
     "nvidia-cudnn-cu12==9.10.2.21.*; python_version >= '3.11'",
     "nvidia-cublas-cu12==12.8.4.1.*; python_version >= '3.11'",
     "cuda-toolkit==12.8.1; sys_platform == 'linux' and python_version >= '3.11'",
@@ -113,7 +113,7 @@ gpu = [
 gpu-min = [
     "onnxruntime-gpu>=1.25.1,<1.26; python_version >= '3.11'",
     "torch>=2.8,<2.9; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.11'",
-    "nvidia-cuda-runtime-cu12==12.8.90.*; python_version >= '3.11'",
+    "nvidia-cuda-runtime-cu12>=12.8.90,<12.9.80; python_version >= '3.11'",
     "nvidia-cudnn-cu12==9.10.2.21.*; python_version >= '3.11'",
     "nvidia-cublas-cu12==12.8.4.1.*; python_version >= '3.11'",
 ]
