@@ -24,7 +24,7 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
     "smolvla": {
         "checkpoint": "qualified-pinned",
         "export": "qualified-linux-cuda-parity",
-        "training": "qualified-lora",
+        "training": "trains-and-loads-lora-task-gain-unmeasured",
         "evaluation": "harness-verified-libero-linux-cuda",
         "studio_recipe": "tether-smolvla-lora-v1",
         "notes": [
@@ -47,10 +47,30 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
             "harness itself is verified: lerobot/smolvla_libero@a24f1f38 scored 14/20 on "
             "the same 20 cases (SmolVLA paper LIBERO-Long 71%). No Tether-produced "
             "SmolVLA arm has a non-zero matched success, so evaluation is not qualified."),
-            ("2026-10-28: the LoRA training receipt shows the recipe runs; the step-5000 "
-            "adapter did not learn libero_10 (0/20), so training efficacy is unproven."),
+            (
+                "2026-10-28: training corrected from qualified-lora. tether-smolvla-lora-v1 "
+                "completed 5000 steps on lerobot/libero@a1aaacb7 and the adapter loads and runs "
+                "in the LIBERO harness, but it scored 0/20 like its base (0/20), so no task "
+                "gain is measured. Outcome-based training qualification needs an arm that "
+                "beats its parent on matched cases."
+            ),
         ],
         "evidence": {
+            "training": {
+                "recipe": "tether-smolvla-lora-v1",
+                "base": "lerobot/smolvla_base@c83c3163b8ca9b7e67c509fffd9121e66cb96205",
+                "dataset": "lerobot/libero@a1aaacb7f6cd6ee5fb43120f673cebb0cfea7dd4",
+                "steps_completed": 5000,
+                "trains": True,
+                "loads": True,
+                "candidate_matched": [0, 20],
+                "parent_matched": [0, 20],
+                "task_gain_measured": False,
+                "record": (
+                    "Studio studio-training.json modal_receipt (run 09083be3) and "
+                    "docs/evidence/smolvla-qualification-20261027/README.md"
+                ),
+            },
             "export": {
                 "receipt": "modal volume parity-gpu-receipts:smolvla-c83c3163-20261028/smolvla/smolvla-export-parity-receipt.json",
                 "receipt_sha256": "aafcb61db5c917c5bddd469a0289e0b8376532477d0664544995ef781324c87a",

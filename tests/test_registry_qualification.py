@@ -16,7 +16,7 @@ def test_every_registry_family_has_an_explicit_qualification():
 
 def test_qualification_is_conservative_and_copied():
     smolvla = qualification_for("smolvla")
-    assert smolvla["training"] == "qualified-lora"
+    assert smolvla["training"] == "trains-and-loads-lora-task-gain-unmeasured"
     assert qualification_for("dreamzero")["checkpoint"] == "registry-only"
     smolvla["notes"].append("changed")
     assert "changed" not in qualification_for("smolvla")["notes"]
@@ -88,3 +88,17 @@ def test_nested_evidence_is_copied():
     pi0 = qualification_for("pi0")
     pi0["evidence"]["export"]["verdict"] = "changed"
     assert qualification_for("pi0")["evidence"]["export"]["verdict"] == "passed"
+
+
+def test_training_status_follows_measured_task_gain():
+    """Training is 'qualified' only when a trained arm beat its parent on matched
+    cases; trains-and-loads evidence alone (SmolVLA LoRA: 0/20 vs 0/20) is not."""
+    for family, facts in FAMILY_QUALIFICATIONS.items():
+        training = (facts.get("evidence") or {}).get("training")
+        if training is None:
+            continue
+        cand, parent = training["candidate_matched"], training["parent_matched"]
+        gain = training["task_gain_measured"] and cand[0] / cand[1] > parent[0] / parent[1]
+        assert str(facts["training"]).startswith("qualified") == gain, family
+        if training["trains"] and training["loads"] and not gain:
+            assert facts["training"].startswith("trains-and-loads"), family
