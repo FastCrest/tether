@@ -1,0 +1,102 @@
+THIRD-PARTY NOTICES for tether.accel and tether.noninferiority
+================================================================
+
+Tether is licensed under BUSL-1.1 (repository LICENSE). The files listed below
+were ported from third-party source and remain under their original licence.
+Each ported file carries a header stating that FastCrest modified it
+(Apache-2.0 section 4(b)). Full audit: docs/provenance/instinct-port.md.
+
+
+1. InstinctFlash, by General Instinct (Apache-2.0)
+---------------------------------------------------
+
+Source:   https://github.com/General-Instinct/InstinctFlash
+Commit:   34e1c6089fb6317cdfdd3a4cdd93ad92fbf0ebaa (2026-10-28, "License
+          InstinctFlash under Apache-2.0 and add a citation")
+Licence:  Apache License 2.0, full text in LICENSE-Apache-2.0.txt (this
+          directory). The upstream repository ships no NOTICE file for the
+          root package, so there is no NOTICE text to reproduce.
+Author:   every ported file's git history has the single author
+          Guanming <guanming@general-instinct.com> (General Instinct).
+
+Ported files (upstream path -> Tether path):
+
+  instinctflash/verify/certify.py             -> src/tether/noninferiority.py
+  instinctflash/engines/common.py             -> src/tether/accel/_common.py
+  instinctflash/kernels/__init__.py           -> src/tether/accel/kernels/__init__.py
+  instinctflash/kernels/_triton.py            -> src/tether/accel/kernels/_triton.py
+  instinctflash/kernels/fp8.py                -> src/tether/accel/kernels/fp8.py
+  instinctflash/kernels/activation.py         -> src/tether/accel/kernels/activation.py
+  instinctflash/kernels/attention.py          -> src/tether/accel/kernels/attention.py
+  instinctflash/kernels/norm.py               -> src/tether/accel/kernels/norm.py
+  instinctflash/kernels/rope.py               -> src/tether/accel/kernels/rope.py
+  instinctflash/engines/pi05/engine.py        -> src/tether/accel/pi05/engine.py
+  instinctflash/engines/pi05/weights.py       -> src/tether/accel/pi05/weights.py
+  instinctflash/engines/groot_n17/engine.py   -> src/tether/accel/groot_n17/engine.py
+  instinctflash/engines/groot_n17/weights.py  -> src/tether/accel/groot_n17/weights.py
+  instinctflash/engines/groot_n17/frontend.py -> src/tether/accel/groot_n17/frontend.py
+  tests/test_certify.py                       -> tests/test_noninferiority_upstream.py
+  tests/test_gi_kernels.py                    -> tests/test_accel_kernels_gpu.py
+  tests/test_groot_action_generator.py        -> tests/test_accel_groot_generator.py
+
+Tether-original files in the same packages (not third-party): accel/__init__.py,
+accel/pi05/__init__.py, accel/pi05/inference.py, accel/groot_n17/__init__.py,
+and the integration in verify.py, parity_cert.py, parity_report.py.
+
+Names: Apache-2.0 section 6 grants no trademark rights. The upstream product
+and company names appear only in this file and the provenance document.
+
+
+2. Triton fused-attention tutorial (MIT) -- precautionary
+---------------------------------------------------------
+
+src/tether/accel/kernels/attention.py implements the online-softmax
+(FlashAttention-style) recurrence with the same idioms as Triton's MIT-licensed
+tutorial python/tutorials/06-fused-attention.py (running max ``m_i``, running
+sum ``l_i``, ``qk_scale = scale * log2(e)`` with ``exp2``). The upstream file
+carries no derivation notice and its structure (grouped-query row folding,
+device-resident key length, split-KV with fused FP8 output) differs from the
+tutorial, so derivation is UNKNOWN. The MIT notice is reproduced here in case
+any portion is derived:
+
+  Copyright 2018-2020 Philippe Tillet
+  Copyright 2020-2022 OpenAI
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+3. Methods (no code copied)
+---------------------------
+
+  - Tango, T. (1998). Equivalence test and confidence interval for the
+    difference in proportions for the paired-sample design. Statistics in
+    Medicine 17, 891-908. (Paired score interval in noninferiority.py.)
+  - McNemar's exact test; paired Wald interval. (Textbook methods.)
+  - Dao et al., FlashAttention (2022): the online-softmax algorithm.
+  - Model architectures (PaliGemma/Gemma pi0.5, NVIDIA GR00T N1.7) are
+    re-implemented from their checkpoint layouts; no model code is vendored.
+    Checkpoint weights keep their own licences and are never bundled.
+
+
+4. Deliberately NOT copied
+--------------------------
+
+See docs/provenance/instinct-port.md, "Excluded", for each file and reason
+(release/vendor/ upstream model code, msgpack-numpy serving, CUDA/cuBLASLt
+native kernels, and engines Tether has no model path for).
