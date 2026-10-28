@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from tests.sys_modules import swap_modules
 from tether.diagnostics.check_cuda_graphs import _run as check_run
 
 
@@ -140,7 +141,7 @@ def test_pass_when_both_sessions_capture(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
     # Mock try_capture_or_fall_back to return CudaGraphWrapper (captured=True) for both
-    with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
+    with swap_modules({"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
         with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             mock_wrapper = MagicMock()
             mock_wrapper.captured = True
@@ -154,7 +155,7 @@ def test_pass_when_both_sessions_capture(tmp_path):
 def test_warn_when_only_expert_captures(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
-    with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
+    with swap_modules({"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
         with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             # First call (vlm_prefix): eager fallback (captured=False)
             # Second call (expert_denoise): captured=True
@@ -174,7 +175,7 @@ def test_warn_when_only_expert_captures(tmp_path):
 def test_fail_when_neither_captures(tmp_path):
     _write_export(tmp_path, _decomposed_config())
 
-    with patch.dict(sys.modules, {"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
+    with swap_modules({"onnxruntime": _patched_ort_with_providers(["CUDAExecutionProvider", "CPUExecutionProvider"])}):
         with patch("tether.runtime.cuda_graphs.try_capture_or_fall_back") as mock_try:
             prefix_wrapper = MagicMock()
             prefix_wrapper.captured = False
