@@ -28,7 +28,7 @@ from pathlib import Path
 import modal
 
 SMOLVLA_BASE_REVISION = "c83c3163b8ca9b7e67c509fffd9121e66cb96205"
-CAMPAIGN = "smolvla-c83c3163-20261028"
+CAMPAIGN = "smolvla-c83c3163-lang48-20261028"
 
 app = modal.App("tether-smolvla-export-parity-pinned")
 _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
