@@ -32,15 +32,34 @@ def tokenize_smolvla_instruction(
     lerobot 0.6.1: ``smolvla_new_line_processor`` appends "\n" when missing,
     then ``TokenizerProcessorStep`` calls the tokenizer with
     ``max_length=tokenizer_max_length, truncation=True, padding="max_length",
-    padding_side="right"``. LeRobot truncates silently; the returned report
-    carries ``truncated`` and the untruncated token count instead.
+    padding_side="right"``. Truncation follows the tokenizer's
+    ``truncation_side``: SmolVLM2's is "left", so LeRobot keeps the *last* 48
+    tokens. LeRobot truncates silently; the returned report carries
+    ``truncated`` and the untruncated token count instead, from the same single
+    encode pass.
     """
     text = instruction if instruction.endswith("\n") else f"{instruction}\n"
-    full = len(tokenizer(text, truncation=False, padding=False)["input_ids"])
-    enc = tokenizer(
-        text, return_tensors="np", padding="max_length", padding_side="right",
-        max_length=max_length, truncation=True,
-    )
+    # One encode pass. With no special tokens added, the tokenizer's own
+    # truncation=True is exactly a slice of this untruncated sequence on its
+    # truncation_side (SmolVLM2's is "left"), so truncation and padding are
+    # applied here and the untruncated length comes from the same pass.
+    if tokenizer.num_special_tokens_to_add(pair=False):
+        raise ValueError(
+            "SmolVLA tokenizer adds special tokens; one-pass truncation would not match "
+            "LeRobot's tokenizer(truncation=True). Refusing rather than diverging."
+        )
+    pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        raise ValueError("SmolVLA tokenizer has no pad token; cannot pad like LeRobot.")
+    ids = np.asarray(tokenizer(text, truncation=False, padding=False)["input_ids"]).reshape(-1).tolist()
+    full = len(ids)
+    if full > max_length:
+        ids = ids[-max_length:] if tokenizer.truncation_side == "left" else ids[:max_length]
+    real = len(ids)
+    tokens = np.full((1, max_length), pad_id, dtype=np.int64)
+    tokens[0, :real] = ids  # LeRobot pads on the right
+    masks = np.zeros((1, max_length), dtype=np.bool_)
+    masks[0, :real] = True
     report = {
         "tokens": full,
         "max_tokens": max_length,
@@ -56,7 +75,7 @@ def tokenize_smolvla_instruction(
             hashlib.sha256(instruction.encode("utf-8", "replace")).hexdigest()[:12],
             instruction[:80],
         )
-    return enc["input_ids"].astype(np.int64), enc["attention_mask"].astype(np.bool_), report
+    return tokens, masks, report
 
 
 class SmolVLAOnnxServer:

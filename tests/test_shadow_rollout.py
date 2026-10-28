@@ -70,6 +70,14 @@ def test_shadow_policy_records_candidate_actions_without_returning_them(
     monkeypatch.setattr(ort, "InferenceSession", _fake_inference_session)
 
     tok_stub = MagicMock()
+
+    # Tokenizer facts SmolVLA's one-pass tokenization reads.
+
+    tok_stub.num_special_tokens_to_add.return_value = 0
+
+    tok_stub.pad_token_id = 0
+
+    tok_stub.truncation_side = "right"
     tok_stub.return_value = {
         "input_ids": np.zeros((1, 16), dtype=np.int64),
         "attention_mask": np.ones((1, 16), dtype=np.int64),

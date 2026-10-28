@@ -145,3 +145,51 @@ def test_truncation_warning_does_not_log_the_unbounded_instruction(caplog):
     assert len(message) < 400
     assert instruction not in message
     assert hashlib.sha256(instruction.encode()).hexdigest()[:12] in message
+
+
+class _CountingTokenizer:
+    """Wraps a tokenizer and counts encode calls (``__call__``)."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.calls = 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        return self.inner(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+@pytest.mark.parametrize("side", ["right", "left"])
+@pytest.mark.parametrize("repeat", [1, 3])  # fits in 48 / overflows 48
+def test_one_tokenizer_pass_matches_lerobot_and_reports_overflow(side, repeat):
+    inner = _tokenizer()
+    inner.truncation_side = side  # SmolVLM2's tokenizer truncates on the left
+    counting = _CountingTokenizer(inner)
+    instruction = " ".join([LONG] * repeat)
+    tokens, masks, report = tokenize_smolvla_instruction(counting, instruction, 48)
+    assert counting.calls == 1
+    ref_tokens, ref_masks = _lerobot(inner, instruction, 48)
+    np.testing.assert_array_equal(tokens, ref_tokens)
+    np.testing.assert_array_equal(masks, ref_masks)
+    full = _real_tokens(inner, instruction)
+    assert report["tokens"] == full and report["truncated"] == (full > 48)
+
+
+def test_real_smolvlm2_tokenizer_matches_lerobot_when_cached():
+    try:
+        real = transformers.AutoTokenizer.from_pretrained(
+            "HuggingFaceTB/SmolVLM2-500M-Video-Instruct", local_files_only=True
+        )
+    except OSError:
+        pytest.skip("SmolVLM2 tokenizer not cached")
+    for instruction in (LONG, " ".join([LONG] * 4)):
+        counting = _CountingTokenizer(real)
+        tokens, masks, report = tokenize_smolvla_instruction(counting, instruction, 48)
+        ref_tokens, ref_masks = _lerobot(real, instruction, 48)
+        assert counting.calls == 1
+        np.testing.assert_array_equal(tokens, ref_tokens)
+        np.testing.assert_array_equal(masks, ref_masks)
+        assert report["truncated"] == (report["tokens"] > 48)
