@@ -680,7 +680,7 @@ class Pi05DecomposedInference:
         # is active, host memory otherwise (CPU/CoreML hosts). Hold OrtValues
         # in a list so Python GC can't drop the memory mid-loop (would
         # segfault ORT).
-        device = "cuda" if raw_sess.get_providers()[0] == "CUDAExecutionProvider" else "cpu"
+        device = iobinding_device(raw_sess.get_providers())
         device_kept_alive = []
         for nm, arr in expert_feed_base.items():
             ortval = ort.OrtValue.ortvalue_from_numpy(arr, device, 0)
@@ -937,4 +937,13 @@ class Pi05DecomposedInference:
         return hashlib.md5(repr(lang_tokens.tolist()).encode()).digest()
 
 
-__all__ = ["Pi05DecomposedInference", "CacheStats", "CacheEntry"]
+def iobinding_device(providers: list[str]) -> str:
+    """Where the per-step loop pins past_kv: GPU memory when the session runs
+    on CUDA or TensorRT (both consume CUDA OrtValues), host memory otherwise.
+    Binding host memory on a GPU session would copy ~140 MB of past_kv
+    host->device on every Euler step."""
+    gpu = {"CUDAExecutionProvider", "TensorrtExecutionProvider", "NvTensorRTRTXExecutionProvider"}
+    return "cuda" if any(p in gpu for p in providers) else "cpu"
+
+
+__all__ = ["Pi05DecomposedInference", "iobinding_device", "CacheStats", "CacheEntry"]

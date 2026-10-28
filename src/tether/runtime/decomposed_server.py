@@ -564,14 +564,28 @@ class Pi05DecomposedServer:
     # -- RTC -----------------------------------------------------------------
 
     def rtc_guidance_support(self) -> str | None:
-        """None when the export's per-step expert exposes v_t to the Euler loop."""
+        """None when this server can guide its denoise loop; else the reason.
+
+        Checked at startup so a configuration RTC cannot serve is refused
+        before any /act, not by every request.
+        """
         decomposed = self._load_config().get("decomposed", {})
         if not decomposed.get("per_step_expert", False):
             return (
                 "this pi0.5 export bakes the Euler loop into expert_denoise.onnx "
                 "(decomposed.per_step_expert=false); re-export with the per-step expert"
             )
+        if self._action_similarity_threshold > 0:
+            return "the action-similarity fast path returns unguided cached chunks"
+        if self._bid_config is not None or self._a2c2_hook is not None:
+            return "BID and A2C2 replace the guided chunk after the denoise loop"
+        # The served inference is built with cache_level="prefix" (load());
+        # the action cache, which skips the expert, is never enabled here.
         return None
+
+    def _refuse_under_rtc(self, value: Any, name: str) -> None:
+        if value is not None and getattr(self, "_rtc_required", False):
+            raise RuntimeError(f"{name} cannot be combined with RTC: it replaces the guided chunk")
 
     def _padded_action_stats(self, width: int) -> tuple[np.ndarray, np.ndarray] | None:
         """Action mean/std padded or cut to ``width`` (as the denorm step does)."""
@@ -867,6 +881,7 @@ class Pi05DecomposedServer:
 
         Returns nothing. Setting None disables internal a2c2 application.
         """
+        self._refuse_under_rtc(hook, "A2C2")
         if hook is not None and self._bid_config is not None:
             self._a2c2_hook = None
             logger.warning(
@@ -891,6 +906,7 @@ class Pi05DecomposedServer:
         Mutually exclusive with set_a2c2_hook (Phase 1). Setting None disables
         BID and reverts to the single-sample inference path.
         """
+        self._refuse_under_rtc(config, "BID")
         self._bid_config = config
         # Reset previous_chunk on (re)config so we don't score against a stale
         # chunk from a different episode/embodiment.
