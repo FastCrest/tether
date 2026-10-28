@@ -207,7 +207,7 @@ eval-local = [
     "lerobot==0.6.1; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "draccus==0.11.6; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "peft; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "mujoco==3.3.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "mujoco==3.17.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "robosuite==1.4.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "bddl==1.0.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "opencv-python-headless; sys_platform == 'linux' and platform_machine == 'x86_64'",
