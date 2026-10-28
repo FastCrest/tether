@@ -95,14 +95,14 @@ class TestCapabilityGate:
         )
         app = create_app(str(tmp_path), device="cpu", rtc_config=_rtc())
         assert isinstance(app.state.tether_server, Pi05DecomposedServer)
-        assert app.state.tether_server.rtc_adapter is not None
+        assert app.state.tether_server.rtc_streams is not None
 
     def test_smolvla_native_is_admitted(self, tmp_path, monkeypatch):
         from tether.runtime.server import create_app
 
         monkeypatch.setenv("TETHER_NATIVE", "1")
         app = create_app(str(_smolvla_export(tmp_path)), device="cpu", rtc_config=_rtc())
-        assert app.state.tether_server.rtc_adapter is not None
+        assert app.state.tether_server.rtc_streams is not None
         assert app.state.tether_server._rtc_required is True
 
     @pytest.mark.parametrize("kwargs, flag", [
@@ -129,7 +129,7 @@ class TestCapabilityGate:
 
         monkeypatch.setenv("TETHER_NATIVE", "1")
         app = create_app(str(_smolvla_export(tmp_path)), device="cpu")
-        assert app.state.tether_server.rtc_adapter is None
+        assert app.state.tether_server.rtc_streams is None
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +175,13 @@ class TestActWiring:
 
     def test_rtc_off_server_ignores_the_fields(self, tmp_path, monkeypatch, tiny_policy):
         with _client(tmp_path, monkeypatch, tiny_policy, None) as client:
-            body = _act(client, actions_executed=2, chunk_id="anything").json()
+            body = _act(client, actions_executed=2, chunk_id="abc123").json()
         assert "actions" in body and "rtc" not in body and "chunk_id" not in body
 
     @pytest.mark.parametrize("extra, status, code", [
         ({"actions_executed": 2}, 422, "rtc_report_incomplete"),
-        ({"chunk_id": "x"}, 422, "rtc_report_incomplete"),
-        ({"actions_executed": 2, "chunk_id": "stale"}, 409, "rtc_chunk_mismatch"),
+        ({"chunk_id": "ab"}, 422, "rtc_report_incomplete"),
+        ({"actions_executed": 2, "chunk_id": "deadbeef"}, 409, "rtc_chunk_mismatch"),
         ({"actions_executed": tiny.CHUNK + 1, "chunk_id": None}, 422, "rtc_actions_executed_invalid"),
     ])
     def test_bad_reports_are_refused(self, tmp_path, monkeypatch, tiny_policy, extra, status, code):
@@ -204,7 +204,10 @@ class TestActWiring:
         assert body["rtc"]["applied"] is False
         assert stale.status_code == 409
 
-    def test_guidance_pulls_the_prefix_toward_the_leftover(self, tmp_path, monkeypatch, tiny_policy):
+    # execute_hz=10000 forces inference_delay far past the 8-row leftover, the
+    # case that made the old slicing flaky under load (review R-B1).
+    @pytest.mark.parametrize("execute_hz", [100.0, 10000.0])
+    def test_guidance_pulls_the_prefix_toward_the_leftover(self, tmp_path, monkeypatch, tiny_policy, execute_hz):
         """Matched seeds: RTC-on vs RTC-off second chunk against the leftover."""
         def second_chunk(rtc_config, seed):
             with _client(tmp_path, monkeypatch, tiny_policy, rtc_config) as client:
@@ -218,14 +221,15 @@ class TestActWiring:
 
         gaps_on, gaps_off = [], []
         for seed in range(4):
-            prev, on, body = second_chunk(_rtc(), 10 * seed)
+            prev, on, body = second_chunk(_rtc(execute_hz=execute_hz), 10 * seed)
             prev_off, off, _ = second_chunk(None, 10 * seed)
             np.testing.assert_allclose(prev, prev_off, atol=1e-5)  # same first chunk
             d = body["rtc"]["inference_delay"]
             assert d > 0
             left = prev[2:]
-            gaps_on.append(np.abs(on[:d] - left[:d]).max())
-            gaps_off.append(np.abs(off[:d] - left[:d]).max())
+            k = min(d, len(left))  # as production: the prefix is capped by the leftover
+            gaps_on.append(np.abs(on[:k] - left[:k]).max())
+            gaps_off.append(np.abs(off[:k] - left[:k]).max())
             assert body["rtc"]["prefix_max_abs"] == pytest.approx(gaps_on[-1], abs=1e-5)
         assert max(gaps_on) < min(gaps_off)
 
@@ -233,7 +237,7 @@ class TestActWiring:
         """The stored chunk is the response's actions after every guard."""
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             body = _act(client, episode_id="ep").json()
-            adapter = client.app.state.tether_server.rtc_adapter
+            adapter = client.app.state.tether_server.rtc_streams.for_episode("ep").adapter
             np.testing.assert_allclose(adapter._last_chunk, np.asarray(body["actions"]), atol=1e-6)
 
 
