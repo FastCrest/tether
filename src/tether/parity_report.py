@@ -118,6 +118,17 @@ def render_parity_report(verdict: "ParityVerdict") -> str:
             "",
         ]
 
+    ni = verdict.non_inferiority_block()
+    lines += ["## Paired non-inferiority", ""]
+    if ni["status"] == "EVALUATED":
+        lines += ["```", str(verdict.non_inferiority), "```", ""]
+        if verdict.non_inferiority is not None and verdict.non_inferiority.notes:
+            lines += [f"- {note}" for note in verdict.non_inferiority.notes] + [""]
+    elif ni["status"] == "NOT_CERTIFIABLE":
+        lines += [f"NOT_CERTIFIABLE at declared margin {ni['margin_declared']:+.4f}: {ni['reason']}", ""]
+    else:
+        lines += ["NOT_EVALUATED (no margin declared before the run)", ""]
+
     lines += [
         "## Gate detail",
         "",
