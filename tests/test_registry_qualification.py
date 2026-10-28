@@ -150,21 +150,24 @@ def test_every_cited_export_receipt_is_committed_and_hashes_to_its_claim():
             assert (receipt.get("environment") or {}).get(key) == value, family
 
 
-def test_smolvla_producer_commit_is_pinned_by_an_evidence_tag():
-    """main allows only squash/rebase merges, so a branch commit is not in main's
-    history. The SmolVLA receipt's producer commit must be reachable through a
-    permanent tag that the registry cites next to the receipt sha256."""
+@pytest.mark.parametrize("family", sorted(f for f, _ in _export_evidence()))
+def test_every_export_producer_commit_is_pinned_by_an_evidence_tag(family):
+    """main allows only squash/rebase merges, so a receipt's producer commit (a PR
+    branch commit) is not in main's history. Each must be reachable through a
+    permanent evidence/<family>-parity-<shortsha> tag, cited next to the receipt
+    sha256, that resolves to exactly that commit."""
     import subprocess
 
-    export = qualification_for("smolvla")["evidence"]["export"]
-    assert export["tether_commit_tag"] == "evidence/smolvla-parity-0b85acd"
+    export = qualification_for(family)["evidence"]["export"]
+    tag = export["tether_commit_tag"]
+    assert tag == f"evidence/{family}-parity-{export['tether_commit'][:7]}"
     try:
         resolved = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", export["tether_commit_tag"] + "^{commit}"],
+            ["git", "rev-parse", "--verify", "--quiet", tag + "^{commit}"],
             check=False, cwd=_REPO, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         pytest.skip("git is unavailable")
     if resolved.returncode != 0:
-        pytest.skip(f"tag {export['tether_commit_tag']} is not fetched in this checkout")
+        pytest.skip(f"tag {tag} is not fetched in this checkout")
     assert resolved.stdout.strip() == export["tether_commit"]
