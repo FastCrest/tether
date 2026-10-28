@@ -41,6 +41,7 @@ from tether.finetune.backends.snapflow_backend import (
     DEFAULT_CONSISTENCY_ALPHA,
     SnapFlowBackend,
     _build_preprocessor,
+    _build_dataloader,
     _build_velocity_adapters,
     _prepare_batch,
     _save_student_checkpoint,
@@ -158,6 +159,53 @@ class TestResolveTeacherPath:
 # ---------------------------------------------------------------------------
 # snapflow_backend utilities
 # ---------------------------------------------------------------------------
+
+
+class TestLocalDistillationInputs:
+    @requires_lerobot
+    def test_pinned_local_dataset_is_used_for_metadata_and_actions(self, tmp_path):
+        root = tmp_path / "dataset"
+        (root / "meta").mkdir(parents=True)
+        (root / "meta/info.json").write_text("{}")
+        cfg = FinetuneConfig(base="", dataset="lerobot/libero", output=tmp_path,
+            dataset_revision="pinned-commit", batch_size=1,
+            extra_lerobot_args={"distill_dataset_root": str(root), "video_backend": "pyav", "num_workers": 0})
+        with patch("lerobot.datasets.lerobot_dataset.LeRobotDatasetMetadata", return_value=SimpleNamespace(fps=10)) as meta, \
+             patch("lerobot.datasets.lerobot_dataset.LeRobotDataset", return_value=[{"action": torch.zeros(50, 7)}]) as dataset:
+            loader = _build_dataloader(cfg, policy_type="pi05", chunk_size=50)
+            assert next(iter(loader))["action"].shape == (1, 50, 7)
+        meta.assert_called_once_with("lerobot/libero", root=root, revision="pinned-commit")
+        assert dataset.call_args.kwargs["root"] == root
+        assert dataset.call_args.kwargs["revision"] == "pinned-commit"
+        assert dataset.call_args.kwargs["video_backend"] == "pyav"
+        assert dataset.call_args.kwargs["delta_timestamps"]["action"][-1] == 4.9
+
+    @requires_lerobot
+    def test_missing_explicit_local_root_does_not_fall_back_to_hub(self, tmp_path):
+        cfg = FinetuneConfig(base="", dataset="lerobot/libero", output=tmp_path,
+            extra_lerobot_args={"distill_dataset_root": str(tmp_path / "missing")})
+        with patch("lerobot.datasets.lerobot_dataset.LeRobotDataset") as download:
+            with pytest.raises(FileNotFoundError, match="metadata missing"):
+                _build_dataloader(cfg, policy_type="pi05", chunk_size=50)
+            download.assert_not_called()
+
+    @requires_lerobot
+    def test_pi05_bf16_suffix_accepts_fp32_sampling_time(self):
+        from tether.distill.snapflow_pi0_model import _resolve_snapflow_pi05_class
+        model = SimpleNamespace(
+            action_in_proj=torch.nn.Linear(4, 8).to(torch.bfloat16),
+            time_mlp_in=torch.nn.Linear(8, 8).to(torch.bfloat16),
+            time_mlp_out=torch.nn.Linear(8, 8).to(torch.bfloat16),
+            target_time_embed_mlp=torch.nn.Sequential(torch.nn.Linear(8, 8)).to(torch.bfloat16),
+            config=SimpleNamespace(min_period=0.004, max_period=4.0, chunk_size=3),
+            _apply_checkpoint=lambda fn, *args: fn(*args),
+        )
+        out = _resolve_snapflow_pi05_class().embed_suffix(
+            model, torch.randn(1, 3, 4, dtype=torch.bfloat16),
+            torch.ones(1, dtype=torch.float32), target_time=torch.ones(1, dtype=torch.float32))
+        assert out[0].dtype == torch.bfloat16
+        assert out[3].dtype == torch.bfloat16
+        assert torch.isfinite(out[3]).all()
 
 
 class TestPrepareBatch:

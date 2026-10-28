@@ -465,6 +465,9 @@ def _resolve_snapflow_pi05_class() -> type:
             action_emb = self._apply_checkpoint(action_proj_func, noisy_actions)
 
             def time_mlp_func(time_emb):
+                # Sampling uses fp32 timesteps even when the learned time
+                # projections are bf16. Match the actual linear weight dtype.
+                time_emb = time_emb.to(self.time_mlp_in.weight.dtype)
                 x = self.time_mlp_in(time_emb)
                 x = F.silu(x)
                 x = self.time_mlp_out(x)

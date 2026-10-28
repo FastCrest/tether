@@ -132,6 +132,11 @@ def check_schema(cfg: FinetuneConfig) -> PreflightCheck:
         from tether.finetune.local_dataset import validate_local_config
         validate_local_config(cfg)
         features = verify_local_dataset(cfg)["info"]["features"]
+    elif cfg.phase == "distill" and cfg.extra_lerobot_args.get("distill_dataset_root"):
+        import json
+        from pathlib import Path
+        info_path = Path(cfg.extra_lerobot_args["distill_dataset_root"]) / "meta" / "info.json"
+        features = json.loads(info_path.read_text())["features"]
     else:
         features = _fetch_dataset_features(cfg.dataset)
     base_config = (_fetch_base_config(cfg.base, cfg.base_revision) if cfg.base_revision

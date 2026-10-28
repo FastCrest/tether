@@ -113,7 +113,13 @@ def check_dataset_size(cfg: FinetuneConfig) -> PreflightCheck:
         )
 
     if cfg.dataset_root is None:
-        info = _fetch_dataset_info(cfg.dataset)
+        if cfg.phase == "distill" and cfg.extra_lerobot_args.get("distill_dataset_root"):
+            import json
+            from pathlib import Path
+            info_path = Path(cfg.extra_lerobot_args["distill_dataset_root"]) / "meta" / "info.json"
+            info = json.loads(info_path.read_text())
+        else:
+            info = _fetch_dataset_info(cfg.dataset)
     if info is None:
         return PreflightCheck(
             name="dataset_size",

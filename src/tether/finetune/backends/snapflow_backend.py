@@ -230,6 +230,14 @@ class SnapFlowBackend:
             else:
                 enable_snapflow(student.model)
 
+            if policy_type == "pi05" and variant == "default":
+                # The default pi05 SnapFlow override detaches the prefix KV
+                # cache. Its VLM cannot receive gradients; freeze it explicitly
+                # instead of building graphs that will be discarded.
+                for p in student.model.paligemma_with_expert.paligemma.parameters():
+                    p.requires_grad = False
+                logger.info("[snapflow] pi05 default: VLM frozen; training action expert and time/action projections")
+
             for p in teacher.model.target_time_embed_mlp.parameters():
                 p.requires_grad = False
             for m in (teacher.model, student.model):
@@ -306,6 +314,9 @@ class SnapFlowBackend:
             (p for p in student.parameters() if p.requires_grad),
             lr=cfg.learning_rate,
         )
+        logger.info("[snapflow] trainable parameters: %d / %d",
+                    sum(p.numel() for p in student.parameters() if p.requires_grad),
+                    sum(p.numel() for p in student.parameters()))
         checkpoint_root = Path(cfg.output) / "training" / "checkpoints"
         checkpoint_root.mkdir(parents=True, exist_ok=True)
         checkpoint_every = int(
@@ -395,6 +406,14 @@ class SnapFlowBackend:
                         consistency_alpha=consistency_alpha,
                     )
                 loss.backward()
+                gradient_norm = None
+                check_interval = int(cfg.extra_lerobot_args.get("gradient_check_every", 0))
+                if check_interval and (step == 1 or step % check_interval == 0):
+                    grads = [p.grad for p in student.parameters() if p.grad is not None]
+                    norms = torch._foreach_norm(grads)
+                    gradient_norm = float(torch.stack(norms).float().norm().item())
+                    if not torch.isfinite(torch.tensor(gradient_norm)):
+                        raise RuntimeError(f"Non-finite gradient norm at step {step}: {gradient_norm}")
                 opt.step()
 
                 loss_history.append(asdict(snap) | {"step": step})
@@ -411,6 +430,7 @@ class SnapFlowBackend:
                     lr=cfg.learning_rate,
                     flow_matching=snap.flow_matching,
                     consistency=snap.consistency,
+                    gradient_norm=gradient_norm,
                 )
 
                 if step == 1 or step % heartbeat_every == 0:
@@ -794,6 +814,14 @@ def _build_preprocessor(
     the run's device. Other steps are left as-shipped.
     """
     from lerobot.processor.pipeline import DataProcessorPipeline
+    # Policy-specific processors register lazily; dataset-only callers may
+    # not have constructed the policy before loading this pipeline.
+    config_path = teacher_path / "config.json"
+    if config_path.is_file():
+        policy_type = json.loads(config_path.read_text()).get("type")
+        if policy_type in ("pi0", "pi05"):
+            import importlib
+            importlib.import_module(f"lerobot.policies.{policy_type}.processor_{policy_type}")
 
     overrides: dict = {}
     if image_key_map:
@@ -825,9 +853,25 @@ def _build_dataloader(cfg, *, policy_type: str, chunk_size: int | None = None):
     )
     from lerobot.utils.constants import ACTION
 
+    # A pinned Hub snapshot may already have been downloaded outside LeRobot's
+    # revision cache. Pass that root explicitly so 0.6.x does not download it again.
+    local_root = cfg.extra_lerobot_args.get("distill_dataset_root")
+    dataset_kwargs = {}
+    if local_root is not None:
+        local_root = Path(local_root)
+        if not (local_root / "meta" / "info.json").is_file():
+            raise FileNotFoundError(f"Local distillation dataset metadata missing: {local_root}")
+        dataset_kwargs["root"] = local_root
+    if cfg.dataset_revision:
+        dataset_kwargs["revision"] = cfg.dataset_revision
+    video_backend = cfg.extra_lerobot_args.get("video_backend")
+    if video_backend:
+        dataset_kwargs["video_backend"] = video_backend
+
     delta_timestamps = None
     if chunk_size is not None and chunk_size > 1:
-        meta = LeRobotDatasetMetadata(cfg.dataset)
+        meta_kwargs = {k: v for k, v in dataset_kwargs.items() if k != "video_backend"}
+        meta = LeRobotDatasetMetadata(cfg.dataset, **meta_kwargs)
         fps = meta.fps
         delta_timestamps = {ACTION: [i / fps for i in range(chunk_size)]}
         logger.info(
@@ -835,7 +879,7 @@ def _build_dataloader(cfg, *, policy_type: str, chunk_size: int | None = None):
             chunk_size, fps,
         )
 
-    dataset = LeRobotDataset(cfg.dataset, delta_timestamps=delta_timestamps)
+    dataset = LeRobotDataset(cfg.dataset, delta_timestamps=delta_timestamps, **dataset_kwargs)
 
     # Pro-tier base+customer mix per ADR 2026-04-25-self-distilling-serve-
     # architecture decision #2. When cfg.base_dataset is set, mix the two
@@ -894,7 +938,7 @@ def _build_dataloader(cfg, *, policy_type: str, chunk_size: int | None = None):
         dataset,
         batch_size=cfg.batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=int(cfg.extra_lerobot_args.get("num_workers", 2)),
         pin_memory=True,
         drop_last=True,
     )
