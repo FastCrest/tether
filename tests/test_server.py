@@ -1,13 +1,32 @@
 """Tests for the VLA inference server."""
 
+import contextlib
+import sys
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from tether.runtime.server import TetherServer
 from tests.export_config_factory import write_test_export_config
+
+
+@contextlib.contextmanager
+def _fake_onnxruntime(fake):
+    """Swap only `onnxruntime`. patch.dict("sys.modules") restores the whole dict, which
+    also evicts modules first imported inside the block (onnx); the next import then
+    re-runs onnx's C extension and protobuf aborts on duplicate descriptors."""
+    missing = object()
+    previous = sys.modules.get("onnxruntime", missing)
+    sys.modules["onnxruntime"] = fake
+    try:
+        yield
+    finally:
+        if previous is missing:
+            del sys.modules["onnxruntime"]
+        else:
+            sys.modules["onnxruntime"] = previous
 
 
 @pytest.fixture
@@ -407,7 +426,7 @@ class TestStrictProviderMode:
         mock_ort.InferenceSession.return_value = mock_session
         mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
 
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        with _fake_onnxruntime(mock_ort):
             with pytest.raises(RuntimeError, match="fell back to CPU"):
                 server._load_onnx(tmp_path / "expert_stack.onnx")
 
@@ -422,7 +441,7 @@ class TestStrictProviderMode:
         mock_ort.InferenceSession.return_value = mock_session
         mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
 
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        with _fake_onnxruntime(mock_ort):
             # Should NOT raise
             server._load_onnx(tmp_path / "expert_stack.onnx")
             assert server._inference_mode == "onnx_cpu"
@@ -442,7 +461,7 @@ class TestStrictProviderMode:
             "CUDAExecutionProvider", "CPUExecutionProvider",
         ]
 
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        with _fake_onnxruntime(mock_ort):
             server._load_onnx(tmp_path / "expert_stack.onnx")
             assert server._inference_mode == "onnx_gpu"
 
@@ -459,7 +478,7 @@ class TestStrictProviderMode:
         mock_ort.InferenceSession.return_value = mock_session
         mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
 
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        with _fake_onnxruntime(mock_ort):
             server._load_onnx(tmp_path / "expert_stack.onnx")
             assert server._inference_mode == "onnx_cpu"
 
@@ -480,7 +499,7 @@ class TestStrictProviderMode:
         mock_ort.InferenceSession.return_value = mock_session
         mock_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
 
-        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        with _fake_onnxruntime(mock_ort):
             # CUDAExecutionProvider is in providers list → strict should fire
             with pytest.raises(RuntimeError, match="fell back to CPU"):
                 server._load_onnx(tmp_path / "expert_stack.onnx")
