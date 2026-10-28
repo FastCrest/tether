@@ -130,6 +130,7 @@ def run_export_parity(
     model_revision: str = SMOLVLA_BASE_REVISION,
     num_steps: int = 10,
     run_id: str = "",
+    tf32_override: str = "",
 ) -> dict:
     import json as _json
     import subprocess
@@ -150,7 +151,11 @@ def run_export_parity(
         "num_steps": num_steps,
         "campaign": CAMPAIGN,
     }
-    out_root = Path(PARITY_OUT_PATH) / "smolvla"
+    # tf32_override="0" is a diagnostic: it disables TF32 for the ORT-CUDA session
+    # only, to attribute CUDA-vs-CPU error to TF32 math. It writes to its own
+    # directory so the qualifying export and receipt are never overwritten.
+    suffix = f"-tf32-override-{tf32_override}" if tf32_override else ""
+    out_root = Path(PARITY_OUT_PATH) / f"smolvla{suffix}"
     if run_id:
         marker = out_root / "attempts" / run_id
         _parity_out_volume.reload()
@@ -237,6 +242,9 @@ def run_export_parity(
 
     # 3. Receipt-grade parity with CUDA, CPU fallback disabled.
     receipt_path = out_root / "smolvla-export-parity-receipt.json"
+    if tf32_override:
+        env["NVIDIA_TF32_OVERRIDE"] = tf32_override
+        summary["tf32_override"] = tf32_override
     cmd = [
         sys.executable, str(pin_dir / "scripts" / "local_smolvla_monolithic_parity.py"),
         "--model-source", "lerobot/smolvla_base",
@@ -289,7 +297,7 @@ def _local_bundle() -> tuple[bytes, str]:
 
 
 @app.local_entrypoint()
-def main(num_steps: int = 10, run_id: str = "", receipt_out: str = "") -> None:
+def main(num_steps: int = 10, run_id: str = "", receipt_out: str = "", tf32_override: str = "") -> None:
     import json
     import uuid
 
@@ -297,6 +305,7 @@ def main(num_steps: int = 10, run_id: str = "", receipt_out: str = "") -> None:
     print(f"Tether commit {commit} ({len(data) / 1e6:.1f} MB bundle)")
     result = run_export_parity.remote(
         source_bundle=data, tether_revision=commit, num_steps=num_steps, run_id=run_id or uuid.uuid4().hex,
+        tf32_override=tf32_override,
     )
     receipt_bytes = result.pop("receipt_bytes", None)
     if receipt_bytes and receipt_out:

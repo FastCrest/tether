@@ -323,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
             }
             | {"onnxruntime": ort.__version__},
             "reference_device": "cpu-fp32",
+            # ORT's CUDA EP uses TF32 math unless this is "0"; recorded so a
+            # strict-fp32 diagnostic receipt is distinguishable from the default.
+            "environment": {"NVIDIA_TF32_OVERRIDE": os.environ.get("NVIDIA_TF32_OVERRIDE")},
         },
     )
     _write_receipt(receipt_path, receipt)
