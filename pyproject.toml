@@ -30,7 +30,7 @@ dependencies = [
     # docs/research/verification/jetson-numpy-lock-20261012.md.
     # LeRobot requires NumPy >=2, so its extras exclude aarch64 even when
     # users upgrade JetPack's Python. Export/evaluate on a desktop host.
-    "numpy>=1.24.0,<2.0; platform_machine == 'aarch64'",
+    "numpy>=1.24.0,<3.0; platform_machine == 'aarch64'",
     "numpy>=1.24.0; platform_machine != 'aarch64'",
     "pyyaml>=6.0",
     # Always needed: hub access for `tether export <hf_id>` and tokenizer/config
