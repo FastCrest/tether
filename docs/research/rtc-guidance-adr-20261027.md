@@ -115,6 +115,21 @@ Now:
   explicit, per stream, and cannot be sent with a report.
 - Replays now carry the original `X-Tether-*` headers.
 
+**Correction 2026-10-28 (re-review #2 of `130c4e8`).**
+- The replay memo survived a guard trip and `/guard/reset`, so the first exact
+  retry after a reset re-sent the pre-trip chunk without inference (VERIFIED by
+  the reviewer's repro, now `tests/test_rtc_safety.py`). Every RTC request now
+  compares a safety epoch (guard latches, health state, license lease); any
+  change, and `/guard/reset` itself, invalidates every stream's carry-forward
+  and memo. A response during which the guard latched is never cached.
+- The 300 s idle floor made the stream table run out under normal fleet use,
+  and a gate-refused request still claimed a slot. The gate now runs before a
+  stream is claimed; the idle floor defaults to max(2 s, 4 x chunk duration),
+  since a leftover only guides within about one chunk period; a full table's
+  503 carries `Retry-After`; `--rtc` without `--api-key` warns at startup.
+- Not done: an explicit episode-end signal to free a stream at once. With a
+  seconds-scale idle floor it is not needed for capacity.
+
 ### D3. Leftover units
 
 | Option | Verdict | Why |

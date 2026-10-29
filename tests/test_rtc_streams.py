@@ -8,7 +8,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
-import numpy as np
 import pytest
 
 pytest.importorskip("lerobot.policies.rtc")

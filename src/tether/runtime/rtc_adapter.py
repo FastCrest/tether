@@ -142,7 +142,10 @@ class RtcAdapterConfig:
     # flight and has been idle at least stream_min_idle_s; if none qualifies
     # the new episode is refused (503) rather than evicting a live robot.
     max_streams: int = 64
-    stream_min_idle_s: float = 300.0
+    # None: derived at serve time as max(2 s, 4 x chunk duration). The carry-
+    # forward only guides a request that arrives within about one chunk
+    # period, so a stream idle for a few chunk periods holds nothing useful.
+    stream_min_idle_s: float | None = None
     # Deprecated (one release): the adapter is always strict now.
     strict_policy_kwargs: bool | None = field(default=None, repr=False)
 
@@ -166,7 +169,7 @@ class RtcAdapterConfig:
             )
         if self.max_streams < 1:
             raise ValueError(f"max_streams must be >= 1, got {self.max_streams}")
-        if self.stream_min_idle_s < 0:
+        if self.stream_min_idle_s is not None and self.stream_min_idle_s < 0:
             raise ValueError(
                 f"stream_min_idle_s must be >= 0, got {self.stream_min_idle_s}"
             )
@@ -307,10 +310,14 @@ class RtcCompatiblePolicy(Protocol):
 class RtcRequestError(ValueError):
     """A client's ``chunk_id`` / ``actions_executed`` report was refused."""
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, retry_after: int | None = None):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.retry_after = retry_after
+
+    def headers(self) -> dict[str, str] | None:
+        return None if self.retry_after is None else {"Retry-After": str(self.retry_after)}
 
     def as_response(self) -> dict[str, Any]:
         return {"error": self.code, "message": str(self)}
@@ -700,7 +707,7 @@ class RtcAdapter:
         return stats
 
 
-_EPISODE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_EPISODE_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")  # used with fullmatch
 
 
 def _episode_tag(episode_id: str | None) -> str:
@@ -722,9 +729,10 @@ class RtcStream:
     answers an exact retry of the report that produced the last chunk.
     """
 
-    def __init__(self, adapter: RtcAdapter, now: float, clock: Any):
+    def __init__(self, adapter: RtcAdapter, now: float, clock: Any, episode_id: str = ""):
         import asyncio
 
+        self.episode_id = episode_id
         self.adapter = adapter
         self.lock = asyncio.Lock()
         self.users = 0
@@ -741,6 +749,15 @@ class RtcStream:
     def start_episode(self, episode_id: str) -> None:
         """Explicit episode start under a reused episode_id: drop the carry."""
         self.adapter.reset(episode_id=episode_id)
+        self.forget_replay()
+
+    def invalidate(self) -> None:
+        """Safety-state change (guard trip/reset, degrade, license change):
+        drop the carry-forward and the replay memo. The next request plans
+        from a fresh observation with no leftover."""
+        self.start_episode(self.episode_id)
+
+    def forget_replay(self) -> None:
         self._last_report = None
         self._last_body = None
         self._last_headers = {}
@@ -784,6 +801,22 @@ class RtcStreams:
         self.min_idle_s = min_idle_s
         self._clock = clock
         self.evictions = 0
+        self.invalidations = 0
+        self._safety_epoch: Any = None
+
+    def invalidate_all(self, reason: str) -> None:
+        """Drop every stream's carry-forward and replay memo."""
+        for stream in self._streams.values():
+            stream.invalidate()
+        self.invalidations += 1
+        logger.warning("[rtc] invalidated %d stream(s): %s", len(self._streams), reason)
+
+    def sync_safety_epoch(self, epoch: Any) -> None:
+        """Invalidate every stream when the serving safety state changed since
+        the last request (guard tripped or reset, health, license)."""
+        if self._safety_epoch is not None and epoch != self._safety_epoch:
+            self.invalidate_all(f"safety state changed {self._safety_epoch!r} -> {epoch!r}")
+        self._safety_epoch = epoch
 
     def acquire(self, episode_id: str | None) -> RtcStream:
         """The stream for ``episode_id`` with one more user; pair with
@@ -794,7 +827,7 @@ class RtcStreams:
                 "--rtc keeps one carry-forward per stream; send episode_id "
                 "(one per robot and episode) so streams never mix",
             )
-        if not isinstance(episode_id, str) or not _EPISODE_ID.match(episode_id):
+        if not isinstance(episode_id, str) or not _EPISODE_ID.fullmatch(episode_id):
             raise RtcRequestError(
                 422, "rtc_episode_invalid",
                 "under --rtc episode_id must be 1-128 characters of "
@@ -807,7 +840,7 @@ class RtcStreams:
                 self._evict_one(now)
             adapter = self._factory()
             adapter.reset(episode_id=episode_id)
-            stream = RtcStream(adapter, now, self._clock)
+            stream = RtcStream(adapter, now, self._clock, episode_id)
             self._streams[episode_id] = stream
         stream.users += 1
         stream.last_activity = now
@@ -820,10 +853,16 @@ class RtcStreams:
             if stream.users == 0 and now - stream.last_activity >= self.min_idle_s
         ]
         if not idle:
+            free_at = [
+                self.min_idle_s - (now - stream.last_activity)
+                for stream in self._streams.values() if stream.users == 0
+            ]
+            wait = min(free_at) if free_at else self.min_idle_s
             raise RtcRequestError(
                 503, "rtc_streams_full",
                 f"{len(self._streams)} RTC streams are active (cap {self.max_streams}, "
                 f"none idle >= {self.min_idle_s:g} s); retry later or raise --rtc-max-streams",
+                retry_after=max(1, math.ceil(wait)),
             )
         _, key = min(idle)
         del self._streams[key]

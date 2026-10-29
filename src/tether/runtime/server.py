@@ -1925,11 +1925,11 @@ try:
         episode_id: str | None = None  # B.3: triggers RTC reset on change
         request_id: str | None = None
         session_id: str | None = None
+        # RTC (--rtc): true on the first request of a new episode that reuses
+        # an episode_id; drops that stream's carry-forward. Not with a report.
+        episode_start: StrictBool = False
         # RTC (--rtc): index of the next unexecuted action of the chunk the
         # server returned as `chunk_id`. Sent together; both optional.
-        # RTC: true on the first request of a new episode that reuses an
-        # episode_id; drops that stream's carry-forward. Not with a report.
-        episode_start: StrictBool = False
         actions_executed: StrictInt | None = Field(default=None, ge=0, le=4096)
         chunk_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{1,64}$")
 
@@ -2539,11 +2539,22 @@ def create_app(
         # Build one now: an adapter that cannot be built must stop startup,
         # not leave --rtc serving unguided chunks.
         _new_rtc_adapter()
+        _min_idle = getattr(rtc_config, "stream_min_idle_s", None)
+        if _min_idle is None:
+            # A leftover only guides a request within about one chunk period;
+            # four periods (at least 2 s) covers jitter and retries.
+            _min_idle = max(2.0, 4.0 * _chunk / float(rtc_config.execute_hz))
         server.rtc_streams = RtcStreams(  # type: ignore[attr-defined]
             _new_rtc_adapter,
             max_streams=int(getattr(rtc_config, "max_streams", 64)),
-            min_idle_s=float(getattr(rtc_config, "stream_min_idle_s", 300.0)),
+            min_idle_s=float(_min_idle),
         )
+        if not api_key:
+            logger.warning(
+                "RTC is on and /act is unauthenticated: any caller can claim RTC "
+                "streams (and drive the robot). Start with --api-key and never "
+                "expose /act unauthenticated."
+            )
         logger.info(
             "RTC armed (per-episode streams) — execution_horizon=%d schedule=%s",
             rtc_config.rtc_execution_horizon,
@@ -3585,16 +3596,26 @@ def create_app(
             return await _act_body(request, None)
         from fastapi.responses import Response
         from .rtc_adapter import RtcRequestError
+        # Gate first: a refused request must not claim a stream slot, and a
+        # changed safety state invalidates every stream's leftover and memo.
+        _closed = _gate_response()
+        _streams.sync_safety_epoch(_safety_epoch())
+        if _closed is not None:
+            return _closed
         try:
             _stream = _streams.acquire(request.episode_id)
         except RtcRequestError as _rtc_exc:
-            return JSONResponse(status_code=_rtc_exc.status, content=_rtc_exc.as_response())
+            return JSONResponse(
+                status_code=_rtc_exc.status, content=_rtc_exc.as_response(),
+                headers=_rtc_exc.headers(),
+            )
         try:
             # Serialise plan -> predict -> commit per stream; other streams run.
             async with _stream.lock:
-                # Every gate a fresh /act passes, before any replay: a replay
-                # is actions too, and a tripped guard must stop it.
+                # Every gate a fresh /act passes, again after waiting for the
+                # lock, before any replay: a replay is actions too.
                 _closed = _gate_response()
+                _streams.sync_safety_epoch(_safety_epoch())
                 if _closed is not None:
                     return _closed
                 if request.episode_start:
@@ -3614,8 +3635,13 @@ def create_app(
                         headers={**_headers, "X-Tether-RTC-Replay": "true"},
                     )
                 _before = _stream.adapter._last_chunk_id
+                _epoch = _safety_epoch()
                 _resp = await _act_body(request, _stream.adapter)
-                if (
+                if _safety_epoch() != _epoch:
+                    # The guard latched (or health/license changed) while this
+                    # request ran: never cache it; drop every leftover.
+                    _streams.sync_safety_epoch(_safety_epoch())
+                elif (
                     getattr(_resp, "status_code", 0) == 200
                     and _stream.adapter._last_chunk_id != _before
                 ):
@@ -3626,6 +3652,16 @@ def create_app(
                 return _resp
         finally:
             _stream.release()
+
+    def _safety_epoch() -> tuple:
+        """Everything a cached RTC response or leftover depends on being
+        unchanged: guard latches, health state and the license lease."""
+        return (
+            tuple((name, bool(g.tripped)) for name, g in _all_guards(server)),
+            getattr(server, "health_state", "ready"),
+            int(getattr(server, "_pro_license_deadline", 0) or 0),
+            bool(_paid_license_admitted(server)),
+        )
 
     def _gate_response() -> Any:
         """The 503 a closed serving gate returns, or None when /act may serve."""
@@ -4368,6 +4404,11 @@ def create_app(
         was_tripped = any(bool(g.tripped) for _, g in guards)
         for _, g in guards:
             g.reset()
+        _streams = getattr(server, "rtc_streams", None)
+        if _streams is not None:
+            # After an investigation the robot may have moved: no RTC stream
+            # may replay or guide from a chunk planned before the reset.
+            _streams.invalidate_all("guard reset")
         return JSONResponse(content={
             "reset": True,
             "was_tripped": was_tripped,

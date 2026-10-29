@@ -2521,13 +2521,16 @@ def serve(
         min=1,
         help="With --rtc: most concurrent RTC streams (one per episode_id). At "
              "the cap a new episode evicts only a stream idle for at least "
-             "--rtc-stream-min-idle-s with no request in flight; otherwise 503.",
+             "--rtc-stream-min-idle-s with no request in flight; otherwise 503. "
+             "Use --api-key with --rtc: never expose /act unauthenticated.",
     ),
-    rtc_stream_min_idle_s: float = typer.Option(
-        300.0,
+    rtc_stream_min_idle_s: float | None = typer.Option(
+        None,
         "--rtc-stream-min-idle-s",
         min=0.0,
-        help="With --rtc: idle seconds before a stream may be evicted.",
+        help="With --rtc: idle seconds before a stream may be evicted. Default "
+             "max(2, 4 x chunk duration): a leftover only guides a request "
+             "within about one chunk period.",
     ),
     adaptive_action_chunking: bool = typer.Option(
         False,

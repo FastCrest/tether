@@ -276,6 +276,7 @@ class TetherClient:
         episode_id: str | None = None,
         actions_executed: int | None = None,
         chunk_id: str | None = None,
+        episode_start: bool = False,
     ) -> dict[str, Any]:
         """POST /act. Returns the parsed response dict.
 
@@ -299,6 +300,8 @@ class TetherClient:
         }
         if actions_executed is not None or chunk_id is not None:
             body.update(actions_executed=actions_executed, chunk_id=chunk_id)
+        if episode_start:
+            body["episode_start"] = True
         resp = self._request_with_retry("POST", "/act", json=body)
         return resp.json()
 
@@ -349,10 +352,13 @@ class _EpisodeProxy:
         report = {}
         if actions_executed is not None and self._last_chunk_id is not None:
             report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
+        # Each `with client.episode(...)` is a new episode on an RTC server,
+        # even when it reuses an episode_id: the first request says so.
+        first = self._call_count == 1
         try:
             result = self._client.act(
                 image=image, instruction=instruction, state=state, episode_id=self._episode_id,
-                **report,
+                episode_start=first, **report,
             )
         except TetherClientError as exc:
             if exc.status_code == 409:
@@ -451,6 +457,7 @@ class TetherAsyncClient:
         episode_id: str | None = None,
         actions_executed: int | None = None,
         chunk_id: str | None = None,
+        episode_start: bool = False,
     ) -> dict[str, Any]:
         body = {
             "image": encode_image(image),
@@ -460,6 +467,8 @@ class TetherAsyncClient:
         }
         if actions_executed is not None or chunk_id is not None:
             body.update(actions_executed=actions_executed, chunk_id=chunk_id)
+        if episode_start:
+            body["episode_start"] = True
         resp = await self._request_with_retry("POST", "/act", json=body)
         return resp.json()
 
@@ -504,10 +513,13 @@ class _AsyncEpisodeProxy:
         report = {}
         if actions_executed is not None and self._last_chunk_id is not None:
             report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
+        # Each `with client.episode(...)` is a new episode on an RTC server,
+        # even when it reuses an episode_id: the first request says so.
+        first = self._call_count == 1
         try:
             result = await self._client.act(
                 image=image, instruction=instruction, state=state, episode_id=self._episode_id,
-                **report,
+                episode_start=first, **report,
             )
         except TetherClientError as exc:
             if exc.status_code == 409:
