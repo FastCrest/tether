@@ -131,6 +131,7 @@ def build_parity_cert(verdict: "ParityVerdict", *, parity_md_path: str | Path | 
             "delta": serialize_evidence(verdict.success_rate_delta),
         },
         "first_failing_gate_id": verdict.first_failing_gate_id,
+        "non_inferiority": verdict.non_inferiority_block(),
         "diagnostics": verdict.to_dict()["diagnostics"],
         "gates": [
             {

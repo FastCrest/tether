@@ -3,6 +3,17 @@
 Reflex VLA bundles or vendors code from the following projects. Each
 project's full license text is reproduced below in alphabetical order.
 
+## InstinctFlash by General Instinct (Apache-2.0)
+
+Source: https://github.com/General-Instinct/InstinctFlash @ `34e1c60`
+Ported: 2026-10-28
+Scope: the paired non-inferiority certificate (`src/tether/noninferiority.py`)
+and the FP8 Triton engines for Thor / RTX 4090 / RTX 5090 (`src/tether/accel/`).
+
+Full file list, licence text and notices: `src/tether/accel/THIRD_PARTY_NOTICES`
+and `src/tether/accel/LICENSE-Apache-2.0.txt`. Audit and exclusions:
+`docs/provenance/instinct-port.md`.
+
 ## auto_soarm (MIT)
 
 Source: https://github.com/0o8o0-blip/auto_soarm

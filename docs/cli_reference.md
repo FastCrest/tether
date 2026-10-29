@@ -371,6 +371,13 @@ tether verify ./tether_export/ \
   --signing-key env:TETHER_SIGNING_KEY \
   --key-id tether-prod-2026-06 \
   --output ./verify_output
+
+# Paired non-inferiority on success, margin declared before the run
+tether verify ./tether_export/ \
+  --non-inferiority-margin -0.05 \
+  --non-inferiority-interval tango_one_sided95 \
+  --signing-key env:TETHER_SIGNING_KEY \
+  --output ./verify_output
 ```
 
 | Key flag | Default | Purpose |
@@ -383,6 +390,8 @@ tether verify ./tether_export/ \
 | `--output` | `./verify_output` | Output directory for `PARITY.md`, `parity.cert.json`, and optional signature |
 | `--signing-key` | _(none)_ | Ed25519 key: `env:VAR`, `file:path`, PEM, or base64 32-byte seed |
 | `--key-id` | _(none)_ | Identifier embedded in the signature block |
+| `--non-inferiority-margin` | _(none)_ | Largest acceptable success-rate drop (<= 0, e.g. `-0.05`), declared before the run. When set, the paired McNemar/Tango certificate must PASS and is embedded in the signed `parity.cert.json`; omitted, the cert records `NOT_EVALUATED` |
+| `--non-inferiority-interval` | `wald_central95` | Decision rule: `wald_central95` or `tango_one_sided95` (stays non-degenerate when the arms agree on every episode) |
 
 Exit code `0` means PASS, `1` means the parity gate failed, and `2` means input
 or artifact generation failed.

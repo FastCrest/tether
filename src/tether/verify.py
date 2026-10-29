@@ -49,6 +49,13 @@ from tether.pro.eval_gate import (
     InsufficientEpisodes,
     MIN_EPISODES_TO_EVALUATE,
 )
+from tether.noninferiority import (
+    Certificate as NonInferiorityCertificate,
+    NotCertifiable,
+    Outcome,
+    certify,
+    check_declaration,
+)
 from tether.verify_metrics import (
     EmbodiedParity,
     TwoSampleResult,
@@ -105,6 +112,12 @@ class ParityVerdict:
     two_sample: TwoSampleResult | None = None  # distributional parity (None if no per-step data)
     two_sample_episodes: int = 0  # # episodes the distributional test compared (both arms succeeded)
     embodied: EmbodiedParity | None = None  # kinematic parity (None if no per-step data)
+    # Paired McNemar/Tango non-inferiority on success, decided at a margin declared
+    # BEFORE the run. None margin = not requested; error = declared but not certifiable.
+    non_inferiority_margin: float | None = None
+    non_inferiority_interval: str = "wald_central95"
+    non_inferiority: NonInferiorityCertificate | None = None
+    non_inferiority_error: str | None = None
 
     @property
     def candidate_not_worse(self) -> bool:
@@ -137,6 +150,27 @@ class ParityVerdict:
     def first_failing_gate_id(self) -> str | None:
         g = self.eval_report.first_failing_gate
         return g.gate_id if g is not None else None
+
+    def non_inferiority_block(self) -> dict[str, Any]:
+        """The signed-certificate view of the non-inferiority result."""
+        if self.non_inferiority_margin is None:
+            return {"status": "NOT_EVALUATED", "reason": "no_margin_declared"}
+        if self.non_inferiority is None:
+            return {
+                "status": "NOT_CERTIFIABLE",
+                "margin_declared": self.non_inferiority_margin,
+                "interval": self.non_inferiority_interval,
+                "reason": self.non_inferiority_error or "unknown",
+            }
+        import json
+
+        return {
+            "status": "EVALUATED",
+            "margin_declared": self.non_inferiority_margin,
+            "interval": self.non_inferiority_interval,
+            "passed": self.non_inferiority.passed,
+            "certificate": json.loads(self.non_inferiority.to_json()),
+        }
 
     def to_dict(self) -> dict[str, Any]:
         diagnostics = {
@@ -173,6 +207,7 @@ class ParityVerdict:
             "two_sample_episodes": self.two_sample_episodes,
             "candidate_not_worse": self.candidate_not_worse,
             "embodied": self.embodied.to_dict() if self.embodied else None,
+            "non_inferiority": self.non_inferiority_block(),
             "diagnostics": diagnostics,
             "eval_report": self.eval_report.to_dict(),
         }
@@ -279,6 +314,29 @@ def _rollout_results_to_samples(
                 )
             )
     return samples
+
+
+def _paired_outcomes(results: dict[str, Any]) -> list[Outcome]:
+    """One :class:`Outcome` per rollout episode, keyed by (task_idx, ep) and the run seed.
+
+    Missing success or seed evidence is refused (``NotCertifiable``), never defaulted.
+    """
+    seed = results.get("seed")
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise NotCertifiable("rollout results carry no integer seed; the arms cannot be paired")
+    outcomes: list[Outcome] = []
+    for task in results.get("per_task", []) or []:
+        task_idx = task.get("task_idx")
+        for episode in task.get("episodes", []) or []:
+            success = episode.get("success")
+            if not isinstance(success, bool):
+                raise NotCertifiable(
+                    f"task {task_idx} episode {episode.get('ep')}: success is not a recorded bool"
+                )
+            outcomes.append(
+                Outcome(f"{task_idx}:{episode.get('ep')}", seed, str(task_idx), success)
+            )
+    return outcomes
 
 
 def _success_rate(samples: list[EvalSample]) -> float:
@@ -1169,6 +1227,8 @@ def run_verify(
     safety_config: str | None = None,
     verification_device: str = "cpu",
     gather_fn: GatherFn | None = None,
+    non_inferiority_margin: float | None = None,
+    non_inferiority_interval: str = "wald_central95",
 ) -> ParityVerdict:
     """Resolve original + optimized policies, gather paired samples, score via
     the Pro 9-gate evaluator, and return a :class:`ParityVerdict`.
@@ -1183,6 +1243,13 @@ def run_verify(
         InsufficientEpisodes: fewer than ``MIN_EPISODES_TO_EVALUATE`` paired
             episodes (propagated from :class:`EvalGate`) — verify refuses to
             return a green light on under-powered evidence, matching the gate.
+        NotCertifiable: an invalid ``non_inferiority_margin``/``_interval``
+            declaration, raised before any rollout runs.
+
+    ``non_inferiority_margin`` (<= 0, e.g. ``-0.05``) declares, before the run,
+    the largest acceptable success-rate drop. When given, the paired
+    non-inferiority certificate (:mod:`tether.noninferiority`) must PASS for the
+    verdict to pass, and it is embedded in the signed ``parity.cert.json``.
     """
     if suite not in SUPPORTED_SUITES:
         raise ValueError(
@@ -1190,6 +1257,9 @@ def run_verify(
             f"{', '.join(SUPPORTED_SUITES)}."
         )
     verification_device = normalize_verification_device(verification_device)
+    if non_inferiority_margin is not None:
+        # Declared before the run: a bad declaration must not cost a rollout.
+        check_declaration(non_inferiority_margin, non_inferiority_interval)
 
     resolved_original_ref = original_ref
     if resolved_original_ref is None:
@@ -1299,6 +1369,27 @@ def run_verify(
     if embodied is not None and embodied.regressed():
         passed = False
 
+    non_inferiority: NonInferiorityCertificate | None = None
+    non_inferiority_error: str | None = None
+    if non_inferiority_margin is not None:
+        try:
+            non_inferiority = certify(
+                _paired_outcomes(original_results),
+                _paired_outcomes(optimized_results),
+                margin=non_inferiority_margin,
+                interval=non_inferiority_interval,
+                teacher_hash=str(resolved_original_ref),
+                student_hash=str(optimized_ref),
+                harness=f"{suite}:{task_suite_name}",
+                recipe=target,
+                seeds=str(seed),
+                fail_on_task_collapse=True,
+            )
+        except NotCertifiable as exc:
+            non_inferiority_error = str(exc)
+        if non_inferiority is None or not non_inferiority.passed:
+            passed = False
+
     success_evidence = evidence["success"]
     if success_evidence.is_available:
         original_success_rate: float | EvidenceValue[float] = _success_rate(
@@ -1325,6 +1416,10 @@ def run_verify(
         optimized_success_rate=optimized_success_rate,
         two_sample=two_sample,
         embodied=embodied,
+        non_inferiority_margin=non_inferiority_margin,
+        non_inferiority_interval=non_inferiority_interval,
+        non_inferiority=non_inferiority,
+        non_inferiority_error=non_inferiority_error,
     )
 
 
@@ -1332,6 +1427,7 @@ __all__ = [
     "MIN_EPISODES_TO_EVALUATE",
     "SUPPORTED_SUITES",
     "InsufficientEpisodes",
+    "NotCertifiable",
     "ParityVerdict",
     "gather_paired_samples",
     "run_verify",
