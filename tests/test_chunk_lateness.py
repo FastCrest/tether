@@ -201,18 +201,19 @@ BACKENDS = [
 
 @pytest.mark.parametrize("module,name", BACKENDS)
 @pytest.mark.parametrize("hz", [50, 100, 200, 1000])
-def test_backend_buffer_deadline_ordering_and_rtc_identity(module, name, hz):
+def test_backend_buffer_deadline_ordering(module, name, hz):
+    # RTC no longer shares this buffer: each RTC stream owns its own (per
+    # episode), so configure_action_buffer has no RTC adapter to re-point.
     from tether.runtime.server import configure_action_buffer
 
     cls = getattr(importlib.import_module(f"tether.runtime.{module}"), name)
     server = cls.__new__(cls)
     server.config = {"chunk_size": 5}
-    server.rtc_adapter = SimpleNamespace(buffer=None)
     clock = Clock()
     buf = configure_action_buffer(
         server, replan_hz=20, execute_hz=hz, max_lateness_ms=4, clock=clock
     )
-    assert server.rtc_adapter.buffer is buf is server._action_buffer
+    assert buf is server._action_buffer
     assert buf.control_hz == hz
     buf.push_chunk(CHUNK)
     buf.pop_next()
