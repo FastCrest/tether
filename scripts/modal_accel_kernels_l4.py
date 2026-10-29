@@ -6,8 +6,9 @@ says nothing about 4090 latency.
 
 Usage:
     MODAL_PROFILE=fastcrest modal run scripts/modal_accel_kernels_l4.py
+    ACCEL_GPU=L40S MODAL_PROFILE=fastcrest modal run scripts/modal_accel_kernels_l4.py
 
-Cost: L4 is ~$0.80/h; the 15-minute timeout caps a run well under $1.
+Cost: L4 ~$0.80/h, L40S ~$2/h; the 15-minute timeout caps a run under $1.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ import modal
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 app = modal.App("tether-accel-kernels-l4")
+#: Any sm_89 part works; L40S when the workspace cannot get an L4 (seen 2026-10-28).
+GPU = os.environ.get("ACCEL_GPU", "L4")
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
@@ -39,7 +42,7 @@ image = (
 )
 
 
-@app.function(gpu="L4", image=image, timeout=900)
+@app.function(gpu=GPU, image=image, timeout=900)
 def run() -> str:
     import subprocess
 
