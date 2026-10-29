@@ -3,6 +3,7 @@
 Regression tests for the feat/rtc-guidance-act review (R-B2, R-B3, R-N1..R-N4).
 The /act cases run the real create_app path with the tiny random SmolVLA.
 """
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -45,10 +46,14 @@ class TestPerStreamState:
             assert a2.status_code == 200, a2.text
             assert a2.json()["rtc"]["leftover_source"] == "client"
             # B's report against A's chunk id is refused, not cross-matched.
-            cross = _act(client, episode_id="robot-b", actions_executed=1, chunk_id=a2.json()["chunk_id"])
+            cross = _act(
+                client, episode_id="robot-b", actions_executed=1, chunk_id=a2.json()["chunk_id"]
+            )
             assert cross.status_code == 409
 
-    def test_returning_to_an_episode_keeps_only_its_own_state(self, tmp_path, monkeypatch, tiny_policy):
+    def test_returning_to_an_episode_keeps_only_its_own_state(
+        self, tmp_path, monkeypatch, tiny_policy
+    ):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             a1 = _act(client, episode_id="a").json()
             _act(client, episode_id="b")
@@ -98,7 +103,9 @@ class TestSerialisationAndReplay:
 
 class TestFieldValidation:
     @pytest.mark.parametrize("bad", [True, "3", 2.0, -1, 10**6])
-    def test_actions_executed_must_be_a_small_non_bool_int(self, tmp_path, monkeypatch, tiny_policy, bad):
+    def test_actions_executed_must_be_a_small_non_bool_int(
+        self, tmp_path, monkeypatch, tiny_policy, bad
+    ):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             first = _act(client, episode_id="ep").json()
             r = _act(client, episode_id="ep", actions_executed=bad, chunk_id=first["chunk_id"])
@@ -154,7 +161,9 @@ class TestPi05Startup:
         from tether.runtime.decomposed_server import Pi05DecomposedServer
 
         write_test_export_config(
-            tmp_path, model_type="pi05_decomposed", export_kind="decomposed_onnx",
+            tmp_path,
+            model_type="pi05_decomposed",
+            export_kind="decomposed_onnx",
             artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
             decomposed={"per_step_expert": True},
         )
@@ -173,12 +182,18 @@ class TestPi05Startup:
         with pytest.raises(RuntimeError, match="RTC"):
             server.set_a2c2_hook(object())
 
-    @pytest.mark.parametrize("providers, device", [
-        (["CUDAExecutionProvider", "CPUExecutionProvider"], "cuda"),
-        (["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"], "cuda"),
-        (["CPUExecutionProvider"], "cpu"),
-        (["CoreMLExecutionProvider", "CPUExecutionProvider"], "cpu"),
-    ])
+    @pytest.mark.parametrize(
+        "providers, device",
+        [
+            (["CUDAExecutionProvider", "CPUExecutionProvider"], "cuda"),
+            (
+                ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+                "cuda",
+            ),
+            (["CPUExecutionProvider"], "cpu"),
+            (["CoreMLExecutionProvider", "CPUExecutionProvider"], "cpu"),
+        ],
+    )
     def test_iobinding_keeps_past_kv_on_the_gpu_for_cuda_and_tensorrt(self, providers, device):
         from tether.runtime.pi05_decomposed_server import iobinding_device
 
@@ -217,7 +232,9 @@ class TestReplayPassesEveryGate:
         monkeypatch.setattr(srv, "_paid_license_admitted", lambda _s: False)
 
     @pytest.mark.parametrize("gate", ["_trip_guard", "_degrade", "_expire_license"])
-    def test_replay_is_refused_while_a_gate_is_closed(self, tmp_path, monkeypatch, tiny_policy, gate):
+    def test_replay_is_refused_while_a_gate_is_closed(
+        self, tmp_path, monkeypatch, tiny_policy, gate
+    ):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             report = _committed_report(client)
             getattr(self, gate)(client.app.state.tether_server, monkeypatch)
@@ -232,7 +249,9 @@ class TestReplayPassesEveryGate:
 
 class TestEpisodeIdBounds:
     @pytest.mark.parametrize("bad", ["x" * 129, "robot a", "a/b", "é"])
-    def test_rtc_refuses_unbounded_or_odd_episode_ids(self, tmp_path, monkeypatch, tiny_policy, bad):
+    def test_rtc_refuses_unbounded_or_odd_episode_ids(
+        self, tmp_path, monkeypatch, tiny_policy, bad
+    ):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             r = _act(client, episode_id=bad)
             assert r.status_code == 422
@@ -246,7 +265,9 @@ class TestEpisodeIdBounds:
                 assert _act(client, episode_id=eid).status_code == 200
         assert eid not in caplog.text
 
-    def test_non_rtc_servers_keep_accepting_old_episode_ids(self, tmp_path, monkeypatch, tiny_policy):
+    def test_non_rtc_servers_keep_accepting_old_episode_ids(
+        self, tmp_path, monkeypatch, tiny_policy
+    ):
         with _client(tmp_path, monkeypatch, tiny_policy, None) as client:
             assert _act(client, episode_id="any id / with spaces").status_code == 200
 
@@ -255,9 +276,7 @@ class TestEviction:
     def test_junk_ids_cannot_evict_a_live_stream(self, tmp_path, monkeypatch, tiny_policy):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc(max_streams=4)) as client:
             a1 = _act(client, episode_id="robot-a").json()
-            refused = [
-                _act(client, episode_id=f"junk-{i}").status_code for i in range(10)
-            ]
+            refused = [_act(client, episode_id=f"junk-{i}").status_code for i in range(10)]
             again = _act(client, episode_id="robot-a", actions_executed=1, chunk_id=a1["chunk_id"])
         assert again.status_code == 200, again.text
         assert 503 in refused  # new streams refused at the cap, nothing live evicted
@@ -268,7 +287,9 @@ class TestEviction:
         from tether.runtime.rtc_adapter import RtcStreams
 
         clock = [0.0]
-        streams = RtcStreams(lambda: _FakeAdapter(), max_streams=1, min_idle_s=10.0, clock=lambda: clock[0])
+        streams = RtcStreams(
+            lambda: _FakeAdapter(), max_streams=1, min_idle_s=10.0, clock=lambda: clock[0]
+        )
         streams.acquire("a").release()
         clock[0] = 5.0
         with pytest.raises(Exception) as exc:
@@ -285,7 +306,9 @@ class TestEviction:
         from tether.runtime.rtc_adapter import RtcStreams
 
         clock = [0.0]
-        streams = RtcStreams(lambda: _FakeAdapter(), max_streams=1, min_idle_s=0.0, clock=lambda: clock[0])
+        streams = RtcStreams(
+            lambda: _FakeAdapter(), max_streams=1, min_idle_s=0.0, clock=lambda: clock[0]
+        )
         held = streams.acquire("a")
         waiter = streams.acquire("a")  # queued behind `held`
         held.release()
@@ -316,8 +339,13 @@ class TestEpisodeStart:
     def test_episode_start_with_a_report_is_refused(self, tmp_path, monkeypatch, tiny_policy):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             first = _act(client, episode_id="ep").json()
-            r = _act(client, episode_id="ep", episode_start=True,
-                     actions_executed=1, chunk_id=first["chunk_id"])
+            r = _act(
+                client,
+                episode_id="ep",
+                episode_start=True,
+                actions_executed=1,
+                chunk_id=first["chunk_id"],
+            )
         assert r.status_code == 422
         assert r.json()["error"] == "rtc_episode_start_with_report"
 

@@ -113,8 +113,11 @@ class SmolVLANativeServer:
         parameters leave nothing to record, and the correction still equals
         the weighted error because x1_t depends on x_t directly.
         """
-        self.policy.eval()
-        self.policy.requires_grad_(False)
+        policy = self.policy
+        if policy is None:
+            raise RuntimeError("SmolVLA policy not loaded; call load() first")
+        policy.eval()
+        policy.requires_grad_(False)
 
     # ---- RTC (LeRobot's own RTCProcessor) -------------------------------
 
@@ -158,19 +161,22 @@ class SmolVLANativeServer:
         from lerobot.configs.types import RTCAttentionSchedule
         from lerobot.policies.rtc.configuration_rtc import RTCConfig
 
-        cur = self.policy.config.rtc_config
+        policy = self.policy
+        if policy is None:
+            raise RuntimeError("RTC needs the SmolVLA policy loaded; call load() first")
+        cur = policy.config.rtc_config
         want = (RTCAttentionSchedule(rtc.schedule), float(rtc.max_guidance_weight))
         if (
             cur is None or not cur.enabled
             or (cur.prefix_attention_schedule, float(cur.max_guidance_weight)) != want
         ):
-            self.policy.config.rtc_config = RTCConfig(
+            policy.config.rtc_config = RTCConfig(
                 enabled=True,
                 prefix_attention_schedule=want[0],
                 max_guidance_weight=want[1],
                 execution_horizon=int(rtc.execution_horizon),
             )
-            self.policy.init_rtc_processor()
+            policy.init_rtc_processor()
 
     def _load_config(self) -> dict[str, Any]:
         p = self.export_dir / "tether_config.json"

@@ -6,6 +6,7 @@ real LeRobot policy, a token-only preprocessor and a real LeRobot action
 unnormalizer are wired in. The RTC path under test is LeRobot's own
 (``euler_integrate`` + ``RTCProcessor``).
 """
+
 from __future__ import annotations
 
 import numpy as np

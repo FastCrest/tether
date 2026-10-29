@@ -674,7 +674,7 @@ class Pi05DecomposedInference:
         x_t = noise.astype(np.float32, copy=False)
         B = x_t.shape[0]
         # Underlying ORT session (the cuda-graphs wrapper exposes .session).
-        raw_sess = getattr(self._sess_expert, "session", self._sess_expert)
+        raw_sess: Any = getattr(self._sess_expert, "session", self._sess_expert)
         binding = raw_sess.io_binding()
         # Pin constant inputs to the session's device: CUDA when the CUDA EP
         # is active, host memory otherwise (CPU/CoreML hosts). Hold OrtValues

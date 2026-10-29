@@ -292,7 +292,7 @@ class TetherClient:
           chunk) with this `chunk_id` so the server guides from the exact
           leftover; without them it estimates from wall-clock time.
         """
-        body = {
+        body: dict[str, Any] = {
             "image": encode_image(image),
             "instruction": instruction,
             "state": state,
@@ -349,7 +349,7 @@ class _EpisodeProxy:
         if self._closed:
             raise TetherClientError("episode context already closed")
         self._call_count += 1
-        report = {}
+        report: dict[str, Any] = {}
         if actions_executed is not None and self._last_chunk_id is not None:
             report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
         # Each `with client.episode(...)` is a new episode on an RTC server,
@@ -459,7 +459,7 @@ class TetherAsyncClient:
         chunk_id: str | None = None,
         episode_start: bool = False,
     ) -> dict[str, Any]:
-        body = {
+        body: dict[str, Any] = {
             "image": encode_image(image),
             "instruction": instruction,
             "state": state,
@@ -510,7 +510,7 @@ class _AsyncEpisodeProxy:
         if self._closed:
             raise TetherClientError("episode context already closed")
         self._call_count += 1
-        report = {}
+        report: dict[str, Any] = {}
         if actions_executed is not None and self._last_chunk_id is not None:
             report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
         # Each `with client.episode(...)` is a new episode on an RTC server,

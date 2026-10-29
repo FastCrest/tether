@@ -496,6 +496,7 @@ class RtcAdapter:
                     f"returned ({self._last_chunk_id!r}); send a new episode_id "
                     "to start over",
                 )
+            assert actions_executed is not None  # paired with chunk_id above
             if actions_executed > prev.shape[0]:
                 raise RtcRequestError(
                     422, "rtc_actions_executed_invalid",
@@ -763,7 +764,7 @@ class RtcStream:
         self._last_headers = {}
 
     def replay(self, chunk_id: str | None, actions_executed: int | None) -> tuple[bytes, dict[str, str]] | None:
-        if chunk_id is None or self._last_report != (chunk_id, actions_executed):
+        if chunk_id is None or self._last_body is None or self._last_report != (chunk_id, actions_executed):
             return None
         return self._last_body, dict(self._last_headers)
 
@@ -774,7 +775,9 @@ class RtcStream:
         body: bytes,
         headers: dict[str, str] | None = None,
     ) -> None:
-        self._last_report = None if chunk_id is None else (chunk_id, int(actions_executed))
+        self._last_report = (
+            None if chunk_id is None or actions_executed is None else (chunk_id, int(actions_executed))
+        )
         self._last_body = body
         self._last_headers = dict(headers or {})
 

@@ -6,6 +6,7 @@ Builds a tiny per-step expert ONNX with the real contract
 CUDA OrtValues unconditionally), and checks the guided result against
 LeRobot's ``euler_integrate`` + ``RTCProcessor`` on the same velocity field.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -101,10 +102,13 @@ def test_cpu_per_step_rtc_matches_lerobot(inference, num_steps, schedule, delay)
         _torch_field,
         torch.from_numpy(noise),
         num_steps,
-        rtc_processor=RTCProcessor(RTCConfig(
-            prefix_attention_schedule=RTCAttentionSchedule(schedule),
-            max_guidance_weight=10.0, execution_horizon=8,
-        )),
+        rtc_processor=RTCProcessor(
+            RTCConfig(
+                prefix_attention_schedule=RTCAttentionSchedule(schedule),
+                max_guidance_weight=10.0,
+                execution_horizon=8,
+            )
+        ),
         rtc_enabled=True,
         inference_delay=delay,
         prev_chunk_left_over=torch.from_numpy(prev),

@@ -26,6 +26,7 @@ Arms, on matched seeds per chunk index:
     HF_HUB_OFFLINE=1 python scripts/local_rtc_smolvla_evidence.py \
         --device mps --chunks 100 --delays 3 6 10 --out evidence.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,7 +60,9 @@ def build_policy(device: str, seed: int):
         input_features={
             "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(STATE_DIM,)),
             "observation.images.image": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
-            "observation.images.image2": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 256, 256)),
+            "observation.images.image2": PolicyFeature(
+                type=FeatureType.VISUAL, shape=(3, 256, 256)
+            ),
         },
         output_features={"action": PolicyFeature(type=FeatureType.ACTION, shape=(ACTION_DIM,))},
     )
@@ -80,18 +83,27 @@ def postprocessor(mean, std):
     )
 
     return PolicyProcessorPipeline(
-        steps=[UnnormalizerProcessorStep(
-            features={"action": PolicyFeature(type=FeatureType.ACTION, shape=(ACTION_DIM,))},
-            norm_map={FeatureType.ACTION: NormalizationMode.MEAN_STD},
-            stats={"action": {"mean": mean, "std": std}},
-        )],
+        steps=[
+            UnnormalizerProcessorStep(
+                features={"action": PolicyFeature(type=FeatureType.ACTION, shape=(ACTION_DIM,))},
+                norm_map={FeatureType.ACTION: NormalizationMode.MEAN_STD},
+                stats={"action": {"mean": mean, "std": std}},
+            )
+        ],
         to_transition=policy_action_to_transition,
         to_output=transition_to_policy_action,
     )
 
 
-def vjp_denoise_step(self, x_t, prev_chunk_left_over, inference_delay, time,
-                     original_denoise_step_partial, execution_horizon=None):
+def vjp_denoise_step(
+    self,
+    x_t,
+    prev_chunk_left_over,
+    inference_delay,
+    time,
+    original_denoise_step_partial,
+    execution_horizon=None,
+):
     """RTCProcessor.denoise_step with the paper's VJP (Kinetix model.py L237-251):
     v_t is computed AFTER x_t requires grad, so the correction is J^T W err."""
     import torch
@@ -102,7 +114,9 @@ def vjp_denoise_step(self, x_t, prev_chunk_left_over, inference_delay, time,
     x_t = x_t.clone().detach()
     if prev_chunk_left_over.dim() < 3:
         prev_chunk_left_over = prev_chunk_left_over.unsqueeze(0)
-    horizon = min(execution_horizon or self.rtc_config.execution_horizon, prev_chunk_left_over.shape[1])
+    horizon = min(
+        execution_horizon or self.rtc_config.execution_horizon, prev_chunk_left_over.shape[1]
+    )
     b, t, a = x_t.shape
     y = torch.zeros(b, t, a, device=x_t.device)
     y[:, : prev_chunk_left_over.shape[1], : prev_chunk_left_over.shape[2]] = prev_chunk_left_over
@@ -125,8 +139,15 @@ def vjp_denoise_step(self, x_t, prev_chunk_left_over, inference_delay, time,
 vjp_denoise_step.rel = []
 
 
-def nograd_denoise_step(self, x_t, prev_chunk_left_over, inference_delay, time,
-                        original_denoise_step_partial, execution_horizon=None):
+def nograd_denoise_step(
+    self,
+    x_t,
+    prev_chunk_left_over,
+    inference_delay,
+    time,
+    original_denoise_step_partial,
+    execution_horizon=None,
+):
     """LeRobot 0.6.1's identity-Jacobian step without the autograd graph.
 
     Same arithmetic as RTCProcessor.denoise_step (correction == err), computed
@@ -138,7 +159,9 @@ def nograd_denoise_step(self, x_t, prev_chunk_left_over, inference_delay, time,
     tau = 1 - time
     if prev_chunk_left_over.dim() < 3:
         prev_chunk_left_over = prev_chunk_left_over.unsqueeze(0)
-    horizon = min(execution_horizon or self.rtc_config.execution_horizon, prev_chunk_left_over.shape[1])
+    horizon = min(
+        execution_horizon or self.rtc_config.execution_horizon, prev_chunk_left_over.shape[1]
+    )
     b, t, a = x_t.shape
     y = torch.zeros(b, t, a, device=x_t.device)
     y[:, : prev_chunk_left_over.shape[1], : prev_chunk_left_over.shape[2]] = prev_chunk_left_over
@@ -203,8 +226,11 @@ def run_arm(policy, device, arm, hz, chunks, stride, horizon, export_dir, seed0)
     rtc_cfg = None
     if arm != "off":
         rtc_cfg = RtcAdapterConfig(
-            enabled=True, execute_hz=hz, rtc_execution_horizon=horizon,
-            cold_start_discard=0, latency_percentile=95,
+            enabled=True,
+            execute_hz=hz,
+            rtc_execution_horizon=horizon,
+            cold_start_discard=0,
+            latency_percentile=95,
         )
     proc = policy.model.rtc_processor
     executed: list[np.ndarray] = []
@@ -236,7 +262,9 @@ def run_arm(policy, device, arm, hz, chunks, stride, horizon, export_dir, seed0)
                     executed.append(chunk[min(idx, len(chunk) - 1)])
                     idx += 1
                 state[:ACTION_DIM] = executed[-1]
-                report = {} if arm == "off" else {"actions_executed": idx, "chunk_id": resp["chunk_id"]}
+                report = (
+                    {} if arm == "off" else {"actions_executed": idx, "chunk_id": resp["chunk_id"]}
+                )
                 seed_all(seed0 + i)
                 new = act(report)
                 lat = float(new["latency_ms"]) / 1000.0
@@ -249,7 +277,9 @@ def run_arm(policy, device, arm, hz, chunks, stride, horizon, export_dir, seed0)
                     executed.append(chunk[min(j, len(chunk) - 1)])
                 new_chunk = np.asarray(new["actions"], np.float32)
                 if d < len(new_chunk) and idx + d < len(chunk):
-                    prefix_err.append(float(np.abs(new_chunk[:d] - chunk[idx: idx + d]).max()) if d else 0.0)
+                    prefix_err.append(
+                        float(np.abs(new_chunk[:d] - chunk[idx : idx + d]).max()) if d else 0.0
+                    )
                     # Discontinuity at the switch: new[d] vs where the old plan went.
                     seam_jump.append(float(np.linalg.norm(new_chunk[d] - chunk[idx + d])))
                 seams.append(len(executed))
@@ -310,24 +340,48 @@ def main() -> int:
     p.add_argument("--horizon", type=int, default=20)
     p.add_argument("--arms", nargs="+", default=["off", "rtc", "rtc_vjp"])
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--interleave", type=int, default=0,
-                   help="repeat the arms ABAB... this many times per delay (one warm-up)")
+    p.add_argument(
+        "--interleave",
+        type=int,
+        default=0,
+        help="repeat the arms ABAB... this many times per delay (one warm-up)",
+    )
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
 
     policy, cfg = build_policy(args.device, args.seed)
     export_dir = Path(tempfile.mkdtemp(prefix="rtc-evidence-"))
     (export_dir / "expert_stack.onnx").write_bytes(b"unused by the native path")
-    (export_dir / "tether_config.json").write_text(json.dumps({
-        "schema_version": 1, "model_id": "random/smolvla", "model_type": "smolvla",
-        "action_dim": ACTION_DIM, "num_denoising_steps": cfg.num_steps, "opset": 19,
-        "export_kind": "decomposed_onnx",
-        "artifacts": [{"path": "expert_stack.onnx", "role": "model"}],
-        "io_contract": {
-            "inputs": [{"name": "input", "dtype": "float32", "shape": [1, cfg.chunk_size, ACTION_DIM]}],
-            "outputs": [{"name": "actions", "dtype": "float32", "shape": [1, cfg.chunk_size, ACTION_DIM]}],
-        },
-    }))
+    (export_dir / "tether_config.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model_id": "random/smolvla",
+                "model_type": "smolvla",
+                "action_dim": ACTION_DIM,
+                "num_denoising_steps": cfg.num_steps,
+                "opset": 19,
+                "export_kind": "decomposed_onnx",
+                "artifacts": [{"path": "expert_stack.onnx", "role": "model"}],
+                "io_contract": {
+                    "inputs": [
+                        {
+                            "name": "input",
+                            "dtype": "float32",
+                            "shape": [1, cfg.chunk_size, ACTION_DIM],
+                        }
+                    ],
+                    "outputs": [
+                        {
+                            "name": "actions",
+                            "dtype": "float32",
+                            "shape": [1, cfg.chunk_size, ACTION_DIM],
+                        }
+                    ],
+                },
+            }
+        )
+    )
 
     # Warm up and measure plain latency to map target delays onto hz.
     with make_client(policy, args.device, None, export_dir) as client:
@@ -345,40 +399,92 @@ def main() -> int:
             pooled: dict[str, list[float]] = {arm: [] for arm in args.arms}
             for rep in range(args.interleave):
                 for arm in args.arms:
-                    row = run_arm(policy, args.device, arm, hz, args.chunks, args.stride,
-                                  args.horizon, export_dir, args.seed * 100_000)
+                    row = run_arm(
+                        policy,
+                        args.device,
+                        arm,
+                        hz,
+                        args.chunks,
+                        args.stride,
+                        args.horizon,
+                        export_dir,
+                        args.seed * 100_000,
+                    )
                     pooled[arm].extend(row.pop("_latencies_ms"))
                     row.update(target_delay=d, execute_hz=round(hz, 3), repeat=rep)
                     results.append(row)
-                    print(json.dumps({"rep": rep, "arm": arm, "mean_ms": row["latency_ms"]["mean"]}), flush=True)
+                    print(
+                        json.dumps({"rep": rep, "arm": arm, "mean_ms": row["latency_ms"]["mean"]}),
+                        flush=True,
+                    )
             for arm, lat in pooled.items():
                 results.append({"arm": arm, "target_delay": d, "pooled_latency_ms": dist(lat)})
                 print(json.dumps({"pooled": arm, **dist(lat)}), flush=True)
             continue
         for arm in args.arms:
             t0 = time.perf_counter()
-            row = run_arm(policy, args.device, arm, hz, args.chunks, args.stride,
-                          args.horizon, export_dir, args.seed * 100_000)
+            row = run_arm(
+                policy,
+                args.device,
+                arm,
+                hz,
+                args.chunks,
+                args.stride,
+                args.horizon,
+                export_dir,
+                args.seed * 100_000,
+            )
             row.pop("_latencies_ms")
-            row.update(target_delay=d, execute_hz=round(hz, 3), wall_s=round(time.perf_counter() - t0, 1))
+            row.update(
+                target_delay=d, execute_hz=round(hz, 3), wall_s=round(time.perf_counter() - t0, 1)
+            )
             if arm == "rtc_vjp":
                 row["vjp_vs_identity_rel_diff"] = dist(vjp_denoise_step.rel)
                 vjp_denoise_step.rel.clear()
             results.append(row)
-            print(json.dumps({k: row[k] for k in ("target_delay", "arm", "prefix_max_abs", "seam_jump_l2", "jerk_at_seam", "latency_ms")}), flush=True)
+            print(
+                json.dumps(
+                    {
+                        k: row[k]
+                        for k in (
+                            "target_delay",
+                            "arm",
+                            "prefix_max_abs",
+                            "seam_jump_l2",
+                            "jerk_at_seam",
+                            "latency_ms",
+                        )
+                    }
+                ),
+                flush=True,
+            )
 
     report = {
         "date": time.strftime("%Y-%m-%d"),
-        "host": {"platform": platform.platform(), "machine": platform.machine(),
-                 "python": sys.version.split()[0], "torch": torch.__version__,
-                 "lerobot": lerobot.__version__, "device": args.device},
-        "model": {"family": "smolvla", "weights": "random (seeded), no checkpoint",
-                  "params_m": round(sum(q.numel() for q in policy.parameters()) / 1e6, 1),
-                  "chunk_size": cfg.chunk_size, "num_steps": cfg.num_steps,
-                  "num_vlm_layers": cfg.num_vlm_layers},
-        "sim": {"stride": args.stride, "execution_horizon": args.horizon,
-                "chunks_per_arm": args.chunks, "warm_p50_latency_ms": round(p50 * 1000, 1),
-                "schedule": "LINEAR", "max_guidance_weight": 10.0},
+        "host": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "python": sys.version.split()[0],
+            "torch": torch.__version__,
+            "lerobot": lerobot.__version__,
+            "device": args.device,
+        },
+        "model": {
+            "family": "smolvla",
+            "weights": "random (seeded), no checkpoint",
+            "params_m": round(sum(q.numel() for q in policy.parameters()) / 1e6, 1),
+            "chunk_size": cfg.chunk_size,
+            "num_steps": cfg.num_steps,
+            "num_vlm_layers": cfg.num_vlm_layers,
+        },
+        "sim": {
+            "stride": args.stride,
+            "execution_horizon": args.horizon,
+            "chunks_per_arm": args.chunks,
+            "warm_p50_latency_ms": round(p50 * 1000, 1),
+            "schedule": "LINEAR",
+            "max_guidance_weight": 10.0,
+        },
         "results": results,
     }
     args.out.write_text(json.dumps(report, indent=2))

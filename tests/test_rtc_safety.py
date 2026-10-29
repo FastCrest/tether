@@ -5,6 +5,7 @@ guard reset, circuit-breaker degrade or license change must invalidate every
 stream's replay memo and carry-forward; a refused request must not claim a
 stream; idle streams free up within seconds, not minutes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +30,9 @@ def tiny_policy():
 
 
 def _trip(server):
-    server._action_guard = SimpleNamespace(tripped=True, trip_reason="joint limit", reset=lambda: None)
+    server._action_guard = SimpleNamespace(
+        tripped=True, trip_reason="joint limit", reset=lambda: None
+    )
 
 
 def _committed(client):
@@ -41,7 +44,9 @@ def _committed(client):
 
 
 class TestSafetyInvalidatesStreams:
-    def test_replay_after_guard_reset_runs_fresh_inference(self, tmp_path, monkeypatch, tiny_policy):
+    def test_replay_after_guard_reset_runs_fresh_inference(
+        self, tmp_path, monkeypatch, tiny_policy
+    ):
         """RR2-B1, reviewer's repro: trip -> refused retry -> reset -> retry
         with a new observation must not replay the pre-trip chunk."""
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
@@ -65,7 +70,8 @@ class TestSafetyInvalidatesStreams:
             report, _ = _committed(client)
             state = {"tripped": True}
             server._action_guard = SimpleNamespace(
-                tripped=True, trip_reason="x",
+                tripped=True,
+                trip_reason="x",
                 reset=lambda: state.update(tripped=False),
             )
             r = client.post("/guard/reset")
@@ -125,15 +131,21 @@ class TestStreamTable:
 
     def test_default_idle_age_is_seconds_derived_from_chunk_timing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TETHER_NATIVE", "1")
-        app = srv.create_app(str(_smolvla_export(tmp_path)), device="cpu",
-                             rtc_config=_rtc(execute_hz=100.0), prewarm=False)
+        app = srv.create_app(
+            str(_smolvla_export(tmp_path)),
+            device="cpu",
+            rtc_config=_rtc(execute_hz=100.0),
+            prewarm=False,
+        )
         streams = app.state.tether_server.rtc_streams
         # max(2 s, 4 x chunk duration); the export here declares no chunk size,
         # so the 50-action default applies: 4 x 0.5 s = 2 s.
         assert streams.min_idle_s == pytest.approx(2.0)
 
     def test_full_table_503_carries_retry_after(self, tmp_path, monkeypatch, tiny_policy):
-        with _client(tmp_path, monkeypatch, tiny_policy, _rtc(max_streams=1, stream_min_idle_s=30.0)) as client:
+        with _client(
+            tmp_path, monkeypatch, tiny_policy, _rtc(max_streams=1, stream_min_idle_s=30.0)
+        ) as client:
             assert _act(client, episode_id="a").status_code == 200
             full = _act(client, episode_id="b")
         assert full.status_code == 503
@@ -144,7 +156,9 @@ class TestStreamTable:
         monkeypatch.setenv("TETHER_NATIVE", "1")
         monkeypatch.delenv("TETHER_API_KEY", raising=False)
         with caplog.at_level("WARNING"):
-            srv.create_app(str(_smolvla_export(tmp_path)), device="cpu", rtc_config=_rtc(), prewarm=False)
+            srv.create_app(
+                str(_smolvla_export(tmp_path)), device="cpu", rtc_config=_rtc(), prewarm=False
+            )
         assert "unauthenticated" in caplog.text and "--api-key" in caplog.text
 
 
@@ -181,7 +195,9 @@ class TestAsyncGates:
 
     def test_waiter_sees_a_trip_that_happened_while_it_queued(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TETHER_NATIVE", "1")
-        app = srv.create_app(str(_smolvla_export(tmp_path)), device="cpu", rtc_config=_rtc(), prewarm=False)
+        app = srv.create_app(
+            str(_smolvla_export(tmp_path)), device="cpu", rtc_config=_rtc(), prewarm=False
+        )
         tiny.install(app.state.tether_server, tiny.build_policy(seed=5))
 
         async def main():
@@ -194,7 +210,9 @@ class TestAsyncGates:
                     return await slow_target(*a, **k)
 
                 server.predict_from_base64_async = slow
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as ac:
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://t"
+                ) as ac:
                     a = asyncio.create_task(ac.post("/act", json={**BODY, "episode_id": "ep"}))
                     await asyncio.sleep(0.1)
                     b = asyncio.create_task(ac.post("/act", json={**BODY, "episode_id": "ep"}))

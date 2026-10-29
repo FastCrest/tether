@@ -6,6 +6,7 @@ whole Euler loops — across every schedule, delays 0..H and NFE {2, 5, 10}, and
 fails on any disagreement above float32 rounding. ``error_distribution`` is
 also what the verification doc reports.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -71,9 +72,7 @@ def _np_loop(field, noise, num_steps, guidance):
     return x
 
 
-def error_distribution(
-    *, seeds=range(3), steps=(2, 5, 10), max_delay=8
-) -> dict[str, float]:
+def error_distribution(*, seeds=range(3), steps=(2, 5, 10), max_delay=8) -> dict[str, float]:
     """Per-element |numpy - LeRobot| over complete Euler loops."""
     errs = []
     for seed, schedule, num_steps, delay in itertools.product(
@@ -130,17 +129,19 @@ def test_single_step_matches_denoise_step(schedule, time, delay):
     field = _Field(delay)
     x = rng.standard_normal((1, T, A)).astype(np.float32)
     prev = rng.standard_normal((T - 3, A_PREV)).astype(np.float32)
-    ref = _processor(schedule, beta=10.0).denoise_step(
-        x_t=torch.from_numpy(x),
-        prev_chunk_left_over=torch.from_numpy(prev),
-        inference_delay=delay,
-        time=time,
-        original_denoise_step_partial=lambda xt: field.torch(xt, time),
-        execution_horizon=8,
-    ).numpy()
-    ours = guide_velocity(
-        x, field.np(x, time), time, RtcGuidance(delay, 8, prev, schedule, 10.0)
+    ref = (
+        _processor(schedule, beta=10.0)
+        .denoise_step(
+            x_t=torch.from_numpy(x),
+            prev_chunk_left_over=torch.from_numpy(prev),
+            inference_delay=delay,
+            time=time,
+            original_denoise_step_partial=lambda xt: field.torch(xt, time),
+            execution_horizon=8,
+        )
+        .numpy()
     )
+    ours = guide_velocity(x, field.np(x, time), time, RtcGuidance(delay, 8, prev, schedule, 10.0))
     np.testing.assert_allclose(ours, ref, rtol=0, atol=TOL)
 
 

@@ -4092,6 +4092,7 @@ def create_app(
                         _final_arr,
                         elapsed_time=float(result.get("latency_ms", 0.0)) / 1000.0,
                     )
+                    assert _rtc_plan is not None  # planned above whenever _rtc is set
                     _rtc_block = _rtc_plan.telemetry()
                     _rtc_block["chunk_id"] = _chunk_id
                     _left = _rtc_plan.leftover_processed

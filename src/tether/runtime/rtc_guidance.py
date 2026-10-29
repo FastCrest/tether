@@ -22,6 +22,7 @@ access only, not a differentiable denoiser. See
 ``docs/research/rtc-guidance-adr-20261027.md`` for the difference and its
 measured size.
 """
+
 from __future__ import annotations
 
 import math
@@ -72,6 +73,7 @@ def prefix_weights(start: int, end: int, total: int, schedule: str) -> np.ndarra
     if schedule not in ("LINEAR", "EXP"):
         raise ValueError(f"unknown schedule {schedule!r}")
     steps = total - max(total - end, 0) - start
+    lin: np.ndarray
     if end <= start or steps <= 0:
         lin = np.zeros(0, dtype=np.float32)
     else:

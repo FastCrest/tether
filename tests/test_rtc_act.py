@@ -4,6 +4,7 @@ The SmolVLA cases run the real create_app + /act path with a tiny random
 SmolVLA (``tests/_rtc_smolvla_tiny.py``) whose denoise loop is LeRobot's own
 RTC-aware ``euler_integrate``.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -66,7 +67,9 @@ class TestCapabilityGate:
 
         monkeypatch.delenv("TETHER_NATIVE", raising=False)
         write_test_export_config(
-            tmp_path, model_type="smolvla", export_kind="monolithic_onnx",
+            tmp_path,
+            model_type="smolvla",
+            export_kind="monolithic_onnx",
             artifacts=["model.onnx"],
         )
         with pytest.raises(RuntimeError, match="per-step velocity access"):
@@ -77,7 +80,9 @@ class TestCapabilityGate:
 
         monkeypatch.delenv("TETHER_NATIVE", raising=False)
         write_test_export_config(
-            tmp_path, model_type="pi05_decomposed", export_kind="decomposed_onnx",
+            tmp_path,
+            model_type="pi05_decomposed",
+            export_kind="decomposed_onnx",
             artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
         )
         with pytest.raises(RuntimeError, match="per_step_expert=false"):
@@ -89,7 +94,9 @@ class TestCapabilityGate:
 
         monkeypatch.delenv("TETHER_NATIVE", raising=False)
         write_test_export_config(
-            tmp_path, model_type="pi05_decomposed", export_kind="decomposed_onnx",
+            tmp_path,
+            model_type="pi05_decomposed",
+            export_kind="decomposed_onnx",
             artifacts=["vlm_prefix.onnx", "expert_denoise.onnx"],
             decomposed={"per_step_expert": True},
         )
@@ -105,12 +112,15 @@ class TestCapabilityGate:
         assert app.state.tether_server.rtc_streams is not None
         assert app.state.tether_server._rtc_required is True
 
-    @pytest.mark.parametrize("kwargs, flag", [
-        ({"max_batch": 2}, "--max-batch"),
-        ({"bid_n_candidates": 4}, "--bid-n-candidates"),
-        ({"a2c2_checkpoint": "head.npz"}, "--a2c2-checkpoint"),
-        ({"action_similarity_threshold": 0.05}, "--action-similarity-threshold"),
-    ])
+    @pytest.mark.parametrize(
+        "kwargs, flag",
+        [
+            ({"max_batch": 2}, "--max-batch"),
+            ({"bid_n_candidates": 4}, "--bid-n-candidates"),
+            ({"a2c2_checkpoint": "head.npz"}, "--a2c2-checkpoint"),
+            ({"action_similarity_threshold": 0.05}, "--action-similarity-threshold"),
+        ],
+    )
     def test_conflicting_wedges_are_refused(self, tmp_path, kwargs, flag):
         from tether.runtime.server import create_app
 
@@ -155,8 +165,9 @@ class TestActWiring:
     def test_client_report_drives_the_leftover(self, tmp_path, monkeypatch, tiny_policy):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             first = _act(client, episode_id="ep").json()
-            second = _act(client, episode_id="ep", actions_executed=3,
-                          chunk_id=first["chunk_id"]).json()
+            second = _act(
+                client, episode_id="ep", actions_executed=3, chunk_id=first["chunk_id"]
+            ).json()
         rtc = second["rtc"]
         assert rtc["applied"] is True
         assert rtc["leftover_source"] == "client"
@@ -178,12 +189,19 @@ class TestActWiring:
             body = _act(client, actions_executed=2, chunk_id="abc123").json()
         assert "actions" in body and "rtc" not in body and "chunk_id" not in body
 
-    @pytest.mark.parametrize("extra, status, code", [
-        ({"actions_executed": 2}, 422, "rtc_report_incomplete"),
-        ({"chunk_id": "ab"}, 422, "rtc_report_incomplete"),
-        ({"actions_executed": 2, "chunk_id": "deadbeef"}, 409, "rtc_chunk_mismatch"),
-        ({"actions_executed": tiny.CHUNK + 1, "chunk_id": None}, 422, "rtc_actions_executed_invalid"),
-    ])
+    @pytest.mark.parametrize(
+        "extra, status, code",
+        [
+            ({"actions_executed": 2}, 422, "rtc_report_incomplete"),
+            ({"chunk_id": "ab"}, 422, "rtc_report_incomplete"),
+            ({"actions_executed": 2, "chunk_id": "deadbeef"}, 409, "rtc_chunk_mismatch"),
+            (
+                {"actions_executed": tiny.CHUNK + 1, "chunk_id": None},
+                422,
+                "rtc_actions_executed_invalid",
+            ),
+        ],
+    )
     def test_bad_reports_are_refused(self, tmp_path, monkeypatch, tiny_policy, extra, status, code):
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             first = _act(client, episode_id="ep").json()
@@ -207,15 +225,21 @@ class TestActWiring:
     # execute_hz=10000 forces inference_delay far past the 8-row leftover, the
     # case that made the old slicing flaky under load (review R-B1).
     @pytest.mark.parametrize("execute_hz", [100.0, 10000.0])
-    def test_guidance_pulls_the_prefix_toward_the_leftover(self, tmp_path, monkeypatch, tiny_policy, execute_hz):
+    def test_guidance_pulls_the_prefix_toward_the_leftover(
+        self, tmp_path, monkeypatch, tiny_policy, execute_hz
+    ):
         """Matched seeds: RTC-on vs RTC-off second chunk against the leftover."""
+
         def second_chunk(rtc_config, seed):
             with _client(tmp_path, monkeypatch, tiny_policy, rtc_config) as client:
                 torch.manual_seed(seed)
                 first = _act(client, episode_id="ep").json()
                 torch.manual_seed(seed + 1)
-                extra = {} if rtc_config is None else {
-                    "actions_executed": 2, "chunk_id": first["chunk_id"]}
+                extra = (
+                    {}
+                    if rtc_config is None
+                    else {"actions_executed": 2, "chunk_id": first["chunk_id"]}
+                )
                 second = _act(client, episode_id="ep", **extra).json()
             return np.asarray(first["actions"]), np.asarray(second["actions"]), second
 
@@ -253,7 +277,11 @@ class TestNormalizeActions:
         server = SmolVLANativeServer(_smolvla_export(tmp_path), device="cpu")
         tiny.install(server, tiny_policy)
         server.load()
-        norm = np.random.default_rng(0).standard_normal((tiny.CHUNK, tiny.ACTION_DIM)).astype(np.float32)
+        norm = (
+            np.random.default_rng(0)
+            .standard_normal((tiny.CHUNK, tiny.ACTION_DIM))
+            .astype(np.float32)
+        )
         processed = server.postprocessor(torch.from_numpy(norm)).numpy()
         np.testing.assert_allclose(processed, norm * tiny.ACTION_STD + tiny.ACTION_MEAN, atol=1e-5)
         np.testing.assert_allclose(server.normalize_actions(processed), norm, atol=1e-5)
