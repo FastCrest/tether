@@ -37,6 +37,7 @@ def _stub_ort_session(value: float):
     inputs = [MagicMock() for _ in input_names]
     for inp, name in zip(inputs, input_names):
         inp.name = name
+        inp.shape = [1, 16] if name in ("lang_tokens", "lang_masks") else [1]  # static, as real exports
     sess.get_inputs.return_value = inputs
     sess.get_providers.return_value = ["CPUExecutionProvider"]
     sess.run.return_value = [np.ones((1, 2, 2), dtype=np.float32) * value]
@@ -69,6 +70,14 @@ def test_shadow_policy_records_candidate_actions_without_returning_them(
     monkeypatch.setattr(ort, "InferenceSession", _fake_inference_session)
 
     tok_stub = MagicMock()
+
+    # Tokenizer facts SmolVLA's one-pass tokenization reads.
+
+    tok_stub.num_special_tokens_to_add.return_value = 0
+
+    tok_stub.pad_token_id = 0
+
+    tok_stub.truncation_side = "right"
     tok_stub.return_value = {
         "input_ids": np.zeros((1, 16), dtype=np.int64),
         "attention_mask": np.ones((1, 16), dtype=np.int64),

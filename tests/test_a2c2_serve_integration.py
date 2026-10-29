@@ -28,6 +28,7 @@ def _stub_ort_session(input_names: list[str], output_shape=(1, 50, 32)):
     inputs = [MagicMock() for _ in input_names]
     for inp, name in zip(inputs, input_names):
         inp.name = name
+        inp.shape = [1, 16] if name in ("lang_tokens", "lang_masks") else [1]  # static, as real exports
     sess.get_inputs.return_value = inputs
     sess.run.return_value = [np.ones(output_shape, dtype=np.float32) * 0.05]
     return sess
@@ -102,6 +103,14 @@ def _setup_app(
     monkeypatch.setattr(ort, "InferenceSession", lambda *a, **kw: stub_session)
 
     tok_stub = MagicMock()
+
+    # Tokenizer facts SmolVLA's one-pass tokenization reads.
+
+    tok_stub.num_special_tokens_to_add.return_value = 0
+
+    tok_stub.pad_token_id = 0
+
+    tok_stub.truncation_side = "right"
     tok_stub.return_value = {
         "input_ids": np.zeros((1, 16), dtype=np.int64),
         "attention_mask": np.ones((1, 16), dtype=np.int64),

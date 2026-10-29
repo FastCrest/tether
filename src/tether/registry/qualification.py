@@ -7,18 +7,96 @@ Studio reads this file without importing heavyweight model dependencies.
 
 from __future__ import annotations
 
+import copy
+
+# Where each "qualified-*" status comes from. A qualified export names a passing
+# Linux-CUDA parity receipt; a qualified evaluation names a matched result with a
+# non-zero success count for the qualified arm. tests/test_registry_qualification.py
+# fails when a status and its evidence disagree in either direction.
+# Literal strings only: Studio reads this dict by AST (backend/tether_registry.py).
+# Each "receipt" is a byte-for-byte copy under docs/evidence/parity/, and the tests
+# check its hash. "studio_receipt" is the same file's path in the Tether Studio repo.
+# Studio binds receipts to a Tether pin (tether_private/qualification/
+# committed_parity.py BOUND_PRODUCERS); a new pin needs Studio's export-path proof.
+# main merges by squash or rebase, so producer commits are not in its history:
+# each "tether_commit_tag" (evidence/<family>-parity-<shortsha>) keeps one reachable.
+
 
 FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
     "smolvla": {
         "checkpoint": "qualified-pinned",
-        "export": "runtime-implemented",
-        "training": "qualified-lora",
-        "evaluation": "qualified-libero-linux-cuda",
+        "export": "qualified-linux-cuda-parity",
+        "training": "trains-and-loads-lora-task-gain-unmeasured",
+        "evaluation": "harness-verified-libero-linux-cuda",
         "studio_recipe": "tether-smolvla-lora-v1",
         "notes": [
-            "Studio has retained real SmolVLA LoRA and native LIBERO evidence.",
             "Local native LIBERO execution requires Linux and CUDA.",
+            (
+                "2026-10-28: export qualified by a Linux-CUDA receipt (A10G, ORT-CUDA 1.23.2, "
+                "CPU fallback disabled) for smolvla_base@c83c3163 over all 10 LIBERO-10 "
+                "instructions with LeRobot's 48-token language contract: worst full cosine "
+                "0.99999987, max_abs 3.0e-3 (p99 5.3e-4). TF32 accounts for the error: with "
+                "NVIDIA_TF32_OVERRIDE=0 the byte-identical graph gives max_abs 4.5e-6."
+            ),
+            (
+                "2026-10-28: export and serve now tokenize like LeRobot (SmolVLM2 tokenizer, "
+                "newline, right padding, truncation at tokenizer_max_length=48); the earlier "
+                "16-token graph silently cut 2 of 10 LIBERO-10 instructions. The server "
+                "reports truncation beyond 48 instead of hiding it."
+            ),
+            ("2026-10-28: evaluation corrected from qualified-libero-linux-cuda. Matched "
+            "libero_10 n=20 per arm: smolvla_base@c83c3163 0/20 and the "
+            "tether-smolvla-lora-v1 step-5000 LoRA 0/20 (all 530-step timeouts). The "
+            "harness itself is verified: lerobot/smolvla_libero@a24f1f38 scored 14/20 on "
+            "the same 20 cases (SmolVLA paper LIBERO-Long 71%). No Tether-produced "
+            "SmolVLA arm has a non-zero matched success, so evaluation is not qualified."),
+            (
+                "2026-10-28: training corrected from qualified-lora. tether-smolvla-lora-v1 "
+                "completed 5000 steps on lerobot/libero@a1aaacb7 and the adapter loads and runs "
+                "in the LIBERO harness, but it scored 0/20 like its base (0/20), so no task "
+                "gain is measured. Outcome-based training qualification needs an arm that "
+                "beats its parent on matched cases."
+            ),
         ],
+        "evidence": {
+            "training": {
+                "recipe": "tether-smolvla-lora-v1",
+                "base": "lerobot/smolvla_base@c83c3163b8ca9b7e67c509fffd9121e66cb96205",
+                "dataset": "lerobot/libero@a1aaacb7f6cd6ee5fb43120f673cebb0cfea7dd4",
+                "steps_completed": 5000,
+                "trains": True,
+                "loads": True,
+                "candidate_matched": [0, 20],
+                "parent_matched": [0, 20],
+                "task_gain_measured": False,
+                "record": (
+                    "Studio studio-training.json modal_receipt (run 09083be3) and "
+                    "docs/evidence/smolvla-qualification-20261027/README.md"
+                ),
+            },
+            "export": {
+                "receipt": "docs/evidence/parity/smolvla-c83c3163-lang48-20261028/smolvla/smolvla-export-parity-receipt.json",
+                "modal_volume": "parity-gpu-receipts:smolvla-c83c3163-lang48-20261028/smolvla/",
+                "receipt_sha256": "1890e3062c9e76dc95d788711657a7afd65fd5dd3f23c57a94ffe994e3c597a4",
+                "model": "lerobot/smolvla_base@c83c3163b8ca9b7e67c509fffd9121e66cb96205",
+                "tether_commit": "0b85acd85f11fb47a736c65c0b1ff76ae077349f",
+                "tether_commit_tag": "evidence/smolvla-parity-0b85acd",
+                "verdict": "passed",
+                "scope": "linux-cuda",
+            },
+            "evaluation": {
+                "suite": "libero_10",
+                "cases": 20,
+                "arms": {
+                    "lerobot/smolvla_base@c83c3163b8ca9b7e67c509fffd9121e66cb96205": [0, 20],
+                    "tether-smolvla-lora-v1 step 5000 (adapter sha256 0d3dc759...574c)": [0, 20],
+                },
+                "control": {"lerobot/smolvla_libero@a24f1f380461b665158d52acd140152c79e8b36d": [14, 20]},
+                "qualified_arm": None,
+                "record": "Studio docs/evidence/smolvla-qualification-20261027/README.md "
+                "(feat/smolvla-policy-import @ 0969d86d)",
+            },
+        },
         "acceptance": [
             "pinned checkpoint",
             "LoRA training receipt",
@@ -28,14 +106,28 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
     },
     "pi0": {
         "checkpoint": "runtime-implemented",
-        "export": "verification-pending",
+        "export": "qualified-linux-cuda-parity",
         "training": "not-qualified",
         "evaluation": "not-qualified",
         "studio_recipe": None,
         "notes": [
             "Do not qualify from registry metadata alone.",
-            "An exact-revision/shared-input ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
+            ("2026-10-28: export corrected from verification-pending. Studio commits a "
+            "passing Linux-CUDA receipt (A100-40GB, CUDA EP, CPU fallback disabled): "
+            "full cosine 0.99999973, max_abs 6.9e-4."),
         ],
+        "evidence": {
+            "export": {
+                "receipt": "docs/evidence/parity/2026-10-12/pi0/pi0-export-parity-receipt.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-10-12/pi0/pi0-export-parity-receipt.json",
+                "receipt_sha256": "9dc91d12a8df9024f761ff56d16c20abe50d00b6ee4c6068d9be0ea9d3886488",
+                "model": "lerobot/pi0_base@26b99b9439acb1e352439e34ee9c67af0d76efa3",
+                "tether_commit": "b7223069a4817f043f0cb15f1ba0d65ef2475763",
+                "tether_commit_tag": "evidence/pi0-parity-b722306",
+                "verdict": "passed",
+                "scope": "linux-cuda",
+            },
+        },
         "acceptance": [
             "pinned checkpoint",
             "shared-noise export parity receipt",
@@ -45,14 +137,27 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
     },
     "pi05": {
         "checkpoint": "runtime-implemented",
-        "export": "runtime-implemented",
+        "export": "qualified-linux-cuda-parity",
         "training": "snapflow-hardware-gated",
         "evaluation": "runtime-evidence-only",
         "studio_recipe": None,
         "notes": [
             "Studio has no accepted pi0.5 training and decision journey.",
-            "An exact-revision/shared-input ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
+            ("2026-10-28: export corrected from runtime-implemented. Studio commits a "
+            "passing Linux-CUDA receipt: full cosine 0.99999990, max_abs 5.2e-4."),
         ],
+        "evidence": {
+            "export": {
+                "receipt": "docs/evidence/parity/2026-10-12/pi05/pi05-export-parity-receipt.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-10-12/pi05/pi05-export-parity-receipt.json",
+                "receipt_sha256": "628b05ab0b00fa3073ec30a15d28a44630f83c248149b684bd613c32e8e05c66",
+                "model": "lerobot/pi05_base@a538eb273274eb30f126a118f39dbc0ee212c883",
+                "tether_commit": "b7223069a4817f043f0cb15f1ba0d65ef2475763",
+                "tether_commit_tag": "evidence/pi05-parity-b722306",
+                "verdict": "passed",
+                "scope": "linux-cuda",
+            },
+        },
         "acceptance": [
             "pinned teacher and student",
             "export parity receipt",
@@ -62,14 +167,30 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
     },
     "groot": {
         "checkpoint": "runtime-implemented",
-        "export": "verification-pending",
+        "export": "qualified-linux-cuda-parity-strict-fp32",
         "training": "not-qualified",
         "evaluation": "not-qualified",
         "studio_recipe": None,
         "notes": [
             "GPU export parity does not establish task success.",
-            "An exact-revision/shared-input per-step ONNX parity receipt harness exists; retained Linux-CUDA acceptance is still pending.",
+            ("2026-10-28: export corrected from verification-pending. The receipt passes "
+            "only with NVIDIA_TF32_OVERRIDE=0 (full cosine 0.9999999999994, max_abs 2.0e-6); "
+            "the default-TF32 receipt groot/groot-export-parity-receipt.json failed and TF32 "
+            "execution is not qualified."),
         ],
+        "evidence": {
+            "export": {
+                "receipt": "docs/evidence/parity/2026-09-18/groot/groot-export-parity-receipt-strict-tf32.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-09-18/groot/groot-export-parity-receipt-strict-tf32.json",
+                "receipt_sha256": "a34fcf84471c7842192d35c9af8975984840aa2b97f530424ca1c9d132d21d0e",
+                "model": "nvidia/GR00T-N1.6-3B@d0814e7ecb19202e7c8468b46098b0b7ef3a6d61",
+                "tether_commit": "4cf9854a72ca9c97ec6a7a398f4246650b001d2a",
+                "tether_commit_tag": "evidence/groot-parity-4cf9854",
+                "verdict": "passed",
+                "scope": "linux-cuda",
+                "condition": "NVIDIA_TF32_OVERRIDE=0",
+            },
+        },
         "acceptance": [
             "pinned checkpoint",
             "export parity receipt",
@@ -79,11 +200,27 @@ FAMILY_QUALIFICATIONS: dict[str, dict[str, object]] = {
     },
     "openvla": {
         "checkpoint": "runtime-implemented",
-        "export": "verification-pending",
+        "export": "qualified-linux-cuda-parity",
         "training": "not-qualified",
         "evaluation": "not-qualified",
         "studio_recipe": None,
-        "notes": ["The tokenized action path needs its own matched evaluation contract."],
+        "notes": [
+            "The tokenized action path needs its own matched evaluation contract.",
+            ("2026-10-28: export corrected from verification-pending. Studio commits a "
+            "passing Linux-CUDA receipt with 7/7 action tokens agreeing and max_abs 0.0."),
+        ],
+        "evidence": {
+            "export": {
+                "receipt": "docs/evidence/parity/2026-09-18/openvla/openvla-export-parity-receipt.json",
+                "studio_receipt": "tether_private/qualification/parity_evidence/2026-09-18/openvla/openvla-export-parity-receipt.json",
+                "receipt_sha256": "99ab67d70343153c9dbec5a0f9509b7e4c22ee3a24b4262502d14ca41f8b2430",
+                "model": "openvla/openvla-7b@47a0ec7fc4ec123775a391911046cf33cf9ed83f",
+                "tether_commit": "6e84101136dcaa6204983956b80418796430504a",
+                "tether_commit_tag": "evidence/openvla-parity-6e84101",
+                "verdict": "passed",
+                "scope": "linux-cuda",
+            },
+        },
         "acceptance": [
             "pinned checkpoint",
             "tokenized-action parity receipt",
@@ -136,7 +273,7 @@ def qualification_for(family: str) -> dict[str, object]:
             "notes": ["No qualification contract is recorded for this family."],
             "acceptance": ["pinned checkpoint", "verified execution receipt"],
         }
-    return {key: list(value) if isinstance(value, list) else value for key, value in facts.items()}
+    return copy.deepcopy(facts)
 
 
 def qualification_gaps(family: str) -> list[str]:
