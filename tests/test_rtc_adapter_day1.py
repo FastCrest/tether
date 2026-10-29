@@ -204,6 +204,9 @@ class TestBuildLerobotRtcConfig:
 class _FakePolicy:
     """Minimal RtcCompatiblePolicy for construction-only tests."""
 
+    def normalize_actions(self, actions):
+        return actions
+
     def predict_action_chunk(self, **kwargs):
         import numpy as np
         return np.zeros((1, 50, 7), dtype=np.float32)

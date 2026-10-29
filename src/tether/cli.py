@@ -2482,11 +2482,13 @@ def serve(
     rtc: bool = typer.Option(
         False,
         "--rtc",
-        help="Enable Real-Time Chunking (RTC) — wraps inference with "
-             "lerobot's RTCProcessor so the robot keeps executing the tail "
-             "of one chunk while the next chunk is being computed. 2-3× "
-             "effective throughput on Jetson-class latency. Requires "
-             "`pip install fastcrest-tether[rtc]` (pulls lerobot==0.6.1).",
+        help="Enable Real-Time Chunking (RTC): each /act chunk is guided "
+             "toward the unexecuted tail of the previous one (LeRobot 0.6.1 "
+             "guidance) so the robot keeps executing while the next chunk "
+             "computes. Clients send actions_executed + chunk_id for an exact "
+             "leftover. Needs per-step velocity access: SmolVLA with "
+             "TETHER_NATIVE=1 or a pi0.5 per-step expert export; other "
+             "runtimes are refused. Requires `pip install fastcrest-tether[rtc]`.",
     ),
     rtc_execution_horizon: int = typer.Option(
         10,
@@ -2512,6 +2514,23 @@ def serve(
         "--rtc-debug",
         help="With --rtc: enable lerobot's debug Tracker for per-step state "
              "capture. Useful for replay forensics; small per-call overhead.",
+    ),
+    rtc_max_streams: int = typer.Option(
+        64,
+        "--rtc-max-streams",
+        min=1,
+        help="With --rtc: most concurrent RTC streams (one per episode_id). At "
+             "the cap a new episode evicts only a stream idle for at least "
+             "--rtc-stream-min-idle-s with no request in flight; otherwise 503. "
+             "Use --api-key with --rtc: never expose /act unauthenticated.",
+    ),
+    rtc_stream_min_idle_s: float | None = typer.Option(
+        None,
+        "--rtc-stream-min-idle-s",
+        min=0.0,
+        help="With --rtc: idle seconds before a stream may be evicted. Default "
+             "max(2, 4 x chunk duration): a leftover only guides a request "
+             "within about one chunk period.",
     ),
     adaptive_action_chunking: bool = typer.Option(
         False,
@@ -3115,6 +3134,8 @@ def serve(
                 prefix_attention_schedule=rtc_schedule,
                 max_guidance_weight=rtc_max_guidance_weight,
                 debug=rtc_debug,
+                max_streams=rtc_max_streams,
+                stream_min_idle_s=rtc_stream_min_idle_s,
                 adaptive_chunking_enabled=(
                     adaptive_action_chunking or adaptive_action_chunking_canary
                 ),
@@ -3128,7 +3149,6 @@ def serve(
                 ),
                 adaptive_high_action_delta=aac_high_action_delta,
                 adaptive_high_latency_ms=aac_high_latency_ms,
-                strict_policy_kwargs=True,
             )
         except ValueError as exc:
             err_console.print(f"[red]Invalid RTC config: {exc}[/red]")

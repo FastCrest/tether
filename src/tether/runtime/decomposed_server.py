@@ -561,6 +561,56 @@ class Pi05DecomposedServer:
             f"to encode the instruction. Last error: {last_exc}"
         )
 
+    # -- RTC -----------------------------------------------------------------
+
+    def rtc_guidance_support(self) -> str | None:
+        """None when this server can guide its denoise loop; else the reason.
+
+        Checked at startup so a configuration RTC cannot serve is refused
+        before any /act, not by every request.
+        """
+        decomposed = self._load_config().get("decomposed", {})
+        if not decomposed.get("per_step_expert", False):
+            return (
+                "this pi0.5 export bakes the Euler loop into expert_denoise.onnx "
+                "(decomposed.per_step_expert=false); re-export with the per-step expert"
+            )
+        if self._action_similarity_threshold > 0:
+            return "the action-similarity fast path returns unguided cached chunks"
+        if self._bid_config is not None or self._a2c2_hook is not None:
+            return "BID and A2C2 replace the guided chunk after the denoise loop"
+        # The served inference is built with cache_level="prefix" (load());
+        # the action cache, which skips the expert, is never enabled here.
+        return None
+
+    def _refuse_under_rtc(self, value: Any, name: str) -> None:
+        if value is not None and getattr(self, "_rtc_required", False):
+            raise RuntimeError(f"{name} cannot be combined with RTC: it replaces the guided chunk")
+
+    def _padded_action_stats(self, width: int) -> tuple[np.ndarray, np.ndarray] | None:
+        """Action mean/std padded or cut to ``width`` (as the denorm step does)."""
+        if self._action_mean is None or self._action_std is None:
+            return None
+        a_mean, a_std = self._action_mean, self._action_std
+        if a_mean.shape[0] < width:
+            a_mean = np.concatenate([a_mean, np.zeros(width - a_mean.shape[0], dtype=np.float32)])
+            a_std = np.concatenate([a_std, np.ones(width - a_std.shape[0], dtype=np.float32)])
+        return a_mean[:width], a_std[:width]
+
+    def normalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Processed actions ``(T, action_dim)`` -> the expert's normalized space.
+
+        Exact inverse of step 6 of ``_predict`` (``x * std + mean``). Without
+        normalizer stats the server already emits normalized actions (and warns
+        at load), so the inverse is the identity.
+        """
+        arr = np.asarray(actions, dtype=np.float32)
+        stats = self._padded_action_stats(arr.shape[-1])
+        if stats is None:
+            return arr
+        mean, std = stats
+        return ((arr - mean) / std).astype(np.float32)
+
     # -- Server-interface contract -----------------------------------------
 
     def predict_from_base64(
@@ -569,6 +619,7 @@ class Pi05DecomposedServer:
         instruction: str = "",
         state: list[float] | None = None,
         image_wrist_b64: str | None = None,
+        rtc: Any = None,
     ) -> dict[str, Any]:
         """Sync entry point. Mirrors TetherServer.predict_from_base64."""
         # Decode primary image
@@ -585,7 +636,7 @@ class Pi05DecomposedServer:
 
         return self._predict(
             image=image, instruction=instruction or "", state=state,
-            image_wrist=image_wrist,
+            image_wrist=image_wrist, rtc=rtc,
         )
 
     def _decode_b64_image(self, b64: str | None) -> "np.ndarray | dict[str, Any] | None":
@@ -607,6 +658,7 @@ class Pi05DecomposedServer:
         instruction: str = "",
         state: list[float] | None = None,
         image_wrist_b64: str | None = None,
+        rtc: Any = None,
     ) -> dict[str, Any]:
         """Async entry point matching TetherServer's contract."""
         # Pi05DecomposedInference is sync-only; offload to thread to avoid
@@ -616,7 +668,7 @@ class Pi05DecomposedServer:
             None,
             lambda: self.predict_from_base64(
                 image_b64=image_b64, instruction=instruction,
-                state=state, image_wrist_b64=image_wrist_b64,
+                state=state, image_wrist_b64=image_wrist_b64, rtc=rtc,
             ),
         )
 
@@ -631,6 +683,7 @@ class Pi05DecomposedServer:
                 instruction=getattr(req, "instruction", "") or "",
                 state=getattr(req, "state", None),
                 image_wrist_b64=getattr(req, "image_wrist", None),
+                rtc=getattr(req, "rtc", None),
             )
             results.append(res)
         return results
@@ -644,6 +697,7 @@ class Pi05DecomposedServer:
         instruction: str,
         state: list[float] | None,
         image_wrist: np.ndarray | None = None,
+        rtc: Any = None,
     ) -> dict[str, Any]:
         """Pure-numpy prep + inference + postprocess. Catches + envelopes
         any exception in the standard error dict (so /act returns a clean
@@ -688,6 +742,8 @@ class Pi05DecomposedServer:
 
             # 4. Inference path — single-sample (default) or BID multi-sample.
             bid_telemetry: dict[str, Any] | None = None
+            if rtc is not None and (self._bid_config is not None or self._a2c2_hook is not None):
+                raise RuntimeError("RTC guidance cannot be combined with BID or A2C2")
             if self._bid_config is not None:
                 # BID: sample N candidate chunks (varying noise per call),
                 # score each by backward coherence with the previously-emitted
@@ -732,7 +788,7 @@ class Pi05DecomposedServer:
                     img_base=img_base, img_wrist_l=img_wrist_l, img_wrist_r=img_pad,
                     mask_base=mask_base, mask_wrist_l=mask_wrist_l, mask_wrist_r=mask_pad,
                     lang_tokens=lang_tokens, lang_masks=lang_masks,
-                    noise=noise, state=state_arr,
+                    noise=noise, state=state_arr, rtc=rtc,
                 )
 
             # 5b. A2C2 hook -- applied in NORMALIZED action space (between
@@ -752,22 +808,11 @@ class Pi05DecomposedServer:
             # was fit on padded actions during distill prep.
             if actions_padded.ndim == 3:
                 actions_padded = actions_padded[0]
-            if self._action_mean is not None and self._action_std is not None:
-                # Stats are typically (action_dim,) for the real action dim.
-                # Pad them to max_action_dim for the broadcast.
-                a_mean = self._action_mean
-                a_std = self._action_std
-                ad = actions_padded.shape[-1]
-                if a_mean.shape[0] < ad:
-                    a_mean = np.concatenate([
-                        a_mean, np.zeros(ad - a_mean.shape[0], dtype=np.float32)
-                    ])
-                    a_std = np.concatenate([
-                        a_std, np.ones(ad - a_std.shape[0], dtype=np.float32)
-                    ])
-                elif a_mean.shape[0] > ad:
-                    a_mean = a_mean[:ad]
-                    a_std = a_std[:ad]
+            # Stats are typically (action_dim,) for the real action dim;
+            # padded to max_action_dim for the broadcast.
+            stats = self._padded_action_stats(actions_padded.shape[-1])
+            if stats is not None:
+                a_mean, a_std = stats
                 actions_padded = actions_padded * a_std + a_mean
             actions_out = actions_padded[:, : self.action_dim].astype(np.float32)
 
@@ -836,6 +881,7 @@ class Pi05DecomposedServer:
 
         Returns nothing. Setting None disables internal a2c2 application.
         """
+        self._refuse_under_rtc(hook, "A2C2")
         if hook is not None and self._bid_config is not None:
             self._a2c2_hook = None
             logger.warning(
@@ -860,6 +906,7 @@ class Pi05DecomposedServer:
         Mutually exclusive with set_a2c2_hook (Phase 1). Setting None disables
         BID and reverts to the single-sample inference path.
         """
+        self._refuse_under_rtc(config, "BID")
         self._bid_config = config
         # Reset previous_chunk on (re)config so we don't score against a stale
         # chunk from a different episode/embodiment.

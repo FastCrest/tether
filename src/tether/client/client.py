@@ -162,6 +162,12 @@ def _classify_response(resp: httpx.Response) -> TetherClientError | None:
     return TetherClientError(msg, status_code=resp.status_code, body=body)
 
 
+def _not_retryable(resp: httpx.Response) -> bool:
+    """A 4xx other than 408/429 is the request's fault: resending it unchanged
+    gets the same answer (e.g. a stale RTC chunk_id returns 409 every time)."""
+    return 400 <= resp.status_code < 500 and resp.status_code not in (408, 429)
+
+
 # ---- Sync client ----------------------------------------------------------
 
 class TetherClient:
@@ -228,7 +234,7 @@ class TetherClient:
             err = _classify_response(resp)
             if err is None:
                 return resp
-            if isinstance(err, (TetherAuthError, TetherValidationError)):
+            if isinstance(err, (TetherAuthError, TetherValidationError)) or _not_retryable(resp):
                 raise err
             if isinstance(err, TetherServerDegradedError) and not self.retry_on_degraded:
                 raise err
@@ -268,6 +274,9 @@ class TetherClient:
         instruction: str = "",
         state: list[float] | None = None,
         episode_id: str | None = None,
+        actions_executed: int | None = None,
+        chunk_id: str | None = None,
+        episode_start: bool = False,
     ) -> dict[str, Any]:
         """POST /act. Returns the parsed response dict.
 
@@ -278,13 +287,21 @@ class TetherClient:
         - `guard_violations`: list of strings if B.6 ActionGuard clamped anything
         - `guard_clamped`: bool flag mirroring guard_violations
         - `inference_mode`: "monolithic" / "decomposed" / etc.
+        - `chunk_id` + `rtc`: with `tether serve --rtc`. Send the next call's
+          `actions_executed` (index of the next unexecuted action of that
+          chunk) with this `chunk_id` so the server guides from the exact
+          leftover; without them it estimates from wall-clock time.
         """
-        body = {
+        body: dict[str, Any] = {
             "image": encode_image(image),
             "instruction": instruction,
             "state": state,
             "episode_id": episode_id,
         }
+        if actions_executed is not None or chunk_id is not None:
+            body.update(actions_executed=actions_executed, chunk_id=chunk_id)
+        if episode_start:
+            body["episode_start"] = True
         resp = self._request_with_retry("POST", "/act", json=body)
         return resp.json()
 
@@ -310,6 +327,7 @@ class _EpisodeProxy:
         self._episode_id = episode_id
         self._closed = False
         self._call_count = 0
+        self._last_chunk_id: str | None = None
 
     @property
     def episode_id(self) -> str:
@@ -324,13 +342,32 @@ class _EpisodeProxy:
         image: Any = None,
         instruction: str = "",
         state: list[float] | None = None,
+        actions_executed: int | None = None,
     ) -> dict[str, Any]:
+        """``actions_executed``: how many actions of the previous response's
+        chunk ran (RTC servers); paired with that response's ``chunk_id``."""
         if self._closed:
             raise TetherClientError("episode context already closed")
         self._call_count += 1
-        return self._client.act(
-            image=image, instruction=instruction, state=state, episode_id=self._episode_id,
-        )
+        report: dict[str, Any] = {}
+        if actions_executed is not None and self._last_chunk_id is not None:
+            report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
+        # Each `with client.episode(...)` is a new episode on an RTC server,
+        # even when it reuses an episode_id: the first request says so.
+        first = self._call_count == 1
+        try:
+            result = self._client.act(
+                image=image, instruction=instruction, state=state, episode_id=self._episode_id,
+                episode_start=first, **report,
+            )
+        except TetherClientError as exc:
+            if exc.status_code == 409:
+                # The server no longer holds that chunk (e.g. evicted); report
+                # nothing next time so it falls back to a labelled estimate.
+                self._last_chunk_id = None
+            raise
+        self._last_chunk_id = result.get("chunk_id") if isinstance(result, dict) else None
+        return result
 
 
 # ---- Async client ---------------------------------------------------------
@@ -388,7 +425,7 @@ class TetherAsyncClient:
             err = _classify_response(resp)
             if err is None:
                 return resp
-            if isinstance(err, (TetherAuthError, TetherValidationError)):
+            if isinstance(err, (TetherAuthError, TetherValidationError)) or _not_retryable(resp):
                 raise err
             if isinstance(err, TetherServerDegradedError) and not self.retry_on_degraded:
                 raise err
@@ -418,13 +455,20 @@ class TetherAsyncClient:
         instruction: str = "",
         state: list[float] | None = None,
         episode_id: str | None = None,
+        actions_executed: int | None = None,
+        chunk_id: str | None = None,
+        episode_start: bool = False,
     ) -> dict[str, Any]:
-        body = {
+        body: dict[str, Any] = {
             "image": encode_image(image),
             "instruction": instruction,
             "state": state,
             "episode_id": episode_id,
         }
+        if actions_executed is not None or chunk_id is not None:
+            body.update(actions_executed=actions_executed, chunk_id=chunk_id)
+        if episode_start:
+            body["episode_start"] = True
         resp = await self._request_with_retry("POST", "/act", json=body)
         return resp.json()
 
@@ -444,6 +488,7 @@ class _AsyncEpisodeProxy:
         self._episode_id = episode_id
         self._closed = False
         self._call_count = 0
+        self._last_chunk_id: str | None = None
 
     @property
     def episode_id(self) -> str:
@@ -458,10 +503,29 @@ class _AsyncEpisodeProxy:
         image: Any = None,
         instruction: str = "",
         state: list[float] | None = None,
+        actions_executed: int | None = None,
     ) -> dict[str, Any]:
+        """``actions_executed``: how many actions of the previous response's
+        chunk ran (RTC servers); paired with that response's ``chunk_id``."""
         if self._closed:
             raise TetherClientError("episode context already closed")
         self._call_count += 1
-        return await self._client.act(
-            image=image, instruction=instruction, state=state, episode_id=self._episode_id,
-        )
+        report: dict[str, Any] = {}
+        if actions_executed is not None and self._last_chunk_id is not None:
+            report = {"actions_executed": actions_executed, "chunk_id": self._last_chunk_id}
+        # Each `with client.episode(...)` is a new episode on an RTC server,
+        # even when it reuses an episode_id: the first request says so.
+        first = self._call_count == 1
+        try:
+            result = await self._client.act(
+                image=image, instruction=instruction, state=state, episode_id=self._episode_id,
+                episode_start=first, **report,
+            )
+        except TetherClientError as exc:
+            if exc.status_code == 409:
+                # The server no longer holds that chunk (e.g. evicted); report
+                # nothing next time so it falls back to a labelled estimate.
+                self._last_chunk_id = None
+            raise
+        self._last_chunk_id = result.get("chunk_id") if isinstance(result, dict) else None
+        return result

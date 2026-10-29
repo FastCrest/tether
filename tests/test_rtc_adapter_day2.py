@@ -1,8 +1,8 @@
 """Day 2 tests for RTC adapter (B.3) — predict_chunk_with_rtc body.
 
-Day 2 scope: latency → actions_consumed dispatch, kwargs forwarded,
-elapsed time recorded, fallback for policies that reject RTC kwargs.
-prev_chunk_left_over is always None this day (carry-forward = Day 3).
+Scope: latency → inference_delay dispatch, kwargs forwarded, and refusal
+(no plain-inference fallback) for policies that reject the RTC kwargs.
+Latency is recorded by merge_and_update, once per returned chunk.
 """
 from __future__ import annotations
 
@@ -27,6 +27,9 @@ class _RtcAwarePolicy:
         self.sleep_s = sleep_s
         self.action_shape = action_shape
         self.calls: list[dict] = []  # records every call's kwargs
+
+    def normalize_actions(self, actions):
+        return actions
 
     def predict_action_chunk(self, **kwargs):
         self.calls.append(dict(kwargs))
@@ -54,13 +57,11 @@ def _adapter(
     enabled: bool = False,
     execute_hz: float = 100.0,
     rtc_execution_horizon: int = 10,
-    strict_policy_kwargs: bool = False,
 ) -> RtcAdapter:
     cfg = RtcAdapterConfig(
         enabled=enabled,
         execute_hz=execute_hz,
         rtc_execution_horizon=rtc_execution_horizon,
-        strict_policy_kwargs=strict_policy_kwargs,
     )
     return RtcAdapter(
         policy=policy,
@@ -108,17 +109,14 @@ class TestPredictChunkWithRtc:
         adapter.predict_chunk_with_rtc({"image": "fake"})
         assert isinstance(policy.calls[0]["inference_delay"], int)
 
-    def test_records_elapsed_time(self):
-        """The latency tracker is fed after every call."""
+    def test_predict_does_not_record_latency(self):
+        """merge_and_update records once per returned chunk; predict used to
+        record too, double-counting every chunk in the p95 window."""
         policy = _RtcAwarePolicy(sleep_s=0.02)
         adapter = _adapter(policy)
-        # Need to clear discard_first cold-start window for the sample to register
         adapter.latency.discard_first = 0
         adapter.predict_chunk_with_rtc({"image": "fake"})
-        # First sample should be ~20ms (≥ 0.015 to avoid timer flake)
-        samples = adapter.latency._samples
-        assert len(samples) == 1
-        assert samples[0] >= 0.015
+        assert adapter.latency._samples == []
 
     def test_latency_to_actions_consumed_warm(self):
         """80ms latency × 100Hz = 8 actions consumed (per plan example)."""
@@ -128,7 +126,7 @@ class TestPredictChunkWithRtc:
         adapter.latency.discard_first = 0
         for _ in range(10):
             adapter.latency.record(0.080)
-        # Now call — actions_consumed should be int(0.080 * 100) = 8
+        # Now call — inference_delay = ceil(0.080 * 100) = 8 (not 9: fp noise)
         adapter.predict_chunk_with_rtc({"image": "fake"})
         # First call uses the primed estimate (0.080) since record() happens AFTER
         # the call. So inference_delay reflects the primed value.
@@ -136,7 +134,7 @@ class TestPredictChunkWithRtc:
 
     def test_cold_start_uses_fallback_estimate(self):
         """With no warm samples, latency.estimate() returns 0.1s fallback;
-        actions_consumed = int(0.1 * 100) = 10."""
+        inference_delay = ceil(0.1 * 100) = 10."""
         policy = _RtcAwarePolicy()
         adapter = _adapter(policy, execute_hz=100.0)
         adapter.predict_chunk_with_rtc({"image": "fake"})
@@ -153,43 +151,32 @@ class TestPredictChunkWithRtc:
         adapter.predict_chunk_with_rtc({"image": "fake"})
         assert policy.calls[0]["execution_horizon"] == 12
 
-    def test_execution_horizon_omitted_when_disabled(self):
+    def test_inference_delay_rounds_up(self):
+        """45 ms at 100 Hz executes 4.5 actions: LeRobot rounds up to 5 so the
+        frozen prefix covers every action run during inference."""
         policy = _RtcAwarePolicy()
-        adapter = _adapter(policy, enabled=False)
-        adapter.predict_chunk_with_rtc({"image": "fake"})
-        assert "execution_horizon" not in policy.calls[0]
-
-    def test_fallback_when_policy_rejects_rtc_kwargs(self):
-        """Monolithic ONNX policies have a strict signature — RTC kwargs
-        cause TypeError. Adapter falls back to a plain call."""
-        policy = _RtcRejectingPolicy()
-        adapter = _adapter(policy)
-        actions = adapter.predict_chunk_with_rtc({"image": "fake", "state": [0.1]})
-        assert actions.shape == (1, 50, 7)
-        # Policy was called twice: once with RTC kwargs (TypeError), once without
-        # We track only the successful call
-        assert len(policy.calls) == 1
-        assert policy.calls[0]["image"] == "fake"
-
-    def test_records_latency_even_on_fallback(self):
-        """Fallback path still feeds the latency tracker. The timer wraps
-        the entire try/except so the recorded value includes both the
-        failed RTC-kwargs attempt AND the successful retry — the right
-        measure for the adapter's effective per-call cost."""
-        policy = _RtcRejectingPolicy()
-        adapter = _adapter(policy)
+        adapter = _adapter(policy, execute_hz=100.0)
         adapter.latency.discard_first = 0
+        for _ in range(10):
+            adapter.latency.record(0.045)
         adapter.predict_chunk_with_rtc({"image": "fake"})
-        assert len(adapter.latency._samples) == 1
-        # Sample should be tiny but nonzero (no real work done by the mock)
-        assert adapter.latency._samples[0] >= 0.0
+        assert policy.calls[0]["inference_delay"] == 5
 
-    def test_strict_mode_rejects_policy_without_rtc_contract(self):
+    def test_policy_rejecting_rtc_kwargs_raises(self):
+        """Monolithic-style signatures reject the kwargs. Plain inference
+        would not apply RTC, so the adapter refuses instead of retrying."""
         policy = _RtcRejectingPolicy()
-        adapter = _adapter(policy, strict_policy_kwargs=True)
+        adapter = _adapter(policy)
         with pytest.raises(RuntimeError, match="plain inference would not apply RTC"):
             adapter.predict_chunk_with_rtc({"image": "fake"})
         assert policy.calls == []
+
+    def test_enabled_adapter_requires_normalize_actions(self):
+        from tether.runtime.rtc_adapter import _RTC_AVAILABLE
+        if not _RTC_AVAILABLE:
+            pytest.skip("lerobot not installed")
+        with pytest.raises(ValueError, match="normalize_actions"):
+            _adapter(_RtcRejectingPolicy(), enabled=True)
 
     def test_chunk_count_not_incremented_by_predict(self):
         """chunk_count is incremented in merge_and_update, not predict.
@@ -206,25 +193,21 @@ class TestPredictChunkWithRtc:
 
 
 class TestLatencyFeedback:
-    def test_repeat_calls_warm_the_tracker(self):
-        policy = _RtcAwarePolicy(sleep_s=0.01)
+    def test_repeat_cycles_warm_the_tracker(self):
+        policy = _RtcAwarePolicy()
         adapter = _adapter(policy)
         adapter.latency.discard_first = 0
         for _ in range(5):
-            adapter.predict_chunk_with_rtc({"image": "fake"})
-        # 5 samples in the window
+            chunk = adapter.predict_chunk_with_rtc({"image": "fake"})
+            adapter.merge_and_update(chunk, elapsed_time=0.01)
         assert adapter.latency.summary()["n"] == 5
 
-    def test_actions_consumed_grows_with_observed_latency(self):
-        """If real latency is high, actions_consumed grows accordingly."""
-        slow_policy = _RtcAwarePolicy(sleep_s=0.05)
-        adapter = _adapter(slow_policy, execute_hz=100.0)
+    def test_inference_delay_grows_with_recorded_latency(self):
+        policy = _RtcAwarePolicy()
+        adapter = _adapter(policy, execute_hz=100.0)
         adapter.latency.discard_first = 0
-        # Warm the tracker
         for _ in range(5):
-            adapter.predict_chunk_with_rtc({"image": "fake"})
-        # Make one more call — its inference_delay should reflect ~50ms × 100 = ~5
+            chunk = adapter.predict_chunk_with_rtc({"image": "fake"})
+            adapter.merge_and_update(chunk, elapsed_time=0.05)
         adapter.predict_chunk_with_rtc({"image": "fake"})
-        last = slow_policy.calls[-1]
-        # Allow some slack for timer noise (3-15 actions)
-        assert 3 <= last["inference_delay"] <= 15
+        assert policy.calls[-1]["inference_delay"] == 5

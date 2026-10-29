@@ -479,9 +479,14 @@ class Pi05DecomposedInference:
         noise: np.ndarray,
         state: np.ndarray | None = None,
         episode_id: str | None = None,
+        rtc: Any = None,
     ) -> np.ndarray:
         """Run one pi0.5 forward, returning ``actions`` of shape
         ``(B, chunk_size, action_dim)``.
+
+        ``rtc`` (``RtcGuidance``) applies LeRobot's RTC guidance inside the
+        per-step Euler loop; it is refused for baked-loop exports and with the
+        action cache / similarity fast path, which return unguided chunks.
 
         Uses the prefix cache when enabled + hashes match + TTL valid.
         When ``cache_level='action'``, skips both VLM + expert when the
@@ -491,6 +496,17 @@ class Pi05DecomposedInference:
         pass a stable ``episode_id`` for the duration of one episode.
         Returns float32 regardless of the ONNX internal dtype."""
         self._call_index += 1
+        if rtc is not None:
+            if not self._per_step_expert:
+                raise RuntimeError(
+                    "RTC guidance needs the per-step expert export "
+                    "(decomposed.per_step_expert=true); this export bakes the loop"
+                )
+            if self.cache_level == "action" or self._fast_path.enabled:
+                raise RuntimeError(
+                    "RTC guidance cannot be combined with the action cache or the "
+                    "action-similarity fast path; both return unguided chunks"
+                )
 
         # Episode cache path — short-circuits the existing phash lookup.
         # Image is NOT hashed here; key is (episode_id, lang_hash) only.
@@ -506,7 +522,7 @@ class Pi05DecomposedInference:
                 img_base=img_base, img_wrist_l=img_wrist_l, img_wrist_r=img_wrist_r,
                 mask_base=mask_base, mask_wrist_l=mask_wrist_l, mask_wrist_r=mask_wrist_r,
                 lang_tokens=lang_tokens, lang_masks=lang_masks,
-                noise=noise, state=state,
+                noise=noise, state=state, rtc=rtc,
             )
 
         image_phashes = (
@@ -599,7 +615,7 @@ class Pi05DecomposedInference:
                     pass
                 return cached
 
-        actions = self._run_expert(expert_feed_base, noise)
+        actions = self._run_expert(expert_feed_base, noise, rtc=rtc)
         # Update fast-path tracker on each real expert call.
         self._fast_path.observe(actions)
 
@@ -619,6 +635,7 @@ class Pi05DecomposedInference:
         self,
         expert_feed_base: dict[str, np.ndarray],
         noise: np.ndarray,
+        rtc: Any = None,
     ) -> np.ndarray:
         """Dispatch to either the baked-loop expert (single ORT call returning
         actions) or the per-step expert (N ORT calls in a Python Euler loop,
@@ -628,6 +645,8 @@ class Pi05DecomposedInference:
         See features/03_export/per-step-expert-export.md for the contract.
         """
         if not self._per_step_expert:
+            if rtc is not None:
+                raise RuntimeError("RTC guidance needs the per-step expert export")
             # Baked-loop path (the shipped default).
             expert_feed = dict(expert_feed_base)
             expert_feed["noise"] = noise.astype(np.float32, copy=False)
@@ -655,15 +674,20 @@ class Pi05DecomposedInference:
         x_t = noise.astype(np.float32, copy=False)
         B = x_t.shape[0]
         # Underlying ORT session (the cuda-graphs wrapper exposes .session).
-        raw_sess = getattr(self._sess_expert, "session", self._sess_expert)
+        raw_sess: Any = getattr(self._sess_expert, "session", self._sess_expert)
         binding = raw_sess.io_binding()
-        # Pin constant inputs to device. Hold OrtValues in a list so Python
-        # GC can't drop the device memory mid-loop (would segfault ORT).
+        # Pin constant inputs to the session's device: CUDA when the CUDA EP
+        # is active, host memory otherwise (CPU/CoreML hosts). Hold OrtValues
+        # in a list so Python GC can't drop the memory mid-loop (would
+        # segfault ORT).
+        device = iobinding_device(raw_sess.get_providers())
         device_kept_alive = []
         for nm, arr in expert_feed_base.items():
-            ortval = ort.OrtValue.ortvalue_from_numpy(arr, "cuda", 0)
+            ortval = ort.OrtValue.ortvalue_from_numpy(arr, device, 0)
             binding.bind_ortvalue_input(nm, ortval)
             device_kept_alive.append(ortval)
+        if rtc is not None:
+            from tether.runtime.rtc_guidance import guide_velocity
         for step in range(n):
             time_val = 1.0 + step * dt
             t_tensor = np.full((B,), time_val, dtype=np.float32)
@@ -674,6 +698,8 @@ class Pi05DecomposedInference:
             v_t = binding.get_outputs()[0].numpy()
             if v_t.dtype != np.float32:
                 v_t = v_t.astype(np.float32)
+            if rtc is not None:
+                v_t = guide_velocity(x_t, v_t, time_val, rtc)
             x_t = x_t + dt * v_t
         return x_t
 
@@ -711,6 +737,7 @@ class Pi05DecomposedInference:
         mask_base, mask_wrist_l, mask_wrist_r,
         lang_tokens, lang_masks,
         noise, state,
+        rtc: Any = None,
     ) -> np.ndarray:
         """Episode-keyed cache path. Looks up (episode_id, lang_hash);
         on hit reuses cached past_kv + prefix_pad_masks (skips VLM).
@@ -764,7 +791,7 @@ class Pi05DecomposedInference:
                 state_arr = np.concatenate([state_arr, pad], axis=-1)
             expert_feed_base["state"] = state_arr
 
-        actions = self._run_expert(expert_feed_base, noise)
+        actions = self._run_expert(expert_feed_base, noise, rtc=rtc)
         return actions
 
     # ---- Cache machinery --------------------------------------------
@@ -910,4 +937,13 @@ class Pi05DecomposedInference:
         return hashlib.md5(repr(lang_tokens.tolist()).encode()).digest()
 
 
-__all__ = ["Pi05DecomposedInference", "CacheStats", "CacheEntry"]
+def iobinding_device(providers: list[str]) -> str:
+    """Where the per-step loop pins past_kv: GPU memory when the session runs
+    on CUDA or TensorRT (both consume CUDA OrtValues), host memory otherwise.
+    Binding host memory on a GPU session would copy ~140 MB of past_kv
+    host->device on every Euler step."""
+    gpu = {"CUDAExecutionProvider", "TensorrtExecutionProvider", "NvTensorRTRTXExecutionProvider"}
+    return "cuda" if any(p in gpu for p in providers) else "cpu"
+
+
+__all__ = ["Pi05DecomposedInference", "iobinding_device", "CacheStats", "CacheEntry"]

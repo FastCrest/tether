@@ -75,7 +75,7 @@ def _call_count_run_expert(inst, action_value: float, chunk_shape=(1, 50, 7)):
     """Patch _run_expert to track call count + return predictable chunk."""
     inst._run_expert_calls = 0
 
-    def fake_run_expert(expert_feed_base, noise):
+    def fake_run_expert(expert_feed_base, noise, rtc=None):
         inst._run_expert_calls += 1
         return np.full(chunk_shape, action_value, dtype=np.float32)
 

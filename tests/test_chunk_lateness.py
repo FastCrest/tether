@@ -201,18 +201,19 @@ BACKENDS = [
 
 @pytest.mark.parametrize("module,name", BACKENDS)
 @pytest.mark.parametrize("hz", [50, 100, 200, 1000])
-def test_backend_buffer_deadline_ordering_and_rtc_identity(module, name, hz):
+def test_backend_buffer_deadline_ordering(module, name, hz):
+    # RTC no longer shares this buffer: each RTC stream owns its own (per
+    # episode), so configure_action_buffer has no RTC adapter to re-point.
     from tether.runtime.server import configure_action_buffer
 
     cls = getattr(importlib.import_module(f"tether.runtime.{module}"), name)
     server = cls.__new__(cls)
     server.config = {"chunk_size": 5}
-    server.rtc_adapter = SimpleNamespace(buffer=None)
     clock = Clock()
     buf = configure_action_buffer(
         server, replan_hz=20, execute_hz=hz, max_lateness_ms=4, clock=clock
     )
-    assert server.rtc_adapter.buffer is buf is server._action_buffer
+    assert buf is server._action_buffer
     assert buf.control_hz == hz
     buf.push_chunk(CHUNK)
     buf.pop_next()
@@ -230,19 +231,21 @@ def test_rtc_peeks_and_previous_leftover_remain_read_only():
     adapter = RtcAdapter(
         policy=SimpleNamespace(), action_buffer=buf, config=RtcAdapterConfig(enabled=False)
     )
-    adapter.merge_and_update(CHUNK, elapsed_time=0.01, t_obs=0)
+    cid = adapter.merge_and_update(CHUNK, elapsed_time=0.01, t_obs=0)
     clock.now = 0.005
     snapshot = buf.peek_all()
     np.testing.assert_array_equal(snapshot, CHUNK)  # no lazy expiry on peek
     snapshot[:] = -1
     np.testing.assert_array_equal(buf.peek_next(), CHUNK[0])
-    adapter.merge_and_update(CHUNK + 10, elapsed_time=0.01)
-    np.testing.assert_array_equal(adapter._prev_chunk_left_over, CHUNK)
+    # The leftover comes from the returned chunk, not the buffer, and a
+    # caller mutating the plan's copy cannot reach the stored chunk.
+    plan = adapter.plan_guidance(actions_executed=1, chunk_id=cid)
+    np.testing.assert_array_equal(plan.guidance.prev_chunk_left_over, CHUNK[1:])
+    plan.guidance.prev_chunk_left_over[:] = -1
+    np.testing.assert_array_equal(adapter._last_chunk, CHUNK)
     clock.now = 0.010
     assert buf.pop_next() is None
-    np.testing.assert_array_equal(adapter._prev_chunk_left_over, CHUNK)
     adapter.merge_and_update(CHUNK + 20, elapsed_time=0.01)
-    assert adapter._prev_chunk_left_over is None  # expired tail was discarded
     assert adapter.get_stats()["action_buffer"]["expired_actions"] == 5
 
 
