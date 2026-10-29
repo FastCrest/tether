@@ -12,6 +12,7 @@ config["model_type"] without case analysis in the endpoints.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -21,6 +22,60 @@ from typing import Any
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def tokenize_smolvla_instruction(
+    tokenizer: Any, instruction: str, max_length: int
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Tokenize exactly like LeRobot's SmolVLA preprocessor, but say when it cut.
+
+    lerobot 0.6.1: ``smolvla_new_line_processor`` appends "\n" when missing,
+    then ``TokenizerProcessorStep`` calls the tokenizer with
+    ``max_length=tokenizer_max_length, truncation=True, padding="max_length",
+    padding_side="right"``. Truncation follows the tokenizer's
+    ``truncation_side``: SmolVLM2's is "left", so LeRobot keeps the *last* 48
+    tokens. LeRobot truncates silently; the returned report carries
+    ``truncated`` and the untruncated token count instead, from the same single
+    encode pass.
+    """
+    text = instruction if instruction.endswith("\n") else f"{instruction}\n"
+    # One encode pass. With no special tokens added, the tokenizer's own
+    # truncation=True is exactly a slice of this untruncated sequence on its
+    # truncation_side (SmolVLM2's is "left"), so truncation and padding are
+    # applied here and the untruncated length comes from the same pass.
+    if tokenizer.num_special_tokens_to_add(pair=False):
+        raise ValueError(
+            "SmolVLA tokenizer adds special tokens; one-pass truncation would not match "
+            "LeRobot's tokenizer(truncation=True). Refusing rather than diverging."
+        )
+    pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        raise ValueError("SmolVLA tokenizer has no pad token; cannot pad like LeRobot.")
+    ids = np.asarray(tokenizer(text, truncation=False, padding=False)["input_ids"]).reshape(-1).tolist()
+    full = len(ids)
+    if full > max_length:
+        ids = ids[-max_length:] if tokenizer.truncation_side == "left" else ids[:max_length]
+    real = len(ids)
+    tokens = np.full((1, max_length), pad_id, dtype=np.int64)
+    tokens[0, :real] = ids  # LeRobot pads on the right
+    masks = np.zeros((1, max_length), dtype=np.bool_)
+    masks[0, :real] = True
+    report = {
+        "tokens": full,
+        "max_tokens": max_length,
+        "truncated": full > max_length,
+        "dropped_tokens": max(0, full - max_length),
+    }
+    if report["truncated"]:
+        # The instruction is request data of unbounded size: log a short prefix and
+        # a digest, never the whole string.
+        logger.warning(
+            "SmolVLA instruction truncated from %d to %d tokens (LeRobot does the same, "
+            "silently): %d chars, sha256 %s, starts %r", full, max_length, len(instruction),
+            hashlib.sha256(instruction.encode("utf-8", "replace")).hexdigest()[:12],
+            instruction[:80],
+        )
+    return tokens, masks, report
 
 
 class SmolVLAOnnxServer:
@@ -51,6 +106,7 @@ class SmolVLAOnnxServer:
         self._strict_providers = strict_providers
         self._tokenizer: Any = None
         self._tokenizer_unavailable = False
+        self._lang_len: int | None = None
 
     def _find_onnx_path(self) -> Path:
         if self._explicit_onnx_path is not None:
@@ -121,6 +177,17 @@ class SmolVLAOnnxServer:
             self.config = json.loads(cfg_path.read_text())
 
         self._input_names = [i.name for i in self._session.get_inputs()]
+        # The graph's static language length (16 for exports before the
+        # LeRobot-matching fix, tokenizer_max_length=48 after) is the only
+        # length the session accepts; read it rather than assuming one.
+        lang_shape = next(
+            (i.shape for i in self._session.get_inputs() if i.name == "lang_tokens"), None
+        )
+        self._lang_len = (
+            int(lang_shape[1])
+            if lang_shape is not None and len(lang_shape) == 2 and isinstance(lang_shape[1], int)
+            else None
+        )
         from tether.runtime.tokenizers import ensure_offline_tokenizer_bundle
         ensure_offline_tokenizer_bundle(
             self.export_dir,
@@ -213,20 +280,37 @@ class SmolVLAOnnxServer:
             np.asarray(value, dtype=np.bool_).reshape(-1) for value in masks_list[:3]
         ]
 
-        # Lang: tokenize (SmolLM2 vocab ~49152) or use provided tokens
+        # Lang: tokenize like LeRobot's preprocessor, or use provided tokens
+        language: dict[str, Any] = {"source": "provided"}
         if lang_tokens is None:
+            lang_len = self._lang_len or int((self.config.get("language") or {}).get("max_length") or 0)
+            if not lang_len:
+                raise RuntimeError(
+                    "SmolVLA graph has no static lang_tokens length and tether_config.json "
+                    "records no language.max_length; cannot tokenize without guessing."
+                )
             tok = self._get_tokenizer()
             if tok is not None:
-                enc = tok(
-                    instruction or " ",
-                    return_tensors="np", padding="max_length",
-                    max_length=16, truncation=True,
+                lang_tokens, lang_masks, language = tokenize_smolvla_instruction(
+                    tok, instruction, lang_len
                 )
-                lang_tokens = enc["input_ids"].astype(np.int64)
-                lang_masks = enc["attention_mask"].astype(np.bool_)
+                language["source"] = "tokenizer"
+            elif self._strict_providers:
+                # Strict mode (the default) never acts on an instruction it could not
+                # read; zero tokens would run the policy with no task at all.
+                return {
+                    "error": (
+                        "SmolVLA tokenizer is unavailable, so the instruction cannot be "
+                        "tokenized; refusing to act on empty language tokens. Re-export with "
+                        "the bundled tokenizer, send lang_tokens/lang_masks, or run with "
+                        "--no-strict-providers to accept the labelled zero-token fallback."
+                    ),
+                    "language": {"source": "unavailable", "truncated": None},
+                }
             else:
-                lang_tokens = np.zeros((1, 16), dtype=np.int64)
-                lang_masks = np.ones((1, 16), dtype=np.bool_)
+                lang_tokens = np.zeros((1, lang_len), dtype=np.int64)
+                lang_masks = np.ones((1, lang_len), dtype=np.bool_)
+                language = {"source": "unavailable-zero-tokens", "truncated": None}
         if lang_masks is None:
             lang_masks = np.ones_like(lang_tokens, dtype=np.bool_)
 
@@ -284,6 +368,7 @@ class SmolVLAOnnxServer:
             "active_providers": list(self._active_providers),
             "denoising_steps": steps,
             "num_denoising_steps": steps,
+            "language": language,
         }
 
     # --- create_app lifespan compat ---------------------------------------
