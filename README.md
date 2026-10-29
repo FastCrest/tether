@@ -668,6 +668,16 @@ Filter dimensions: `--since` (`7d` / `24h` / `30m`), `--task` (case-insensitive 
 
 A native TensorRT-LLM path (sm_100 / sm_120) is tracked upstream as an additional Blackwell runtime.
 
+### Tether accelerated engines (FP8)
+
+`tether.accel` holds per-token FP8 Triton engines for **pi0.5** and the **GR00T N1.7**
+action head, with one CUDA graph per prompt-length bucket. They target **Jetson Thor
+(sm_110), RTX 4090 (sm_89) and RTX 5090 (sm_120)** only; any other device is refused, and
+Orin keeps the TensorRT/ONNX export path. The pi0.5 engine implements the same
+`predict_action_chunk` contract as the decomposed ONNX runtime. Kernel tests pass on
+sm_89; end-to-end action parity on real weights is still to be measured. Provenance:
+[docs/provenance/instinct-port.md](docs/provenance/instinct-port.md).
+
 ## Composable runtime wedges
 
 Each wedge is a flag on `tether serve` (also flowed through `tether go`):

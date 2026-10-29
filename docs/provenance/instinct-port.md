@@ -67,11 +67,15 @@ port is **not** wired into Orin export.
 
 Validation status:
 - Upstream claims Thor and RTX 4090 qualification, with 5090 "pending re-qualification": ASSERTED, `release/OSS_RELEASE.rst`.
-- In Tether: CPU unit tests pass (VERIFIED). Kernel and CUDA-graph tests ran on a Modal L4 (sm_89, the 4090 stand-in); see the PR for the result.
+- In Tether: CPU unit tests pass (VERIFIED). The 17 kernel and CUDA-graph tests pass on a Modal L40S (sm_89, the 4090 compute capability), 2026-10-28 (VERIFIED). An L4 could not be scheduled on the workspace that day.
 - Not yet measured: end-to-end pi05 action parity of `AccelPi05Inference` against the native policy on real weights, i.e. a `tether verify --non-inferiority-margin` run on a 4090 or Thor.
 
-## Open for Romir
+## Naming and CLI (decided 2026-10-29)
 
-- The customer-facing name for `tether.accel`. This is the working name only.
-- A CLI flag for the pre-declared margin (`run_verify(non_inferiority_margin=...)` exists; no flag yet, because flag names are customer-facing).
-- Whether to request the written grant anyway.
+- Module: `tether.accel`. Docs name: "Tether accelerated engines (FP8)", targets Thor, RTX 4090, RTX 5090.
+- `tether verify --non-inferiority-margin FLOAT --non-inferiority-interval [wald_central95|tango_one_sided95]`,
+  mirroring the `run_verify` keyword arguments. Omitting the margin leaves behaviour unchanged (`NOT_EVALUATED`).
+
+## Still open
+
+- Whether to request the written grant anyway (see Licence basis).

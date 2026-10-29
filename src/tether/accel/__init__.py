@@ -1,4 +1,4 @@
-"""FP8 Triton engines for Jetson Thor, RTX 4090 and RTX 5090 (working name ``tether.accel``).
+"""Tether accelerated engines (FP8): Triton engines for Jetson Thor, RTX 4090 and RTX 5090.
 
 Each engine prepares a checkpoint's weights once (per-channel FP8), runs the
 model with the kernels in :mod:`tether.accel.kernels`, and captures its whole

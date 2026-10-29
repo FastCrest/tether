@@ -1998,6 +1998,18 @@ def verify_cmd(
         "", "--key-id",
         help="Optional key identifier embedded in the parity cert signature block.",
     ),
+    non_inferiority_margin: Optional[float] = typer.Option(
+        None, "--non-inferiority-margin",
+        help="Largest acceptable success-rate drop, declared BEFORE the run, as a "
+             "number <= 0 (e.g. -0.05). When set, the paired McNemar/Tango "
+             "non-inferiority certificate must PASS and is embedded in the signed "
+             "parity.cert.json. Omitted: unchanged behaviour, recorded as NOT_EVALUATED.",
+    ),
+    non_inferiority_interval: str = typer.Option(
+        "wald_central95", "--non-inferiority-interval",
+        help="Decision rule for --non-inferiority-margin: wald_central95 or "
+             "tango_one_sided95.",
+    ),
     output_json: bool = typer.Option(
         False, "--json", help="Emit the machine-readable verdict to stdout.",
     ),
@@ -2019,15 +2031,24 @@ def verify_cmd(
         tether verify ./my-export --target orin --eval libero
         tether verify ./my-export --tasks 0,1,2 --num-episodes 50
         tether verify ./my-export --original lerobot/pi05_libero --json
+        tether verify ./my-export --non-inferiority-margin -0.05
     """
     _setup_logging(verbose)
 
+    from tether.noninferiority import NotCertifiable, check_declaration
     from tether.verify import (
         SUPPORTED_SUITES,
         InsufficientEpisodes,
         run_verify,
     )
     from tether.verification_evidence import normalize_verification_device
+
+    if non_inferiority_margin is not None:
+        try:
+            check_declaration(non_inferiority_margin, non_inferiority_interval)
+        except NotCertifiable as exc:
+            err_console.print(f"[red]--non-inferiority-margin/--non-inferiority-interval: {exc}[/red]")
+            raise typer.Exit(2)
 
     try:
         verification_device = normalize_verification_device(device)
@@ -2109,6 +2130,10 @@ def verify_cmd(
         f"  Safety:     {safety_config or '[yellow]not configured (S1 will fail)[/yellow]'}"
     )
     console.print(f"  Output:     {output}")
+    if non_inferiority_margin is not None:
+        console.print(
+            f"  NI margin:  {non_inferiority_margin:+.4f} ({non_inferiority_interval}, declared before the run)"
+        )
     if embodiment_metadata:
         console.print(
             f"  Embodiment: [cyan]so_arm100[/cyan] "
@@ -2127,6 +2152,8 @@ def verify_cmd(
             seed=seed,
             safety_config=safety_config or None,
             verification_device=verification_device,
+            non_inferiority_margin=non_inferiority_margin,
+            non_inferiority_interval=non_inferiority_interval,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Verify interrupted by user.[/yellow]")

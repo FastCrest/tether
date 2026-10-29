@@ -153,3 +153,123 @@ def test_unsigned_cert_and_report_carry_the_block():
     assert build_parity_cert(v)["non_inferiority"]["passed"] is False
     md = render_parity_report(v)
     assert "## Paired non-inferiority" in md and "margin declared BEFORE the run" in md
+
+
+def _cli(monkeypatch, tmp_path, original, optimized, *flags):
+    typer_testing = pytest.importorskip("typer.testing")
+    import tether.verify as verify_mod
+    from tether.cli import app
+
+    monkeypatch.setattr(
+        verify_mod,
+        "gather_paired_samples",
+        _make_gather_fn(
+            _rollout_results(task_success=original), _rollout_results(task_success=optimized)
+        ),
+    )
+    seed = Ed25519PrivateKey.generate().private_bytes_raw()
+    monkeypatch.setenv("TETHER_TEST_NI_KEY", base64.b64encode(seed).decode("ascii"))
+    out = tmp_path / "verify"
+    result = typer_testing.CliRunner().invoke(
+        app,
+        [
+            "verify",
+            "/fake/export",
+            "--num-episodes",
+            str(_EPS),
+            "--output",
+            str(out),
+            "--signing-key",
+            "env:TETHER_TEST_NI_KEY",
+            *flags,
+        ],
+    )
+    trusted = [Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes_raw()]
+    return result, out, trusted
+
+
+# 36 concordant pairs: Wald collapses to [0, 0]; Tango's one-sided bound is ~-0.070, so only
+# a -0.10 margin is decidable there. Both are what the statistics should say.
+@pytest.mark.parametrize(
+    "interval,margin", [("wald_central95", "-0.05"), ("tango_one_sided95", "-0.1")]
+)
+def test_cli_flags_round_trip_into_signed_cert(monkeypatch, tmp_path, interval, margin):
+    result, out, trusted = _cli(
+        monkeypatch,
+        tmp_path,
+        _all_success(),
+        _all_success(),
+        "--non-inferiority-margin",
+        margin,
+        "--non-inferiority-interval",
+        interval,
+    )
+    assert result.exit_code == 0, result.output
+    cert = json.loads((out / "parity.cert.json").read_text())
+    verify_parity_cert_signature(cert, trusted_keys=trusted)
+    ni = cert["non_inferiority"]
+    assert ni["status"] == "EVALUATED" and ni["passed"] is True
+    assert ni["margin_declared"] == float(margin) and ni["interval"] == interval
+    assert ni["certificate"]["margin_declared"] == float(margin)
+    assert ("ci_method" in ni["certificate"]) == (interval == "tango_one_sided95")
+
+
+def test_cli_margin_fails_a_regression(monkeypatch, tmp_path):
+    result, out, _ = _cli(
+        monkeypatch,
+        tmp_path,
+        _all_success(),
+        _with_failures(4),
+        "--non-inferiority-margin",
+        "-0.05",
+    )
+    assert result.exit_code == 1, result.output
+    assert json.loads((out / "parity.cert.json").read_text())["non_inferiority"]["passed"] is False
+
+
+def test_cli_tango_at_tight_margin_is_insufficient_evidence(monkeypatch, tmp_path):
+    result, out, _ = _cli(
+        monkeypatch,
+        tmp_path,
+        _all_success(),
+        _all_success(),
+        "--non-inferiority-margin",
+        "-0.05",
+        "--non-inferiority-interval",
+        "tango_one_sided95",
+    )
+    assert result.exit_code == 1, result.output
+    verdict = json.loads((out / "parity.cert.json").read_text())["non_inferiority"]["certificate"][
+        "verdict"
+    ]
+    assert "insufficient evidence" in verdict
+
+
+def test_cli_without_margin_records_not_evaluated(monkeypatch, tmp_path):
+    result, out, _ = _cli(monkeypatch, tmp_path, _all_success(), _all_success())
+    assert result.exit_code == 0, result.output
+    cert = json.loads((out / "parity.cert.json").read_text())
+    assert cert["non_inferiority"] == {"status": "NOT_EVALUATED", "reason": "no_margin_declared"}
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ("--non-inferiority-margin", "0.05"),
+        ("--non-inferiority-margin", "-0.05", "--non-inferiority-interval", "wilson"),
+    ],
+)
+def test_cli_bad_declaration_exits_2_before_rollout(monkeypatch, tmp_path, flags):
+    typer_testing = pytest.importorskip("typer.testing")
+    import tether.verify as verify_mod
+    from tether.cli import app
+
+    def gather(**_):
+        raise AssertionError("rollout must not run")
+
+    monkeypatch.setattr(verify_mod, "gather_paired_samples", gather)
+    result = typer_testing.CliRunner().invoke(
+        app, ["verify", "/fake/export", "--output", str(tmp_path / "v"), *flags]
+    )
+    assert result.exit_code == 2, result.output
+    assert "non-inferiority" in result.output
