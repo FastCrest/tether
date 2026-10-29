@@ -97,6 +97,24 @@ Now:
 - `actions_executed` is a strict int in [0, 4096] (and <= chunk length);
   `chunk_id` is lowercase hex, at most 64 characters.
 
+**Correction 2026-10-28 (adversarial re-review of `b4802d8`).**
+- An exact replay was answered before the license, circuit-breaker and
+  guard-latch checks, so a retry could return actions while the guard was
+  tripped. The gates now run first for every RTC request, replays included.
+- `episode_id` became the stream key but was unbounded; under `--rtc` it is
+  now 1-128 characters of `[A-Za-z0-9._:-]` and is logged only as length plus
+  a short hash.
+- LRU eviction let 64 unknown ids evict a live robot, and could delete a
+  stream between a lock release and its queued waiter. Streams now count
+  users; only a stream with no users, idle at least `--rtc-stream-min-idle-s`
+  (300 s), is evicted at `--rtc-max-streams` (64), otherwise the new episode
+  gets 503.
+- A reused `episode_id` carried the last episode's leftover. Contract chosen:
+  one `episode_id` per episode (the client's `episode()` generates one), and
+  `episode_start: true` on the first request when an id is reused. That is
+  explicit, per stream, and cannot be sent with a report.
+- Replays now carry the original `X-Tether-*` headers.
+
 ### D3. Leftover units
 
 | Option | Verdict | Why |

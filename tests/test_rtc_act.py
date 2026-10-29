@@ -237,7 +237,7 @@ class TestActWiring:
         """The stored chunk is the response's actions after every guard."""
         with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
             body = _act(client, episode_id="ep").json()
-            adapter = client.app.state.tether_server.rtc_streams.for_episode("ep").adapter
+            adapter = client.app.state.tether_server.rtc_streams.acquire("ep").adapter
             np.testing.assert_allclose(adapter._last_chunk, np.asarray(body["actions"]), atol=1e-6)
 
 

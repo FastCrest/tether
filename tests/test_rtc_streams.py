@@ -184,3 +184,189 @@ class TestPi05Startup:
         from tether.runtime.pi05_decomposed_server import iobinding_device
 
         assert iobinding_device(providers) == device
+
+
+# ---------------------------------------------------------------------------
+# Re-review 2026-10-28 (RR-B1, RR-B2, RR-N1..N5, strict_policy_kwargs shim)
+# ---------------------------------------------------------------------------
+
+
+def _committed_report(client):
+    first = _act(client, episode_id="ep").json()
+    report = {"episode_id": "ep", "actions_executed": 2, "chunk_id": first["chunk_id"]}
+    assert _act(client, **report).status_code == 200
+    return report
+
+
+class TestReplayPassesEveryGate:
+    """RR-B1: an exact retry must be refused exactly when a fresh /act is."""
+
+    @staticmethod
+    def _trip_guard(server, monkeypatch):
+        from types import SimpleNamespace
+
+        server._action_guard = SimpleNamespace(tripped=True, trip_reason="joint limit")
+
+    @staticmethod
+    def _degrade(server, monkeypatch):
+        server.health_state = "degraded"
+
+    @staticmethod
+    def _expire_license(server, monkeypatch):
+        import tether.runtime.server as srv
+
+        monkeypatch.setattr(srv, "_paid_license_admitted", lambda _s: False)
+
+    @pytest.mark.parametrize("gate", ["_trip_guard", "_degrade", "_expire_license"])
+    def test_replay_is_refused_while_a_gate_is_closed(self, tmp_path, monkeypatch, tiny_policy, gate):
+        with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
+            report = _committed_report(client)
+            getattr(self, gate)(client.app.state.tether_server, monkeypatch)
+            fresh = _act(client, episode_id="other")
+            replay = _act(client, **report)
+        assert fresh.status_code == 503
+        assert replay.status_code == 503
+        assert "actions" not in replay.json() or not replay.json()["actions"]
+        assert replay.json().get("error") == fresh.json().get("error")
+        assert replay.headers.get("X-Tether-RTC-Replay") is None
+
+
+class TestEpisodeIdBounds:
+    @pytest.mark.parametrize("bad", ["x" * 129, "robot a", "a/b", "é"])
+    def test_rtc_refuses_unbounded_or_odd_episode_ids(self, tmp_path, monkeypatch, tiny_policy, bad):
+        with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
+            r = _act(client, episode_id=bad)
+            assert r.status_code == 422
+            assert r.json()["error"] == "rtc_episode_invalid"
+            assert len(client.app.state.tether_server.rtc_streams) == 0
+
+    def test_episode_id_is_never_logged_in_full(self, tmp_path, monkeypatch, tiny_policy, caplog):
+        eid = "robot-" + "q" * 100
+        with caplog.at_level("DEBUG"):
+            with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
+                assert _act(client, episode_id=eid).status_code == 200
+        assert eid not in caplog.text
+
+    def test_non_rtc_servers_keep_accepting_old_episode_ids(self, tmp_path, monkeypatch, tiny_policy):
+        with _client(tmp_path, monkeypatch, tiny_policy, None) as client:
+            assert _act(client, episode_id="any id / with spaces").status_code == 200
+
+
+class TestEviction:
+    def test_junk_ids_cannot_evict_a_live_stream(self, tmp_path, monkeypatch, tiny_policy):
+        with _client(tmp_path, monkeypatch, tiny_policy, _rtc(max_streams=4)) as client:
+            a1 = _act(client, episode_id="robot-a").json()
+            refused = [
+                _act(client, episode_id=f"junk-{i}").status_code for i in range(10)
+            ]
+            again = _act(client, episode_id="robot-a", actions_executed=1, chunk_id=a1["chunk_id"])
+        assert again.status_code == 200, again.text
+        assert 503 in refused  # new streams refused at the cap, nothing live evicted
+
+    def test_idle_streams_are_evicted_after_the_minimum_idle_age(self):
+        import asyncio
+
+        from tether.runtime.rtc_adapter import RtcStreams
+
+        clock = [0.0]
+        streams = RtcStreams(lambda: _FakeAdapter(), max_streams=1, min_idle_s=10.0, clock=lambda: clock[0])
+        streams.acquire("a").release()
+        clock[0] = 5.0
+        with pytest.raises(Exception) as exc:
+            streams.acquire("b")
+        assert getattr(exc.value, "status", None) == 503
+        clock[0] = 20.0
+        streams.acquire("b").release()
+        assert "a" not in streams and "b" in streams
+        asyncio.run(asyncio.sleep(0))
+
+    def test_a_stream_with_a_queued_user_is_never_evicted(self):
+        """RR-N2: between lock release and a woken waiter, lock.locked() is
+        False; the user count, not the lock, protects the stream."""
+        from tether.runtime.rtc_adapter import RtcStreams
+
+        clock = [0.0]
+        streams = RtcStreams(lambda: _FakeAdapter(), max_streams=1, min_idle_s=0.0, clock=lambda: clock[0])
+        held = streams.acquire("a")
+        waiter = streams.acquire("a")  # queued behind `held`
+        held.release()
+        clock[0] = 100.0
+        with pytest.raises(Exception):
+            streams.acquire("b")
+        assert streams.acquire("a") is waiter or "a" in streams
+        waiter.release()
+
+
+class _FakeAdapter:
+    _last_chunk_id = None
+
+    def reset(self, episode_id=None):
+        self.episode_id = episode_id
+
+
+class TestEpisodeStart:
+    def test_episode_start_drops_the_previous_leftover(self, tmp_path, monkeypatch, tiny_policy):
+        with _client(tmp_path, monkeypatch, tiny_policy, _rtc(execute_hz=1.0)) as client:
+            _act(client, episode_id="fixed")
+            plain = _act(client, episode_id="fixed").json()
+            fresh = _act(client, episode_id="fixed", episode_start=True).json()
+        assert plain["rtc"]["applied"] is True  # same id, same episode: carried
+        assert fresh["rtc"]["applied"] is False
+        assert fresh["rtc"]["leftover_source"] == "none"
+
+    def test_episode_start_with_a_report_is_refused(self, tmp_path, monkeypatch, tiny_policy):
+        with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
+            first = _act(client, episode_id="ep").json()
+            r = _act(client, episode_id="ep", episode_start=True,
+                     actions_executed=1, chunk_id=first["chunk_id"])
+        assert r.status_code == 422
+        assert r.json()["error"] == "rtc_episode_start_with_report"
+
+
+class TestReplayHeaders:
+    def test_replay_keeps_the_original_tether_headers(self, tmp_path, monkeypatch, tiny_policy):
+        from fastapi.responses import JSONResponse
+
+        import tether.runtime.server as srv
+
+        with _client(tmp_path, monkeypatch, tiny_policy, _rtc()) as client:
+            first = _act(client, episode_id="ep").json()
+            report = {"episode_id": "ep", "actions_executed": 2, "chunk_id": first["chunk_id"]}
+            original = _act(client, **report)
+            replay = _act(client, **report)
+        assert replay.headers.get("X-Tether-RTC-Replay") == "true"
+        for name, value in original.headers.items():
+            if name.lower().startswith("x-tether-") and name.lower() != "x-tether-request-id":
+                assert replay.headers.get(name) == value
+        assert replay.headers["content-type"] == original.headers["content-type"]
+        assert JSONResponse and srv  # imports exercised
+
+    def test_configure_replan_has_no_dead_rtc_branch(self):
+        import inspect
+
+        import tether.runtime.server as srv
+
+        assert "rtc_adapter" not in inspect.getsource(srv.configure_action_buffer)
+
+
+class TestStrictPolicyKwargsShim:
+    def test_true_is_deprecated(self):
+        from tether.runtime.rtc_adapter import RtcAdapterConfig
+
+        with pytest.warns(DeprecationWarning, match="always strict"):
+            RtcAdapterConfig(strict_policy_kwargs=True)
+
+    def test_false_is_refused_with_the_reason(self):
+        from tether.runtime.rtc_adapter import RtcAdapterConfig
+
+        with pytest.raises(ValueError, match="plain-inference fallback was removed"):
+            RtcAdapterConfig(strict_policy_kwargs=False)
+
+    def test_omitted_is_fine(self):
+        import warnings
+
+        from tether.runtime.rtc_adapter import RtcAdapterConfig
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            RtcAdapterConfig()

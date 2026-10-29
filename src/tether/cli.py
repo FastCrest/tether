@@ -2515,6 +2515,20 @@ def serve(
         help="With --rtc: enable lerobot's debug Tracker for per-step state "
              "capture. Useful for replay forensics; small per-call overhead.",
     ),
+    rtc_max_streams: int = typer.Option(
+        64,
+        "--rtc-max-streams",
+        min=1,
+        help="With --rtc: most concurrent RTC streams (one per episode_id). At "
+             "the cap a new episode evicts only a stream idle for at least "
+             "--rtc-stream-min-idle-s with no request in flight; otherwise 503.",
+    ),
+    rtc_stream_min_idle_s: float = typer.Option(
+        300.0,
+        "--rtc-stream-min-idle-s",
+        min=0.0,
+        help="With --rtc: idle seconds before a stream may be evicted.",
+    ),
     adaptive_action_chunking: bool = typer.Option(
         False,
         "--adaptive-action-chunking",
@@ -3117,6 +3131,8 @@ def serve(
                 prefix_attention_schedule=rtc_schedule,
                 max_guidance_weight=rtc_max_guidance_weight,
                 debug=rtc_debug,
+                max_streams=rtc_max_streams,
+                stream_min_idle_s=rtc_stream_min_idle_s,
                 adaptive_chunking_enabled=(
                     adaptive_action_chunking or adaptive_action_chunking_canary
                 ),

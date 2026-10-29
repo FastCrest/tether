@@ -755,10 +755,6 @@ def configure_action_buffer(
     server._replan_hz = replan_hz
     server._execute_hz = execute_hz
     server._replan_threshold = window["threshold_ratio"]
-    # RTC must retain the very same buffer after lifespan configuration.
-    adapter = getattr(server, "rtc_adapter", None)
-    if adapter is not None:
-        adapter.buffer = server._action_buffer
     logger.info(
         "replan configured: replan_hz=%g execute_hz=%g capacity=%d "
         "max_lateness_ms=%s max_age_ms=%s; HTTP /act returns full chunks",
@@ -1919,7 +1915,7 @@ class TetherServer:
 
 
 try:
-    from pydantic import BaseModel, Field, StrictInt
+    from pydantic import BaseModel, Field, StrictBool, StrictInt
 
     class PredictRequest(BaseModel):
         image: str | None = None  # base64 encoded -- the primary/agentview camera
@@ -1931,6 +1927,9 @@ try:
         session_id: str | None = None
         # RTC (--rtc): index of the next unexecuted action of the chunk the
         # server returned as `chunk_id`. Sent together; both optional.
+        # RTC: true on the first request of a new episode that reuses an
+        # episode_id; drops that stream's carry-forward. Not with a report.
+        episode_start: StrictBool = False
         actions_executed: StrictInt | None = Field(default=None, ge=0, le=4096)
         chunk_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{1,64}$")
 
@@ -2504,7 +2503,6 @@ def create_app(
     # (episode_id), never shared across robots. /act plans guidance from the
     # stream's adapter before predict and commits the returned chunk after,
     # under the stream's lock. No-op when rtc_config is None or disabled.
-    server.rtc_adapter = None  # type: ignore[attr-defined]
     server.rtc_streams = None  # type: ignore[attr-defined]
     if rtc_config is not None and getattr(rtc_config, "enabled", False):
         # Reject 1-NFE + RTC at config-time per the per-step-expert-export
@@ -2541,7 +2539,11 @@ def create_app(
         # Build one now: an adapter that cannot be built must stop startup,
         # not leave --rtc serving unguided chunks.
         _new_rtc_adapter()
-        server.rtc_streams = RtcStreams(_new_rtc_adapter)  # type: ignore[attr-defined]
+        server.rtc_streams = RtcStreams(  # type: ignore[attr-defined]
+            _new_rtc_adapter,
+            max_streams=int(getattr(rtc_config, "max_streams", 64)),
+            min_idle_s=float(getattr(rtc_config, "stream_min_idle_s", 300.0)),
+        )
         logger.info(
             "RTC armed (per-episode streams) — execution_horizon=%d schedule=%s",
             rtc_config.rtc_execution_horizon,
@@ -3584,29 +3586,49 @@ def create_app(
         from fastapi.responses import Response
         from .rtc_adapter import RtcRequestError
         try:
-            _stream = _streams.for_episode(request.episode_id)
+            _stream = _streams.acquire(request.episode_id)
         except RtcRequestError as _rtc_exc:
             return JSONResponse(status_code=_rtc_exc.status, content=_rtc_exc.as_response())
-        # Serialise plan -> predict -> commit per stream; other streams run.
-        async with _stream.lock:
-            _cached = _stream.replay(request.chunk_id, request.actions_executed)
-            if _cached is not None:
-                # Exact retry of the report that produced the last chunk (lost
-                # response): answer with that chunk, run no new inference.
-                return Response(
-                    content=_cached, media_type="application/json",
-                    headers={"X-Tether-RTC-Replay": "true"},
-                )
-            _before = _stream.adapter._last_chunk_id
-            _resp = await _act_body(request, _stream.adapter)
-            if (
-                getattr(_resp, "status_code", 0) == 200
-                and _stream.adapter._last_chunk_id != _before
-            ):
-                _stream.remember(request.chunk_id, request.actions_executed, bytes(_resp.body))
-            return _resp
+        try:
+            # Serialise plan -> predict -> commit per stream; other streams run.
+            async with _stream.lock:
+                # Every gate a fresh /act passes, before any replay: a replay
+                # is actions too, and a tripped guard must stop it.
+                _closed = _gate_response()
+                if _closed is not None:
+                    return _closed
+                if request.episode_start:
+                    if request.actions_executed is not None or request.chunk_id is not None:
+                        return JSONResponse(status_code=422, content={
+                            "error": "rtc_episode_start_with_report",
+                            "message": "episode_start begins a new carry-forward; send no report with it",
+                        })
+                    _stream.start_episode(request.episode_id)
+                _cached = _stream.replay(request.chunk_id, request.actions_executed)
+                if _cached is not None:
+                    # Exact retry of the report that produced the last chunk
+                    # (lost response): same body and headers, no new inference.
+                    _body, _headers = _cached
+                    return Response(
+                        content=_body, media_type="application/json",
+                        headers={**_headers, "X-Tether-RTC-Replay": "true"},
+                    )
+                _before = _stream.adapter._last_chunk_id
+                _resp = await _act_body(request, _stream.adapter)
+                if (
+                    getattr(_resp, "status_code", 0) == 200
+                    and _stream.adapter._last_chunk_id != _before
+                ):
+                    _stream.remember(
+                        request.chunk_id, request.actions_executed, bytes(_resp.body),
+                        {k: v for k, v in _resp.headers.items() if k.lower().startswith("x-tether-")},
+                    )
+                return _resp
+        finally:
+            _stream.release()
 
-    async def _act_body(request: Any, _rtc: Any):
+    def _gate_response() -> Any:
+        """The 503 a closed serving gate returns, or None when /act may serve."""
         if not _paid_license_admitted(server):
             return JSONResponse(
                 status_code=503,
@@ -3644,6 +3666,12 @@ def create_app(
                 "model) and call POST /guard/reset to resume."
             )
             return JSONResponse(status_code=503, content=_stop)
+        return None
+
+    async def _act_body(request: Any, _rtc: Any):
+        _closed = _gate_response()
+        if _closed is not None:
+            return _closed
         # Determine embodiment label for metrics. Bounded enum (per
         # ORGANIZATION.md/cardinality budget): preset name OR 'custom'.
         _ec = getattr(server, "embodiment_config", None)
@@ -3680,7 +3708,8 @@ def create_app(
             )
 
             if _rtc is not None and request.episode_id:
-                span.set_attribute("tether.rtc.episode_id", request.episode_id)
+                from .rtc_adapter import _episode_tag
+                span.set_attribute("tether.rtc.episode", _episode_tag(request.episode_id))
 
             # RTC guidance inputs for this chunk (leftover from the client's
             # actions_executed report, or a labelled wall-clock estimate).

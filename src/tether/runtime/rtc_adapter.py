@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
@@ -136,10 +137,39 @@ class RtcAdapterConfig:
     adaptive_high_correction_magnitude: float = 0.20
     adaptive_high_action_delta: float = 0.25
     adaptive_high_latency_ms: float = 120.0
+    # HTTP /act keeps one carry-forward per episode_id. At the cap a new
+    # episode evicts the least recently active stream that has no request in
+    # flight and has been idle at least stream_min_idle_s; if none qualifies
+    # the new episode is refused (503) rather than evicting a live robot.
+    max_streams: int = 64
+    stream_min_idle_s: float = 300.0
+    # Deprecated (one release): the adapter is always strict now.
+    strict_policy_kwargs: bool | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Validate the Tether-side extras. lerobot's RTCConfig validates
         its own fields when constructed via _build_lerobot_rtc_config()."""
+        if self.strict_policy_kwargs is True:
+            import warnings
+
+            warnings.warn(
+                "RtcAdapterConfig.strict_policy_kwargs is deprecated: RTC is always "
+                "strict now; drop the keyword (removed in the next minor release)",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        elif self.strict_policy_kwargs is False:
+            raise ValueError(
+                "strict_policy_kwargs=False is no longer supported: the plain-inference "
+                "fallback was removed, so a policy that rejects the RTC kwargs is "
+                "refused instead of served unguided; drop the keyword"
+            )
+        if self.max_streams < 1:
+            raise ValueError(f"max_streams must be >= 1, got {self.max_streams}")
+        if self.stream_min_idle_s < 0:
+            raise ValueError(
+                f"stream_min_idle_s must be >= 0, got {self.stream_min_idle_s}"
+            )
         if self.adaptive_chunking_canary:
             self.adaptive_chunking_enabled = True
         if self.prefix_attention_schedule not in _VALID_SCHEDULES:
@@ -637,7 +667,7 @@ class RtcAdapter:
         )
         if self._processor is not None:
             self._processor.reset_tracker()
-        logger.info("[rtc] reset — new episode_id=%s", episode_id)
+        logger.info("[rtc] reset — new episode %s", _episode_tag(episode_id))
 
     # ---- Introspection ------------------------------------------
 
@@ -670,68 +700,135 @@ class RtcAdapter:
         return stats
 
 
-class RtcStream:
-    """One client's RTC carry-forward: adapter, lock and replay memo.
+_EPISODE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
-    The lock is held by ``/act`` from guidance planning to chunk commit, so
-    two in-flight requests on one stream cannot both plan against the same
-    leftover. ``replay`` answers an exact retry of the report that produced
-    the last chunk (a lost response) with that chunk instead of a 409.
+
+def _episode_tag(episode_id: str | None) -> str:
+    """Loggable stand-in for a client-chosen id: length + short hash."""
+    if episode_id is None:
+        return "none"
+    digest = hashlib.sha256(episode_id.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"len{len(episode_id)}:{digest}"
+
+
+class RtcStream:
+    """One client's RTC carry-forward: adapter, lock, users and replay memo.
+
+    ``/act`` holds ``lock`` from guidance planning to chunk commit, so two
+    in-flight requests on one stream cannot plan against the same leftover.
+    ``users`` counts requests that hold or wait for the lock; eviction only
+    takes streams with none (``lock.locked()`` is briefly False between a
+    release and the woken waiter, so it cannot be the test). ``replay``
+    answers an exact retry of the report that produced the last chunk.
     """
 
-    def __init__(self, adapter: RtcAdapter):
+    def __init__(self, adapter: RtcAdapter, now: float, clock: Any):
         import asyncio
 
         self.adapter = adapter
         self.lock = asyncio.Lock()
+        self.users = 0
+        self.last_activity = now
+        self._clock = clock
         self._last_report: tuple[str, int] | None = None
         self._last_body: bytes | None = None
+        self._last_headers: dict[str, str] = {}
 
-    def replay(self, chunk_id: str | None, actions_executed: int | None) -> bytes | None:
+    def release(self) -> None:
+        self.users -= 1
+        self.last_activity = self._clock()
+
+    def start_episode(self, episode_id: str) -> None:
+        """Explicit episode start under a reused episode_id: drop the carry."""
+        self.adapter.reset(episode_id=episode_id)
+        self._last_report = None
+        self._last_body = None
+        self._last_headers = {}
+
+    def replay(self, chunk_id: str | None, actions_executed: int | None) -> tuple[bytes, dict[str, str]] | None:
         if chunk_id is None or self._last_report != (chunk_id, actions_executed):
             return None
-        return self._last_body
+        return self._last_body, dict(self._last_headers)
 
-    def remember(self, chunk_id: str | None, actions_executed: int | None, body: bytes) -> None:
+    def remember(
+        self,
+        chunk_id: str | None,
+        actions_executed: int | None,
+        body: bytes,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._last_report = None if chunk_id is None else (chunk_id, int(actions_executed))
         self._last_body = body
+        self._last_headers = dict(headers or {})
 
 
 class RtcStreams:
     """RTC state keyed by ``episode_id``: one stream per robot/episode.
 
-    Never shared across keys. Least-recently-used idle streams are evicted
-    beyond ``max_streams`` (an evicted stream's next report gets 409 and its
-    client starts over with an estimate).
+    Never shared across keys. At ``max_streams`` a new key evicts the least
+    recently active stream with no user that has been idle at least
+    ``min_idle_s``; when none qualifies the new key is refused with 503, so
+    a burst of unknown ids cannot evict a live robot.
     """
 
-    def __init__(self, factory: Any, max_streams: int = 64):
-        from collections import OrderedDict
-
+    def __init__(
+        self,
+        factory: Any,
+        max_streams: int = 64,
+        min_idle_s: float = 300.0,
+        clock: Any = time.monotonic,
+    ):
         self._factory = factory
-        self._streams: OrderedDict[str, RtcStream] = OrderedDict()
+        self._streams: dict[str, RtcStream] = {}
         self.max_streams = max_streams
+        self.min_idle_s = min_idle_s
+        self._clock = clock
+        self.evictions = 0
 
-    def for_episode(self, episode_id: str | None) -> RtcStream:
+    def acquire(self, episode_id: str | None) -> RtcStream:
+        """The stream for ``episode_id`` with one more user; pair with
+        ``stream.release()``. Raises :class:`RtcRequestError`."""
         if not episode_id:
             raise RtcRequestError(
                 422, "rtc_episode_required",
                 "--rtc keeps one carry-forward per stream; send episode_id "
                 "(one per robot and episode) so streams never mix",
             )
+        if not isinstance(episode_id, str) or not _EPISODE_ID.match(episode_id):
+            raise RtcRequestError(
+                422, "rtc_episode_invalid",
+                "under --rtc episode_id must be 1-128 characters of "
+                "A-Z a-z 0-9 . _ : -",
+            )
+        now = self._clock()
         stream = self._streams.get(episode_id)
         if stream is None:
+            if len(self._streams) >= self.max_streams:
+                self._evict_one(now)
             adapter = self._factory()
             adapter.reset(episode_id=episode_id)
-            stream = RtcStream(adapter)
+            stream = RtcStream(adapter, now, self._clock)
             self._streams[episode_id] = stream
-            for key in list(self._streams):
-                if len(self._streams) <= self.max_streams:
-                    break
-                if key != episode_id and not self._streams[key].lock.locked():
-                    del self._streams[key]
-        self._streams.move_to_end(episode_id)
+        stream.users += 1
+        stream.last_activity = now
         return stream
+
+    def _evict_one(self, now: float) -> None:
+        idle = [
+            (stream.last_activity, key)
+            for key, stream in self._streams.items()
+            if stream.users == 0 and now - stream.last_activity >= self.min_idle_s
+        ]
+        if not idle:
+            raise RtcRequestError(
+                503, "rtc_streams_full",
+                f"{len(self._streams)} RTC streams are active (cap {self.max_streams}, "
+                f"none idle >= {self.min_idle_s:g} s); retry later or raise --rtc-max-streams",
+            )
+        _, key = min(idle)
+        del self._streams[key]
+        self.evictions += 1
+        logger.info("[rtc] evicted idle stream %s", _episode_tag(key))
 
     def __len__(self) -> int:
         return len(self._streams)
