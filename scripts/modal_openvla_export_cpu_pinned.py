@@ -86,9 +86,13 @@ image = (
         "accelerate",
         "scipy",
     )
+    # numpy is re-pinned here: without it this layer upgraded numpy to 2.x, so the
+    # export's provenance never matched the GPU parity image (numpy 1.26.4) and the
+    # parity job refused it (2026-10-30, 1733d30 re-qualification).
     .pip_install(
         "onnx>=1.16",
         "onnxruntime>=1.20,<1.24",
+        "numpy==1.26.4",
     )
     .env({
         "HF_HOME": HF_CACHE_PATH,
