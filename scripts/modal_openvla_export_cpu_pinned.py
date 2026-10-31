@@ -120,6 +120,17 @@ SETUP_MARGIN_SECONDS = 1200
 MODAL_TIMEOUT_SECONDS = EXPORT_TIMEOUT_SECONDS + PARITY_TIMEOUT_SECONDS + SETUP_MARGIN_SECONDS
 
 
+def _print_timeout_output(exc) -> None:
+    """Keep the hung phase's log: TimeoutExpired carries its partial output."""
+    for stream in (exc.stdout, exc.stderr):
+        if stream:
+            text = stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+            print(text[-4000:], flush=True)
+
+
+PASS_VERDICTS = ("passed",)
+
+
 @app.function(
     image=image,
     timeout=MODAL_TIMEOUT_SECONDS,
@@ -245,6 +256,7 @@ def run_export_cpu(
                 timeout=export_timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
+            _print_timeout_output(exc)
             _parity_out_volume.commit()
             raise RuntimeError(
                 f"export exceeded {export_timeout_seconds:.0f}s; stopped"
@@ -321,6 +333,7 @@ def run_export_cpu(
                 timeout=parity_timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
+            _print_timeout_output(exc)
             _parity_out_volume.commit()
             raise RuntimeError(
                 f"CPU pre-check exceeded {parity_timeout_seconds:.0f}s; stopped"
@@ -332,6 +345,10 @@ def run_export_cpu(
         if receipt_path.is_file():
             receipt = _json.loads(receipt_path.read_text())
             summary["verdict"] = receipt.get("verdict")
+            if proc.returncode != 0 and summary["verdict"] in PASS_VERDICTS:
+                raise RuntimeError(
+                    f"harness exited {proc.returncode} but its receipt says {summary['verdict']!r}"
+                )
             summary["action_token_agreement"] = (receipt.get("metrics") or {}).get(
                 "action_token_agreement"
             )
@@ -372,3 +389,8 @@ def main(
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
+    # A non-pass (restart guard, provenance refusal, no receipt, failed
+    # verdict) must not look like a successful `modal run`.
+    # With --no-run-harness an export-only run has no verdict unless aborted.
+    if result.get("verdict", None if run_harness else "passed") not in PASS_VERDICTS:
+        raise SystemExit(f"run did not pass: verdict={result.get('verdict')!r}")

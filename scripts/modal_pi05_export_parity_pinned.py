@@ -33,9 +33,9 @@ import modal
 # action steps) -> a538eb27 (2026-06-01, VLABench eval results).
 PI05_BASE_REVISION = "a538eb273274eb30f126a118f39dbc0ee212c883"
 
-# Exact Tether implementation commit under test. This vehicle adds only new
-# files; src/ and the harness are byte-identical to this commit.
-TETHER_REVISION = "8f464ebdff9cda09d9f30fca0af5b409cfd794b6"
+# Exact Tether implementation commit under test: the 1733d30 public pin
+# (v0.13.0). PARITY_OUT_PATH is named for it.
+TETHER_REVISION = "1733d3045c98dfc1ed961763486acc5579a0b147"
 
 TETHER_REPO = "https://github.com/FastCrest/tether.git"
 
@@ -129,6 +129,17 @@ EXPORT_TIMEOUT_SECONDS = 2700
 PARITY_TIMEOUT_SECONDS = 900
 SETUP_MARGIN_SECONDS = 600
 MODAL_TIMEOUT_SECONDS = EXPORT_TIMEOUT_SECONDS + PARITY_TIMEOUT_SECONDS + SETUP_MARGIN_SECONDS
+
+
+def _print_timeout_output(exc) -> None:
+    """Keep the hung phase's log: TimeoutExpired carries its partial output."""
+    for stream in (exc.stdout, exc.stderr):
+        if stream:
+            text = stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+            print(text[-4000:], flush=True)
+
+
+PASS_VERDICTS = ("passed",)
 
 
 @app.function(
@@ -256,8 +267,11 @@ def run_export_parity(
     snap = snapshot_download("lerobot/pi05_base", revision=model_revision)
     summary["snapshot_dir"] = snap
 
-    export_dir = Path(PARITY_OUT_PATH) / "pi05" / "export"
-    provenance_path = export_dir / "tether-export-provenance.json"
+    family_dir = Path(PARITY_OUT_PATH) / "pi05"
+    export_dir = family_dir / "export"
+    # Beside the export, not inside it, so it never enters the artifact
+    # identity the harness hashes over --onnx-dir.
+    provenance_path = family_dir / "export.provenance.json"
     harness_env = dict(_os.environ)
     harness_env["PYTHONPATH"] = str(pin_dir / "src") + _os.pathsep + harness_env.get(
         "PYTHONPATH", ""
@@ -268,18 +282,25 @@ def run_export_parity(
         "tether_revision": tether_revision,
         "model_revision": model_revision,
         "num_steps": num_steps,
-        **{p: _v(p) for p in ("lerobot", "transformers", "torch", "onnx-diagnostic", "onnxscript")},
+        **{p: _v(p) for p in ("lerobot", "transformers", "torch", "onnx", "onnx-diagnostic", "onnxscript", "numpy")},
     }
     summary["export_provenance"] = provenance
     retained = (
         _json.loads(provenance_path.read_text()) if provenance_path.is_file() else None
     )
-    if reuse_export and retained == provenance:
+    if reuse_export and retained == provenance and (export_dir / "model.onnx").is_file():
         export_result = {"status": "reused", "onnx_path": str(export_dir / "model.onnx")}
         _progress("reusing retained export (provenance matches)")
     else:
         if reuse_export:
             _progress(f"not reusing: retained provenance {retained} != {provenance}")
+        # Drop the old provenance first and clear the directory, so a
+        # failed or partial export can never be mistaken for a matching one.
+        import shutil
+
+        provenance_path.unlink(missing_ok=True)
+        shutil.rmtree(export_dir, ignore_errors=True)
+        _parity_out_volume.commit()
         _progress("export_pi05_monolithic from pinned snapshot (subprocess)")
         code = (
             "import json, sys; from tether.exporters.monolithic import export_pi05_monolithic; "
@@ -293,6 +314,7 @@ def run_export_parity(
                 timeout=export_timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
+            _print_timeout_output(exc)
             _parity_out_volume.commit()
             raise RuntimeError(
                 f"export exceeded {export_timeout_seconds:.0f}s; stopped"
@@ -310,7 +332,9 @@ def run_export_parity(
 
 
     # 3. Receipt-grade parity with CUDA, CPU fallback disabled.
-    receipt_path = Path(PARITY_OUT_PATH) / "pi05" / "pi05-export-parity-receipt.json"
+    receipt_path = family_dir / "pi05-export-parity-receipt.json"
+    # A receipt left by an earlier run must never be read as this run's.
+    receipt_path.unlink(missing_ok=True)
     cmd = [
         sys.executable,
         str(pin_dir / "scripts" / "local_pi05_monolithic_parity.py"),
@@ -328,6 +352,7 @@ def run_export_parity(
             timeout=parity_timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
+        _print_timeout_output(exc)
         _parity_out_volume.commit()
         raise RuntimeError(f"parity harness exceeded {parity_timeout_seconds:.0f}s; stopped") from exc
     print(proc.stdout[-6000:], flush=True)
@@ -337,6 +362,10 @@ def run_export_parity(
     if receipt_path.is_file():
         receipt = _json.loads(receipt_path.read_text())
         summary["verdict"] = receipt.get("verdict")
+        if proc.returncode != 0 and summary["verdict"] in PASS_VERDICTS:
+            raise RuntimeError(
+                f"harness exited {proc.returncode} but its receipt says {summary['verdict']!r}"
+            )
         summary["external_acceptance"] = receipt.get("external_acceptance")
         summary["first_cosine"] = receipt.get("first_cosine")
         summary["first_max_abs"] = receipt.get("first_max_abs")
@@ -375,3 +404,7 @@ def main(
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
+    # A non-pass (restart guard, provenance refusal, no receipt, failed
+    # verdict) must not look like a successful `modal run`.
+    if result.get("verdict") not in PASS_VERDICTS:
+        raise SystemExit(f"run did not pass: verdict={result.get('verdict')!r}")

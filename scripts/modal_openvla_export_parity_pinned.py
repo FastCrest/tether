@@ -128,6 +128,17 @@ SETUP_MARGIN_SECONDS = 600
 MODAL_TIMEOUT_SECONDS = PARITY_TIMEOUT_SECONDS + SETUP_MARGIN_SECONDS
 
 
+def _print_timeout_output(exc) -> None:
+    """Keep the hung phase's log: TimeoutExpired carries its partial output."""
+    for stream in (exc.stdout, exc.stderr):
+        if stream:
+            text = stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+            print(text[-4000:], flush=True)
+
+
+PASS_VERDICTS = ("passed",)
+
+
 @app.function(
     image=image,
     gpu="A100-40GB",
@@ -294,6 +305,7 @@ def run_export_parity(
             timeout=parity_timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
+        _print_timeout_output(exc)
         _parity_out_volume.commit()
         raise RuntimeError(f"parity harness exceeded {parity_timeout_seconds:.0f}s; stopped") from exc
     print(proc.stdout[-6000:], flush=True)
@@ -303,6 +315,19 @@ def run_export_parity(
     if receipt_path.is_file():
         receipt = _json.loads(receipt_path.read_text())
         summary["verdict"] = receipt.get("verdict")
+        if proc.returncode != 0 and summary["verdict"] in PASS_VERDICTS:
+            raise RuntimeError(
+                f"harness exited {proc.returncode} but its receipt says {summary['verdict']!r}"
+            )
+        # Versions matched above; this checks content: the GPU run must have
+        # measured the exact export the CPU pre-check measured.
+        precheck_path = family_dir / "openvla-cpu-precheck-receipt.json"
+        if precheck_path.is_file():
+            cpu_sha = (_json.loads(precheck_path.read_text()).get("export_identity") or {}).get("artifact_sha256")
+            gpu_sha = (receipt.get("export_identity") or {}).get("artifact_sha256")
+            summary["artifact_matches_cpu_precheck"] = cpu_sha == gpu_sha
+            if cpu_sha != gpu_sha:
+                summary["verdict"] = "refused-artifact-differs-from-cpu-precheck"
         summary["external_acceptance"] = receipt.get("external_acceptance")
         summary["metrics"] = receipt.get("metrics")
         print("[receipt] " + _json.dumps(receipt, sort_keys=True), flush=True)
@@ -334,3 +359,7 @@ def main(
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
+    # A non-pass (restart guard, provenance refusal, no receipt, failed
+    # verdict) must not look like a successful `modal run`.
+    if result.get("verdict") not in PASS_VERDICTS:
+        raise SystemExit(f"run did not pass: verdict={result.get('verdict')!r}")

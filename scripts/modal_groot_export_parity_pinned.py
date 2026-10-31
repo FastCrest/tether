@@ -149,6 +149,17 @@ SETUP_MARGIN_SECONDS = 900
 MODAL_TIMEOUT_SECONDS = EXPORT_TIMEOUT_SECONDS + PARITY_TIMEOUT_SECONDS + SETUP_MARGIN_SECONDS
 
 
+def _print_timeout_output(exc) -> None:
+    """Keep the hung phase's log: TimeoutExpired carries its partial output."""
+    for stream in (exc.stdout, exc.stderr):
+        if stream:
+            text = stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+            print(text[-4000:], flush=True)
+
+
+PASS_VERDICTS = ("passed",)
+
+
 @app.function(
     image=image,
     gpu="A100-40GB",
@@ -290,13 +301,13 @@ def run_export_parity(
         "tether_revision": tether_revision,
         "model_revision": model_revision,
         "embodiment_id": embodiment_id,
-        **{p: _v(p) for p in ("lerobot", "transformers", "torch", "onnx-diagnostic", "onnxscript")},
+        **{p: _v(p) for p in ("lerobot", "transformers", "torch", "onnx", "onnx-diagnostic", "onnxscript", "numpy")},
     }
     summary["export_provenance"] = provenance
     retained = (
         _json.loads(provenance_path.read_text()) if provenance_path.is_file() else None
     )
-    if reuse_export and retained == provenance:
+    if reuse_export and retained == provenance and (export_dir / "model.onnx").is_file():
         export_result = {"status": "reused", "onnx_path": str(export_dir / "model.onnx")}
         _progress("reusing retained export (provenance matches)")
     else:
@@ -324,6 +335,7 @@ def run_export_parity(
                 timeout=export_timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
+            _print_timeout_output(exc)
             _parity_out_volume.commit()
             raise RuntimeError(
                 f"export exceeded {export_timeout_seconds:.0f}s; stopped"
@@ -373,6 +385,7 @@ def run_export_parity(
             timeout=parity_timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
+        _print_timeout_output(exc)
         _parity_out_volume.commit()
         raise RuntimeError(f"parity harness exceeded {parity_timeout_seconds:.0f}s; stopped") from exc
     print(proc.stdout[-6000:], flush=True)
@@ -383,6 +396,14 @@ def run_export_parity(
         raw = receipt_path.read_bytes()
         receipt = _json.loads(raw)
         if strict_fp32:
+            # Harnesses from this branch on record what they saw; older pins
+            # (1733d30 included) do not, so only a recorded value is checked.
+            observed = receipt.get("observed_environment")
+            # NVIDIA_TF32_OVERRIDE=0 forces cuBLAS/cuDNN to fp32 whatever ORT's
+            # own use_tf32 option reports, so the env var is the condition;
+            # the provider options are recorded as evidence only.
+            if observed is not None and observed.get("NVIDIA_TF32_OVERRIDE") != "0":
+                raise RuntimeError(f"strict-fp32 run did not observe TF32 off: {observed}")
             receipt["environment"] = {
                 "NVIDIA_TF32_OVERRIDE": "0",
                 "math_mode": "strict-fp32 (cuBLAS/cuDNN IEEE fp32, TF32 disabled)",
@@ -391,6 +412,10 @@ def run_export_parity(
             qualifying_path.write_text(_json.dumps(receipt, indent=2, sort_keys=True) + "\n")
         summary["receipt_path"] = str(qualifying_path)
         summary["verdict"] = receipt.get("verdict")
+        if proc.returncode != 0 and summary["verdict"] in PASS_VERDICTS:
+            raise RuntimeError(
+                f"harness exited {proc.returncode} but its receipt says {summary['verdict']!r}"
+            )
         summary["external_acceptance"] = receipt.get("external_acceptance")
         summary["first_cosine"] = receipt.get("first_cosine")
         summary["first_max_abs"] = receipt.get("first_max_abs")
@@ -435,3 +460,7 @@ def main(
     print("\n=== RESULT ===")
     for key, value in result.items():
         print(f"  {key}: {value}")
+    # A non-pass (restart guard, provenance refusal, no receipt, failed
+    # verdict) must not look like a successful `modal run`.
+    if result.get("verdict") not in PASS_VERDICTS:
+        raise SystemExit(f"run did not pass: verdict={result.get('verdict')!r}")
