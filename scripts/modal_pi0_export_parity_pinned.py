@@ -40,7 +40,7 @@ _parity_out_volume = modal.Volume.from_name(
 )
 
 HF_CACHE_PATH = "/root/.cache/huggingface"
-PARITY_OUT_PATH = "/parity_out/lerobot-061-tf554-20261012"
+PARITY_OUT_PATH = "/parity_out/requal-1733d30-20261030"
 
 
 def _hf_secret():
