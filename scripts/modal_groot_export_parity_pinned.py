@@ -1,8 +1,8 @@
 """Modal: GR00T export-parity qualification run (Tether Studio M4 #53).
 
 Runs the receipt-grade harness `scripts/local_groot_monolithic_parity.py` on
-Modal Linux + CUDA, following the proven pi0 pattern (exact 40-hex model
-commit pin, no floating HEAD, plus an in-function self-kill watchdog):
+Modal Linux + CUDA, following the pi0 vehicle pattern (exact 40-hex model
+commit pin, no floating HEAD, bounded GPU time, provenance-checked reuse):
 
 - `nvidia/GR00T-N1.6-3B` is pinned to GROOT_REVISION (the repo's single
   squashed main commit; floating HEAD is refused regardless).
@@ -12,16 +12,26 @@ commit pin, no floating HEAD, plus an in-function self-kill watchdog):
 - The Tether implementation under test is pinned to TETHER_REVISION (an
   exact 40-hex commit): the container clones the repo and checks out that
   commit, and the harness records `git rev-parse HEAD` from that checkout.
-- A self-kill wall-clock watchdog bounds GPU burn: `timeout=` on the
-  decorator is the platform's promise; a hung download or stuck CUDA call
-  can sit in the container without tripping it.
+- GPU burn is bounded by per-phase subprocess timeouts, the Modal function
+  timeout and retries=0, plus a restart guard keyed by --run-id (see
+  EXPORT_TIMEOUT_SECONDS). No in-container SIGKILL watchdog.
+- --reuse-export reuses the retained export only when its provenance
+  record (`groot/export.provenance.json`: Tether commit, model revision,
+  embodiment id, library versions) equals this job's exactly.
 
 GR00T's gate (docs/groot-export-parity.md) is cosine >= 0.9999 and max
 absolute error < 1e-3 on the per-step velocity graph; the harness enforces
-it, this script only reports it.
+it, this script only reports it. Under default ORT-CUDA TF32 math the gate
+fails on full_max_abs (1.26e-03, docs/parity/parity-round2-report.md:43-79);
+it passes only with NVIDIA_TF32_OVERRIDE=0, which is the one condition
+Studio accepts (receipt `groot/groot-export-parity-receipt-strict-tf32.json`
+with an `environment` block). --strict-fp32 runs the unmodified harness
+under that env and writes that receipt; without it the default-env receipt
+is written, as before.
 
 Usage:
-    modal run scripts/modal_groot_export_parity_pinned.py
+    modal run scripts/modal_groot_export_parity_pinned.py \
+        --tether-revision <40-hex> --run-id <id> [--strict-fp32] [--reuse-export]
 """
 
 import os
@@ -33,9 +43,9 @@ import modal
 # Pinned exactly; floating HEAD is refused.
 GROOT_REVISION = "d0814e7ecb19202e7c8468b46098b0b7ef3a6d61"
 
-# Exact Tether implementation commit under test. This vehicle adds only new
-# files; src/ and the harness are byte-identical to this commit.
-TETHER_REVISION = "8f464ebdff9cda09d9f30fca0af5b409cfd794b6"
+# Exact Tether implementation commit under test: the 1733d30
+# re-qualification. Override with --tether-revision.
+TETHER_REVISION = "1733d3045c98dfc1ed961763486acc5579a0b147"
 
 TETHER_REPO = "https://github.com/FastCrest/tether.git"
 
@@ -46,7 +56,7 @@ _parity_out_volume = modal.Volume.from_name(
 )
 
 HF_CACHE_PATH = "/root/.cache/huggingface"
-PARITY_OUT_PATH = "/parity_out/lerobot-061-20261011"
+PARITY_OUT_PATH = "/parity_out/requal-1733d30-20261030"
 
 
 def _hf_secret():
@@ -118,10 +128,32 @@ image = (
 )
 
 
+# Phase budgets from measured runs on A100-40GB: GR00T export + parity
+# together took 201 s (docs/parity/parity-agent-report.md:102) and
+# "rebuild+parity 3.4" GPU-min, about 204 s
+# (docs/parity/parity-round2-report.md:114). The split between export and
+# harness is not recorded, so each phase gets a bound that alone exceeds
+# the measured total: export 900 s (about 4.4x) and harness 600 s (about
+# 2.9x). Those runs were at transformers 5.3.0; the 5.5.4 / torch 2.11 stack
+# here is not measured for GR00T (pi0's export moved 1716.8 -> 1776.5 s
+# across a similar change). The 900 s margin covers container start, the
+# clone and the ~7 GB snapshot download, which the first agent run put at
+# most of its ~10 min wall. Each phase runs in a subprocess with its
+# timeout, so an overrun ends the input as an ordinary failure; the old
+# in-container SIGKILL watchdog surfaced as a runner crash, which Modal's
+# client re-schedules as an internal failure regardless of the retry policy
+# (modal 1.4.0 `_functions.py`, MAX_INTERNAL_FAILURE_COUNT = 8).
+EXPORT_TIMEOUT_SECONDS = 900
+PARITY_TIMEOUT_SECONDS = 600
+SETUP_MARGIN_SECONDS = 900
+MODAL_TIMEOUT_SECONDS = EXPORT_TIMEOUT_SECONDS + PARITY_TIMEOUT_SECONDS + SETUP_MARGIN_SECONDS
+
+
 @app.function(
     image=image,
     gpu="A100-40GB",
-    timeout=3600,
+    timeout=MODAL_TIMEOUT_SECONDS,
+    retries=0,
     volumes={
         HF_CACHE_PATH: _hf_cache_volume,
         "/parity_out": _parity_out_volume,
@@ -133,46 +165,51 @@ def run_export_parity(
     tether_revision: str = TETHER_REVISION,
     embodiment_id: int = 0,
     reuse_export: bool = False,
-    watchdog_seconds: float = 3300,
+    strict_fp32: bool = False,
+    export_timeout_seconds: float = EXPORT_TIMEOUT_SECONDS,
+    parity_timeout_seconds: float = PARITY_TIMEOUT_SECONDS,
+    run_id: str = "",
 ) -> dict:
+    import hashlib
+    import json as _json
+    import os as _os
+    import shutil
     import subprocess
     import sys
     import time
+    from importlib.metadata import version as _v
     from pathlib import Path
-
-    import os as _os
-    import signal as _signal
-    import threading as _threading
-
-    _WATCHDOG_SECONDS = float(
-        _os.environ.get("PARITY_WATCHDOG_SECONDS", str(watchdog_seconds))
-    )
-
-    def _self_kill() -> None:
-        print(
-            f"[watchdog] deadline of {_WATCHDOG_SECONDS:.0f}s reached; killing this "
-            "container rather than burning GPU time on a hung step.",
-            flush=True,
-        )
-        _os.kill(_os.getpid(), _signal.SIGKILL)
-
-    _watchdog = _threading.Timer(_WATCHDOG_SECONDS, _self_kill)
-    _watchdog.daemon = True
-    _watchdog.start()
 
     _started_at = time.monotonic()
 
     def _progress(stage: str) -> None:
         print(f"[progress] {time.monotonic() - _started_at:7.1f}s  {stage}", flush=True)
 
-    _progress("container up, watchdog armed")
+    _progress("container up")
     summary: dict = {
         "model_source": "nvidia/GR00T-N1.6-3B",
         "model_revision": model_revision,
         "tether_revision": tether_revision,
+        "run_id": run_id,
         "provider": "CUDAExecutionProvider",
         "embodiment_id": embodiment_id,
+        "strict_fp32": strict_fp32,
     }
+    family_dir = Path(PARITY_OUT_PATH) / "groot"
+
+    # Restart guard: if Modal re-schedules this input after a container
+    # crash, the second attempt finds its own marker and exits at once
+    # instead of starting another GPU export.
+    if run_id:
+        marker = family_dir / "attempts" / run_id
+        _parity_out_volume.reload()
+        if marker.exists():
+            _progress("restarted attempt detected; refusing to run again")
+            summary["verdict"] = "aborted-restarted-attempt"
+            return summary
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(time.time()))
+        _parity_out_volume.commit()
 
     # Fail fast if the CUDA EP cannot be created (a broken CUDA/cuDNN
     # image otherwise surfaces many minutes later as a no-fallback gate
@@ -241,44 +278,81 @@ def run_export_parity(
     snap = snapshot_download("nvidia/GR00T-N1.6-3B", revision=model_revision)
     summary["snapshot_dir"] = snap
 
-    from tether.exporters.monolithic import export_gr00t_monolithic
-
-    export_dir = Path(PARITY_OUT_PATH) / "groot" / "export"
-    existing = export_dir / "model.onnx"
-    if reuse_export and existing.is_file() and existing.stat().st_size > 10**6:
-        export_result = {
-            "status": "reused",
-            "onnx_path": str(existing),
-            "size_mb": existing.stat().st_size / 1e6,
-            "embodiment_id": embodiment_id,
-        }
-        _progress(f"reusing retained export ({export_result['size_mb']:.1f}MB)")
+    export_dir = family_dir / "export"
+    # Beside the export, not inside it, so it never enters the artifact
+    # identity the harness hashes over --onnx-dir.
+    provenance_path = family_dir / "export.provenance.json"
+    harness_env = dict(_os.environ)
+    harness_env["PYTHONPATH"] = str(pin_dir / "src") + _os.pathsep + harness_env.get(
+        "PYTHONPATH", ""
+    )
+    provenance = {
+        "tether_revision": tether_revision,
+        "model_revision": model_revision,
+        "embodiment_id": embodiment_id,
+        **{p: _v(p) for p in ("lerobot", "transformers", "torch", "onnx-diagnostic", "onnxscript")},
+    }
+    summary["export_provenance"] = provenance
+    retained = (
+        _json.loads(provenance_path.read_text()) if provenance_path.is_file() else None
+    )
+    if reuse_export and retained == provenance:
+        export_result = {"status": "reused", "onnx_path": str(export_dir / "model.onnx")}
+        _progress("reusing retained export (provenance matches)")
     else:
-        _progress("export_gr00t_monolithic from pinned snapshot")
-        export_result = export_gr00t_monolithic(
-            snap, export_dir, embodiment_id=embodiment_id
+        if reuse_export:
+            _progress(f"not reusing: retained provenance {retained} != {provenance}")
+        # Drop the old provenance first and clear the directory, so a
+        # failed or partial export can never be mistaken for a matching one.
+        provenance_path.unlink(missing_ok=True)
+        shutil.rmtree(export_dir, ignore_errors=True)
+        _parity_out_volume.commit()
+        # The export runs in its own process, so its CUDA allocations are
+        # freed before the harness loads the reference (the in-process
+        # export needed an explicit cache release: on pi0.5 the parent held
+        # 22.03/22.06 GiB and the child got 16 MiB).
+        _progress("export_gr00t_monolithic from pinned snapshot (subprocess)")
+        code = (
+            "import json, sys; from tether.exporters.monolithic import export_gr00t_monolithic; "
+            "r = export_gr00t_monolithic(sys.argv[1], sys.argv[2], embodiment_id=int(sys.argv[3])); "
+            "print('EXPORT_RESULT ' + json.dumps(r, default=str), flush=True)"
         )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", code, snap, str(export_dir), str(embodiment_id)],
+                cwd=str(pin_dir), env=harness_env, capture_output=True, text=True,
+                timeout=export_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _parity_out_volume.commit()
+            raise RuntimeError(
+                f"export exceeded {export_timeout_seconds:.0f}s; stopped"
+            ) from exc
+        print(proc.stdout[-4000:], flush=True)
+        print(proc.stderr[-4000:], flush=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"export failed with return code {proc.returncode}")
+        line = next(x for x in proc.stdout.splitlines() if x.startswith("EXPORT_RESULT "))
+        export_result = _json.loads(line.split(" ", 1)[1])
+        provenance_path.write_text(_json.dumps(provenance, sort_keys=True) + "\n")
+        _parity_out_volume.commit()
         _progress(f"export ok: {export_result.get('size_mb', 0):.1f}MB")
     summary["export"] = export_result
 
-    # Release the export phase's cached GPU blocks before the parity
-    # subprocess: the harness loads the reference beside the parent, and
-    # the parent's caching-allocator reservation would OOM it (observed
-    # on pi0.5: parent held 22.03/22.06 GiB, child got 16 MiB free).
-    import gc as _gc
-
-    _gc.collect()
-    try:
-        import torch as _torch
-
-        if _torch.cuda.is_available():
-            _torch.cuda.empty_cache()
-    except Exception as exc:  # noqa: BLE001 -- diagnostic only
-        print(f"[warn] cuda cache release failed: {exc!r}", flush=True)
-    _progress("parent GPU cache released")
-
     # 3. Receipt-grade parity with CUDA, CPU fallback disabled.
-    receipt_path = Path(PARITY_OUT_PATH) / "groot" / "groot-export-parity-receipt.json"
+    if strict_fp32:
+        # Same layout as the 2026-09-18 strict receipt Studio ingests: the
+        # harness writes the raw receipt, and the qualifying file is that
+        # receipt plus an `environment` block naming the condition and the
+        # raw receipt's sha256.
+        harness_env["NVIDIA_TF32_OVERRIDE"] = "0"
+        receipt_path = family_dir / "groot-export-parity-receipt-strict-tf32.raw.json"
+        qualifying_path = family_dir / "groot-export-parity-receipt-strict-tf32.json"
+    else:
+        receipt_path = family_dir / "groot-export-parity-receipt.json"
+        qualifying_path = receipt_path
+    for _stale in {receipt_path, qualifying_path}:
+        _stale.unlink(missing_ok=True)
     cmd = [
         sys.executable,
         str(pin_dir / "scripts" / "local_groot_monolithic_parity.py"),
@@ -289,22 +363,33 @@ def run_export_parity(
         "--provider", "CUDAExecutionProvider",
         "--receipt", str(receipt_path),
     ]
-    _progress("running receipt-grade parity (CUDA, no CPU fallback)")
-    harness_env = dict(_os.environ)
-    harness_env["PYTHONPATH"] = str(pin_dir / "src") + _os.pathsep + harness_env.get(
-        "PYTHONPATH", ""
+    _progress(
+        "running receipt-grade parity (CUDA, no CPU fallback"
+        + (", NVIDIA_TF32_OVERRIDE=0)" if strict_fp32 else ")")
     )
-    proc = subprocess.run(
-        cmd, cwd=str(pin_dir), capture_output=True, text=True, env=harness_env
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(pin_dir), capture_output=True, text=True, env=harness_env,
+            timeout=parity_timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _parity_out_volume.commit()
+        raise RuntimeError(f"parity harness exceeded {parity_timeout_seconds:.0f}s; stopped") from exc
     print(proc.stdout[-6000:], flush=True)
     print(proc.stderr[-3000:], flush=True)
     summary["harness_returncode"] = proc.returncode
 
-    import json as _json
-
     if receipt_path.is_file():
-        receipt = _json.loads(receipt_path.read_text())
+        raw = receipt_path.read_bytes()
+        receipt = _json.loads(raw)
+        if strict_fp32:
+            receipt["environment"] = {
+                "NVIDIA_TF32_OVERRIDE": "0",
+                "math_mode": "strict-fp32 (cuBLAS/cuDNN IEEE fp32, TF32 disabled)",
+                "raw_harness_receipt_sha256": hashlib.sha256(raw).hexdigest(),
+            }
+            qualifying_path.write_text(_json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        summary["receipt_path"] = str(qualifying_path)
         summary["verdict"] = receipt.get("verdict")
         summary["external_acceptance"] = receipt.get("external_acceptance")
         summary["first_cosine"] = receipt.get("first_cosine")
@@ -317,8 +402,11 @@ def run_export_parity(
     else:
         summary["verdict"] = "no-receipt"
 
+    if run_id:
+        run_record = family_dir / "runs" / f"{run_id}.json"
+        run_record.parent.mkdir(parents=True, exist_ok=True)
+        run_record.write_text(_json.dumps(summary, sort_keys=True, default=str) + "\n")
     _parity_out_volume.commit()
-    _watchdog.cancel()
     _progress("done")
     return summary
 
@@ -326,10 +414,23 @@ def run_export_parity(
 @app.local_entrypoint()
 def main(
     tether_revision: str = TETHER_REVISION,
-    watchdog_seconds: float = 1800,
+    reuse_export: bool = False,
+    strict_fp32: bool = False,
+    embodiment_id: int = 0,
+    export_timeout_seconds: float = EXPORT_TIMEOUT_SECONDS,
+    parity_timeout_seconds: float = PARITY_TIMEOUT_SECONDS,
+    run_id: str = "",
 ) -> None:
+    import uuid
+
     result = run_export_parity.remote(
-        tether_revision=tether_revision, watchdog_seconds=watchdog_seconds
+        tether_revision=tether_revision,
+        reuse_export=reuse_export,
+        strict_fp32=strict_fp32,
+        embodiment_id=embodiment_id,
+        export_timeout_seconds=export_timeout_seconds,
+        parity_timeout_seconds=parity_timeout_seconds,
+        run_id=run_id or uuid.uuid4().hex,
     )
     print("\n=== RESULT ===")
     for key, value in result.items():
