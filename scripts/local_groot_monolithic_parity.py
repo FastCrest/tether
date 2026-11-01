@@ -209,6 +209,12 @@ def main(argv: list[str] | None = None) -> int:
         full_cosine=full_cosine,
         full_max_abs=full_max_abs,
     )
+    # Observed, not asserted: a strict-fp32 receipt must show TF32 was off in
+    # this process and in the CUDA EP that ran the artifact.
+    receipt["observed_environment"] = {
+        "NVIDIA_TF32_OVERRIDE": os.environ.get("NVIDIA_TF32_OVERRIDE"),
+        "ort_provider_options": session.get_provider_options().get(args.provider),
+    }
     _write_receipt(receipt_path, receipt)
 
     print("\n====== GR00T EXPORT PARITY ======")
