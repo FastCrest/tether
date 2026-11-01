@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from tether.admin._client import admin_request
+from tether.admin._client import AdminError, admin_request
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,10 +21,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reason", default="admin_revoke", help="Reason for revocation (admin audit).")
     args = parser.parse_args(argv)
 
-    resp = admin_request("POST", "/admin/revoke", {
-        "license_id": args.license_id,
-        "reason": args.reason,
-    })
+    try:
+        resp = admin_request("POST", "/admin/revoke", {
+            "license_id": args.license_id,
+            "reason": args.reason,
+        })
+    except AdminError as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        return exc.exit_code
 
     print()
     print(f"  License revoked: {resp.get('license_id')}")
