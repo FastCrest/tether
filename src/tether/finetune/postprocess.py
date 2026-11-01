@@ -44,6 +44,11 @@ class PostprocessReport:
     libero_drop_pp: float | None = None
     """Task-success delta (student − teacher) in percentage points. Set
     by the libero_drop_gate hook when phase='distill'; None otherwise."""
+    libero_gate_status: str | None = None
+    """Outcome of the LIBERO drop-gate, so a SKIP is never mistaken for a
+    PASS: one of 'passed', 'failed', 'crashed', 'skipped_disabled',
+    'skipped_phase', 'skipped_missing_inputs', 'skipped_unavailable'. None
+    means the gate never attached (non-distill run)."""
     errors: list[str] = field(default_factory=list)
 
 
