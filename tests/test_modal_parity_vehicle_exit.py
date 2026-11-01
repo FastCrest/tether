@@ -67,7 +67,8 @@ def _remote_fn(module):
 
 @pytest.mark.parametrize("name", VEHICLES)
 @pytest.mark.parametrize(
-    "verdict", ["aborted-restarted-attempt", "refused-export-provenance-mismatch", "no-receipt", "failed"]
+    "verdict",
+    ["aborted-restarted-attempt", "refused-export-provenance-mismatch", "no-receipt", "failed"],
 )
 def test_a_non_pass_exits_non_zero(name, verdict, monkeypatch):
     module = _load(name, monkeypatch)
