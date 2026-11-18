@@ -216,7 +216,7 @@ or newly skipped to hide these results. Thor and loaded-model timing remain
 unverified. The final run took 207.28 seconds.
 
 The full run used the requested interpreter and
-`PYTHONPATH=<cwd>/src:/Users/romirjain/dev/.sol-out/tether-mcpdeps:/Users/romirjain/dev/.sol-out/tether-asyncdeps`,
+`PYTHONPATH=<cwd>/src:/home/user/dev/.sol-out/tether-mcpdeps:/home/user/dev/.sol-out/tether-asyncdeps`,
 with `-m pytest -o tmp_path_retention_policy=failed --basetemp=/tmp/chunk-bt`,
 plus `-ra` and a JUnit output file for baseline comparison. The baseline used a
 `git archive 7efcaa4` copy under `/tmp` with equivalent paths. Temporary test
@@ -243,7 +243,7 @@ bound or a timer wakeup distribution. Active competing suite processes must
 finish before the reported run.
 
 Measured on 2026-10-14, macOS-26.3.1-arm64-arm-64bit, Python 3.12.12, arm64,
-using `/Users/romirjain/dev/studio-wt-s11/.sol-scratch/venv/bin/python`.
+using `/home/user/dev/studio-wt-s11/.sol-scratch/venv/bin/python`.
 These are **macOS dev-machine numbers only**, with no Thor or inference load.
 
 | Measured interval, 1,000,000 pops | p50, ms | p99, ms | max, ms | p99 minus p50, ms |

@@ -104,7 +104,7 @@ def test_build_burst_validation_request_rejects_unsafe_manifest() -> None:
             device_id="dev_1",
             payload_hash="sha256:" + "a" * 64,
             payload_manifest={
-                "local_path": "/Users/romirjain/private/frame.png",
+                "local_path": "/home/user/private/frame.png",
                 "signed_url": "https://example.invalid/blob?X-Amz-Signature=secret",
                 "token": "secret",
             },

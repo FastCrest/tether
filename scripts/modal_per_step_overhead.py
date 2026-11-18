@@ -32,7 +32,7 @@ Research:    features/03_export/per-step-expert-export_research.md
 Cost: ~$1.50 Modal (one A100-80GB invocation, ~5 min wall once cached).
 
 Usage:
-    modal profile activate suranjana-jain
+    modal profile activate <modal-profile>
     HF_TOKEN=<token> modal run --detach scripts/modal_per_step_overhead.py
 """
 

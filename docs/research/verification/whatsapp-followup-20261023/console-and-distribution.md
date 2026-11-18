@@ -63,7 +63,7 @@ package version bump, or package installation was performed here.
 
 ## Verification
 
-Interpreter: `/Users/romirjain/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-061/bin/python`
+Interpreter: `/home/user/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-061/bin/python`
 (Python 3.12), with `PYTHONPATH=src`.
 
 ```

@@ -129,8 +129,8 @@ Final requested full-suite run: **VERIFIED, 4229 passed, 138 skipped,
 14 warnings, zero failures in 125.46 seconds**, exit 0.
 
 ```bash
-PYTHONPATH="$PWD/src:/Users/romirjain/dev/.sol-out/tether-mcpdeps:/Users/romirjain/dev/.sol-out/tether-asyncdeps" \
-  /Users/romirjain/dev/studio-wt-s11/.sol-scratch/venv/bin/python -m pytest
+PYTHONPATH="$PWD/src:/home/user/dev/.sol-out/tether-mcpdeps:/home/user/dev/.sol-out/tether-asyncdeps" \
+  /home/user/dev/studio-wt-s11/.sol-scratch/venv/bin/python -m pytest
 ```
 
 The full output is retained at `/private/tmp/tether-numpy-pytest-final.log`.

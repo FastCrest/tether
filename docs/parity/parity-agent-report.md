@@ -18,7 +18,7 @@ Gates applied unmodified: pi0.5/OpenVLA cos >= 0.999, max-abs < 0.1;
 GR00T cos >= 0.9999, max-abs < 1e-3 (its doc gate is stricter than the
 0.999/0.1 summary — not relaxed). Harness scripts + `src/` untouched from
 `8f464eb`; only new vehicle scripts were added (worktree
-`/Users/romirjain/dev/tether-wt-parity-gpu`, branch `parity-gpu-runs`).
+`/home/user/dev/tether-wt-parity-gpu`, branch `parity-gpu-runs`).
 Shared checkouts (`tether`, `tether-pinned-18ed0100`) untouched and clean.
 
 ## 1. pi0.5 (rank 52) — FAIL, root-caused to a bool Pad node
@@ -78,7 +78,7 @@ Shared checkouts (`tether`, `tether-pinned-18ed0100`) untouched and clean.
   OpenVLA ONNX export`, rc=1, no receipt, no vacuous pass.
 - Retained: attempt record `parity-gpu-receipts:openvla/openvla-export-attempt.json`
   (explicitly `is_parity_receipt: false`; local copy at
-  `/Users/romirjain/dev/parity-openvla-attempt.json`).
+  `/home/user/dev/parity-openvla-attempt.json`).
 - Related static verification (no GPU): the pinned config sets
   `use_fused_vision_backbone: true` and `modeling_prismatic.py:120` runs
   `torch.split(pixel_values, [3, 3], dim=1)`, so the harness's `(1,3,224,224)`
@@ -109,7 +109,7 @@ Single-digit dollars at Modal per-second rates — well under the cap. Watchdogs
 - Retained: `parity-gpu-receipts:pi05/export/` (13 GB pinned export),
   `parity-gpu-receipts:groot/export/` (4.4 GB pinned export),
   `parity-gpu-receipts:openvla/openvla-export-attempt.json`.
-- Vehicles: worktree `/Users/romirjain/dev/tether-wt-parity-gpu`,
+- Vehicles: worktree `/home/user/dev/tether-wt-parity-gpu`,
   branch `parity-gpu-runs` (12 commits, all new `scripts/modal_*` files).
 
 ## Recommendation (highest leverage next)

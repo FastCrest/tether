@@ -1,6 +1,6 @@
 """PaliGemmaBackbone — PaliGemma's language path wrapped as a spine LLMBackbone.
 
-Per Romir's 2026-05-20 design fork: SigLIP is split out as the
+Per the maintainer's 2026-05-20 design fork: SigLIP is split out as the
 `vision_backbone` slot (see `models/vision/siglip_backbone.py`). This
 backbone wraps **the rest of PaliGemma** — language_model (Gemma2) +
 multi_modal_projector + token embeddings — for use in the BaseVLA spine's

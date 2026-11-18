@@ -82,4 +82,4 @@ Recommended Grafana panels (not shipped by default; customer-side setup):
 - `features/01_serve/subfeatures/_ecosystem/latency-slo-enforcement/latency-slo-enforcement.md`
 - `features/01_serve/subfeatures/_ecosystem/latency-slo-enforcement/latency-slo-enforcement_plan.md`
 
-Pattern source: [InferScope](https://github.com/rylinjames/easyinference) rolling-window tracker (sibling project at `EasyInference-main/products/inferscope/`). Tether's tracker uses the same percentile/recovery semantics with VLA-specific Prometheus labels.
+Pattern source: [InferScope](the InferScope project) rolling-window tracker (sibling project at `EasyInference-main/products/inferscope/`). Tether's tracker uses the same percentile/recovery semantics with VLA-specific Prometheus labels.

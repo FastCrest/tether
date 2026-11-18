@@ -35,8 +35,7 @@ two paths depending on how involved you want to be:
 
 if you're shipping a VLA in production or in a research lab and want push access + design-partner context:
 
-- discord: `romirj`
-- email: playindus@gmail.com
+- email: team@fastcrest.com
 
 briefly mention your stack (model, hardware, where you're stuck) and i'll add you as a collaborator + set up a call.
 

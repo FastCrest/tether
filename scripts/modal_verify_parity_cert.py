@@ -15,8 +15,8 @@ This is a ~2-hour single-container run (native arm ~1 hr). It therefore sets a l
 function timeout, prints a 60s heartbeat so timing pressure can't hide, and MUST be
 launched with a wall-clock watchdog:
 
-    ( sleep 11400 && MODAL_PROFILE=romirj-16723 modal app stop <app-id> ) &   # 3h10m cap
-    MODAL_PROFILE=romirj-16723 modal run scripts/modal_verify_parity_cert.py --n-episodes 30
+    ( sleep 11400 && MODAL_PROFILE=<modal-profile> modal app stop <app-id> ) &   # 3h10m cap
+    MODAL_PROFILE=<modal-profile> modal run scripts/modal_verify_parity_cert.py --n-episodes 30
 """
 import os
 import subprocess

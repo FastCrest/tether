@@ -40,7 +40,7 @@ verify_output/
 LICENSE.apache.bak
 
 # Don't accidentally create a sibling reflex_context vault inside reflex-vla.
-# The actual vault lives at /Users/romirjain/Desktop/building projects/reflex_context/.
+# The actual vault lives at /home/user/Desktop/building projects/reflex_context/.
 # This guard prevents agents/IDEs that can't see the parent dir from making
 # a misplaced copy (caught 2026-04-29).
 reflex_context/
