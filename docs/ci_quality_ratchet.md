@@ -11,7 +11,8 @@ After the bootstrap merge, repository administrators must:
 1. Require the `quality-ratchet/protected` commit status on `main`.
 2. Create the `quality-ratchet-policy` environment.
 3. Restrict that environment to protected branches and configure
-   `@rylinjames` as its sole reviewer.
+   the maintainer(s) listed in the `QUALITY_POLICY_REVIEWERS` repository variable
+   (comma-separated logins) as its sole reviewers.
 
 The manual workflow requires the exact reviewer allowlist before it can
 authorize a commit. Missing, duplicate, team, or additional reviewers and a

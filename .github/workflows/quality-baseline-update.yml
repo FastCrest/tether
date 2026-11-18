@@ -240,6 +240,7 @@ jobs:
           EXPECTED_SHA: ${{ needs.validate-candidate.outputs.candidate_sha }}
           EXPECTED_BASE: ${{ needs.validate-candidate.outputs.base_sha }}
           EXPECTED_NAME: ${{ needs.validate-candidate.outputs.validation_name }}
+          QUALITY_POLICY_REVIEWERS: ${{ vars.QUALITY_POLICY_REVIEWERS }}
         run: |
           set -euo pipefail
           ENVIRONMENT="$RUNNER_TEMP/policy-environment.json"

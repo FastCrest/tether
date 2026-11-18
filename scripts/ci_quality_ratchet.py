@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 import sys
+import os
 import tempfile
 from collections import Counter, defaultdict
 from contextlib import contextmanager
@@ -20,7 +21,13 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator, Sequence
 
 MAX_RELOCATION_LINES = 50
-TRUSTED_POLICY_REVIEWERS = frozenset({"rylinjames"})
+POLICY_REVIEWERS_ENV = "QUALITY_POLICY_REVIEWERS"
+
+
+def trusted_policy_reviewers() -> frozenset[str]:
+    """Allowlist comes from the repo variable, comma-separated; unset fails closed."""
+    raw = os.environ.get(POLICY_REVIEWERS_ENV, "")
+    return frozenset(x.strip().casefold() for x in raw.split(",") if x.strip())
 AUTHORIZATION_PATHS = frozenset(
     {
         ".github/CODEOWNERS",
@@ -321,7 +328,10 @@ def verify_policy_environment(value: object) -> None:
         actual_reviewers.append(login.casefold())
     if len(actual_reviewers) != len(set(actual_reviewers)):
         raise RatchetError("policy environment reviewer list contains duplicates")
-    if frozenset(actual_reviewers) != TRUSTED_POLICY_REVIEWERS:
+    trusted = trusted_policy_reviewers()
+    if not trusted:
+        raise RatchetError(f"{POLICY_REVIEWERS_ENV} is not set")
+    if frozenset(actual_reviewers) != trusted:
         raise RatchetError("policy environment reviewer allowlist does not match")
 
     branch_policy = value.get("deployment_branch_policy")
