@@ -6,7 +6,7 @@ is a line-by-line port of:
 
     openpi/examples/libero/main.py (battle-tested OpenPI LIBERO rollout)
 
-cloned at `/Users/romirjain/Desktop/building projects/openpi/`, adapted for
+cloned at `/home/user/Desktop/building projects/openpi/`, adapted for
 in-process SmolVLAPolicy (OpenPI uses a WebsocketClient to a separate model
 server; we call policy.select_action directly).
 
@@ -329,7 +329,7 @@ def run_ported_libero(
     # Postprocessor unnormalizes policy output back to env action space.
     # Without this, predict_action_chunk returns normalized (zero-mean,
     # unit-variance) values which the env interprets as wildly wrong
-    # deltas. This is what was missing in the 0/3 run on romirj profile.
+    # deltas. This is what was missing in the 0/3 run on the personal profile.
     postprocessor = PolicyProcessorPipeline.from_pretrained(
         pretrained_model_name_or_path=repo_dir,
         config_filename="policy_postprocessor.json",

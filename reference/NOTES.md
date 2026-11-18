@@ -403,7 +403,7 @@ Keep these architectural wins from our current implementation:
 
 ## Sibling project: EasyInference (NOT a competitor — own project; pattern source for Phase 1)
 
-**Path:** `/Users/romirjain/Desktop/building projects/EasyInference-main/`
+**Path:** `/home/user/Desktop/building projects/EasyInference-main/`
 
 EasyInference is a sibling open-source project (2 products: ISB-1 benchmark standard + InferScope CLI/MCP). It targets LLM inference (H100/H200/B200/GB200/MI300X/MI355X), not VLA inference. Different unit-of-work (tokens vs action chunks), different latency model (ms-per-token vs ms-per-chunk × control rate), different customer (chatbot ops vs robotics engineers). NOT cloned into `reference/` because the convention there is competitor-OSS-grep-first. This is a SIBLING — pattern source, not benchmark target.
 

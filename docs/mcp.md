@@ -170,4 +170,4 @@ Phase 1 ships the substrate (tools + live-node context implementation). The end-
 - `features/01_serve/subfeatures/_dx_gaps/mcp-server/mcp-server_plan.md`
 - `features/01_serve/subfeatures/_ecosystem/ros2-mcp-bridge/ros2-mcp-bridge.md` (ROS2 tools)
 
-Pattern source: [InferScope](https://github.com/rylinjames/easyinference) (sibling project at `EasyInference-main/products/inferscope/`). Tether's MCP server lifts InferScope's FastMCP tool/resource pattern with VLA-specific tool semantics (`act` instead of `chat/completions`).
+Pattern source: [InferScope](the InferScope project) (sibling project at `EasyInference-main/products/inferscope/`). Tether's MCP server lifts InferScope's FastMCP tool/resource pattern with VLA-specific tool semantics (`act` instead of `chat/completions`).

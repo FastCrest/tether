@@ -12,7 +12,7 @@ failure evidence, not as successful parity evidence.
 ## Source comparison and root cause
 
 Compared the installed 0.5.1 and 0.6.1 wheel sources in
-`/Users/romirjain/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-051d`
+`/home/user/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-051d`
 and `venv-061t`, including both `pi0/modeling_pi0.py` and
 `pi05/modeling_pi05.py`. The version-pin commit `d7361f8` made the old
 private-method calls fail. The tiny CPU pi0 regression reproduced the exact
@@ -114,7 +114,7 @@ and padded language tokens in a batch of two. Subprocesses isolate global
 export patches from the rest of pytest.
 
 The requested 0.6.1 environment's actual interpreter is
-`/Users/romirjain/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-061t/bin/python`.
+`/home/user/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-061t/bin/python`.
 It has Python 3.12.12, LeRobot 0.6.1, Transformers 5.3.0 and Torch 2.7.1.
 The CPU Torch graphs are diagnostic evidence; production monolithic export
 still correctly requires Torch >=2.8. No new GPU/ONNX Runtime acceptance
@@ -122,12 +122,12 @@ receipt was produced, and existing qualification verdicts are unchanged.
 
 ```bash
 PYTHONPATH="$PWD/src" \
-  /Users/romirjain/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-061t/bin/python \
+  /home/user/dev/studio-wt-lerobot06/.sol-scratch/lerobot06/venv-061t/bin/python \
   -m pytest -q tests/test_lerobot06_patched_forward.py \
   tests/test_snapflow_backend.py tests/test_monolithic_causal_mask_shim.py
 
-PYTHONPATH="$PWD/src:/Users/romirjain/dev/.sol-out/tether-mcpdeps:/Users/romirjain/dev/.sol-out/tether-asyncdeps" \
-  /Users/romirjain/dev/studio-wt-s11/.sol-scratch/venv/bin/python -m pytest
+PYTHONPATH="$PWD/src:/home/user/dev/.sol-out/tether-mcpdeps:/home/user/dev/.sol-out/tether-asyncdeps" \
+  /home/user/dev/studio-wt-s11/.sol-scratch/venv/bin/python -m pytest
 ```
 
 The final focused run in `venv-061t` passed: **48 passed in 71.20 seconds**,

@@ -3,7 +3,7 @@
 Outcome: **pi0 PASS, OpenVLA PASS, GR00T FAIL as-specified** (placement blocker
 eliminated; remaining gap proven to be backend matmul precision, not export
 fidelity). No gate weakened, no receipt fabricated. All work on own worktree
-`/Users/romirjain/dev/tether-wt-round2`, branch `padfix/round2-parity` (20
+`/home/user/dev/tether-wt-round2`, branch `padfix/round2-parity` (20
 commits, pushed to origin). Shared/pinned checkouts untouched and clean.
 
 Template reused from the pi0.5 refix: exact 40-hex model + implementation pins,

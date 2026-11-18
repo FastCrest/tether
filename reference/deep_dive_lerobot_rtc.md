@@ -14,7 +14,7 @@ RTC (Real-Time Chunking) is **not a policy**, but an **inference-time wrapper** 
 
 **Key insight:** The policy's diffusion denoiser runs at constant compute cost (always N steps). RTC adds guidance at inference time (no training cost), so 2-3x throughput boost is nearly free.
 
-**Source:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py:1-35`
+**Source:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py:1-35`
 
 ### 1.2 RTCProcessor: The Core Class
 
@@ -35,7 +35,7 @@ where `RTCConfig` (configuration_rtc.py) specifies:
 - `execution_horizon: int = 10` — number of timesteps at the head of the new chunk to guide (rest is free)
 - `debug: bool` — enable step-by-step tracking for diagnostics
 
-**File:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/configuration_rtc.py`
+**File:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/configuration_rtc.py`
 
 ### 1.3 The RTC Guidance Wrapper: `denoise_step()`
 
@@ -91,8 +91,8 @@ denoise_step(
 **Key insight:** Guidance only acts on the **prefix**: the first `inference_delay` actions. The tail of the new chunk is free to diverge from the old plan. This allows fast re-planning without getting stuck to stale actions.
 
 **Source files:**
-- `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py:111-237`
-- `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py:242-285` (weight schedule)
+- `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py:111-237`
+- `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py:242-285` (weight schedule)
 
 ### 1.4 Integration with Policy's sample_actions()
 
@@ -101,7 +101,7 @@ Both Pi0 and Pi0.5 call RTC inside their main denoising loop. The policy's `samp
 2. For each denoising step, calls `denoise_step_partial_call(x_t)` 
 3. If RTC is enabled, wraps that call via `rtc_processor.denoise_step(...)`
 
-**Pi0 example:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:862-885`
+**Pi0 example:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:862-885`
 
 ```python
 if self._rtc_enabled():
@@ -117,7 +117,7 @@ else:
     v_t = denoise_step_partial_call(x_t)
 ```
 
-**Pi0.5 identical:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi05/modeling_pi05.py:843-862`
+**Pi0.5 identical:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi05/modeling_pi05.py:843-862`
 
 **Entry point:** `predict_action_chunk(**kwargs)` accepts:
 - `inference_delay: int | None` — elapsed timesteps during this inference
@@ -125,8 +125,8 @@ else:
 - `execution_horizon: int | None` — override config
 
 **Sources:**
-- Pi0: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:1262-1277`
-- Pi0.5: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi05/modeling_pi05.py:1233-1247`
+- Pi0: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:1262-1277`
+- Pi0.5: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi05/modeling_pi05.py:1233-1247`
 
 ---
 
@@ -173,7 +173,7 @@ merge(
 
 **Get leftover for next RTC call:** `get_left_over()` (line 106-118) returns `original_queue[last_index:]` — the actions **not yet executed** that will become the guidance term in the next inference.
 
-**Source:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_queue.py`
+**Source:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_queue.py`
 
 ### 2.2 Postprocessor: From Normalized → Denormalized
 
@@ -184,16 +184,16 @@ LeRobot's action postprocessor (processor/normalize_processor.py + policy_robot_
    - Pi0/Pi0.5 use normalization via `NormalizerProcessorStep`
    - Each action feature has `(mean, std)` from training data
    - `normalized_action = (action - mean) / std`
-   - Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/processor/normalize_processor.py`
+   - Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/processor/normalize_processor.py`
 
 2. **Postprocessing** (denormalization): reverse the scale
    - `denormalized_action = normalized_action * std + mean`
-   - Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/processor/normalize_processor.py:UnnormalizerProcessorStep`
+   - Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/processor/normalize_processor.py:UnnormalizerProcessorStep`
 
 3. **Action space postprocess** (e.g., EE6D.postprocess()): handle gripper logic
    - Apply sigmoid to gripper logits (convert unbounded ℝ → [0,1])
    - Trim padding if action dim is larger than real robot dim
-   - Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/xvla/action_hub.py:130-145` (EE6DActionSpace)
+   - Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/xvla/action_hub.py:130-145` (EE6DActionSpace)
 
 **Full denormalization chain:**
 ```
@@ -234,7 +234,7 @@ while True:
         robot.send(action)
 ```
 
-**Source:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_interpolator.py`
+**Source:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_interpolator.py`
 
 **Important:** Interpolation happens **post-denormalization** (on robot actions), so it doesn't affect RTC guidance computation.
 
@@ -254,7 +254,7 @@ while True:
   - Trigger an emergency replan (higher priority inference)
   - Fail safe (stop robot)
 
-**Reflex analogy:** Our ActionChunkBuffer has `should_replan(threshold_ratio)`. We should **trigger replan before buffer drains to zero**, not after. See `/Users/romirjain/Desktop/building projects/reflex-vla/src/reflex/runtime/buffer.py:94-102`.
+**Reflex analogy:** Our ActionChunkBuffer has `should_replan(threshold_ratio)`. We should **trigger replan before buffer drains to zero**, not after. See `/home/user/Desktop/building projects/reflex-vla/src/reflex/runtime/buffer.py:94-102`.
 
 ### 3.2 Inference Delay Tracking
 
@@ -263,7 +263,7 @@ while True:
 **LeRobot solution:**
 - `LatencyTracker` (latency_tracker.py) records inference latencies
 - Provides `.max()`, `.percentile(q)`, `.p95()` for adaptive delay estimation
-- Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/latency_tracker.py`
+- Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/latency_tracker.py`
 
 **ActionQueue validation:**
 - `_check_and_resolve_delays()` (action_queue.py:206-228) compares expected vs. actual consumed actions
@@ -278,7 +278,7 @@ while True:
 - Gripper logic is handled in action spaces (EE6DActionSpace, JointActionSpace, etc.)
 - Apply sigmoid only **after** guidance (in postprocess), so the guidance term operates on logits (unbounded ℝ)
 - Prefix weighting ensures the first few actions of the new chunk are anchored to the old gripper state via guidance
-- Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/xvla/action_hub.py:123-145` (postprocess logic)
+- Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/xvla/action_hub.py:123-145` (postprocess logic)
 
 ### 3.4 Execution Horizon < Chunk Size
 
@@ -300,7 +300,7 @@ while True:
 - `get_safe_dtype()` (pi0/modeling_pi0.py:94-102) handles device-specific quirks (MPS doesn't support float64, etc.)
 - Device ProcessorStep (normalize_processor.py) explicitly moves data
 - ActionQueue uses `.to(device)` before returns
-- Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:94-102`
+- Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:94-102`
 
 ### 3.6 Debug Tracking Without Production Overhead
 
@@ -310,7 +310,7 @@ while True:
 - `RTCProcessor.is_debug_enabled()` checks `if self.tracker is not None`
 - All tracking calls are no-ops if tracker is None
 - `@torch._dynamo.disable` prevents graph break in compiled models
-- Source: `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/debug_tracker.py:92-97`
+- Source: `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/debug_tracker.py:92-97`
 
 ---
 
@@ -717,24 +717,24 @@ Key tests:
 ### Must-Read Files (in order)
 
 1. **RTC Core Math**
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py` (denoise_step, prefix_weights)
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/configuration_rtc.py`
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/modeling_rtc.py` (denoise_step, prefix_weights)
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/configuration_rtc.py`
 
 2. **Action Management**
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_queue.py` (merge, get_left_over)
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_interpolator.py`
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/latency_tracker.py`
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_queue.py` (merge, get_left_over)
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/action_interpolator.py`
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/rtc/latency_tracker.py`
 
 3. **Policy Integration**
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:1262-1277` (predict_action_chunk)
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:862-885` (RTC call site in sample_actions)
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:1262-1277` (predict_action_chunk)
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/pi0/modeling_pi0.py:862-885` (RTC call site in sample_actions)
 
 4. **Denormalization**
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/processor/normalize_processor.py` (UnnormalizerProcessorStep)
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/xvla/action_hub.py` (action space postprocess)
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/processor/normalize_processor.py` (UnnormalizerProcessorStep)
+   - `/home/user/Desktop/building projects/reflex-vla/reference/lerobot/src/lerobot/policies/xvla/action_hub.py` (action space postprocess)
 
 5. **Existing Reflex Pattern**
-   - `/Users/romirjain/Desktop/building projects/reflex-vla/src/reflex/runtime/buffer.py` (ActionChunkBuffer, understand interface)
+   - `/home/user/Desktop/building projects/reflex-vla/src/reflex/runtime/buffer.py` (ActionChunkBuffer, understand interface)
 
 ### Key Takeaways
 
@@ -754,4 +754,4 @@ Key tests:
 
 **Generated:** 2025-04-22
 **Paper Reference:** https://arxiv.org/abs/2506.07339
-**LeRobot Source Base:** `/Users/romirjain/Desktop/building projects/reflex-vla/reference/lerobot`
+**LeRobot Source Base:** `/home/user/Desktop/building projects/reflex-vla/reference/lerobot`

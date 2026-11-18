@@ -1,6 +1,6 @@
 """SigLIPBackbone — SigLIP vision tower wrapped as a spine VisionBackbone.
 
-Per Romir's 2026-05-20 fork decision in the lift #1 Day 4 design:
+Per the maintainer's 2026-05-20 fork decision in the lift #1 Day 4 design:
 **SigLIP is split out as a separate `vision_backbone` slot**, NOT folded into
 PaliGemma's `llm_backbone`. Cleaner spine taxonomy; downstream lifts (#3
 inference-only-weights, #5 fast-kernels) bind to a discrete component.

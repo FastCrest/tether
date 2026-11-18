@@ -23,7 +23,7 @@ num_steps 10, input/noise seeds 42/99, shapes [1,50,32] both sides.
 - Model: `lerobot/pi05_base` @ `a538eb273274eb30f126a118f39dbc0ee212c883` (unchanged).
 - Implementation: `f43e5977260b9eac84e23f404379e0280f34ac23`
   (branch `padfix/pi05-padfree-mask` own worktree
-  `/Users/romirjain/dev/tether-wt-pi05-padfix`; nothing committed into
+  `/home/user/dev/tether-wt-pi05-padfix`; nothing committed into
   `exporter-parity-fixes` or `parity-gpu-runs`).
 
 ## What changed (one file, 41+/5-)

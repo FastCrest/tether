@@ -16,7 +16,7 @@ resize + seed-42 + hard-task-set [3,4,6] produced a spurious 0/9 "baseline"
 a proven native run at that config to compare against.
 
 Usage:
-    modal profile activate romirj-16723
+    modal profile activate <modal-profile>
     # FORMAL kill-trigger-3 gate (default): N=100/task × 3 tasks × both arms,
     # sharded into 6 parallel A100 cells (~3 hr wall = slowest native cell,
     # retryable per cell; 4 hr per-cell timeout):

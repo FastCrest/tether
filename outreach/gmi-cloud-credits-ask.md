@@ -1,7 +1,7 @@
 # Tether × GMI Cloud — compute credits ask
 
 **To:** GMI Cloud (sales@gmicloud.ai + LinkedIn route to head of developer relations / partnerships)
-**From:** Romir Jain — solo founder, Tether — suranjana.jain@gmail.com
+**From:** FastCrest team — team@fastcrest.com
 **Date:** 2026-04-24
 **Ask:** $100K H100/H200 credits over 12 months (≈50,000 H100-hours at $2/hr), tiered milestones below + a separate hardware ask: brokered access to NVIDIA Jetson dev kits (Orin Nano $249, AGX Orin ~$2K, Thor ~$3.5K) if GMI has an Inception / NVIDIA Embedded relationship
 
@@ -115,7 +115,7 @@ We will not sign exclusivity. We will sign mutual case study + co-marketing righ
 
 A 30-min call to go through the experiment-by-experiment plan and confirm GMI infrastructure access (H100 vs H200, dedicated cluster availability, region for low-latency to a Hugging Face Hub mirror).
 
-Email: suranjana.jain@gmail.com
+Email: team@fastcrest.com
 GitHub: github.com/FastCrest/tether
 Hugging Face: (add user's HF org link before sending)
 

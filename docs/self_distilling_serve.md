@@ -100,7 +100,7 @@ Rollback target is the secondary slot in the policy-versioning router (the previ
 python -m tether.pro.license issue_dev --customer-id acme --tier pro --days 30
 
 # Phase 1.5: real license from the dashboard
-# (URL TBD — see Romir's open-items list in the ADR)
+# (URL TBD — see the maintainer's open-items list in the ADR)
 ```
 
 License lives at `~/.tether/pro.license`. Bound to GPU UUID + GPU name + CPU count. Driver / kernel patches don't invalidate the license; major-version GPU swap or new host does.
@@ -162,7 +162,7 @@ The `tether report last-week` CLI shows a budget bar for distill runs / eval run
 - **Federated distill** across customers — Phase 3 (cross-customer aggregation with privacy posture TBD)
 - **On-prem-only mode** (no HF Hub; MinIO/S3-compatible artifact store) — Phase 2; today's HF-private-repo path is the regulated-industry workaround
 - **Customer-data fine-tuning composition** with auto-calibration — Phase 1.5
-- **Real-customer Modal validation** — gated on Romir-authorized Modal A100 burn ($10-30 estimated)
+- **Real-customer Modal validation** — gated on maintainer-authorized Modal A100 burn ($10-30 estimated)
 
 ## Architectural commitments
 

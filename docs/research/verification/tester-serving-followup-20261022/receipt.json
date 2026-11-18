@@ -97,5 +97,5 @@
     "No physical execution verified"
   ],
   "receipt_generation_python": "3.9.6",
-  "runtime_executable": "/Users/romirjain/dev/studio-wt-integration-011/.venv/bin/python"
+  "runtime_executable": "/home/user/dev/studio-wt-integration-011/.venv/bin/python"
 }

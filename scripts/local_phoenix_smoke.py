@@ -4,7 +4,7 @@ Doesn't load any VLA — just verifies the tracing module wires up correctly,
 the exporter connects, and a span lands in Phoenix.
 
 Run:
-    /Users/romirjain/tools/phoenix-env/bin/phoenix serve   # in another shell
+    /home/user/tools/phoenix-env/bin/phoenix serve   # in another shell
     .venv/bin/python scripts/local_phoenix_smoke.py
     open http://localhost:6006   # confirm "tether" project + an "act" span
 """

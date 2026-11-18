@@ -75,4 +75,3 @@ Every export directory gets a `VERIFICATION.md` with sha256 of every file, ONNX 
 
 Honest disclaimer: alpha, single maintainer, no funding. If it works for you, great; if not, please tell me how it broke.
 
-— @rylinjames
