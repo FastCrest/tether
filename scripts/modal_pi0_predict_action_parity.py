@@ -81,6 +81,24 @@ image = (
 )
 
 
+# The exact `lerobot/pi0_base` revision this parity gate is valid against.
+#
+# Floating HEAD broke this run: HEAD is 25c379b5 "Add relative action processor
+# steps (#6)" (2026-06-03), whose processor config names
+# `relative_actions_processor`, and lerobot 0.5.1's registry has no such step --
+# it has `delta_actions_processor` and `absolute_actions_processor`. So the load
+# failed with ImportError before any comparison ran.
+#
+# `scripts/local_pi0_monolithic_parity.py:133` already requires an exact 40-hex
+# commit and refuses floating HEAD for exactly this reason. This script did not,
+# which also meant any receipt it produced named a checkpoint that could differ
+# between runs -- a reproducibility hole (spec 00 section 11), not only a
+# compatibility one.
+#
+# 26b99b9439acb1e352439e34ee9c67af0d76efa3 is the last revision before the relative-action steps landed.
+PI0_BASE_REVISION = "26b99b9439acb1e352439e34ee9c67af0d76efa3"
+
+
 app = modal.App("tether-pi0-spine-parity")
 _hf_cache_volume = modal.Volume.from_name("pi0-hf-cache", create_if_missing=True)
 
@@ -104,6 +122,36 @@ def run_parity(
     Returns the error distribution + verdict.
     """
     import time
+
+    # A self-kill wall-clock watchdog, inside the function. `timeout=` on the
+    # decorator is the platform's promise and is not enough on its own: a hung
+    # download or a stuck CUDA call can sit inside the container burning A10G
+    # minutes without the platform deciding the function is over. This thread
+    # kills the process from within at a deadline this code owns.
+    import os as _os
+    import signal as _signal
+    import threading as _threading
+
+    _WATCHDOG_SECONDS = float(_os.environ.get("PARITY_WATCHDOG_SECONDS", "900"))
+
+    def _self_kill() -> None:
+        print(
+            f"[watchdog] deadline of {_WATCHDOG_SECONDS:.0f}s reached; killing this "
+            "container rather than burning GPU time on a hung step.",
+            flush=True,
+        )
+        _os.kill(_os.getpid(), _signal.SIGKILL)
+
+    _watchdog = _threading.Timer(_WATCHDOG_SECONDS, _self_kill)
+    _watchdog.daemon = True
+    _watchdog.start()
+
+    _started_at = time.monotonic()
+
+    def _progress(stage: str) -> None:
+        print(f"[progress] {time.monotonic() - _started_at:7.1f}s  {stage}", flush=True)
+
+    _progress("container up, watchdog armed")
 
     import numpy as np
     import torch
@@ -172,7 +220,7 @@ def run_parity(
     from lerobot.processor.converters import batch_to_transition, transition_to_batch
     from huggingface_hub import snapshot_download
 
-    policy = PI0Policy.from_pretrained("lerobot/pi0_base").eval()
+    policy = PI0Policy.from_pretrained("lerobot/pi0_base", revision=PI0_BASE_REVISION).eval()
     policy = policy.to(dtype=torch.float32).to("cpu")  # CPU + fp32 for max determinism
     step("load_lerobot", "pass", f"{time.time() - start:.1f}s, params={sum(p.numel() for p in policy.parameters())/1e9:.2f}B")
 
@@ -191,7 +239,7 @@ def run_parity(
         "observation.state": state.unsqueeze(0),
         "task": ["pick up the red bowl"],
     }
-    repo = snapshot_download("lerobot/pi0_base")
+    repo = snapshot_download("lerobot/pi0_base", revision=PI0_BASE_REVISION)
     pre = PolicyProcessorPipeline.from_pretrained(
         pretrained_model_name_or_path=repo,
         config_filename="policy_preprocessor.json",
@@ -665,6 +713,8 @@ def run_parity(
              f"max={err_max:.2e} (need < 1e-4), p95={err_p95:.2e} (need < 1e-5) — "
              f"investigate root cause per CLAUDE.md")
 
+    _watchdog.cancel()
+    _progress("done")
     return results
 
 
