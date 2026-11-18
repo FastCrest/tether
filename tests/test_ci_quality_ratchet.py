@@ -428,8 +428,9 @@ def test_current_main_binding_rejects_stale_event_reruns() -> None:
             )
 
 
-def test_policy_environment_requires_exact_reviewer_allowlist() -> None:
-    trusted = {"type": "User", "reviewer": {"login": "rylinjames"}}
+def test_policy_environment_requires_exact_reviewer_allowlist(monkeypatch) -> None:
+    monkeypatch.setenv("QUALITY_POLICY_REVIEWERS", "trusted-reviewer")
+    trusted = {"type": "User", "reviewer": {"login": "trusted-reviewer"}}
     valid = {
         "protection_rules": [
             {"type": "required_reviewers", "reviewers": [trusted]},
@@ -457,7 +458,7 @@ def test_policy_environment_requires_exact_reviewer_allowlist() -> None:
             "protection_rules": [
                 {
                     "type": "required_reviewers",
-                    "reviewers": [{"type": "Team", "reviewer": {"login": "rylinjames"}}],
+                    "reviewers": [{"type": "Team", "reviewer": {"login": "trusted-reviewer"}}],
                 }
             ],
         },
@@ -662,3 +663,15 @@ def test_adversarial_head_cannot_hide_new_debt_or_replace_judge(tmp_path: Path) 
         "pyproject.toml#[tool.ruff]",
         "scripts/ci_quality_ratchet.py",
     ]
+
+
+def test_policy_environment_fails_closed_without_allowlist(monkeypatch) -> None:
+    monkeypatch.delenv("QUALITY_POLICY_REVIEWERS", raising=False)
+    env = {
+        "protection_rules": [
+            {"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "x"}}]}
+        ],
+        "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False},
+    }
+    with pytest.raises(RatchetError):
+        verify_policy_environment(env)
