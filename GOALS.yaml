@@ -155,7 +155,7 @@ goals:
 
   - id: docker-image-distribution
     status: done
-    description: "ghcr.io/rylinjames/reflex:<version>-<target> images published per release. Zero-install path: docker pull + docker run. Images for orin-nano, orin, thor, desktop. MVP-adoption tablestakes — first-hour experience goes from 4 hours of install to 60 seconds."
+    description: "container images (reflex:<version>-<target>) published per release. Zero-install path: docker pull + docker run. Images for orin-nano, orin, thor, desktop. MVP-adoption tablestakes — first-hour experience goes from 4 hours of install to 60 seconds."
     check: "test -f .github/workflows/docker-publish.yml"
     weight: 7
 

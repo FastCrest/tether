@@ -1,5 +1,5 @@
-# Every file in this repo requires @rylinjames approval before merge.
+# Every file in this repo requires maintainer approval before merge.
 # When combined with the "Require review from Code Owners" branch
 # protection rule on main, this means anyone can open a PR but only
-# rylinjames can approve and merge.
-* @rylinjames
+# the FastCrest maintainers team can approve and merge.
+* @FastCrest/maintainers
